@@ -1,0 +1,30 @@
+[package]
+name = "mcp-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mcp-core.workspace = true
+
+# Template engine
+handlebars.workspace = true
+
+# Code generation
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

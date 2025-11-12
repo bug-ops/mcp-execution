@@ -1,0 +1,45 @@
+[package]
+name = "mcp-wasm-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mcp-core.workspace = true
+mcp-bridge.workspace = true
+mcp-vfs.workspace = true
+mcp-codegen.workspace = true
+
+# WASM runtime
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+
+# Caching
+blake3.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Filesystem
+tempfile.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+criterion.workspace = true
+
+[features]
+default = ["assemblyscript"]
+assemblyscript = []
+quickjs = []

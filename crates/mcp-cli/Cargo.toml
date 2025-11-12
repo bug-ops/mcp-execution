@@ -1,0 +1,31 @@
+[package]
+name = "mcp-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mcp-cli"
+path = "src/main.rs"
+
+[dependencies]
+mcp-wasm-runtime.workspace = true
+mcp-core.workspace = true
+
+# CLI parsing
+clap.workspace = true
+
+# Error handling (anyhow for applications)
+anyhow.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Async runtime
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true

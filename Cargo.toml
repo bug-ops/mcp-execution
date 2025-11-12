@@ -1,0 +1,109 @@
+[workspace]
+members = [
+    "crates/mcp-core",
+    "crates/mcp-introspector",
+    "crates/mcp-codegen",
+    "crates/mcp-bridge",
+    "crates/mcp-wasm-runtime",
+    "crates/mcp-vfs",
+    "crates/mcp-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["MCP Execution Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bug-ops/mcp-execution"
+
+[workspace.dependencies]
+# Internal workspace crates
+mcp-core = { path = "crates/mcp-core" }
+mcp-introspector = { path = "crates/mcp-introspector" }
+mcp-codegen = { path = "crates/mcp-codegen" }
+mcp-bridge = { path = "crates/mcp-bridge" }
+mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
+mcp-vfs = { path = "crates/mcp-vfs" }
+
+# Official MCP Protocol Implementation (v0.8.5 as of Nov 2025)
+rmcp = "0.8"
+
+# Core async runtime - Tokio chosen for maturity and ecosystem
+tokio = { version = "1.48", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+] }
+async-trait = "0.1"
+
+# Serialization - Industry standard (using caret versioning for compatibility)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# WASM Runtime - Latest stable Wasmtime (monthly releases, 37.0.2 as of Nov 2025)
+wasmtime = "37.0"
+wasmtime-wasi = "37.0"
+
+# Error handling (latest stable versions as of Nov 2025)
+thiserror = "2.0" # For library error types (latest: 2.0.17)
+anyhow = "1.0"    # For CLI application (latest: 1.0.99)
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Code generation (latest: handlebars 6.3.2, syn 2.0.104, quote 1.0.42)
+handlebars = "6.3"
+syn = { version = "2.0", features = ["full", "parsing", "proc-macro"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# HTTP client for MCP transport
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# Filesystem utilities
+walkdir = "2.5"
+tempfile = "3.14"
+
+# CLI (for mcp-cli only)
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Caching
+lru = "0.16"
+
+# Hashing for cache keys
+blake3 = "1.5"
+
+# Security and validation
+secrecy = "0.10" # For handling sensitive data
+
+# Benchmarking
+criterion = { version = "0.7", features = ["html_reports"] }
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+cargo = "warn"
+nursery = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+debug = true
+
+[profile.dev]
+opt-level = 0
+debug = true
