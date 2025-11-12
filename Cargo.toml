@@ -78,6 +78,9 @@ lru = "0.16"
 # Hashing for cache keys
 blake3 = "1.5"
 
+# UUID generation for secure session IDs
+uuid = { version = "1.11", features = ["v4", "fast-rng"] }
+
 # Security and validation
 secrecy = "0.10" # For handling sensitive data
 

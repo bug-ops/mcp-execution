@@ -25,5 +25,11 @@ secrecy.workspace = true
 # Time handling
 tokio = { workspace = true, features = ["time"] }
 
+# Hashing for cache keys
+blake3.workspace = true
+
+# UUID generation for session IDs
+uuid.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

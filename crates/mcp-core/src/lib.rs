@@ -6,20 +6,46 @@
 //! # Architecture
 //!
 //! The core consists of:
-//! - Strong domain types (`ServerId`, `ToolName`, `SessionId`)
+//! - Strong domain types (`ServerId`, `ToolName`, `SessionId`, `MemoryLimit`, `CacheKey`)
 //! - Error hierarchy with contextual information
-//! - Core traits for execution, bridging, caching, and storage
-//! - Configuration types
+//! - Core traits for execution, caching, and state storage
+//! - Configuration types with security policies
+//!
+//! # Examples
+//!
+//! ```
+//! use mcp_core::{RuntimeConfig, SecurityPolicy, MemoryLimit};
+//! use std::time::Duration;
+//!
+//! // Create a runtime configuration
+//! let config = RuntimeConfig::builder()
+//!     .memory_limit(MemoryLimit::from_mb(512).unwrap())
+//!     .execution_timeout(Duration::from_secs(60))
+//!     .enable_cache(true)
+//!     .security(SecurityPolicy::strict())
+//!     .build();
+//!
+//! // Validate configuration
+//! assert!(config.validate().is_ok());
+//! ```
 
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod config;
 mod error;
 mod types;
-mod config;
 
 pub mod traits;
 
+// Re-export error types
 pub use error::{Error, Result};
-pub use types::{ServerId, ToolName, SessionId, MemoryLimit};
-pub use config::{RuntimeConfig, SecurityPolicy};
+
+// Re-export domain types
+pub use types::{CacheKey, MemoryLimit, ServerId, SessionId, ToolName};
+
+// Re-export configuration types
+pub use config::{RuntimeConfig, RuntimeConfigBuilder, SecurityPolicy};
+
+// Re-export traits for convenience
+pub use traits::{CacheProvider, CodeExecutor, StateStorage};
