@@ -145,6 +145,40 @@ impl<'a> TemplateEngine<'a> {
     pub fn has_template(&self, name: &str) -> bool {
         self.handlebars.has_template(name)
     }
+
+    /// Registers a custom template from a string.
+    ///
+    /// This allows other crates to register their own templates
+    /// using the same template engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if template registration fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_codegen::template_engine::TemplateEngine;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut engine = TemplateEngine::new()?;
+    /// engine.register_template_string("custom", "Hello {{name}}!")?;
+    /// assert!(engine.has_template("custom"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn register_template_string(
+        &mut self,
+        name: &str,
+        template: &str,
+    ) -> Result<()> {
+        self.handlebars
+            .register_template_string(name, template)
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register template '{name}': {e}"),
+                source: None,
+            })
+    }
 }
 
 #[cfg(test)]
@@ -174,5 +208,22 @@ mod tests {
         let context = json!({"name": "test"});
         let result = engine.render("nonexistent", &context);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_register_template_string() {
+        let mut engine = TemplateEngine::new().unwrap();
+
+        // Register a custom template
+        let result = engine.register_template_string("custom", "Hello {{name}}!");
+        assert!(result.is_ok());
+
+        // Verify template is registered
+        assert!(engine.has_template("custom"));
+
+        // Render the custom template
+        let context = json!({"name": "World"});
+        let result = engine.render("custom", &context).unwrap();
+        assert_eq!(result, "Hello World!");
     }
 }

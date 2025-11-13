@@ -69,6 +69,16 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+
+    /// File I/O operation failed.
+    #[error("File I/O error for {path:?}")]
+    IoError {
+        /// The path that caused the error.
+        path: std::path::PathBuf,
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl Error {
@@ -100,6 +110,27 @@ impl Error {
     #[must_use]
     pub fn is_introspection_error(&self) -> bool {
         matches!(self, Self::IntrospectionError { .. })
+    }
+
+    /// Returns true if this is an I/O error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_skill_generator::Error;
+    /// use std::path::PathBuf;
+    /// use std::io;
+    ///
+    /// let err = Error::IoError {
+    ///     path: PathBuf::from("/tmp/test"),
+    ///     source: io::Error::new(io::ErrorKind::NotFound, "file not found"),
+    /// };
+    /// assert!(err.is_io_error());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_io_error(&self) -> bool {
+        matches!(self, Self::IoError { .. })
     }
 }
 

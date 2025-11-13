@@ -32,12 +32,12 @@
 //! ## Basic Usage
 //!
 //! ```no_run
-//! use mcp_skill_generator::{SkillName, SkillContext, template_engine::TemplateEngine};
+//! use mcp_skill_generator::{SkillName, SkillContext, create_skill_template_engine, render_skill};
 //! use mcp_core::ServerId;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create template engine
-//! let engine = TemplateEngine::new()?;
+//! let engine = create_skill_template_engine()?;
 //!
 //! // Create skill context
 //! let context = SkillContext {
@@ -51,7 +51,7 @@
 //! };
 //!
 //! // Generate skill
-//! let skill_md = engine.render_skill(&context)?;
+//! let skill_md = render_skill(&engine, &context)?;
 //! println!("{}", skill_md);
 //! # Ok(())
 //! # }
@@ -120,14 +120,15 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::cargo)]
 
-pub mod template_engine;
+pub mod skill_template;
 pub mod types;
 
 // Re-export key types for convenience
+pub use skill_template::{create_skill_template_engine, render_skill};
 pub use types::{
-    Error, GeneratedSkill, ParameterContext, Result, SkillContext, SkillGenerationOptions,
-    SkillGenerationOptionsBuilder, SkillMetadata, SkillName, TemplateType, ToolContext,
-    sanitize_string, validate_no_template_syntax,
+    sanitize_string, validate_no_template_syntax, Error, GeneratedSkill, ParameterContext, Result,
+    SkillContext, SkillGenerationOptions, SkillGenerationOptionsBuilder, SkillMetadata, SkillName,
+    TemplateType, ToolContext,
 };
 
 #[cfg(test)]

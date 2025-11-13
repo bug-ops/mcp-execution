@@ -15,14 +15,15 @@ readme = "../../README.md"
 # Internal dependencies
 mcp-core.workspace = true
 mcp-introspector.workspace = true
+mcp-codegen.workspace = true
 
 # External dependencies
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-handlebars.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+tempfile = "3.14"

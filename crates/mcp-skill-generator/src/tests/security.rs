@@ -7,8 +7,7 @@
 //! - Unicode control character sanitization
 //! - Shell metacharacter blocking
 
-use crate::template_engine::TemplateEngine;
-use crate::{ParameterContext, SkillContext, SkillName, ToolContext};
+use crate::{create_skill_template_engine, render_skill, ParameterContext, SkillContext, SkillName, ToolContext};
 use mcp_core::{ServerId, ToolName};
 
 #[test]
@@ -58,7 +57,7 @@ fn test_command_injection_blocked() {
 
 #[test]
 fn test_template_injection_blocked() {
-    let engine = TemplateEngine::new().unwrap();
+    let engine = create_skill_template_engine().unwrap();
 
     // Template injection in description
     let context = SkillContext {
@@ -71,7 +70,7 @@ fn test_template_injection_blocked() {
         generated_at: "2025-11-13T10:00:00Z".to_string(),
     };
 
-    let result = engine.render_skill(&context);
+    let result = render_skill(&engine, &context);
     assert!(result.is_err());
     assert!(result.unwrap_err().is_validation_error());
 
@@ -90,7 +89,7 @@ fn test_template_injection_blocked() {
         generated_at: "2025-11-13T10:00:00Z".to_string(),
     };
 
-    let result = engine.render_skill(&context);
+    let result = render_skill(&engine, &context);
     assert!(result.is_err());
     assert!(result.unwrap_err().is_validation_error());
 
@@ -114,7 +113,7 @@ fn test_template_injection_blocked() {
         generated_at: "2025-11-13T10:00:00Z".to_string(),
     };
 
-    let result = engine.render_skill(&context);
+    let result = render_skill(&engine, &context);
     assert!(result.is_err());
     assert!(result.unwrap_err().is_validation_error());
 }
