@@ -3,7 +3,7 @@
 //! These benchmarks measure the performance characteristics of the LRU cache
 //! and cache key generation.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_core::CacheKey;
 use std::hint::black_box;
 
@@ -16,19 +16,15 @@ fn bench_cache_key_generation(c: &mut Criterion) {
         let params = "x".repeat(*size);
 
         group.throughput(Throughput::Bytes(*size as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(size),
-            &params,
-            |b, params| {
-                b.iter(|| {
-                    CacheKey::from_parts(
-                        black_box("test-server"),
-                        black_box("test-tool"),
-                        black_box(params),
-                    )
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(size), &params, |b, params| {
+            b.iter(|| {
+                CacheKey::from_parts(
+                    black_box("test-server"),
+                    black_box("test-tool"),
+                    black_box(params),
+                )
+            });
+        });
     }
 
     group.finish();

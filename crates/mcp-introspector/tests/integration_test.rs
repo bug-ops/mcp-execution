@@ -2,8 +2,8 @@
 //!
 //! These tests validate server discovery, tool extraction, and metadata management.
 
-use mcp_introspector::{Introspector, ServerCapabilities, ServerInfo, ToolInfo};
 use mcp_core::{ServerId, ToolName};
+use mcp_introspector::{Introspector, ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 
 /// Tests introspector creation
@@ -197,8 +197,8 @@ fn test_server_capabilities() {
     let json = serde_json::to_string(&caps).expect("Failed to serialize");
 
     // Deserialize
-    let deserialized: ServerCapabilities = serde_json::from_str(&json)
-        .expect("Failed to deserialize");
+    let deserialized: ServerCapabilities =
+        serde_json::from_str(&json).expect("Failed to deserialize");
     assert_eq!(deserialized.supports_tools, caps.supports_tools);
 }
 
@@ -281,7 +281,9 @@ async fn test_invalid_command_rejection() {
     let server_id = ServerId::new("test");
 
     // Try to discover with invalid command (should fail validation)
-    let result = introspector.discover_server(server_id, "echo test; rm -rf /").await;
+    let result = introspector
+        .discover_server(server_id, "echo test; rm -rf /")
+        .await;
 
     // Should fail due to validation or connection error
     assert!(result.is_err());

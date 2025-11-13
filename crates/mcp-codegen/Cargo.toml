@@ -42,3 +42,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+mcp-vfs.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "code_generation"
+harness = false

@@ -3,7 +3,7 @@
 //! These benchmarks measure JSON serialization/deserialization of
 //! ServerInfo and ToolInfo structures.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_core::{ServerId, ToolName};
 use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;

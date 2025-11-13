@@ -198,7 +198,9 @@ async fn test_connect_command_validation() {
     let server_id = ServerId::new("test");
 
     // Test with potentially dangerous command (should be caught by validation)
-    let result = bridge.connect(server_id.clone(), "echo hello; rm -rf /").await;
+    let result = bridge
+        .connect(server_id.clone(), "echo hello; rm -rf /")
+        .await;
 
     // Should fail validation or connection (either is acceptable)
     // The important part is it doesn't execute the dangerous command
