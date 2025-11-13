@@ -7,20 +7,36 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Internal workspace crates
 mcp-core.workspace = true
 mcp-introspector.workspace = true
 mcp-bridge.workspace = true
 mcp-codegen.workspace = true
+mcp-vfs.workspace = true
+mcp-wasm-runtime.workspace = true
 
 # Async runtime
 tokio.workspace = true
 
 # Error handling
 anyhow.workspace = true
+thiserror.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
 
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+# Utilities
+blake3.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [[example]]
 name = "test_vkteams"
@@ -29,3 +45,19 @@ path = "examples/test_vkteams.rs"
 [[example]]
 name = "codegen"
 path = "examples/codegen.rs"
+
+[[example]]
+name = "e2e_workflow"
+path = "examples/e2e_workflow.rs"
+
+[[example]]
+name = "token_analysis"
+path = "examples/token_analysis.rs"
+
+[[example]]
+name = "performance_test"
+path = "examples/performance_test.rs"
+
+[[bench]]
+name = "e2e_benchmark"
+harness = false
