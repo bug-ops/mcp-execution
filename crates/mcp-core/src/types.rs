@@ -24,6 +24,7 @@
 //! assert_eq!(limit.bytes(), 256 * 1024 * 1024);
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Server identifier (newtype over String).
@@ -39,7 +40,7 @@ use std::fmt;
 /// let id = ServerId::new("example-server");
 /// assert_eq!(id.as_str(), "example-server");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ServerId(String);
 
 impl ServerId {
@@ -54,6 +55,7 @@ impl ServerId {
     /// let from_string = ServerId::new(String::from("my-server"));
     /// assert_eq!(id, from_string);
     /// ```
+    #[inline]
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -69,6 +71,7 @@ impl ServerId {
     /// let id = ServerId::new("test");
     /// assert_eq!(id.as_str(), "test");
     /// ```
+    #[inline]
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -85,6 +88,7 @@ impl ServerId {
     /// let inner: String = id.into_inner();
     /// assert_eq!(inner, "test");
     /// ```
+    #[inline]
     #[must_use]
     pub fn into_inner(self) -> String {
         self.0
@@ -122,7 +126,7 @@ impl From<&str> for ServerId {
 /// let tool = ToolName::new("execute_code");
 /// assert_eq!(tool.as_str(), "execute_code");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ToolName(String);
 
 impl ToolName {
@@ -136,6 +140,7 @@ impl ToolName {
     /// let name = ToolName::new("my_tool");
     /// assert_eq!(name.as_str(), "my_tool");
     /// ```
+    #[inline]
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
@@ -151,6 +156,7 @@ impl ToolName {
     /// let name = ToolName::new("test_tool");
     /// assert_eq!(name.as_str(), "test_tool");
     /// ```
+    #[inline]
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -167,6 +173,7 @@ impl ToolName {
     /// let inner: String = name.into_inner();
     /// assert_eq!(inner, "tool");
     /// ```
+    #[inline]
     #[must_use]
     pub fn into_inner(self) -> String {
         self.0
@@ -210,7 +217,7 @@ impl From<&str> for ToolName {
 /// let custom = SessionId::new("custom-session");
 /// assert_eq!(custom.as_str(), "custom-session");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(String);
 
 impl SessionId {
@@ -224,6 +231,7 @@ impl SessionId {
     /// let id = SessionId::new("session-123");
     /// assert_eq!(id.as_str(), "session-123");
     /// ```
+    #[inline]
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -260,6 +268,7 @@ impl SessionId {
     /// let id = SessionId::new("test-session");
     /// assert_eq!(id.as_str(), "test-session");
     /// ```
+    #[inline]
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -276,6 +285,7 @@ impl SessionId {
     /// let inner: String = id.into_inner();
     /// assert_eq!(inner, "test");
     /// ```
+    #[inline]
     #[must_use]
     pub fn into_inner(self) -> String {
         self.0
@@ -323,7 +333,7 @@ impl From<&str> for SessionId {
 /// let too_large = MemoryLimit::new(1024 * 1024 * 1024);
 /// assert!(too_large.is_err());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct MemoryLimit(usize);
 
 impl MemoryLimit {
@@ -395,6 +405,7 @@ impl MemoryLimit {
     /// let limit = MemoryLimit::default();
     /// assert_eq!(limit.bytes(), 256 * 1024 * 1024);
     /// ```
+    #[inline]
     #[must_use]
     pub const fn bytes(&self) -> usize {
         self.0
@@ -410,6 +421,7 @@ impl MemoryLimit {
     /// let limit = MemoryLimit::default();
     /// assert_eq!(limit.megabytes(), 256);
     /// ```
+    #[inline]
     #[must_use]
     pub const fn megabytes(&self) -> usize {
         self.0 / (1024 * 1024)
@@ -447,7 +459,7 @@ impl fmt::Display for MemoryLimit {
 /// let custom = CacheKey::new("custom-cache-key");
 /// assert_eq!(custom.as_str(), "custom-cache-key");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CacheKey(String);
 
 impl CacheKey {
@@ -461,6 +473,7 @@ impl CacheKey {
     /// let key = CacheKey::new("my-cache-key");
     /// assert_eq!(key.as_str(), "my-cache-key");
     /// ```
+    #[inline]
     #[must_use]
     pub fn new(key: impl Into<String>) -> Self {
         Self(key.into())
@@ -520,6 +533,7 @@ impl CacheKey {
     /// let key = CacheKey::new("test-key");
     /// assert_eq!(key.as_str(), "test-key");
     /// ```
+    #[inline]
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -536,6 +550,7 @@ impl CacheKey {
     /// let inner: String = key.into_inner();
     /// assert_eq!(inner, "test");
     /// ```
+    #[inline]
     #[must_use]
     pub fn into_inner(self) -> String {
         self.0

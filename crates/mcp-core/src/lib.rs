@@ -32,6 +32,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod command;
 mod config;
 mod error;
 mod types;
@@ -49,3 +50,6 @@ pub use config::{RuntimeConfig, RuntimeConfigBuilder, SecurityPolicy};
 
 // Re-export traits for convenience
 pub use traits::{CacheProvider, CodeExecutor, StateStorage};
+
+// Re-export command validation
+pub use command::validate_command;

@@ -7,6 +7,7 @@ members = [
     "crates/mcp-wasm-runtime",
     "crates/mcp-vfs",
     "crates/mcp-cli",
+    "crates/mcp-examples",
 ]
 resolver = "2"
 
@@ -28,7 +29,9 @@ mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
 mcp-vfs = { path = "crates/mcp-vfs" }
 
 # Official MCP Protocol Implementation (v0.8.5 as of Nov 2025)
-rmcp = "0.8"
+# Using 'client' feature for client-side MCP operations
+# Using 'transport-child-process' for stdio transport to MCP servers
+rmcp = { version = "0.8", features = ["client", "transport-child-process"] }
 
 # Core async runtime - Tokio chosen for maturity and ecosystem
 tokio = { version = "1.48", features = [
@@ -36,6 +39,7 @@ tokio = { version = "1.48", features = [
     "macros",
     "time",
     "sync",
+    "process",  # Required for MCP stdio transport
 ] }
 async-trait = "0.1"
 
