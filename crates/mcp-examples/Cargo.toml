@@ -1,0 +1,31 @@
+[package]
+name = "mcp-examples"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+mcp-core.workspace = true
+mcp-introspector.workspace = true
+mcp-bridge.workspace = true
+mcp-codegen.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[example]]
+name = "test_vkteams"
+path = "examples/test_vkteams.rs"
+
+[[example]]
+name = "codegen"
+path = "examples/codegen.rs"

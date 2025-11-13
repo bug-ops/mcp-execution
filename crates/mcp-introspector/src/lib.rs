@@ -39,8 +39,8 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use mcp_core::{Error, Result, ServerId, ToolName};
-use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::ServiceExt;
+use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -257,32 +257,36 @@ impl Introspector {
         mcp_core::validate_command(command)?;
 
         // Connect via stdio using rmcp
-        let transport = TokioChildProcess::new(
-            tokio::process::Command::new(command).configure(|_cmd| {}),
-        )
-        .map_err(|e| Error::ConnectionFailed {
-            server: server_id.to_string(),
-            source: Box::new(e),
-        })?;
+        let transport =
+            TokioChildProcess::new(tokio::process::Command::new(command).configure(|_cmd| {}))
+                .map_err(|e| Error::ConnectionFailed {
+                    server: server_id.to_string(),
+                    source: Box::new(e),
+                })?;
 
         // Create client using serve pattern
-        let client = ()
-            .serve(transport)
+        let client =
+            ().serve(transport)
+                .await
+                .map_err(|e| Error::ConnectionFailed {
+                    server: server_id.to_string(),
+                    source: Box::new(e),
+                })?;
+
+        // List all tools from server
+        let tool_list = client
+            .list_all_tools()
             .await
             .map_err(|e| Error::ConnectionFailed {
                 server: server_id.to_string(),
                 source: Box::new(e),
             })?;
 
-        // List all tools from server
-        let tool_list = client.list_all_tools().await.map_err(|e| {
-            Error::ConnectionFailed {
-                server: server_id.to_string(),
-                source: Box::new(e),
-            }
-        })?;
-
-        tracing::debug!("Server {} responded with {} tools", server_id, tool_list.len());
+        tracing::debug!(
+            "Server {} responded with {} tools",
+            server_id,
+            tool_list.len()
+        );
 
         // Extract tools
         let tools = tool_list
@@ -309,7 +313,7 @@ impl Introspector {
 
         let info = ServerInfo {
             id: server_id.clone(),
-            name: command.to_string(), // Use command as name
+            name: command.to_string(),      // Use command as name
             version: "unknown".to_string(), // MCP doesn't expose version via ServiceExt
             tools,
             capabilities,

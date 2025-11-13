@@ -109,10 +109,7 @@ pub fn validate_command(command: &str) -> Result<()> {
     let path = Path::new(command);
     if !path.is_absolute() {
         return Err(Error::SecurityViolation {
-            reason: format!(
-                "Command must be an absolute path, got: {}",
-                command
-            ),
+            reason: format!("Command must be an absolute path, got: {}", command),
         });
     }
 
@@ -186,11 +183,7 @@ mod tests {
 
         for cmd in dangerous {
             let result = validate_command(cmd);
-            assert!(
-                result.is_err(),
-                "Should reject dangerous command: {}",
-                cmd
-            );
+            assert!(result.is_err(), "Should reject dangerous command: {}", cmd);
             if let Err(Error::SecurityViolation { reason }) = result {
                 assert!(
                     reason.contains("forbidden") || reason.contains("metacharacter"),

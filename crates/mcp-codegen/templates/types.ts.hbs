@@ -1,0 +1,32 @@
+/**
+ * Shared types for {{server_name}} MCP server.
+ *
+ * @packageDocumentation
+ */
+
+/**
+ * Base result type for all tool calls.
+ */
+export interface ToolResult {
+  success: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+/**
+ * MCP tool call function signature.
+ */
+declare global {
+  function callTool(toolName: string, params: unknown): Promise<unknown>;
+}
+
+/**
+ * Available tools in this server.
+ */
+export const AVAILABLE_TOOLS = [
+{{#each tools}}
+  '{{name}}'{{#unless @last}},{{/unless}}
+{{/each}}
+] as const;
+
+export type ToolName = typeof AVAILABLE_TOOLS[number];

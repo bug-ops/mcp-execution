@@ -160,8 +160,7 @@ impl Bridge {
     /// Panics if `cache_size` is 0. Use at least 1 for minimal caching.
     #[must_use]
     pub fn with_limits(cache_size: usize, max_connections: usize) -> Self {
-        let cache_size =
-            NonZeroUsize::new(cache_size).expect("Cache size must be greater than 0");
+        let cache_size = NonZeroUsize::new(cache_size).expect("Cache size must be greater than 0");
 
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
@@ -217,22 +216,21 @@ impl Bridge {
         // Validate command for security (prevents command injection)
         mcp_core::validate_command(command)?;
 
-        let transport = TokioChildProcess::new(
-            tokio::process::Command::new(command).configure(|_cmd| {}),
-        )
-        .map_err(|e| Error::ConnectionFailed {
-            server: server_id.to_string(),
-            source: Box::new(e),
-        })?;
+        let transport =
+            TokioChildProcess::new(tokio::process::Command::new(command).configure(|_cmd| {}))
+                .map_err(|e| Error::ConnectionFailed {
+                    server: server_id.to_string(),
+                    source: Box::new(e),
+                })?;
 
         // Create client using serve pattern
-        let client = ()
-            .serve(transport)
-            .await
-            .map_err(|e| Error::ConnectionFailed {
-                server: server_id.to_string(),
-                source: Box::new(e),
-            })?;
+        let client =
+            ().serve(transport)
+                .await
+                .map_err(|e| Error::ConnectionFailed {
+                    server: server_id.to_string(),
+                    source: Box::new(e),
+                })?;
 
         let connection = Connection {
             client,
@@ -296,11 +294,8 @@ impl Bridge {
     ) -> Result<Value> {
         // Check cache first
         if self.cache_enabled {
-            let cache_key = CacheKey::from_parts(
-                server_id.as_str(),
-                tool_name.as_str(),
-                &params.to_string(),
-            );
+            let cache_key =
+                CacheKey::from_parts(server_id.as_str(), tool_name.as_str(), &params.to_string());
 
             let cached = self.cache.lock().await.get(&cache_key).cloned();
             if let Some(value) = cached {
@@ -355,11 +350,8 @@ impl Bridge {
 
         // Cache result
         if self.cache_enabled {
-            let cache_key = CacheKey::from_parts(
-                server_id.as_str(),
-                tool_name.as_str(),
-                &params.to_string(),
-            );
+            let cache_key =
+                CacheKey::from_parts(server_id.as_str(), tool_name.as_str(), &params.to_string());
             self.cache.lock().await.put(cache_key, result.clone());
         }
 

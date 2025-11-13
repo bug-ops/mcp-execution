@@ -1,0 +1,178 @@
+//! Template engine for code generation using Handlebars.
+//!
+//! Provides a wrapper around Handlebars with pre-registered templates
+//! for TypeScript code generation.
+//!
+//! # Examples
+//!
+//! ```
+//! use mcp_codegen::template_engine::TemplateEngine;
+//! use serde_json::json;
+//!
+//! let engine = TemplateEngine::new().unwrap();
+//! let context = json!({"name": "test"});
+//! // let result = engine.render("tool", &context).unwrap();
+//! ```
+
+use handlebars::Handlebars;
+use mcp_core::{Error, Result};
+use serde::Serialize;
+
+/// Template engine for code generation.
+///
+/// Wraps Handlebars and provides pre-registered templates for
+/// generating TypeScript code from MCP tool schemas.
+///
+/// # Thread Safety
+///
+/// This type is `Send` and `Sync`, allowing it to be used across
+/// thread boundaries safely.
+#[derive(Debug)]
+pub struct TemplateEngine<'a> {
+    handlebars: Handlebars<'a>,
+}
+
+impl<'a> TemplateEngine<'a> {
+    /// Creates a new template engine with registered templates.
+    ///
+    /// Registers all built-in templates for TypeScript code generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if template registration fails (should not happen
+    /// with valid built-in templates).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_codegen::template_engine::TemplateEngine;
+    ///
+    /// let engine = TemplateEngine::new().unwrap();
+    /// ```
+    pub fn new() -> Result<Self> {
+        let mut handlebars = Handlebars::new();
+
+        // Strict mode: fail on missing variables
+        handlebars.set_strict_mode(true);
+
+        // Register built-in templates
+        Self::register_templates(&mut handlebars)?;
+
+        Ok(Self { handlebars })
+    }
+
+    /// Registers all built-in Handlebars templates.
+    fn register_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
+        // Tool template: generates a single tool function
+        handlebars
+            .register_template_string("tool", include_str!("../templates/tool.ts.hbs"))
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register tool template: {}", e),
+                source: None,
+            })?;
+
+        // Manifest template: generates manifest.json
+        handlebars
+            .register_template_string("manifest", include_str!("../templates/manifest.json.hbs"))
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register manifest template: {}", e),
+                source: None,
+            })?;
+
+        // Types template: generates types.ts with shared types
+        handlebars
+            .register_template_string("types", include_str!("../templates/types.ts.hbs"))
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register types template: {}", e),
+                source: None,
+            })?;
+
+        // Index template: generates index.ts with exports
+        handlebars
+            .register_template_string("index", include_str!("../templates/index.ts.hbs"))
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register index template: {}", e),
+                source: None,
+            })?;
+
+        Ok(())
+    }
+
+    /// Renders a template with the given context.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Template name is not registered
+    /// - Context cannot be serialized
+    /// - Template rendering fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_codegen::template_engine::TemplateEngine;
+    /// use serde_json::json;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let engine = TemplateEngine::new()?;
+    /// let context = json!({"name": "test", "description": "A test tool"});
+    /// let result = engine.render("tool", &context)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn render<T: Serialize>(&self, template_name: &str, context: &T) -> Result<String> {
+        self.handlebars
+            .render(template_name, context)
+            .map_err(|e| Error::SerializationError {
+                message: format!("Template rendering failed: {}", e),
+                source: None,
+            })
+    }
+
+    /// Checks if a template is registered.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_codegen::template_engine::TemplateEngine;
+    ///
+    /// let engine = TemplateEngine::new().unwrap();
+    /// assert!(engine.has_template("tool"));
+    /// assert!(!engine.has_template("nonexistent"));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn has_template(&self, name: &str) -> bool {
+        self.handlebars.has_template(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_template_engine_new() {
+        let engine = TemplateEngine::new();
+        assert!(engine.is_ok());
+    }
+
+    #[test]
+    fn test_has_template() {
+        let engine = TemplateEngine::new().unwrap();
+        assert!(engine.has_template("tool"));
+        assert!(engine.has_template("manifest"));
+        assert!(engine.has_template("types"));
+        assert!(engine.has_template("index"));
+        assert!(!engine.has_template("nonexistent"));
+    }
+
+    #[test]
+    fn test_render_with_invalid_template() {
+        let engine = TemplateEngine::new().unwrap();
+        let context = json!({"name": "test"});
+        let result = engine.render("nonexistent", &context);
+        assert!(result.is_err());
+    }
+}
