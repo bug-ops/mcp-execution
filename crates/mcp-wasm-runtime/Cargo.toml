@@ -8,8 +8,8 @@ license.workspace = true
 [dependencies]
 mcp-core.workspace = true
 mcp-bridge.workspace = true
-mcp-vfs.workspace = true
-mcp-codegen.workspace = true
+# mcp-vfs.workspace = true  # TODO: Implement mcp-vfs
+# mcp-codegen.workspace = true  # Not needed for runtime
 
 # WASM runtime
 wasmtime.workspace = true
@@ -24,6 +24,7 @@ serde_json.workspace = true
 
 # Error handling
 thiserror.workspace = true
+anyhow.workspace = true
 
 # Async runtime
 tokio.workspace = true
