@@ -6,20 +6,29 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-mcp-core.workspace = true
-
-# Filesystem operations
-walkdir.workspace = true
-
-# Serialization
-serde.workspace = true
-serde_json.workspace = true
-
-# Error handling
+mcp-codegen.workspace = true
 thiserror.workspace = true
 
-# Logging
-tracing.workspace = true
+# Reserved for future use:
+# serde.workspace = true           # For VFS serialization
+# serde_json.workspace = true      # For manifest parsing
+# tracing.workspace = true         # For instrumentation/debugging
+
+[dependencies.dhat]
+version = "0.3"
+optional = true
 
 [dev-dependencies]
 tempfile.workspace = true
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+dhat-heap = ["dhat"]
+
+[[bench]]
+name = "vfs_benchmarks"
+harness = false
+
+[[example]]
+name = "profile_memory"
+required-features = ["dhat-heap"]

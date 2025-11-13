@@ -5,6 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["wasm"]
+
+# Execution environment targets
+wasm = []          # WebAssembly sandbox with host functions
+skills = []        # Claude Code Skills with shell execution
+
+# Meta features
+all = ["wasm", "skills"]  # Enable all for development
+
 [dependencies]
 mcp-core.workspace = true
 mcp-introspector.workspace = true

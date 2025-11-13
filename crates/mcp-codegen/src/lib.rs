@@ -2,15 +2,64 @@
 //!
 //! Transforms MCP tool schemas into executable TypeScript or Rust code
 //! using Handlebars templates.
+//!
+//! # Features
+//!
+//! This crate supports multiple code generation targets via feature flags:
+//!
+//! - **`wasm`** (default): Generate TypeScript for WebAssembly execution
+//! - **`skills`**: Generate executable scripts for Claude Code Skills
+//! - **`all`**: Enable both WASM and Skills generation
+//!
+//! # Examples
+//!
+//! ## WASM Code Generation (default)
+//!
+//! ```toml
+//! [dependencies]
+//! mcp-codegen = "0.1"  # wasm feature enabled by default
+//! ```
+//!
+//! ```no_run
+//! use mcp_codegen::CodeGenerator;
+//! use mcp_introspector::ServerInfo;
+//!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let generator = CodeGenerator::new()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Skills Code Generation
+//!
+//! ```toml
+//! [dependencies]
+//! mcp-codegen = { version = "0.1", features = ["skills"], default-features = false }
+//! ```
 
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-pub mod generator;
+// Common module (no feature gates)
+pub mod common;
 pub mod template_engine;
-pub mod types;
-pub mod typescript;
 
-pub use generator::CodeGenerator;
+// WASM module (feature-gated)
+#[cfg(feature = "wasm")]
+pub mod wasm;
+
+// Skills module (feature-gated)
+#[cfg(feature = "skills")]
+pub mod skills;
+
+// Re-export common types (always available)
+pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
 pub use template_engine::TemplateEngine;
-pub use types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
+
+// Re-export WASM-specific types
+#[cfg(feature = "wasm")]
+pub use wasm::CodeGenerator;
+
+// Feature check: at least one feature must be enabled
+#[cfg(not(any(feature = "wasm", feature = "skills")))]
+compile_error!("At least one feature must be enabled: 'wasm' or 'skills'");

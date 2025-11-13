@@ -126,9 +126,9 @@ pub mod types;
 // Re-export key types for convenience
 pub use skill_template::{create_skill_template_engine, render_skill};
 pub use types::{
-    sanitize_string, validate_no_template_syntax, Error, GeneratedSkill, ParameterContext, Result,
-    SkillContext, SkillGenerationOptions, SkillGenerationOptionsBuilder, SkillMetadata, SkillName,
-    TemplateType, ToolContext,
+    Error, GeneratedSkill, ParameterContext, Result, SkillContext, SkillGenerationOptions,
+    SkillGenerationOptionsBuilder, SkillMetadata, SkillName, TemplateType, ToolContext,
+    sanitize_string, validate_no_template_syntax,
 };
 
 #[cfg(test)]

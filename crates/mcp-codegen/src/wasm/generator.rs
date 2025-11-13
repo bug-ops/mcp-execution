@@ -23,9 +23,9 @@
 //! # }
 //! ```
 
+use crate::common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
+use crate::common::typescript;
 use crate::template_engine::TemplateEngine;
-use crate::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
-use crate::typescript;
 use mcp_core::{Error, Result};
 use mcp_introspector::ServerInfo;
 use std::collections::HashMap;

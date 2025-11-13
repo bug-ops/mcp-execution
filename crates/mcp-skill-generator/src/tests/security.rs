@@ -7,7 +7,10 @@
 //! - Unicode control character sanitization
 //! - Shell metacharacter blocking
 
-use crate::{create_skill_template_engine, render_skill, ParameterContext, SkillContext, SkillName, ToolContext};
+use crate::{
+    ParameterContext, SkillContext, SkillName, ToolContext, create_skill_template_engine,
+    render_skill,
+};
 use mcp_core::{ServerId, ToolName};
 
 #[test]

@@ -38,7 +38,10 @@ pub fn create_skill_template_engine() -> Result<TemplateEngine<'static>> {
 
     // Register skill template
     engine
-        .register_template_string(SKILL_TEMPLATE_NAME, include_str!("../templates/skill.yaml.hbs"))
+        .register_template_string(
+            SKILL_TEMPLATE_NAME,
+            include_str!("../templates/skill.yaml.hbs"),
+        )
         .map_err(|e| Error::TemplateError {
             message: format!("Failed to register skill template: {e}"),
             source: Some(Box::new(e)),

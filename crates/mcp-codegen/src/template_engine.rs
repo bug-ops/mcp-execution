@@ -62,39 +62,69 @@ impl<'a> TemplateEngine<'a> {
     }
 
     /// Registers all built-in Handlebars templates.
+    ///
+    /// Templates are registered based on enabled features:
+    /// - `wasm` feature: WASM-specific templates from templates/wasm/
+    /// - `skills` feature: Skills-specific templates from templates/skills/
+    #[allow(unused_variables)]
     fn register_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
+        // Register WASM templates if feature enabled
+        #[cfg(feature = "wasm")]
+        Self::register_wasm_templates(handlebars)?;
+
+        // Register Skills templates if feature enabled
+        #[cfg(feature = "skills")]
+        Self::register_skills_templates(handlebars)?;
+
+        Ok(())
+    }
+
+    /// Registers WASM-specific templates.
+    #[cfg(feature = "wasm")]
+    fn register_wasm_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
         // Tool template: generates a single tool function
         handlebars
-            .register_template_string("tool", include_str!("../templates/tool.ts.hbs"))
+            .register_template_string("tool", include_str!("../templates/wasm/tool.ts.hbs"))
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register tool template: {}", e),
+                message: format!("Failed to register WASM tool template: {}", e),
                 source: None,
             })?;
 
         // Manifest template: generates manifest.json
         handlebars
-            .register_template_string("manifest", include_str!("../templates/manifest.json.hbs"))
+            .register_template_string(
+                "manifest",
+                include_str!("../templates/wasm/manifest.json.hbs"),
+            )
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register manifest template: {}", e),
+                message: format!("Failed to register WASM manifest template: {}", e),
                 source: None,
             })?;
 
         // Types template: generates types.ts with shared types
         handlebars
-            .register_template_string("types", include_str!("../templates/types.ts.hbs"))
+            .register_template_string("types", include_str!("../templates/wasm/types.ts.hbs"))
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register types template: {}", e),
+                message: format!("Failed to register WASM types template: {}", e),
                 source: None,
             })?;
 
         // Index template: generates index.ts with exports
         handlebars
-            .register_template_string("index", include_str!("../templates/index.ts.hbs"))
+            .register_template_string("index", include_str!("../templates/wasm/index.ts.hbs"))
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register index template: {}", e),
+                message: format!("Failed to register WASM index template: {}", e),
                 source: None,
             })?;
 
+        Ok(())
+    }
+
+    /// Registers Skills-specific templates.
+    #[cfg(feature = "skills")]
+    fn register_skills_templates(_handlebars: &mut Handlebars<'a>) -> Result<()> {
+        // Placeholder for future Skills templates
+        // TODO: Implement Skills template registration
         Ok(())
     }
 
@@ -167,11 +197,7 @@ impl<'a> TemplateEngine<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn register_template_string(
-        &mut self,
-        name: &str,
-        template: &str,
-    ) -> Result<()> {
+    pub fn register_template_string(&mut self, name: &str, template: &str) -> Result<()> {
         self.handlebars
             .register_template_string(name, template)
             .map_err(|e| Error::SerializationError {

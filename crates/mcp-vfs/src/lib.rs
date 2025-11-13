@@ -1,14 +1,87 @@
 //! Virtual filesystem for MCP tools.
 //!
-//! Provides a virtual filesystem structure with progressive loading
-//! of MCP tool definitions.
+//! Provides an in-memory, read-only virtual filesystem for storing and
+//! accessing generated MCP tool definitions. Files are organized in a
+//! hierarchical structure like `/mcp-tools/servers/<server-id>/...`.
+//!
+//! # Features
+//!
+//! - **In-memory storage**: All files stored in memory for fast access
+//! - **Strong types**: Type-safe paths and error handling
+//! - **Builder pattern**: Fluent API for VFS construction
+//! - **Integration**: Works seamlessly with `mcp-codegen` output
+//! - **Thread-safe**: All types are `Send + Sync`
+//!
+//! # Examples
+//!
+//! ## Basic usage
+//!
+//! ```
+//! use mcp_vfs::{Vfs, VfsBuilder};
+//!
+//! // Create VFS using builder
+//! let vfs = VfsBuilder::new()
+//!     .add_file("/mcp-tools/manifest.json", "{}")
+//!     .add_file("/mcp-tools/types.ts", "export type Params = {};")
+//!     .build()
+//!     .unwrap();
+//!
+//! // Read files
+//! let content = vfs.read_file("/mcp-tools/manifest.json").unwrap();
+//! assert_eq!(content, "{}");
+//!
+//! // Check existence
+//! assert!(vfs.exists("/mcp-tools/types.ts"));
+//! assert!(!vfs.exists("/missing.ts"));
+//! ```
+//!
+//! ## Integration with code generation
+//!
+//! ```
+//! use mcp_vfs::VfsBuilder;
+//! use mcp_codegen::{GeneratedCode, GeneratedFile};
+//!
+//! let mut code = GeneratedCode::new();
+//! code.add_file(GeneratedFile {
+//!     path: "manifest.json".to_string(),
+//!     content: r#"{"version": "1.0"}"#.to_string(),
+//! });
+//! code.add_file(GeneratedFile {
+//!     path: "tools/sendMessage.ts".to_string(),
+//!     content: "export function sendMessage() {}".to_string(),
+//! });
+//!
+//! let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/vkteams-bot")
+//!     .build()
+//!     .unwrap();
+//!
+//! assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/manifest.json"));
+//! assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/tools/sendMessage.ts"));
+//! ```
+//!
+//! ## Directory operations
+//!
+//! ```
+//! use mcp_vfs::VfsBuilder;
+//!
+//! let vfs = VfsBuilder::new()
+//!     .add_file("/mcp-tools/servers/test/file1.ts", "")
+//!     .add_file("/mcp-tools/servers/test/file2.ts", "")
+//!     .build()
+//!     .unwrap();
+//!
+//! let files = vfs.list_dir("/mcp-tools/servers/test").unwrap();
+//! assert_eq!(files.len(), 2);
+//! ```
 
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-pub mod vfs;
 pub mod builder;
 pub mod types;
+pub mod vfs;
 
-pub use vfs::VirtualFS;
-pub use types::{FileEntry, DirEntry};
+// Re-export main types
+pub use builder::VfsBuilder;
+pub use types::{Result, VfsError, VfsFile, VfsPath};
+pub use vfs::Vfs;
