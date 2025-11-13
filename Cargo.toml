@@ -41,7 +41,7 @@ tokio = { version = "1.48", features = [
     "macros",
     "time",
     "sync",
-    "process",  # Required for MCP stdio transport
+    "process",         # Required for MCP stdio transport
 ] }
 async-trait = "0.1"
 
@@ -50,8 +50,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # WASM Runtime - Latest stable Wasmtime (monthly releases, 37.0.2 as of Nov 2025)
-wasmtime = "37.0"
-wasmtime-wasi = "37.0"
+wasmtime = "38.0"
+wasmtime-wasi = "38.0"
 
 # Error handling (latest stable versions as of Nov 2025)
 thiserror = "2.0" # For library error types (latest: 2.0.17)

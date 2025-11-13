@@ -33,12 +33,16 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
+pub mod cache;
 pub mod compiler;
 pub mod host_functions;
+pub mod monitor;
 pub mod sandbox;
 pub mod security;
 
+pub use cache::{CacheKey, ModuleCache};
 pub use compiler::{CompilationBackend, Compiler};
 pub use host_functions::HostContext;
+pub use monitor::ResourceMonitor;
 pub use sandbox::Runtime;
 pub use security::{SecurityConfig, SecurityConfigBuilder};

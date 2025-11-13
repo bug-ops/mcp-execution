@@ -7,12 +7,13 @@
 //!
 //! Run with: cargo bench --package mcp-codegen
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_codegen::CodeGenerator;
 use mcp_core::{ServerId, ToolName};
 use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use mcp_vfs::VfsBuilder;
 use serde_json::json;
+use std::hint::black_box;
 
 // ============================================================================
 // Test Data Generators

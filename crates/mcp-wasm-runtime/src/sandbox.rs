@@ -21,7 +21,9 @@
 //! # }
 //! ```
 
+use crate::cache::ModuleCache;
 use crate::host_functions::HostContext;
+use crate::monitor::ResourceMonitor;
 use crate::security::SecurityConfig;
 use mcp_bridge::Bridge;
 use mcp_core::{Error, Result};
@@ -65,6 +67,7 @@ pub struct Runtime {
     engine: Engine,
     host_context: HostContext,
     config: SecurityConfig,
+    module_cache: ModuleCache,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -72,6 +75,7 @@ impl std::fmt::Debug for Runtime {
         f.debug_struct("Runtime")
             .field("config", &self.config)
             .field("host_context", &self.host_context)
+            .field("module_cache", &self.module_cache)
             .finish_non_exhaustive()
     }
 }
@@ -119,11 +123,13 @@ impl Runtime {
         })?;
 
         let host_context = HostContext::new(bridge);
+        let module_cache = ModuleCache::new(100); // Default cache size: 100 modules
 
         Ok(Self {
             engine,
             host_context,
             config,
+            module_cache,
         })
     }
 
@@ -163,6 +169,10 @@ impl Runtime {
         _args: &[String],
     ) -> Result<serde_json::Value> {
         let start_time = Instant::now();
+        let monitor = ResourceMonitor::new(&self.config);
+
+        // Generate cache key
+        let cache_key = ModuleCache::cache_key_for_code(wasm_bytes);
 
         // Create store with host context and memory limits
         let store_data = StoreData {
@@ -191,10 +201,29 @@ impl Runtime {
             );
         }
 
-        // Compile module
-        let module = Module::new(&self.engine, wasm_bytes).map_err(|e| Error::WasmError {
-            message: format!("Failed to compile WASM module: {}", e),
-        })?;
+        // Try to get module from cache
+        let module = if let Some(cached_module) = self.module_cache.get(&cache_key) {
+            let key_preview = cache_key.as_str();
+            let preview_len = key_preview.len().min(16);
+            tracing::debug!("Using cached WASM module: {}", &key_preview[..preview_len]);
+            cached_module
+        } else {
+            // Compile module
+            tracing::debug!("Compiling WASM module ({} bytes)", wasm_bytes.len());
+            let compilation_start = Instant::now();
+
+            let module = Module::new(&self.engine, wasm_bytes).map_err(|e| Error::WasmError {
+                message: format!("Failed to compile WASM module: {}", e),
+            })?;
+
+            let compilation_time = compilation_start.elapsed();
+            tracing::info!("Module compiled in {:?}", compilation_time);
+
+            // Cache the compiled module
+            self.module_cache.insert(cache_key, module.clone());
+
+            module
+        };
 
         // Create linker with host functions
         let mut linker = Linker::new(&self.engine);
@@ -244,10 +273,13 @@ impl Runtime {
             elapsed,
             result
         );
+        tracing::debug!("Resource usage: {}", monitor.summary());
 
         Ok(serde_json::json!({
             "exit_code": result,
             "elapsed_ms": elapsed.as_millis(),
+            "memory_usage_mb": monitor.memory_usage_mb(),
+            "host_calls": monitor.host_call_count(),
         }))
     }
 
@@ -313,6 +345,54 @@ impl Runtime {
     #[cfg(test)]
     pub fn host_context(&self) -> &HostContext {
         &self.host_context
+    }
+
+    /// Returns reference to module cache.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_wasm_runtime::Runtime;
+    /// use mcp_wasm_runtime::security::SecurityConfig;
+    /// use mcp_bridge::Bridge;
+    /// use std::sync::Arc;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let bridge = Bridge::new(1000);
+    /// let config = SecurityConfig::default();
+    /// let runtime = Runtime::new(Arc::new(bridge), config)?;
+    ///
+    /// let cache = runtime.module_cache();
+    /// println!("Cache size: {}/{}", cache.len(), cache.capacity());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn module_cache(&self) -> &ModuleCache {
+        &self.module_cache
+    }
+
+    /// Clears the module cache.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_wasm_runtime::Runtime;
+    /// use mcp_wasm_runtime::security::SecurityConfig;
+    /// use mcp_bridge::Bridge;
+    /// use std::sync::Arc;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let bridge = Bridge::new(1000);
+    /// let config = SecurityConfig::default();
+    /// let runtime = Runtime::new(Arc::new(bridge), config)?;
+    ///
+    /// runtime.clear_cache();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn clear_cache(&self) {
+        self.module_cache.clear();
     }
 }
 

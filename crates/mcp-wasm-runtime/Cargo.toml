@@ -17,6 +17,7 @@ wasmtime-wasi.workspace = true
 
 # Caching
 blake3.workspace = true
+lru.workspace = true
 
 # Serialization
 serde.workspace = true
@@ -46,3 +47,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 default = ["assemblyscript"]
 assemblyscript = []
 quickjs = []
+
+[[bench]]
+name = "execution_benchmark"
+harness = false
