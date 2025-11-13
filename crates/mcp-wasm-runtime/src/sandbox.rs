@@ -105,6 +105,9 @@ impl Runtime {
         wasmtime_config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
         wasmtime_config.async_support(true);
 
+        // Use Cranelift compiler for better compatibility
+        wasmtime_config.strategy(wasmtime::Strategy::Cranelift);
+
         // Configure fuel for CPU limits
         if config.max_fuel().is_some() {
             wasmtime_config.consume_fuel(true);
@@ -206,24 +209,34 @@ impl Runtime {
             })?;
 
         // Get entry point function
+        tracing::debug!("Getting entry point function: {}", entry_point);
         let func = instance
             .get_typed_func::<(), i32>(&mut store, entry_point)
             .map_err(|e| Error::WasmError {
                 message: format!("Entry point '{}' not found: {}", entry_point, e),
             })?;
 
+        tracing::debug!("Calling entry point function asynchronously");
         // Execute with timeout
         let timeout = self.config.execution_timeout();
         let result = tokio::time::timeout(timeout, func.call_async(&mut store, ()))
             .await
-            .map_err(|_| Error::Timeout {
-                operation: "WASM execution".to_string(),
-                duration_secs: timeout.as_secs(),
+            .map_err(|_| {
+                tracing::error!("Execution timeout after {:?}", timeout);
+                Error::Timeout {
+                    operation: "WASM execution".to_string(),
+                    duration_secs: timeout.as_secs(),
+                }
             })?
-            .map_err(|e| Error::ExecutionError {
-                message: format!("WASM execution failed: {}", e),
-                source: None,
+            .map_err(|e| {
+                tracing::error!("WASM execution trap: {}", e);
+                Error::ExecutionError {
+                    message: format!("WASM execution failed: {}", e),
+                    source: None,
+                }
             })?;
+
+        tracing::debug!("WASM function returned: {}", result);
 
         let elapsed = start_time.elapsed();
         tracing::info!(
@@ -239,12 +252,60 @@ impl Runtime {
     }
 
     /// Links host functions to the WASM linker.
-    fn link_host_functions(&self, _linker: &mut Linker<StoreData>) -> Result<()> {
-        // TODO: Implement actual host function linking
-        // This requires defining the WASM function signatures that match
-        // our HostContext methods. For now, we return Ok as a placeholder.
+    ///
+    /// Registers host functions that WASM modules can call:
+    /// - `host_log(ptr: i32, len: i32)` - Log a message from WASM
+    /// - `host_add(a: i32, b: i32) -> i32` - Simple test function
+    ///
+    /// # Note
+    ///
+    /// Full MCP integration (call_tool, state management, VFS) requires
+    /// more complex memory management and will be implemented in the next phase.
+    fn link_host_functions(&self, linker: &mut Linker<StoreData>) -> Result<()> {
+        // Simple test function: add two numbers
+        linker
+            .func_wrap("env", "host_add", |a: i32, b: i32| -> i32 { a + b })
+            .map_err(|e| Error::WasmError {
+                message: format!("Failed to link host_add: {}", e),
+            })?;
 
-        tracing::debug!("Host functions linked");
+        // Log function: reads string from WASM memory
+        linker
+            .func_wrap(
+                "env",
+                "host_log",
+                |mut caller: wasmtime::Caller<'_, StoreData>, ptr: i32, len: i32| {
+                    // Get memory from the caller
+                    let mem = match caller.get_export("memory") {
+                        Some(wasmtime::Extern::Memory(mem)) => mem,
+                        _ => {
+                            tracing::error!("WASM module has no memory export");
+                            return;
+                        }
+                    };
+
+                    // Read string from WASM memory
+                    let data = mem.data(&caller);
+                    let ptr = ptr as usize;
+                    let len = len as usize;
+
+                    if ptr + len > data.len() {
+                        tracing::error!("Invalid memory access: ptr={}, len={}", ptr, len);
+                        return;
+                    }
+
+                    let bytes = &data[ptr..ptr + len];
+                    match std::str::from_utf8(bytes) {
+                        Ok(s) => tracing::info!("[WASM] {}", s),
+                        Err(e) => tracing::error!("Invalid UTF-8 from WASM: {}", e),
+                    }
+                },
+            )
+            .map_err(|e| Error::WasmError {
+                message: format!("Failed to link host_log: {}", e),
+            })?;
+
+        tracing::debug!("Host functions linked: host_add, host_log");
         Ok(())
     }
 
@@ -325,5 +386,42 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // TODO: Add test with valid WASM module when we have compiler ready
+    #[tokio::test]
+    async fn test_simple_wasm_execution() {
+        // Initialize tracing for test
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .try_init();
+
+        let bridge = Bridge::new(1000);
+        let config = SecurityConfig::default();
+        let runtime = Runtime::new(Arc::new(bridge), config).unwrap();
+
+        // Simple WASM module that returns 42
+        let wat = r#"
+            (module
+                (func (export "main") (result i32)
+                    (i32.const 42)
+                )
+            )
+        "#;
+
+        // Parse WAT to WASM
+        let wasm_bytes = wat::parse_str(wat).expect("Failed to parse WAT");
+
+        tracing::info!("Executing WASM module, size: {} bytes", wasm_bytes.len());
+
+        // Execute
+        let result = runtime.execute(&wasm_bytes, "main", &[]).await;
+
+        match result {
+            Ok(value) => {
+                assert_eq!(value["exit_code"], 42);
+            }
+            Err(e) => {
+                panic!("Expected successful execution, got error: {:?}", e);
+            }
+        }
+    }
 }

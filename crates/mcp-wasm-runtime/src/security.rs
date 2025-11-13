@@ -140,7 +140,9 @@ impl Default for SecurityConfig {
             memory_limit: MemoryLimit::from_mb(Self::DEFAULT_MEMORY_LIMIT_MB)
                 .expect("default memory limit is valid"),
             execution_timeout: Duration::from_secs(Self::DEFAULT_TIMEOUT_SECS),
-            max_fuel: Some(Self::DEFAULT_FUEL),
+            // Fuel is disabled by default due to Wasmtime 37.0 API limitations
+            // Use execution_timeout for CPU exhaustion protection
+            max_fuel: None,
             preopened_dirs: Vec::new(),
             allow_network: false, // Secure by default
             max_host_calls: Some(1000),
@@ -272,7 +274,8 @@ mod tests {
         let config = SecurityConfig::default();
         assert_eq!(config.memory_limit_bytes(), 256 * 1024 * 1024);
         assert_eq!(config.execution_timeout(), Duration::from_secs(60));
-        assert_eq!(config.max_fuel(), Some(10_000_000));
+        // Fuel disabled by default due to Wasmtime 37.0 API limitations
+        assert_eq!(config.max_fuel(), None);
         assert!(!config.allow_network());
         assert_eq!(config.max_host_calls(), Some(1000));
     }
