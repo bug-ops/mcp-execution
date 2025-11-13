@@ -140,9 +140,7 @@ async fn test_execution_timeout() {
 /// Test that valid WASM modules compile and execute successfully.
 #[tokio::test]
 async fn test_simple_arithmetic() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     // Simple WASM module that returns 123
     let wat = r#"

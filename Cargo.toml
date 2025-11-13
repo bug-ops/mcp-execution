@@ -7,6 +7,7 @@ members = [
     "crates/mcp-wasm-runtime",
     "crates/mcp-vfs",
     "crates/mcp-cli",
+    "crates/mcp-skill-generator",
     "crates/mcp-examples",
 ]
 resolver = "2"
@@ -27,6 +28,7 @@ mcp-codegen = { path = "crates/mcp-codegen" }
 mcp-bridge = { path = "crates/mcp-bridge" }
 mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
 mcp-vfs = { path = "crates/mcp-vfs" }
+mcp-skill-generator = { path = "crates/mcp-skill-generator" }
 
 # Official MCP Protocol Implementation (v0.8.5 as of Nov 2025)
 # Using 'client' feature for client-side MCP operations
@@ -87,6 +89,9 @@ uuid = { version = "1.11", features = ["v4", "fast-rng"] }
 
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
+
+# String manipulation and validation
+regex = "1.11"
 
 # Security and validation
 secrecy = "0.10" # For handling sensitive data
