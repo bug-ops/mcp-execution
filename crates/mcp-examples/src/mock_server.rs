@@ -318,17 +318,19 @@ impl MockMcpServer {
         // Basic parameter validation
         if let Some(obj) = params.as_object()
             && let Some(schema) = tool.input_schema.as_object()
-                && let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-                    for req_field in required {
-                        if let Some(field_name) = req_field.as_str()
-                            && !obj.contains_key(field_name) {
-                                return Err(MockServerError::InvalidParameters(format!(
-                                    "missing required field: {}",
-                                    field_name
-                                )));
-                            }
-                    }
+            && let Some(required) = schema.get("required").and_then(|r| r.as_array())
+        {
+            for req_field in required {
+                if let Some(field_name) = req_field.as_str()
+                    && !obj.contains_key(field_name)
+                {
+                    return Err(MockServerError::InvalidParameters(format!(
+                        "missing required field: {}",
+                        field_name
+                    )));
                 }
+            }
+        }
 
         // Return configured response or default
         Ok(self

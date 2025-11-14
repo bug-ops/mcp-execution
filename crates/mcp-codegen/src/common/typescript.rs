@@ -204,29 +204,30 @@ pub fn extract_properties(schema: &Value) -> Vec<serde_json::Value> {
     let mut properties = Vec::new();
 
     if let Some(obj) = schema.as_object()
-        && let Some(props) = obj.get("properties").and_then(|v| v.as_object()) {
-            let required = obj
-                .get("required")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .map(String::from)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+        && let Some(props) = obj.get("properties").and_then(|v| v.as_object())
+    {
+        let required = obj
+            .get("required")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
-            for (name, prop_schema) in props {
-                let ts_type = json_schema_to_typescript(prop_schema);
-                let is_required = required.contains(name);
+        for (name, prop_schema) in props {
+            let ts_type = json_schema_to_typescript(prop_schema);
+            let is_required = required.contains(name);
 
-                properties.push(serde_json::json!({
-                    "name": name,
-                    "type": ts_type,
-                    "required": is_required,
-                }));
-            }
+            properties.push(serde_json::json!({
+                "name": name,
+                "type": ts_type,
+                "required": is_required,
+            }));
         }
+    }
 
     properties
 }

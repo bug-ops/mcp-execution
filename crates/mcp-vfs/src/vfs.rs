@@ -196,9 +196,10 @@ impl Vfs {
                     // This is a subdirectory, add the directory path
                     let subdir = format!("{}{}", normalized_dir, &relative[..idx]);
                     if let Ok(subdir_path) = VfsPath::new(subdir)
-                        && !children.contains(&subdir_path) {
-                            children.push(subdir_path);
-                        }
+                        && !children.contains(&subdir_path)
+                    {
+                        children.push(subdir_path);
+                    }
                 }
             }
         }
