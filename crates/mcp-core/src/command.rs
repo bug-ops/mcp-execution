@@ -196,7 +196,12 @@ mod tests {
 
     #[test]
     fn test_validate_command_nonexistent() {
-        let result = validate_command("/absolutely/nonexistent/path/to/server");
+        #[cfg(unix)]
+        let nonexistent_path = "/absolutely/nonexistent/path/to/server";
+        #[cfg(windows)]
+        let nonexistent_path = "C:\\absolutely\\nonexistent\\path\\to\\server.exe";
+
+        let result = validate_command(nonexistent_path);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("does not exist"));
