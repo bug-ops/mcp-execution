@@ -78,7 +78,21 @@ wat = "1.240"
 mockall = "0.13"
 
 # CLI (for mcp-cli only)
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.5", features = ["derive", "env", "cargo", "color"] }
+
+# CLI User Experience (Phase 7)
+indicatif = "0.18"
+colored = "3.0"
+dialoguer = "0.12"
+console = "0.15"
+human-panic = "2.0"
+
+# Configuration (Phase 7)
+toml = "0.8"
+dirs = "6.0"
+
+# Monitoring (Phase 7)
+tracing-appender = "0.2"
 
 # Caching
 lru = "0.16"

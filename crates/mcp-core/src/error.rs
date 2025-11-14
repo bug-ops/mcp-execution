@@ -136,6 +136,12 @@ pub enum Error {
         /// Description of the state storage failure
         message: String,
     },
+
+    /// Invalid argument error.
+    ///
+    /// Raised when CLI arguments or function parameters are invalid.
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }
 
 impl Error {
