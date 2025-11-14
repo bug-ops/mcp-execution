@@ -263,7 +263,7 @@ mod tests {
         async fn set(&mut self, session: SessionId, key: String, value: Value) -> Result<()> {
             self.data
                 .entry(session.into_inner())
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(key, value);
             Ok(())
         }

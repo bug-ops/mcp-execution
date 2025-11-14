@@ -31,7 +31,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
-mockall = "0.13"
+mockall.workspace = true
 criterion.workspace = true
 
 [[bench]]

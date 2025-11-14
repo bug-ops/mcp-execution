@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn test_memory_limit_validation() {
         // Valid limits
-        assert!(MemoryLimit::new(1 * 1024 * 1024).is_ok());
+        assert!(MemoryLimit::new(1024 * 1024).is_ok());
         assert!(MemoryLimit::new(512 * 1024 * 1024).is_ok());
 
         // Too small

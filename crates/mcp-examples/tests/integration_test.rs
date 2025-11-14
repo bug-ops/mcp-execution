@@ -4,10 +4,8 @@
 
 use mcp_bridge::Bridge;
 use mcp_codegen::CodeGenerator;
-use mcp_core::{ServerId, ToolName};
 use mcp_examples::mock_server::MockMcpServer;
 use mcp_examples::token_analysis::TokenAnalysis;
-use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use mcp_vfs::VfsBuilder;
 use mcp_wasm_runtime::Runtime;
 use mcp_wasm_runtime::security::SecurityConfig;

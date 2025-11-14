@@ -1,5 +1,6 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mcp_vfs::{Vfs, VfsBuilder};
+use std::hint::black_box;
 
 /// Benchmark read_file operation across different VFS sizes
 fn bench_read_file(c: &mut Criterion) {

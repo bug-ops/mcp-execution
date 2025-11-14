@@ -34,7 +34,7 @@ tracing-subscriber.workspace = true
 blake3.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
+criterion = { workspace = true, features = ["async_tokio"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

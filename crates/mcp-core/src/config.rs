@@ -453,12 +453,16 @@ mod tests {
         let config = RuntimeConfig::default();
         assert!(config.validate().is_ok());
 
-        let mut invalid = RuntimeConfig::default();
-        invalid.connection_pool_size = 0;
+        let invalid = RuntimeConfig {
+            connection_pool_size: 0,
+            ..Default::default()
+        };
         assert!(invalid.validate().is_err());
 
-        let mut invalid2 = RuntimeConfig::default();
-        invalid2.execution_timeout = Duration::from_secs(0);
+        let invalid2 = RuntimeConfig {
+            execution_timeout: Duration::from_secs(0),
+            ..Default::default()
+        };
         assert!(invalid2.validate().is_err());
     }
 
@@ -557,8 +561,10 @@ mod tests {
 
     #[test]
     fn test_validation_with_empty_cache_dir() {
-        let mut config = RuntimeConfig::default();
-        config.cache_dir = Some(PathBuf::from(""));
+        let config = RuntimeConfig {
+            cache_dir: Some(PathBuf::from("")),
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 }

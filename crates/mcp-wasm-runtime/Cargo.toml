@@ -40,7 +40,7 @@ tempfile.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 criterion.workspace = true
-wat = "1.219" # WAT to WASM converter for tests
+wat.workspace = true                                                 # WAT to WASM converter for tests
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [features]

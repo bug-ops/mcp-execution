@@ -20,7 +20,7 @@ optional = true
 
 [dev-dependencies]
 tempfile.workspace = true
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { workspace = true, features = ["html_reports"] }
 
 [features]
 dhat-heap = ["dhat"]

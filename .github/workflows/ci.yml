@@ -58,7 +58,7 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
-  # Security audit using cargo-audit
+  # Security and supply chain audit using cargo-deny
   security:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -69,13 +69,22 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-audit
+      - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit
+          tool: cargo-deny
 
-      - name: Security audit
-        run: cargo audit --deny warnings
+      - name: Check security advisories
+        run: cargo deny check advisories
+
+      - name: Check licenses
+        run: cargo deny check licenses
+
+      - name: Check banned dependencies
+        run: cargo deny check bans
+
+      - name: Check sources
+        run: cargo deny check sources
 
   # Cross-platform tests with matrix
   test:

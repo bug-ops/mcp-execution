@@ -9,7 +9,7 @@
 //! - Special characters in names
 //! - Very long descriptions
 
-use mcp_codegen::{CodeGenerator, GeneratedCode};
+use mcp_codegen::CodeGenerator;
 use mcp_core::{ServerId, ToolName};
 use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;

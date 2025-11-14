@@ -1,0 +1,99 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+# This configuration provides comprehensive security and supply chain checks:
+# 1. Security advisories scanning (CVE, RUSTSEC)
+# 2. License compliance verification
+# 3. Banned/restricted dependencies management
+# 4. Duplicate dependencies detection
+# 5. Source verification (crates.io only)
+
+[advisories]
+
+# Ignore specific advisories if needed (add RUSTSEC IDs here)
+ignore = [
+    # paste crate - unmaintained but used by rmcp (transitive dependency)
+    # Only used at compile-time for macros, low security risk
+    # Tracking: https://github.com/modelcontextprotocol/rust-sdk/issues
+    "RUSTSEC-2024-0436",
+]
+
+[licenses]
+version = 2
+
+# Allow the following open-source licenses
+# These are common permissive licenses used in the Rust ecosystem
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception", # Used by some LLVM/Rust tooling
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",               # Unicode data files
+    "Unicode-3.0",
+    "Zlib",                           # Compression libraries
+    "BSL-1.0",                        # Boost Software License
+]
+
+# Confidence threshold for license detection (0.8 = 80% confidence)
+confidence-threshold = 0.8
+
+# Additional license exceptions for specific crates
+# Use this if a commonly-used crate has a non-standard license
+exceptions = [
+    # Example: { allow = ["OpenSSL"], name = "ring", version = "*" },
+]
+
+[bans]
+# Warn when multiple versions of the same crate are used
+# This helps reduce binary size and compilation time
+multiple-versions = "warn"
+
+# Allow wildcard dependencies (we control versions via workspace)
+wildcards = "allow"
+
+# Highlight all instances of duplicate dependencies in output
+highlight = "all"
+
+# Allow workspace members to use default features
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# Deny specific crates (security or policy reasons)
+deny = [
+    # Example: ban old, vulnerable OpenSSL versions
+    # { name = "openssl", version = "<1.1" },
+]
+
+# Skip checking these crates for duplicates
+# Use sparingly, only for build-time tools or dev dependencies
+skip = [
+    # Example: { name = "syn", version = "1.0" },
+]
+
+# Skip checking dependencies of these crates
+# Useful for dev-dependencies that don't affect final binary
+skip-tree = [
+    # Example: { name = "criterion", version = "*" },
+]
+
+[sources]
+# Deny crates from unknown registries
+unknown-registry = "deny"
+
+# Deny crates from unknown git repositories
+unknown-git = "deny"
+
+# Only allow crates from the official crates.io registry
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# Allow specific git repositories (if needed for unreleased patches)
+# Uncomment and add repositories as needed
+# allow-git = [
+#     "https://github.com/modelcontextprotocol/rust-sdk",
+# ]
+
+# Organizational allowlist (for private registries)
+# Uncomment if using private crate registries
+# allow-org = { github = ["your-org"] }
