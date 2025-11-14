@@ -180,10 +180,10 @@ impl RuntimeConfig {
             return Err("Execution timeout must be greater than zero".to_string());
         }
 
-        if let Some(cache_dir) = &self.cache_dir {
-            if cache_dir.as_os_str().is_empty() {
-                return Err("Cache directory path cannot be empty".to_string());
-            }
+        if let Some(cache_dir) = &self.cache_dir
+            && cache_dir.as_os_str().is_empty()
+        {
+            return Err("Cache directory path cannot be empty".to_string());
         }
 
         Ok(())

@@ -117,12 +117,20 @@ impl VfsBuilder {
     #[must_use]
     pub fn from_generated_code(code: GeneratedCode, base_path: impl AsRef<Path>) -> Self {
         let mut builder = Self::new();
-        let base = base_path.as_ref();
+        let base = base_path.as_ref().to_string_lossy();
+
+        // Ensure base path ends with a trailing slash for proper joining
+        let base_normalized = if base.ends_with('/') {
+            base.into_owned()
+        } else {
+            format!("{}/", base)
+        };
 
         for file in code.files {
-            // Construct full path by joining base path with file path
-            let full_path = base.join(&file.path);
-            builder = builder.add_file(full_path, file.content);
+            // Use string concatenation to maintain Unix-style paths on all platforms
+            // This ensures VFS paths are always forward-slash separated, even on Windows
+            let full_path = format!("{}{}", base_normalized, file.path);
+            builder = builder.add_file(full_path.as_str(), file.content);
         }
 
         builder
