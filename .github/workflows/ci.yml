@@ -7,7 +7,7 @@ on:
     branches: [master, main, develop]
   schedule:
     # Weekly security audit on Sundays at midnight
-    - cron: '0 0 * * 0'
+    - cron: "0 0 * * 0"
 
 env:
   CARGO_TERM_COLOR: always
@@ -191,7 +191,7 @@ jobs:
           name: codecov-umbrella
 
       - name: Archive coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-report
           path: lcov.info
@@ -199,17 +199,17 @@ jobs:
 
   # MSRV check (Minimum Supported Rust Version)
   msrv:
-    name: Check MSRV (1.85)
+    name: Check MSRV (1.88)
     needs: [check]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Rust 1.85
+      - name: Install Rust 1.88
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.85"
+          toolchain: "1.88"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
