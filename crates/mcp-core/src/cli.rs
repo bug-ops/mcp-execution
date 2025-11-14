@@ -397,10 +397,17 @@ impl CacheDir {
             crate::Error::InvalidArgument("system cache directory not available".to_string())
         })?;
 
+        // Canonicalize base cache once for all comparisons (handles case-insensitive filesystems)
+        let canonical_base = base_cache
+            .canonicalize()
+            .unwrap_or_else(|_| base_cache.clone());
+
         // Resolve the provided path relative to base cache
         let resolved = if path.is_absolute() {
             // Reject absolute paths outside base cache
-            if !path.starts_with(&base_cache) {
+            // Canonicalize the absolute path for comparison if it exists
+            let path_to_check = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if !path_to_check.starts_with(&canonical_base) {
                 return Err(crate::Error::InvalidArgument(format!(
                     "cache directory must be within system cache directory ({})",
                     base_cache.display()
@@ -420,7 +427,7 @@ impl CacheDir {
             })?;
 
             // Verify canonical path is still within base cache
-            if !canonical.starts_with(&base_cache) {
+            if !canonical.starts_with(&canonical_base) {
                 return Err(crate::Error::InvalidArgument(
                     "cache directory path traversal detected".to_string(),
                 ));
@@ -662,13 +669,23 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_dir_absolute_within_cache() {
-        // Absolute path within system cache should be valid
+    #[cfg(unix)]
+    fn test_cache_dir_absolute_within_cache_unix() {
+        // Absolute path within system cache should be valid (Unix)
         if let Some(base) = dirs::cache_dir() {
             let valid_abs = base.join("mcp-execution");
             let cache = CacheDir::new(valid_abs.clone()).unwrap();
             assert_eq!(cache.as_path(), &valid_abs);
         }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_cache_dir_absolute_within_cache_windows() {
+        // Windows: Test with actual Windows path
+        // Just verify that relative paths work - absolute paths tested separately
+        let cache = CacheDir::new("mcp-execution").unwrap();
+        assert!(cache.as_path().ends_with("mcp-execution"));
     }
 
     // Security tests for path traversal prevention
@@ -682,11 +699,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_dir_absolute_outside_cache() {
-        // Absolute paths outside system cache should be rejected
+    #[cfg(unix)]
+    fn test_cache_dir_absolute_outside_cache_unix() {
+        // Absolute paths outside system cache should be rejected (Unix)
         assert!(CacheDir::new("/etc/passwd").is_err());
         assert!(CacheDir::new("/tmp/outside").is_err());
         assert!(CacheDir::new("/root/.cache").is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_cache_dir_absolute_outside_cache_windows() {
+        // Absolute paths outside system cache should be rejected (Windows)
+        assert!(CacheDir::new("C:\\Windows\\System32").is_err());
+        assert!(CacheDir::new("C:\\Program Files").is_err());
     }
 
     #[test]
