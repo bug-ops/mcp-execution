@@ -17,16 +17,21 @@
 //! use mcp_core::validate_command;
 //!
 //! // Valid absolute path
-//! # std::fs::write("/tmp/test-mcp-server", "#!/bin/sh\n").unwrap();
+//! # let temp_file = if cfg!(windows) {
+//! #     std::env::temp_dir().join("test-mcp-server.exe")
+//! # } else {
+//! #     std::path::PathBuf::from("/tmp/test-mcp-server")
+//! # };
+//! # std::fs::write(&temp_file, "#!/bin/sh\n").unwrap();
 //! # #[cfg(unix)]
 //! # {
 //! # use std::os::unix::fs::PermissionsExt;
-//! # let mut perms = std::fs::metadata("/tmp/test-mcp-server").unwrap().permissions();
+//! # let mut perms = std::fs::metadata(&temp_file).unwrap().permissions();
 //! # perms.set_mode(0o755);
-//! # std::fs::set_permissions("/tmp/test-mcp-server", perms).unwrap();
+//! # std::fs::set_permissions(&temp_file, perms).unwrap();
 //! # }
-//! let result = validate_command("/tmp/test-mcp-server");
-//! # std::fs::remove_file("/tmp/test-mcp-server").ok();
+//! let result = validate_command(temp_file.to_str().unwrap());
+//! # std::fs::remove_file(&temp_file).ok();
 //! # if result.is_err() {
 //! #     // On some systems, execution permission check might fail
 //! #     return;
