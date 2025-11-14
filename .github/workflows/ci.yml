@@ -101,10 +101,6 @@ jobs:
           # Test on beta channel on Linux only
           - os: ubuntu-latest
             rust: beta
-          # Test on nightly (allow to fail)
-          - os: ubuntu-latest
-            rust: nightly
-    continue-on-error: ${{ matrix.rust == 'nightly' }}
 
     steps:
       - uses: actions/checkout@v5
