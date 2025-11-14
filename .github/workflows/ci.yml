@@ -51,10 +51,10 @@ jobs:
         run: cargo +nightly fmt --all -- --check
 
       - name: Clippy (all targets, all features)
-        run: cargo clippy --all-targets --all-features --workspace -- -D warnings
+        run: cargo +stable clippy --all-targets --all-features --workspace -- -D warnings
 
       - name: Check documentation
-        run: cargo doc --no-deps --all-features --workspace
+        run: cargo +stable doc --no-deps --all-features --workspace
         env:
           RUSTDOCFLAGS: "-D warnings"
 
