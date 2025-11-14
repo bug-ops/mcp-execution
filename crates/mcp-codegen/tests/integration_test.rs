@@ -197,7 +197,7 @@ fn test_complete_generation_workflow_vkteams() {
         .read_file("/mcp-tools/servers/vkteams-bot/manifest.json")
         .expect("Should read manifest");
     let manifest: serde_json::Value =
-        serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
+        serde_json::from_str(manifest_content).expect("Manifest should be valid JSON");
 
     assert_eq!(manifest["name"], "VK Teams Bot");
     assert_eq!(manifest["version"], "2.1.0");
@@ -247,7 +247,7 @@ fn test_empty_server_generation() {
     let manifest_content = vfs
         .read_file("/mcp-tools/servers/empty/manifest.json")
         .unwrap();
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(manifest_content).unwrap();
     assert_eq!(manifest["tools"].as_array().unwrap().len(), 0);
 }
 
@@ -446,7 +446,7 @@ fn test_performance_large_server() {
     let mut tools = Vec::new();
     for i in 0..50 {
         tools.push(ToolInfo {
-            name: ToolName::new(&format!("tool_{}", i)),
+            name: ToolName::new(format!("tool_{}", i)),
             description: format!("Tool number {}", i),
             input_schema: json!({
                 "type": "object",

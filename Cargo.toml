@@ -103,18 +103,20 @@ criterion = "0.7"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
-unsafe_op_in_unsafe_fn = "warn"
+unsafe_op_in_unsafe_fn = "deny"
 unused_lifetimes = "warn"
 
 [workspace.lints.clippy]
-all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-cargo = { level = "warn", priority = -1 }
-nursery = { level = "warn", priority = -1 }
+# Deny all clippy warnings to fail CI
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
 
 # Allow specific lints that are too strict or have false positives
-needless-borrows-for-generic-args = "allow"
-multiple-crate-versions = "allow"  # Common with transitive dependencies
+needless_borrows_for_generic_args = { level = "allow", priority = 1 }
+multiple_crate_versions = { level = "allow", priority = 1 }         # Common with transitive dependencies
+cargo_common_metadata = { level = "allow", priority = 1 }           # Not required for internal workspace crates
 
 [profile.release]
 opt-level = 3

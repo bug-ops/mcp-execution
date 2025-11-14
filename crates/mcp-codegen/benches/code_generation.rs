@@ -22,7 +22,7 @@ use std::hint::black_box;
 /// Creates a simple tool with minimal schema.
 fn create_simple_tool(index: usize) -> ToolInfo {
     ToolInfo {
-        name: ToolName::new(&format!("simple_tool_{}", index)),
+        name: ToolName::new(format!("simple_tool_{}", index)),
         description: format!("Simple tool {}", index),
         input_schema: json!({
             "type": "object",
@@ -38,7 +38,7 @@ fn create_simple_tool(index: usize) -> ToolInfo {
 /// Creates a tool with moderate schema complexity.
 fn create_moderate_tool(index: usize) -> ToolInfo {
     ToolInfo {
-        name: ToolName::new(&format!("moderate_tool_{}", index)),
+        name: ToolName::new(format!("moderate_tool_{}", index)),
         description: format!("Moderate complexity tool {}", index),
         input_schema: json!({
             "type": "object",
@@ -67,7 +67,7 @@ fn create_moderate_tool(index: usize) -> ToolInfo {
 /// Creates a tool with complex nested schema.
 fn create_complex_tool(index: usize) -> ToolInfo {
     ToolInfo {
-        name: ToolName::new(&format!("complex_tool_{}", index)),
+        name: ToolName::new(format!("complex_tool_{}", index)),
         description: format!("Complex nested tool {}", index),
         input_schema: json!({
             "type": "object",
@@ -141,7 +141,7 @@ fn create_server_info(tool_count: usize, tool_creator: fn(usize) -> ToolInfo) ->
     let tools: Vec<_> = (0..tool_count).map(tool_creator).collect();
 
     ServerInfo {
-        id: ServerId::new(&format!("bench-server-{}", tool_count)),
+        id: ServerId::new(format!("bench-server-{}", tool_count)),
         name: format!("Benchmark Server (n={})", tool_count),
         version: "1.0.0".to_string(),
         tools,

@@ -293,7 +293,7 @@ mod tests {
     fn create_test_server(num_tools: usize) -> ServerInfo {
         let tools: Vec<ToolInfo> = (0..num_tools)
             .map(|i| ToolInfo {
-                name: ToolName::new(&format!("tool_{}", i)),
+                name: ToolName::new(format!("tool_{}", i)),
                 description: format!("Tool {}", i),
                 input_schema: json!({"type": "object"}),
                 output_schema: None,

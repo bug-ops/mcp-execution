@@ -144,7 +144,7 @@ fn test_codegen_to_vfs() {
     let vfs = result.unwrap();
 
     // Verify files are accessible
-    assert!(vfs.exists(&format!("{}/manifest.json", vfs_root)));
+    assert!(vfs.exists(format!("{}/manifest.json", vfs_root)));
 }
 
 #[test]

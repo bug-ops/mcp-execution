@@ -14,7 +14,7 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUST_BACKTRACE: short
-  RUSTFLAGS: "-D warnings"
+  # Don't use RUSTFLAGS=-D warnings, use workspace lints configuration instead
   RUSTUP_MAX_RETRIES: 10
 
 # Cancel previous runs on new push
@@ -51,7 +51,7 @@ jobs:
         run: cargo +nightly fmt --all -- --check
 
       - name: Clippy (all targets, all features)
-        run: cargo +stable clippy --all-targets --all-features --workspace -- -D warnings
+        run: cargo +stable clippy --all-targets --all-features --workspace
 
       - name: Check documentation
         run: cargo +stable doc --no-deps --all-features --workspace

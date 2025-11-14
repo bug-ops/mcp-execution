@@ -117,7 +117,7 @@ fn bench_scaling_with_tools(c: &mut Criterion) {
     for num_tools in [1, 5, 10, 20, 50].iter() {
         let tools: Vec<ToolInfo> = (0..*num_tools)
             .map(|i| ToolInfo {
-                name: ToolName::new(&format!("tool_{}", i)),
+                name: ToolName::new(format!("tool_{}", i)),
                 description: format!("Tool number {}", i),
                 input_schema: json!({"type": "object"}),
                 output_schema: None,

@@ -11,7 +11,7 @@ use serde_json::json;
 
 fn create_moderate_tool(index: usize) -> ToolInfo {
     ToolInfo {
-        name: ToolName::new(&format!("tool_{}", index)),
+        name: ToolName::new(format!("tool_{}", index)),
         description: format!("Tool {}", index),
         input_schema: json!({
             "type": "object",
