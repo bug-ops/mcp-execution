@@ -97,14 +97,13 @@ impl HostContext {
         let mut count = self.call_count.write().await;
         *count += 1;
 
-        if let Some(max) = self.max_calls {
-            if *count > max {
+        if let Some(max) = self.max_calls
+            && *count > max {
                 return Err(Error::ExecutionError {
                     message: format!("Host function call limit exceeded: {}/{}", *count, max),
                     source: None,
                 });
             }
-        }
 
         Ok(())
     }

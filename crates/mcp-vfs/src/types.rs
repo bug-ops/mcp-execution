@@ -16,7 +16,7 @@
 //! ```
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use thiserror::Error;
 
 /// Errors that can occur during VFS operations.
@@ -136,10 +136,14 @@ impl VfsError {
 
 /// A validated virtual filesystem path.
 ///
-/// VfsPath ensures paths are:
-/// - Absolute (start with '/')
+/// VfsPath ensures paths use Unix-style conventions on all platforms:
+/// - Must start with '/' (absolute paths only)
 /// - Free of parent directory references ('..')
-/// - Normalized (no redundant '/' or '.')
+/// - Use forward slashes as separators
+///
+/// This is intentional: VFS paths are platform-independent and always use
+/// Unix conventions, even on Windows. This enables consistent path handling
+/// across development machines and CI environments.
 ///
 /// # Examples
 ///
@@ -157,20 +161,28 @@ impl VfsError {
 /// assert!(VfsPath::new("relative/path").is_err());
 /// assert!(VfsPath::new("/parent/../escape").is_err());
 /// ```
+///
+/// On Windows, Unix-style paths like "/mcp-tools/servers/test" are accepted
+/// (not Windows paths like "C:\mcp-tools\servers\test").
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct VfsPath(PathBuf);
+pub struct VfsPath(String);
 
 impl VfsPath {
     /// Creates a new VfsPath from a path-like type.
     ///
-    /// The path must be absolute and must not contain parent directory
-    /// references ('..').
+    /// The path must be absolute (start with '/') and must not contain parent
+    /// directory references ('..').
+    ///
+    /// VfsPath uses Unix-style path conventions on all platforms, ensuring
+    /// consistent behavior on Linux, macOS, and Windows. Paths are validated
+    /// using string-based checks rather than platform-specific Path::is_absolute(),
+    /// which enables cross-platform compatibility.
     ///
     /// # Errors
     ///
-    /// Returns `VfsError::PathNotAbsolute` if the path is not absolute.
+    /// Returns `VfsError::PathNotAbsolute` if the path does not start with '/'.
     /// Returns `VfsError::InvalidPathComponent` if the path contains '..'.
-    /// Returns `VfsError::InvalidPath` if the path is empty or invalid.
+    /// Returns `VfsError::InvalidPath` if the path is empty or not UTF-8 valid.
     ///
     /// # Examples
     ///
@@ -179,35 +191,52 @@ impl VfsPath {
     ///
     /// let path = VfsPath::new("/mcp-tools/test.ts")?;
     /// assert_eq!(path.as_str(), "/mcp-tools/test.ts");
+    ///
+    /// // Works on all platforms (Unix-style paths)
+    /// let path = VfsPath::new("/mcp-tools/servers/test/manifest.json")?;
     /// # Ok::<(), mcp_vfs::VfsError>(())
     /// ```
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
+        // Convert to string for platform-independent validation
+        let path_str = path.to_str().ok_or_else(|| VfsError::InvalidPath {
+            path: path.display().to_string(),
+        })?;
+
+        // Normalize path separators to Unix-style (forward slashes) on all platforms
+        // This ensures VFS paths are consistent regardless of the host OS
+        let normalized_str = if cfg!(target_os = "windows") {
+            // Replace Windows backslashes with forward slashes
+            path_str.replace(std::path::MAIN_SEPARATOR, "/")
+        } else {
+            path_str.to_string()
+        };
+
         // Check if empty
-        if path.as_os_str().is_empty() {
+        if normalized_str.is_empty() {
             return Err(VfsError::InvalidPath {
                 path: String::new(),
             });
         }
 
-        // Check if absolute
-        if !path.is_absolute() {
+        // Check if absolute using Unix-style path rules (starts with '/')
+        // VFS uses Unix-style paths on all platforms
+        if !normalized_str.starts_with('/') {
             return Err(VfsError::PathNotAbsolute {
-                path: path.display().to_string(),
+                path: normalized_str,
             });
         }
 
-        // Check for '..' components
-        for component in path.components() {
-            if component == std::path::Component::ParentDir {
-                return Err(VfsError::InvalidPathComponent {
-                    path: path.display().to_string(),
-                });
-            }
+        // Check for '..' components in the path string
+        if normalized_str.contains("..") {
+            return Err(VfsError::InvalidPathComponent {
+                path: normalized_str,
+            });
         }
 
-        Ok(Self(path.to_path_buf()))
+        // Store as String with normalized Unix-style separators
+        Ok(Self(normalized_str))
     }
 
     /// Returns the path as a `Path` reference.
@@ -224,7 +253,7 @@ impl VfsPath {
     /// ```
     #[must_use]
     pub fn as_path(&self) -> &Path {
-        &self.0
+        Path::new(&self.0)
     }
 
     /// Returns the path as a string slice.
@@ -240,9 +269,7 @@ impl VfsPath {
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
-        self.0
-            .to_str()
-            .expect("VfsPath contains non-UTF-8 characters (this is a bug)")
+        &self.0
     }
 
     /// Returns the parent directory of this path.
@@ -261,7 +288,16 @@ impl VfsPath {
     /// ```
     #[must_use]
     pub fn parent(&self) -> Option<VfsPath> {
-        self.0.parent().map(|p| VfsPath(p.to_path_buf()))
+        // Find the last '/' separator
+        self.0.rfind('/').map(|pos| {
+            if pos == 0 {
+                // Parent of "/foo" is "/" (root)
+                VfsPath("/".to_string())
+            } else {
+                // Parent of "/foo/bar" is "/foo"
+                VfsPath(self.0[..pos].to_string())
+            }
+        })
     }
 
     /// Checks if this path is a directory path.
@@ -282,7 +318,10 @@ impl VfsPath {
     /// ```
     #[must_use]
     pub fn is_dir_path(&self) -> bool {
-        self.0.extension().is_none()
+        // A path is a directory if it doesn't contain a '.' after the last '/'
+        self.0
+            .rfind('/')
+            .is_some_and(|last_slash| !self.0[last_slash..].contains('.'))
     }
 }
 
@@ -294,7 +333,7 @@ impl fmt::Display for VfsPath {
 
 impl AsRef<Path> for VfsPath {
     fn as_ref(&self) -> &Path {
-        &self.0
+        Path::new(&self.0)
     }
 }
 

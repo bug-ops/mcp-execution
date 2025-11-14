@@ -203,8 +203,8 @@ pub fn json_schema_to_typescript(schema: &Value) -> String {
 pub fn extract_properties(schema: &Value) -> Vec<serde_json::Value> {
     let mut properties = Vec::new();
 
-    if let Some(obj) = schema.as_object() {
-        if let Some(props) = obj.get("properties").and_then(|v| v.as_object()) {
+    if let Some(obj) = schema.as_object()
+        && let Some(props) = obj.get("properties").and_then(|v| v.as_object()) {
             let required = obj
                 .get("required")
                 .and_then(|v| v.as_array())
@@ -227,7 +227,6 @@ pub fn extract_properties(schema: &Value) -> Vec<serde_json::Value> {
                 }));
             }
         }
-    }
 
     properties
 }
