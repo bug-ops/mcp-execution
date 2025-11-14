@@ -341,10 +341,10 @@ impl FromStr for ServerConnectionString {
 ///
 /// ```
 /// use mcp_core::cli::CacheDir;
-/// use std::path::PathBuf;
 ///
-/// let cache = CacheDir::new("/tmp/cache")?;
-/// assert_eq!(cache.as_path(), &PathBuf::from("/tmp/cache"));
+/// // Relative paths are resolved within the system cache directory
+/// let cache = CacheDir::new("mcp-execution")?;
+/// assert!(cache.as_path().ends_with("mcp-execution"));
 /// # Ok::<(), mcp_core::Error>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -445,10 +445,10 @@ impl CacheDir {
     ///
     /// ```
     /// use mcp_core::cli::CacheDir;
-    /// use std::path::Path;
     ///
-    /// let cache = CacheDir::new("/tmp")?;
-    /// assert_eq!(cache.as_path(), Path::new("/tmp"));
+    /// // Relative paths are resolved within the system cache directory
+    /// let cache = CacheDir::new("my-cache")?;
+    /// assert!(cache.as_path().ends_with("my-cache"));
     /// # Ok::<(), mcp_core::Error>(())
     /// ```
     #[must_use]
