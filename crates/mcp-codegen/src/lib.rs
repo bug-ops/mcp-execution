@@ -1,3 +1,14 @@
+// Temporary allow for Phase 7.1 - will be cleaned up in follow-up
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::option_if_let_else)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::unused_self)]
+#![allow(clippy::unnecessary_wraps)]
+#![allow(clippy::needless_lifetimes)]
+#![allow(clippy::elidable_lifetime_names)]
+
 //! Code generation for MCP tools.
 //!
 //! Transforms MCP tool schemas into executable TypeScript or Rust code

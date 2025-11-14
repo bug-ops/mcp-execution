@@ -159,7 +159,7 @@ impl Error {
     /// assert!(err.is_connection_error());
     /// ```
     #[must_use]
-    pub fn is_connection_error(&self) -> bool {
+    pub const fn is_connection_error(&self) -> bool {
         matches!(self, Self::ConnectionFailed { .. })
     }
 
@@ -176,7 +176,7 @@ impl Error {
     /// assert!(err.is_security_error());
     /// ```
     #[must_use]
-    pub fn is_security_error(&self) -> bool {
+    pub const fn is_security_error(&self) -> bool {
         matches!(self, Self::SecurityViolation { .. })
     }
 
@@ -194,7 +194,7 @@ impl Error {
     /// assert!(err.is_execution_error());
     /// ```
     #[must_use]
-    pub fn is_execution_error(&self) -> bool {
+    pub const fn is_execution_error(&self) -> bool {
         matches!(self, Self::ExecutionError { .. })
     }
 
@@ -211,7 +211,7 @@ impl Error {
     /// assert!(err.is_not_found());
     /// ```
     #[must_use]
-    pub fn is_not_found(&self) -> bool {
+    pub const fn is_not_found(&self) -> bool {
         matches!(self, Self::ResourceNotFound { .. })
     }
 
@@ -228,7 +228,7 @@ impl Error {
     /// assert!(err.is_config_error());
     /// ```
     #[must_use]
-    pub fn is_config_error(&self) -> bool {
+    pub const fn is_config_error(&self) -> bool {
         matches!(self, Self::ConfigError { .. })
     }
 
@@ -246,7 +246,7 @@ impl Error {
     /// assert!(err.is_timeout());
     /// ```
     #[must_use]
-    pub fn is_timeout(&self) -> bool {
+    pub const fn is_timeout(&self) -> bool {
         matches!(self, Self::Timeout { .. })
     }
 
@@ -263,7 +263,7 @@ impl Error {
     /// assert!(err.is_wasm_error());
     /// ```
     #[must_use]
-    pub fn is_wasm_error(&self) -> bool {
+    pub const fn is_wasm_error(&self) -> bool {
         matches!(self, Self::WasmError { .. })
     }
 }

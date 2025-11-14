@@ -97,8 +97,7 @@ impl FromStr for OutputFormat {
             "text" => Ok(Self::Text),
             "pretty" => Ok(Self::Pretty),
             _ => Err(crate::Error::InvalidArgument(format!(
-                "invalid output format: '{}' (expected: json, text, or pretty)",
-                s
+                "invalid output format: '{s}' (expected: json, text, or pretty)"
             ))),
         }
     }
@@ -417,7 +416,7 @@ impl CacheDir {
         let parent = resolved.parent().unwrap_or(&resolved);
         if parent.exists() {
             let canonical = parent.canonicalize().map_err(|e| {
-                crate::Error::InvalidArgument(format!("invalid cache directory path: {}", e))
+                crate::Error::InvalidArgument(format!("invalid cache directory path: {e}"))
             })?;
 
             // Verify canonical path is still within base cache
@@ -430,7 +429,7 @@ impl CacheDir {
 
         // Reject paths with parent directory components
         for component in resolved.components() {
-            if let Component::ParentDir = component {
+            if component == Component::ParentDir {
                 return Err(crate::Error::InvalidArgument(
                     "cache directory cannot contain '..' path components".to_string(),
                 ));
@@ -453,7 +452,7 @@ impl CacheDir {
     /// # Ok::<(), mcp_core::Error>(())
     /// ```
     #[must_use]
-    pub fn as_path(&self) -> &PathBuf {
+    pub const fn as_path(&self) -> &PathBuf {
         &self.0
     }
 }

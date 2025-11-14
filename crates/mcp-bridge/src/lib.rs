@@ -57,7 +57,7 @@ use tokio::sync::Mutex;
 
 /// Connection to an MCP server.
 ///
-/// Wraps an rmcp RunningService and tracks connection metadata.
+/// Wraps an `rmcp` `RunningService` and tracks connection metadata.
 struct Connection {
     client: rmcp::service::RunningService<RoleClient, ()>,
     server_id: ServerId,
@@ -67,6 +67,7 @@ struct Connection {
 impl std::fmt::Debug for Connection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Connection")
+            .field("client", &"RunningService{..}")
             .field("server_id", &self.server_id)
             .field("call_count", &self.call_count)
             .finish()
@@ -203,10 +204,11 @@ impl Bridge {
         {
             let connections = self.connections.lock().await;
             if connections.len() >= self.max_connections {
+                let len = connections.len();
+                drop(connections); // Drop lock early before returning error
                 return Err(Error::ConfigError {
                     message: format!(
-                        "Connection limit reached ({}/{}). Disconnect servers before adding more.",
-                        connections.len(),
+                        "Connection limit reached ({len}/{}). Disconnect servers before adding more.",
                         self.max_connections
                     ),
                 });
@@ -330,7 +332,7 @@ impl Bridge {
             })
             .await
             .map_err(|e| Error::ExecutionError {
-                message: format!("Tool call failed: {}", e),
+                message: format!("Tool call failed: {e}"),
                 source: Some(Box::new(e)),
             })?;
 
@@ -585,7 +587,10 @@ impl CacheStats {
         if self.capacity == 0 {
             0.0
         } else {
-            (self.size as f64 / self.capacity as f64) * 100.0
+            #[allow(clippy::cast_precision_loss)]
+            {
+                (self.size as f64 / self.capacity as f64) * 100.0
+            }
         }
     }
 }

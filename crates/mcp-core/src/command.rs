@@ -102,10 +102,7 @@ pub fn validate_command(command: &str) -> Result<()> {
     for forbidden in FORBIDDEN_CHARS {
         if command.contains(*forbidden) {
             return Err(Error::SecurityViolation {
-                reason: format!(
-                    "Command contains forbidden shell metacharacter: '{}'",
-                    forbidden
-                ),
+                reason: format!("Command contains forbidden shell metacharacter: '{forbidden}'"),
             });
         }
     }
@@ -114,21 +111,21 @@ pub fn validate_command(command: &str) -> Result<()> {
     let path = Path::new(command);
     if !path.is_absolute() {
         return Err(Error::SecurityViolation {
-            reason: format!("Command must be an absolute path, got: {}", command),
+            reason: format!("Command must be an absolute path, got: {command}"),
         });
     }
 
     // Verify file exists
     if !path.exists() {
         return Err(Error::SecurityViolation {
-            reason: format!("Command file does not exist: {}", command),
+            reason: format!("Command file does not exist: {command}"),
         });
     }
 
     // Verify it's a file (not a directory)
     if !path.is_file() {
         return Err(Error::SecurityViolation {
-            reason: format!("Command path is not a file: {}", command),
+            reason: format!("Command path is not a file: {command}"),
         });
     }
 
@@ -137,7 +134,7 @@ pub fn validate_command(command: &str) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let metadata = std::fs::metadata(path).map_err(|e| Error::SecurityViolation {
-            reason: format!("Cannot read command metadata: {}", e),
+            reason: format!("Cannot read command metadata: {e}"),
         })?;
         let permissions = metadata.permissions();
         let mode = permissions.mode();
@@ -145,7 +142,7 @@ pub fn validate_command(command: &str) -> Result<()> {
         // Check if any execute bit is set (owner, group, or other)
         if mode & 0o111 == 0 {
             return Err(Error::SecurityViolation {
-                reason: format!("Command file is not executable: {}", command),
+                reason: format!("Command file is not executable: {command}"),
             });
         }
     }
