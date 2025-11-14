@@ -13,6 +13,9 @@ jobs:
     name: Build Release (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write  # For uploading artifacts
     strategy:
       fail-fast: false
       matrix:
