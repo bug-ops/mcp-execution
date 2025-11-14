@@ -29,11 +29,10 @@ allow = [
     "Apache-2.0 WITH LLVM-exception", # Used by some LLVM/Rust tooling
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
-    "Unicode-DFS-2016",               # Unicode data files
     "Unicode-3.0",
     "Zlib",                           # Compression libraries
     "BSL-1.0",                        # Boost Software License
+    "MPL-2.0"
 ]
 
 # Confidence threshold for license detection (0.8 = 80% confidence)

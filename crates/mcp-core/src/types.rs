@@ -367,7 +367,7 @@ impl MemoryLimit {
     /// assert!(MemoryLimit::new(1024).is_err()); // Too small
     /// assert!(MemoryLimit::new(1024 * 1024 * 1024).is_err()); // Too large
     /// ```
-    pub fn new(bytes: usize) -> Result<Self, &'static str> {
+    pub const fn new(bytes: usize) -> Result<Self, &'static str> {
         if bytes < Self::MIN.0 {
             Err("Memory limit below minimum (1MB)")
         } else if bytes > Self::MAX.0 {
@@ -391,7 +391,7 @@ impl MemoryLimit {
     /// let limit = MemoryLimit::from_mb(128).unwrap();
     /// assert_eq!(limit.bytes(), 128 * 1024 * 1024);
     /// ```
-    pub fn from_mb(megabytes: usize) -> Result<Self, &'static str> {
+    pub const fn from_mb(megabytes: usize) -> Result<Self, &'static str> {
         Self::new(megabytes * 1024 * 1024)
     }
 

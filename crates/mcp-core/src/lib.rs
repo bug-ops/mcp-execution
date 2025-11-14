@@ -37,6 +37,7 @@ mod config;
 mod error;
 mod types;
 
+pub mod cli;
 pub mod traits;
 
 // Re-export error types

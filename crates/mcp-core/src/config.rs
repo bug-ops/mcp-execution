@@ -100,7 +100,7 @@ pub struct RuntimeConfig {
     ///
     /// Fuel limits prevent infinite loops by metering instruction execution.
     /// If `None`, fuel metering is disabled (not recommended for untrusted code).
-    /// Default: Some(10_000_000)
+    /// Default: `Some(10_000_000)`
     pub max_fuel: Option<u64>,
 
     /// Security policy configuration.
@@ -211,6 +211,7 @@ impl RuntimeConfig {
 /// assert!(dev.allow_filesystem);
 /// ```
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SecurityPolicy {
     /// Allow network access from WASM code.
     ///
@@ -295,7 +296,7 @@ impl SecurityPolicy {
     /// assert!(!policy.allow_spawn); // Still disabled for safety
     /// ```
     #[must_use]
-    pub fn development() -> Self {
+    pub const fn development() -> Self {
         Self {
             allow_network: true,
             allow_filesystem: true,
@@ -344,14 +345,14 @@ impl RuntimeConfigBuilder {
 
     /// Sets the memory limit.
     #[must_use]
-    pub fn memory_limit(mut self, limit: MemoryLimit) -> Self {
+    pub const fn memory_limit(mut self, limit: MemoryLimit) -> Self {
         self.config.memory_limit = limit;
         self
     }
 
     /// Sets the execution timeout.
     #[must_use]
-    pub fn execution_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn execution_timeout(mut self, timeout: Duration) -> Self {
         self.config.execution_timeout = timeout;
         self
     }
@@ -372,35 +373,35 @@ impl RuntimeConfigBuilder {
 
     /// Enables or disables state storage.
     #[must_use]
-    pub fn enable_state(mut self, enable: bool) -> Self {
+    pub const fn enable_state(mut self, enable: bool) -> Self {
         self.config.enable_state = enable;
         self
     }
 
     /// Enables or disables result caching.
     #[must_use]
-    pub fn enable_cache(mut self, enable: bool) -> Self {
+    pub const fn enable_cache(mut self, enable: bool) -> Self {
         self.config.enable_cache = enable;
         self
     }
 
     /// Sets the connection pool size.
     #[must_use]
-    pub fn connection_pool_size(mut self, size: usize) -> Self {
+    pub const fn connection_pool_size(mut self, size: usize) -> Self {
         self.config.connection_pool_size = size;
         self
     }
 
     /// Sets the maximum fuel units.
     #[must_use]
-    pub fn max_fuel(mut self, fuel: Option<u64>) -> Self {
+    pub const fn max_fuel(mut self, fuel: Option<u64>) -> Self {
         self.config.max_fuel = fuel;
         self
     }
 
     /// Sets the security policy.
     #[must_use]
-    pub fn security(mut self, policy: SecurityPolicy) -> Self {
+    pub const fn security(mut self, policy: SecurityPolicy) -> Self {
         self.config.security = policy;
         self
     }

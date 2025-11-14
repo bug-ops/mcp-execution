@@ -11,6 +11,9 @@ keywords = ["mcp", "claude", "code-generation", "skills"]
 categories = ["development-tools"]
 readme = "../../README.md"
 
+[lints]
+workspace = true
+
 [dependencies]
 # Internal dependencies
 mcp-core.workspace = true

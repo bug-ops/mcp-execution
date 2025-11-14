@@ -5,12 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "mcp-cli"
 path = "src/main.rs"
 
 [dependencies]
+# Internal crates
 mcp-wasm-runtime.workspace = true
+mcp-introspector.workspace = true
+mcp-codegen.workspace = true
+mcp-bridge.workspace = true
+mcp-vfs.workspace = true
 mcp-core.workspace = true
 
 # CLI parsing
@@ -29,3 +37,15 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+# CLI User Experience (Phase 7.2 - for future use)
+indicatif.workspace = true
+colored.workspace = true
+dialoguer.workspace = true
+console.workspace = true
+human-panic.workspace = true
+
+# Configuration (Phase 7.5 - for future use)
+toml.workspace = true
+dirs.workspace = true
