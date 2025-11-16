@@ -148,7 +148,8 @@ cargo run
 ```
 
 Expected output:
-```
+
+```text
 ✓ Execution successful!
   Exit code: 42
   Time: 2ms
@@ -323,7 +324,8 @@ for file in &generated.files {
 ```
 
 **Generated structure:**
-```
+
+```text
 /mcp-tools/servers/vkteams-bot/
 ├── manifest.json       # Server metadata
 ├── types.ts            # Shared types
@@ -532,6 +534,7 @@ let gh_result = context.call_tool(
 **Cause**: Invalid WAT syntax or corrupted WASM bytecode.
 
 **Solution**:
+
 ```rust
 // Validate WAT before parsing
 let wat = r#"..."#;
@@ -546,6 +549,7 @@ match wat::parse_str(wat) {
 **Cause**: WASM module doesn't export the function you're calling.
 
 **Solution**:
+
 ```rust
 // Always export your functions
 let wat = r#"
@@ -562,6 +566,7 @@ let wat = r#"
 **Cause**: WASM module tries to allocate more memory than allowed.
 
 **Solution**:
+
 ```rust
 // Increase memory limit
 let config = SecurityConfig::builder()
@@ -574,6 +579,7 @@ let config = SecurityConfig::builder()
 **Cause**: Fuel was enabled but not initialized (Wasmtime 37.0 issue).
 
 **Solution**:
+
 ```rust
 // Disable fuel (default in SecurityConfig)
 let config = SecurityConfig::default();
@@ -589,6 +595,7 @@ let config = SecurityConfig::builder()
 **Cause**: WASM code has infinite loop or is too slow.
 
 **Solution**:
+
 ```rust
 // Increase timeout
 let config = SecurityConfig::builder()
@@ -630,8 +637,8 @@ tracing_subscriber::fmt()
 - **Documentation**: Run `cargo doc --open`
 - **Examples**: Check `examples/` directory
 - **Tests**: Look at integration tests in `tests/`
-- **Issues**: https://github.com/bug-ops/mcp-execution/issues
-- **MCP Spec**: https://spec.modelcontextprotocol.io/
+- **Issues**: <https://github.com/bug-ops/mcp-execution/issues>
+- **MCP Spec**: <https://spec.modelcontextprotocol.io/>
 
 ## Next Steps
 
