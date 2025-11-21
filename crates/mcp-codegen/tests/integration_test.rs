@@ -310,7 +310,11 @@ fn test_generated_typescript_is_syntactically_valid() {
     let generated = generator.generate(&server_info).unwrap();
 
     for file in &generated.files {
-        if file.path.ends_with(".ts") {
+        if std::path::Path::new(&file.path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ts"))
+        {
             // Basic TypeScript syntax checks
             let content = &file.content;
 

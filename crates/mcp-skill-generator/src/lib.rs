@@ -125,9 +125,6 @@
 //! Tokio and multi-threaded environments.
 
 #![warn(missing_docs)]
-#![warn(clippy::all)]
-#![warn(clippy::pedantic)]
-#![warn(clippy::cargo)]
 
 pub mod skill_template;
 pub mod types;

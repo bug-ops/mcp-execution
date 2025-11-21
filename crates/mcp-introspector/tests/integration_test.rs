@@ -226,10 +226,9 @@ async fn test_concurrent_introspector_access() {
     for i in 0..10 {
         let introspector_clone = Arc::clone(&introspector);
         let handle = tokio::spawn(async move {
-            {
-                let intro = introspector_clone.lock().await;
-                assert_eq!(intro.server_count(), 0);
-            }
+            let intro = introspector_clone.lock().await;
+            assert_eq!(intro.server_count(), 0);
+            drop(intro); // Explicitly drop lock before returning
             i
         });
         handles.push(handle);

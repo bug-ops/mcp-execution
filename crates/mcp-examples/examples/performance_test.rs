@@ -304,13 +304,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Exit with appropriate code
     if passed == total {
         println!("Performance test: SUCCESS\n");
-        Ok(())
     } else {
         println!("Performance test: PARTIAL (some targets missed)\n");
         println!("Note: This is acceptable for development builds.");
         println!("      Run with --release for production performance.\n");
-        Ok(())
     }
+    Ok(())
 }
 
 /// Creates a minimal demo WASM module for testing.

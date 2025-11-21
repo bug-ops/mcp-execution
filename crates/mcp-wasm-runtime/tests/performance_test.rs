@@ -373,5 +373,5 @@ fn test_cache_statistics() {
     let (hits, total, rate) = cache.hit_rate();
     assert_eq!(hits, 5);
     assert_eq!(total, 10);
-    assert_eq!(rate, 50.0); // 5/10 = 50%
+    assert!((rate - 50.0).abs() < f64::EPSILON); // 5/10 = 50%
 }

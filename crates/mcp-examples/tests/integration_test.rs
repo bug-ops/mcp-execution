@@ -114,13 +114,11 @@ fn test_codegen_generates_expected_files() {
     assert!(has_types, "Should generate types.ts");
 
     // Should generate tool files
-    let tool_files: Vec<_> = generated
-        .files
-        .iter()
-        .filter(|f| f.path.contains("tools/"))
-        .collect();
     assert!(
-        !tool_files.is_empty(),
+        generated
+            .files
+            .iter()
+            .any(|f| f.path.contains("tools/")),
         "Should generate tool implementation files"
     );
 }
