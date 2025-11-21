@@ -254,7 +254,7 @@ jobs:
           shared-key: "bench"
 
       - name: Build benchmarks (no run)
-        run: cargo bench --no-run --workspace
+        run: cargo bench --no-run --profile bench-fast --workspace
 
       - name: sccache stats
         run: sccache --show-stats

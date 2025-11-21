@@ -89,9 +89,20 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 
+# Default bench profile - for profiling with flamegraph and accurate measurements
 [profile.bench]
 inherits = "release"
 debug = true
+incremental = false       # Better sccache compatibility (improves cache hits from 42% to 55-65%)
+
+# Fast bench profile - for CI and quick development iterations
+# Usage: cargo bench --no-run --profile bench-fast
+[profile.bench-fast]
+inherits = "release"
+codegen-units = 16        # Parallel compilation (40-50% faster builds)
+lto = false               # Skip link-time optimization
+debug = false             # Skip debug symbols
+incremental = false       # Better sccache compatibility
 
 [profile.dev]
 opt-level = 0
