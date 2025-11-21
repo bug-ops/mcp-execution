@@ -32,7 +32,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 # Async runtime
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 
 # Logging
 tracing.workspace = true
@@ -49,3 +49,7 @@ human-panic.workspace = true
 # Configuration (Phase 7.5 - for future use)
 toml.workspace = true
 dirs.workspace = true
+
+[dev-dependencies]
+wat.workspace = true
+tempfile.workspace = true
