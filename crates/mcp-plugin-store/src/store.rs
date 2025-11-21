@@ -677,6 +677,7 @@ fn validate_server_name(server_name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mcp_vfs::VfsBuilder;
     use tempfile::TempDir;
 
     #[test]
@@ -777,13 +778,7 @@ mod tests {
         let tools = create_test_tools();
 
         let metadata = store
-            .save_plugin(
-                "test-server",
-                &vfs,
-                &wasm,
-                server_info.clone(),
-                tools.clone(),
-            )
+            .save_plugin("test-server", &vfs, &wasm, server_info, tools)
             .unwrap();
 
         // Verify metadata
@@ -852,13 +847,7 @@ mod tests {
 
         // Save plugin
         let save_metadata = store
-            .save_plugin(
-                "roundtrip-server",
-                &vfs,
-                &wasm,
-                server_info.clone(),
-                tools.clone(),
-            )
+            .save_plugin("roundtrip-server", &vfs, &wasm, server_info, tools)
             .unwrap();
 
         // Load plugin
@@ -1058,7 +1047,6 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = PluginStore::new(temp.path()).unwrap();
 
-        use mcp_vfs::VfsBuilder;
         let vfs = VfsBuilder::new().build().unwrap();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
         let server_info = create_test_server_info("empty-vfs");
@@ -1104,16 +1092,13 @@ mod tests {
         });
 
         let store2 = Arc::clone(&store);
-        let vfs2 = vfs.clone();
-        let wasm2 = wasm.clone();
-        let tools2 = tools.clone();
         let t2 = thread::spawn(move || {
             store2.save_plugin(
                 "concurrent-test",
-                &vfs2,
-                &wasm2,
+                &vfs,
+                &wasm,
                 create_test_server_info("concurrent-test"),
-                tools2,
+                tools,
             )
         });
 
@@ -1210,7 +1195,6 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = PluginStore::new(temp.path()).unwrap();
 
-        use mcp_vfs::VfsBuilder;
         let vfs = VfsBuilder::new()
             .add_file("/a/b/c/deep.ts", "export const DEEP = true;")
             .add_file("/x/y/file.ts", "export const XY = true;")
@@ -1239,5 +1223,111 @@ mod tests {
 
         let content = loaded.vfs.read_file("/a/b/c/deep.ts").unwrap();
         assert_eq!(content, "export const DEEP = true;");
+    }
+
+    #[test]
+    fn test_load_plugin_unsupported_format_version() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path()).unwrap();
+
+        // Create a plugin with future/unsupported format version
+        let plugin_dir = store.plugin_path("test-server");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+
+        let metadata = serde_json::json!({
+            "format_version": "2.0",  // Future version
+            "server": {
+                "name": "test-server",
+                "version": "1.0.0",
+                "protocol_version": "2024-11-05"
+            },
+            "generated_at": "2025-11-21T12:00:00Z",
+            "generator_version": "0.1.0",
+            "checksums": {
+                "wasm": "blake3:abc123",
+                "generated": {}
+            },
+            "tools": []
+        });
+
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            serde_json::to_string_pretty(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        // Attempt to load should fail with InvalidMetadata
+        let result = store.load_plugin("test-server");
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PluginStoreError::InvalidMetadata { .. }),
+            "Expected InvalidMetadata error for unsupported format version, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_server_name_control_characters() {
+        // Test null byte
+        assert!(
+            validate_server_name("server\x00name").is_err(),
+            "Should reject null bytes in server name"
+        );
+
+        // Test newline
+        assert!(
+            validate_server_name("server\nname").is_err(),
+            "Should reject newlines in server name"
+        );
+
+        // Test carriage return
+        assert!(
+            validate_server_name("server\rname").is_err(),
+            "Should reject carriage returns in server name"
+        );
+
+        // Test tab
+        assert!(
+            validate_server_name("server\tname").is_err(),
+            "Should reject tabs in server name"
+        );
+
+        // Test various control characters
+        for c in 0u8..32u8 {
+            let name = format!("server{}name", c as char);
+            assert!(
+                validate_server_name(&name).is_err(),
+                "Should reject control character {c} in server name"
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_plugin_missing_metadata() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path()).unwrap();
+
+        // Create plugin directory structure without metadata file
+        let plugin_dir = store.plugin_path("test-server");
+        let generated_dir = plugin_dir.join("generated");
+        std::fs::create_dir_all(&generated_dir).unwrap();
+
+        // Create some generated files
+        std::fs::write(generated_dir.join("test.ts"), "export const test = true;").unwrap();
+
+        // Create WASM file
+        std::fs::write(plugin_dir.join("module.wasm"), b"fake wasm").unwrap();
+
+        // plugin.json is missing - should fail
+        let result = store.load_plugin("test-server");
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        // Should be MissingFile error
+        assert!(
+            matches!(err, PluginStoreError::MissingFile { .. }),
+            "Expected MissingFile error for missing plugin.json, got: {err:?}"
+        );
     }
 }

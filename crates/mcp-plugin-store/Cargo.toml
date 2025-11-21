@@ -22,3 +22,16 @@ tracing.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "large_vfs"
+harness = false
+
+[[bench]]
+name = "wasm_sizes"
+harness = false
+
+[[bench]]
+name = "concurrent"
+harness = false

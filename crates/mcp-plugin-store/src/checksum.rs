@@ -229,6 +229,7 @@ mod tests {
 
         // Timing difference should be negligible (within 100x)
         // This is a very loose bound - real timing attacks need much tighter analysis
+        #[allow(clippy::cast_precision_loss)]
         let ratio = if duration1 < duration2 {
             duration2.as_nanos() as f64 / duration1.as_nanos().max(1) as f64
         } else {
@@ -236,7 +237,7 @@ mod tests {
         };
 
         // Just ensure both executed (not a rigorous timing test)
-        assert!(ratio < 100.0, "Timing ratio too large: {}", ratio);
+        assert!(ratio < 100.0, "Timing ratio too large: {ratio}");
     }
 
     #[test]
