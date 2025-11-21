@@ -1,15 +1,15 @@
 [workspace]
 members = [
-    "crates/mcp-core",
-    "crates/mcp-introspector",
-    "crates/mcp-codegen",
     "crates/mcp-bridge",
-    "crates/mcp-wasm-runtime",
-    "crates/mcp-vfs",
     "crates/mcp-cli",
-    "crates/mcp-skill-generator",
-    "crates/mcp-plugin-store",
+    "crates/mcp-codegen",
+    "crates/mcp-core",
     "crates/mcp-examples",
+    "crates/mcp-introspector",
+    "crates/mcp-plugin-store",
+    "crates/mcp-skill-generator",
+    "crates/mcp-vfs",
+    "crates/mcp-wasm-runtime",
 ]
 resolver = "2"
 
@@ -22,101 +22,52 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/bug-ops/mcp-execution"
 
 [workspace.dependencies]
-# Internal workspace crates
+anyhow = "1.0"
+async-trait = "0.1"
+blake3 = "1.8"
+chrono = "0.4"
+clap = "4.5"
+clap_complete = "4.5"
+colored = "3.0"
+console = "0.16"
+criterion = "0.7"
+dialoguer = "0.12"
+dirs = "6.0"
+handlebars = "6.3"
+human-panic = "2.0"
+indicatif = "0.18"
+lru = "0.16"
+mcp-bridge = { path = "crates/mcp-bridge" }
+mcp-codegen = { path = "crates/mcp-codegen" }
 mcp-core = { path = "crates/mcp-core" }
 mcp-introspector = { path = "crates/mcp-introspector" }
-mcp-codegen = { path = "crates/mcp-codegen" }
-mcp-bridge = { path = "crates/mcp-bridge" }
-mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
-mcp-vfs = { path = "crates/mcp-vfs" }
-mcp-skill-generator = { path = "crates/mcp-skill-generator" }
 mcp-plugin-store = { path = "crates/mcp-plugin-store" }
-
-# Official MCP Protocol Implementation (v0.8.5 as of Nov 2025)
-# Using 'client' feature for client-side MCP operations
-# Using 'transport-child-process' for stdio transport to MCP servers
-rmcp = { version = "0.8", features = ["client", "transport-child-process"] }
-
-# Core async runtime - Tokio chosen for maturity and ecosystem
-tokio = { version = "1.48", features = [
-    "rt-multi-thread",
-    "macros",
-    "time",
-    "sync",
-    "process",         # Required for MCP stdio transport
-] }
-async-trait = "0.1"
-
-# Serialization - Industry standard (using caret versioning for compatibility)
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# WASM Runtime - Latest stable Wasmtime (monthly releases, 37.0.2 as of Nov 2025)
-wasmtime = "38.0"
-wasmtime-wasi = "38.0"
-
-# Error handling (latest stable versions as of Nov 2025)
-thiserror = "2.0" # For library error types (latest: 2.0.17)
-anyhow = "1.0"    # For CLI application (latest: 1.0.99)
-
-# Logging and tracing
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-
-# Code generation (latest: handlebars 6.3.2, syn 2.0.104, quote 1.0.42)
-handlebars = "6.3"
-syn = { version = "2.0", features = ["full", "parsing", "proc-macro"] }
-quote = "1.0"
-proc-macro2 = "1.0"
-
-# HTTP client for MCP transport
-reqwest = { version = "0.12", features = ["json", "stream"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-
-# Filesystem utilities
-walkdir = "2.5"
-tempfile = "3.23"
-wat = "1.240"
+mcp-skill-generator = { path = "crates/mcp-skill-generator" }
+mcp-vfs = { path = "crates/mcp-vfs" }
+mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
 mockall = "0.13"
-
-# CLI (for mcp-cli only)
-clap = { version = "4.5", features = ["derive", "env", "cargo", "color"] }
-clap_complete = "4.5"
-
-# CLI User Experience (Phase 7)
-indicatif = "0.18"
-colored = "3.0"
-dialoguer = "0.12"
-console = "0.16"
-human-panic = "2.0"
-
-# Configuration (Phase 7)
-toml = "0.9"
-dirs = "6.0"
-
-# Monitoring (Phase 7)
-tracing-appender = "0.2"
-
-# Caching
-lru = "0.16"
-
-# Hashing for cache keys
-blake3 = "1.5"
-
-# UUID generation for secure session IDs
-uuid = { version = "1.11", features = ["v4", "fast-rng"] }
-
-# Date/time handling
-chrono = { version = "0.4", features = ["serde"] }
-
-# String manipulation and validation
+proc-macro2 = "1.0"
+quote = "1.0"
 regex = "1.11"
-
-# Security and validation
-secrecy = "0.10" # For handling sensitive data
-
-# Benchmarking
-criterion = "0.7"
+reqwest = "0.12"
+rmcp = "0.8"
+secrecy = "0.10"
+serde = "1.0"
+serde_json = "1.0"
+syn = "2.0"
+tempfile = "3.23"
+thiserror = "2.0"
+tokio = "1.48"
+tokio-util = "0.7"
+toml = "0.9"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = "0.3"
+uuid = "1.11"
+walkdir = "2.5"
+wasmtime = "39.0"
+wasmtime-wasi = "39.0"
+wat = "1.240"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
@@ -124,17 +75,14 @@ unsafe_op_in_unsafe_fn = "deny"
 unused_lifetimes = "warn"
 
 [workspace.lints.clippy]
-# Deny all clippy warnings by default to enforce code quality in CI
 all = { level = "deny", priority = -1 }
-pedantic = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-
-# Allow specific lints that are too strict or have false positives
+cargo_common_metadata = { level = "allow", priority = 10 }
+multiple_crate_versions = { level = "allow", priority = 10 }
 needless_borrows_for_generic_args = { level = "allow", priority = 10 }
-multiple_crate_versions = { level = "allow", priority = 10 }           # Common with transitive dependencies
-cargo_common_metadata = { level = "allow", priority = 10 }             # Not required for internal workspace crates
-too_many_lines = { level = "allow", priority = 10 }                    # Allow comprehensive examples and tests
+nursery = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+too_many_lines = { level = "allow", priority = 10 }
 
 [profile.release]
 opt-level = 3

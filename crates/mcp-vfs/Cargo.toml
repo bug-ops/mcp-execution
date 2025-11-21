@@ -10,20 +10,18 @@ workspace = true
 
 [dependencies]
 mcp-codegen.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
-
-# Reserved for future use:
-# serde.workspace = true           # For VFS serialization
-# serde_json.workspace = true      # For manifest parsing
-# tracing.workspace = true         # For instrumentation/debugging
+tracing.workspace = true
 
 [dependencies.dhat]
 version = "0.3"
 optional = true
 
 [dev-dependencies]
-tempfile.workspace = true
 criterion = { workspace = true, features = ["html_reports"] }
+tempfile.workspace = true
 
 [features]
 dhat-heap = ["dhat"]

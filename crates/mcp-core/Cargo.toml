@@ -9,33 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-# Strong typing for domain types
-serde.workspace = true
-serde_json.workspace = true
-
-# Error handling with backtraces
-thiserror.workspace = true
-
-# Async trait support
 async-trait.workspace = true
-
-# Structured logging
-tracing.workspace = true
-
-# Security for sensitive data
-secrecy.workspace = true
-
-# Time handling
-tokio = { workspace = true, features = ["time"] }
-
-# Hashing for cache keys
 blake3.workspace = true
-
-# UUID generation for session IDs
-uuid.workspace = true
-
-# System directories for secure path validation
 dirs.workspace = true
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["test-util", "macros"] }
+secrecy.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4", "fast-rng"] }

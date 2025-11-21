@@ -9,42 +9,26 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-mcp-core.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+blake3.workspace = true
+lru.workspace = true
 mcp-bridge.workspace = true
-# mcp-vfs.workspace = true  # TODO: Implement mcp-vfs
-# mcp-codegen.workspace = true  # Not needed for runtime
-
-# WASM runtime
+mcp-core.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+tracing.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 
-# Caching
-blake3.workspace = true
-lru.workspace = true
-
-# Serialization
-serde.workspace = true
-serde_json.workspace = true
-
-# Error handling
-thiserror.workspace = true
-anyhow.workspace = true
-
-# Async runtime
-tokio.workspace = true
-async-trait.workspace = true
-
-# Logging
-tracing.workspace = true
-
-# Filesystem
-tempfile.workspace = true
-
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util", "macros"] }
 criterion.workspace = true
-wat.workspace = true                                                 # WAT to WASM converter for tests
+tokio = { workspace = true, features = ["test-util", "macros"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+wat.workspace = true
 
 [features]
 default = ["assemblyscript"]

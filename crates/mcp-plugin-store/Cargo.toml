@@ -9,29 +9,30 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+blake3.workspace = true
+chrono = { workspace = true, features = ["serde"] }
 mcp-core.workspace = true
 mcp-vfs.workspace = true
-serde.workspace = true
+secrecy.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-blake3.workspace = true
-chrono.workspace = true
-walkdir.workspace = true
 tracing.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
-tokio.workspace = true
 criterion.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 
 [[bench]]
 name = "large_vfs"
 harness = false
 
 [[bench]]
-name = "wasm_sizes"
+name = "concurrent"
 harness = false
 
 [[bench]]
-name = "concurrent"
+name = "wasm_sizes"
 harness = false
