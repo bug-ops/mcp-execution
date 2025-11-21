@@ -20,6 +20,7 @@ mcp-codegen.workspace = true
 mcp-bridge.workspace = true
 mcp-vfs.workspace = true
 mcp-core.workspace = true
+mcp-plugin-store.workspace = true
 
 # CLI parsing
 clap.workspace = true

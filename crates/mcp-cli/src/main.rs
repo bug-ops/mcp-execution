@@ -103,6 +103,14 @@ enum Commands {
         /// Overwrite existing output directory without prompting
         #[arg(short = 'F', long)]
         force: bool,
+
+        /// Save generated code as a plugin
+        #[arg(long)]
+        save_plugin: bool,
+
+        /// Plugin directory for save/load operations
+        #[arg(long, default_value = "./plugins")]
+        plugin_dir: PathBuf,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -159,6 +167,15 @@ enum Commands {
         /// Configuration action
         #[command(subcommand)]
         action: ConfigAction,
+    },
+
+    /// Manage saved plugins.
+    ///
+    /// Save, load, list, and manage plugins stored on disk.
+    Plugin {
+        /// Plugin management action
+        #[command(subcommand)]
+        action: commands::plugin::PluginAction,
     },
 }
 
@@ -278,7 +295,18 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             output,
             feature,
             force,
-        } => commands::generate::run(server, output, feature, force, output_format).await,
+            save_plugin,
+            plugin_dir,
+        } => commands::generate::run(
+            server,
+            output,
+            feature,
+            force,
+            save_plugin,
+            plugin_dir,
+            output_format,
+        )
+        .await,
         Commands::Execute {
             module,
             entry,
@@ -289,6 +317,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         Commands::Stats { category } => commands::stats::run(category, output_format).await,
         Commands::Debug { action } => commands::debug::run(action, output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
+        Commands::Plugin { action } => commands::plugin::run(action, output_format).await,
     }
 }
 

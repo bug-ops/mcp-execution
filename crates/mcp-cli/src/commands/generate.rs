@@ -9,6 +9,8 @@ use mcp_codegen::CodeGenerator;
 use mcp_core::ServerId;
 use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
 use mcp_introspector::Introspector;
+use mcp_plugin_store::{PluginStore, ServerInfo, ToolInfo};
+use mcp_vfs::VfsBuilder;
 use serde::Serialize;
 use std::path::PathBuf;
 use tokio::fs;
@@ -27,6 +29,8 @@ struct GenerationResult {
     files_created: usize,
     /// Total lines of code generated
     total_lines: usize,
+    /// Plugin saved location (if --save-plugin was used)
+    plugin_saved: Option<String>,
 }
 
 /// Runs the generate command.
@@ -43,6 +47,8 @@ struct GenerationResult {
 /// * `output` - Optional output directory (defaults to "./generated")
 /// * `feature` - Code generation feature mode ("wasm" or "skills")
 /// * `force` - Overwrite existing output directory without prompting
+/// * `save_plugin` - Save generated code as a plugin
+/// * `plugin_dir` - Plugin directory for save operations
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -53,6 +59,7 @@ struct GenerationResult {
 /// - Server introspection fails
 /// - Code generation fails
 /// - File system operations fail
+/// - Plugin save fails (if --save-plugin is used)
 ///
 /// # Examples
 ///
@@ -67,6 +74,8 @@ struct GenerationResult {
 ///     Some(PathBuf::from("./generated")),
 ///     "wasm".to_string(),
 ///     false,
+///     false,
+///     PathBuf::from("./plugins"),
 ///     OutputFormat::Pretty,
 /// ).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);
@@ -78,6 +87,8 @@ pub async fn run(
     output: Option<PathBuf>,
     feature: String,
     force: bool,
+    save_plugin: bool,
+    plugin_dir: PathBuf,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Validate inputs
@@ -187,6 +198,59 @@ pub async fn run(
         info!("Created file: {file_path}");
     }
 
+    // Step 4: Save plugin if requested
+    let plugin_saved = if save_plugin {
+        info!("Saving plugin to: {}", plugin_dir.display());
+
+        // For MVP, we use mock WASM since we don't have TypeScript compilation
+        // In production, this would compile the generated TypeScript to WASM
+        let mock_wasm = create_mock_wasm();
+
+        // Create plugin store
+        let store = PluginStore::new(&plugin_dir)
+            .context("failed to initialize plugin store")?;
+
+        // Build VFS from generated code
+        let mut vfs_builder = VfsBuilder::new();
+        for file in &generated_code.files {
+            // Convert relative paths to VFS absolute paths (prepend /)
+            let vfs_path = format!("/{}", file.path);
+            vfs_builder = vfs_builder.add_file(&vfs_path, file.content.clone());
+        }
+        let vfs = vfs_builder.build()
+            .context("failed to create VFS from generated code")?;
+
+        // Extract server info from introspection
+        // Note: Using "2024-11-05" as default protocol version for MVP
+        let plugin_server_info = ServerInfo {
+            name: server.clone(),
+            version: server_info.version.clone(),
+            protocol_version: "2024-11-05".to_string(),
+        };
+
+        // Extract tool info
+        let tool_info: Vec<ToolInfo> = server_info
+            .tools
+            .iter()
+            .map(|t| ToolInfo {
+                name: t.name.to_string(),
+                description: t.description.clone(),
+            })
+            .collect();
+
+        // Save plugin
+        store
+            .save_plugin(&server, &vfs, &mock_wasm, plugin_server_info, tool_info)
+            .with_context(|| format!("failed to save plugin for server '{server}'"))?;
+
+        let plugin_path = store.plugin_path(&server);
+        info!("Plugin saved to: {}", plugin_path.display());
+
+        Some(plugin_path.display().to_string())
+    } else {
+        None
+    };
+
     // Build result
     let result = GenerationResult {
         server: server.clone(),
@@ -194,6 +258,7 @@ pub async fn run(
         feature_mode: feature.clone(),
         files_created: generated_code.file_count(),
         total_lines,
+        plugin_saved: plugin_saved.clone(),
     };
 
     // Format and display result
@@ -205,7 +270,23 @@ pub async fn run(
         result.files_created, result.total_lines, result.output_dir
     );
 
+    if let Some(plugin_path) = plugin_saved {
+        info!("Plugin saved to: {}", plugin_path);
+    }
+
     Ok(ExitCode::SUCCESS)
+}
+
+/// Creates a mock WASM module for MVP.
+///
+/// In production, this would compile the generated TypeScript to WASM.
+/// For now, we use a minimal valid WASM module.
+fn create_mock_wasm() -> Vec<u8> {
+    // WASM magic number + version
+    vec![
+        0x00, 0x61, 0x73, 0x6D, // magic: \0asm
+        0x01, 0x00, 0x00, 0x00, // version: 1
+    ]
 }
 
 #[cfg(test)]
@@ -220,6 +301,7 @@ mod tests {
             feature_mode: "wasm".to_string(),
             files_created: 5,
             total_lines: 250,
+            plugin_saved: None,
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -258,6 +340,7 @@ mod tests {
             feature_mode: "wasm".to_string(),
             files_created: 10,
             total_lines: 500,
+            plugin_saved: Some("./plugins/test".to_string()),
         };
 
         assert_eq!(result.server, "test");
@@ -265,6 +348,7 @@ mod tests {
         assert_eq!(result.feature_mode, "wasm");
         assert_eq!(result.files_created, 10);
         assert_eq!(result.total_lines, 500);
+        assert_eq!(result.plugin_saved, Some("./plugins/test".to_string()));
     }
 
     #[tokio::test]
@@ -355,6 +439,7 @@ mod tests {
             feature_mode: "wasm".to_string(),
             files_created: 8,
             total_lines: 400,
+            plugin_saved: None,
         };
 
         // Test that all fields are accessible
