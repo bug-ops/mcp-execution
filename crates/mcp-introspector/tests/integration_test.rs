@@ -361,7 +361,7 @@ fn test_multiple_server_management() {
     assert_eq!(introspector.server_count(), 0);
 }
 
-/// Tests discover_server with empty command
+/// Tests `discover_server` with empty command
 #[tokio::test]
 async fn test_discover_server_empty_command() {
     let mut introspector = Introspector::new();
@@ -373,7 +373,7 @@ async fn test_discover_server_empty_command() {
     assert!(result.is_err());
 }
 
-/// Tests discover_server with whitespace command
+/// Tests `discover_server` with whitespace command
 #[tokio::test]
 async fn test_discover_server_whitespace_command() {
     let mut introspector = Introspector::new();
@@ -385,7 +385,7 @@ async fn test_discover_server_whitespace_command() {
     assert!(result.is_err());
 }
 
-/// Tests discover_server with command containing shell operators
+/// Tests `discover_server` with command containing shell operators
 #[tokio::test]
 async fn test_discover_server_shell_operators() {
     let mut introspector = Introspector::new();
@@ -404,11 +404,11 @@ async fn test_discover_server_shell_operators() {
         let result = introspector.discover_server(server_id.clone(), cmd).await;
 
         // Should fail validation
-        assert!(result.is_err(), "Command should be rejected: {}", cmd);
+        assert!(result.is_err(), "Command should be rejected: {cmd}");
     }
 }
 
-/// Tests discover_server with nonexistent command
+/// Tests `discover_server` with nonexistent command
 #[tokio::test]
 async fn test_discover_server_nonexistent_command() {
     let mut introspector = Introspector::new();
@@ -422,7 +422,7 @@ async fn test_discover_server_nonexistent_command() {
     assert!(result.is_err());
 }
 
-/// Tests ServerInfo with tools containing empty descriptions
+/// Tests `ServerInfo` with tools containing empty descriptions
 #[test]
 fn test_tool_info_empty_description() {
     let tool = ToolInfo {
@@ -436,7 +436,7 @@ fn test_tool_info_empty_description() {
     assert!(tool.output_schema.is_none());
 }
 
-/// Tests ServerInfo with maximum capabilities
+/// Tests `ServerInfo` with maximum capabilities
 #[test]
 fn test_server_capabilities_all_enabled() {
     let caps = ServerCapabilities {
@@ -450,7 +450,7 @@ fn test_server_capabilities_all_enabled() {
     assert!(caps.supports_prompts);
 }
 
-/// Tests ServerInfo with all capabilities disabled
+/// Tests `ServerInfo` with all capabilities disabled
 #[test]
 fn test_server_capabilities_all_disabled() {
     let caps = ServerCapabilities {
@@ -464,7 +464,7 @@ fn test_server_capabilities_all_disabled() {
     assert!(!caps.supports_prompts);
 }
 
-/// Tests ServerInfo clone
+/// Tests `ServerInfo` clone
 #[test]
 fn test_server_info_clone() {
     let info = ServerInfo {
@@ -485,7 +485,7 @@ fn test_server_info_clone() {
     assert_eq!(cloned.version, info.version);
 }
 
-/// Tests ToolInfo clone
+/// Tests `ToolInfo` clone
 #[test]
 fn test_tool_info_clone() {
     let tool = ToolInfo {
@@ -500,7 +500,7 @@ fn test_tool_info_clone() {
     assert_eq!(cloned.description, tool.description);
 }
 
-/// Tests ServerCapabilities clone
+/// Tests `ServerCapabilities` clone
 #[test]
 fn test_server_capabilities_clone() {
     let caps = ServerCapabilities {
@@ -515,7 +515,7 @@ fn test_server_capabilities_clone() {
     assert_eq!(cloned.supports_prompts, caps.supports_prompts);
 }
 
-/// Tests list_servers returns references
+/// Tests `list_servers` returns references
 #[test]
 fn test_list_servers_references() {
     let introspector = Introspector::new();
@@ -525,7 +525,7 @@ fn test_list_servers_references() {
     assert_eq!(servers.len(), 0);
 }
 
-/// Tests get_server returns reference
+/// Tests `get_server` returns reference
 #[test]
 fn test_get_server_reference() {
     let introspector = Introspector::new();
@@ -535,7 +535,7 @@ fn test_get_server_reference() {
     assert!(server.is_none());
 }
 
-/// Tests remove_server returns bool correctly
+/// Tests `remove_server` returns bool correctly
 #[test]
 fn test_remove_server_return_value() {
     let mut introspector = Introspector::new();
@@ -546,13 +546,13 @@ fn test_remove_server_return_value() {
     assert_eq!(introspector.server_count(), 0);
 }
 
-/// Tests ServerInfo with many tools
+/// Tests `ServerInfo` with many tools
 #[test]
 fn test_server_info_with_many_tools() {
     let tools: Vec<ToolInfo> = (0..100)
         .map(|i| ToolInfo {
-            name: ToolName::new(&format!("tool_{}", i)),
-            description: format!("Tool number {}", i),
+            name: ToolName::new(&format!("tool_{i}")),
+            description: format!("Tool number {i}"),
             input_schema: json!({"type": "object"}),
             output_schema: None,
         })
@@ -574,7 +574,7 @@ fn test_server_info_with_many_tools() {
     assert!(info.capabilities.supports_tools);
 }
 
-/// Tests ToolInfo with null input schema
+/// Tests `ToolInfo` with null input schema
 #[test]
 fn test_tool_info_null_schema() {
     let tool = ToolInfo {
@@ -588,7 +588,7 @@ fn test_tool_info_null_schema() {
     assert!(tool.output_schema.is_some());
 }
 
-/// Tests ServerInfo with special characters in name
+/// Tests `ServerInfo` with special characters in name
 #[test]
 fn test_server_info_special_chars() {
     let info = ServerInfo {
@@ -607,7 +607,7 @@ fn test_server_info_special_chars() {
     assert!(info.version.contains('+'));
 }
 
-/// Tests ToolInfo with very long description
+/// Tests `ToolInfo` with very long description
 #[test]
 fn test_tool_info_long_description() {
     let long_desc = "a".repeat(10000);
@@ -637,7 +637,7 @@ fn test_clear_empty() {
     assert_eq!(introspector.server_count(), 0);
 }
 
-/// Tests ServerCapabilities Debug
+/// Tests `ServerCapabilities` Debug
 #[test]
 fn test_server_capabilities_debug() {
     let caps = ServerCapabilities {
@@ -646,20 +646,20 @@ fn test_server_capabilities_debug() {
         supports_prompts: true,
     };
 
-    let debug_str = format!("{:?}", caps);
-    assert!(debug_str.len() > 0);
+    let debug_str = format!("{caps:?}");
+    assert!(!debug_str.is_empty());
 }
 
 /// Tests Introspector Debug
 #[test]
 fn test_introspector_debug() {
     let introspector = Introspector::new();
-    let debug_str = format!("{:?}", introspector);
+    let debug_str = format!("{introspector:?}");
 
     assert!(debug_str.contains("Introspector"));
 }
 
-/// Tests ToolInfo with nested schema
+/// Tests `ToolInfo` with nested schema
 #[test]
 fn test_tool_info_nested_schema() {
     let nested_schema = json!({
@@ -690,7 +690,7 @@ fn test_tool_info_nested_schema() {
     assert!(tool.output_schema.is_some());
 }
 
-/// Tests ServerInfo serialization with tools
+/// Tests `ServerInfo` serialization with tools
 #[test]
 fn test_server_info_serialization_with_tools() {
     let tool = ToolInfo {
@@ -721,7 +721,7 @@ fn test_server_info_serialization_with_tools() {
     assert_eq!(deserialized.tools[0].name.as_str(), "test_tool");
 }
 
-/// Tests concurrent list_servers calls
+/// Tests concurrent `list_servers` calls
 #[tokio::test]
 async fn test_concurrent_list_servers() {
     use std::sync::Arc;
@@ -736,6 +736,7 @@ async fn test_concurrent_list_servers() {
             let intro = intro_clone.lock().await;
             let servers = intro.list_servers();
             assert_eq!(servers.len(), 0);
+            drop(intro); // Explicitly drop the lock
         });
         handles.push(handle);
     }

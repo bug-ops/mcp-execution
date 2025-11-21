@@ -269,7 +269,7 @@ async fn test_connection_limit_reached() {
     assert!(current <= max);
 }
 
-/// Tests empty server_id handling
+/// Tests empty `server_id` handling
 #[tokio::test]
 async fn test_empty_server_id() {
     let bridge = Bridge::new(100);
@@ -325,7 +325,7 @@ async fn test_connection_limits_after_disconnect() {
     assert_eq!(max2, 5);
 }
 
-/// Tests call_tool error when server never connected
+/// Tests `call_tool` error when server never connected
 #[tokio::test]
 async fn test_call_tool_server_never_connected() {
     let bridge = Bridge::new(100);
@@ -370,7 +370,7 @@ async fn test_cache_with_different_params() {
     assert_eq!(stats.size, 0);
 }
 
-/// Tests with_limits constructor with various configurations
+/// Tests `with_limits` constructor with various configurations
 #[test]
 fn test_with_limits_configurations() {
     // Minimum viable configuration
@@ -386,7 +386,7 @@ fn test_with_limits_configurations() {
     let _ = bridge3;
 }
 
-/// Tests cache_stats with various cache states
+/// Tests `cache_stats` with various cache states
 #[tokio::test]
 async fn test_cache_stats_edge_cases() {
     // Minimum cache size
@@ -402,7 +402,7 @@ async fn test_cache_stats_edge_cases() {
     assert_eq!(stats_large.size, 0);
 }
 
-/// Tests connection_call_count with various server IDs
+/// Tests `connection_call_count` with various server IDs
 #[tokio::test]
 async fn test_connection_call_count_variations() {
     let bridge = Bridge::new(100);
@@ -449,7 +449,7 @@ async fn test_concurrent_disconnects() {
     assert_eq!(bridge.connection_count().await, 0);
 }
 
-/// Tests CacheStats Debug implementation
+/// Tests `CacheStats` Debug implementation
 #[test]
 fn test_cache_stats_debug() {
     let stats = CacheStats {
@@ -457,7 +457,7 @@ fn test_cache_stats_debug() {
         capacity: 100,
     };
 
-    let debug_str = format!("{:?}", stats);
+    let debug_str = format!("{stats:?}");
     assert!(debug_str.contains("42"));
     assert!(debug_str.contains("100"));
 }
@@ -466,7 +466,7 @@ fn test_cache_stats_debug() {
 #[test]
 fn test_bridge_debug() {
     let bridge = Bridge::new(100);
-    let debug_str = format!("{:?}", bridge);
+    let debug_str = format!("{bridge:?}");
 
     assert!(debug_str.contains("Bridge"));
 }
@@ -492,7 +492,7 @@ async fn test_command_validation_special_chars() {
     for cmd in dangerous_commands {
         let result = bridge.connect(server_id.clone(), cmd).await;
         // Should fail validation or connection
-        assert!(result.is_err(), "Command should be rejected: {}", cmd);
+        assert!(result.is_err(), "Command should be rejected: {cmd}");
     }
 }
 
@@ -505,7 +505,7 @@ async fn test_connection_usage_percentage() {
     let (current, max) = bridge.connection_limits().await;
     let usage_percent = (current as f64 / max as f64) * 100.0;
 
-    assert_eq!(usage_percent, 0.0);
+    assert!((usage_percent - 0.0).abs() < f64::EPSILON);
     assert_eq!(max, 10);
 }
 
@@ -515,7 +515,7 @@ fn test_cache_state_persistence() {
     let mut bridge = Bridge::new(100);
 
     // Initial state
-    assert!(format!("{:?}", bridge).len() > 0);
+    assert!(!format!("{bridge:?}").is_empty());
 
     // Toggle state multiple times
     bridge.disable_cache();
@@ -524,5 +524,5 @@ fn test_cache_state_persistence() {
     bridge.enable_cache(); // Double enable
 
     // Should be stable
-    assert!(format!("{:?}", bridge).len() > 0);
+    assert!(!format!("{bridge:?}").is_empty());
 }

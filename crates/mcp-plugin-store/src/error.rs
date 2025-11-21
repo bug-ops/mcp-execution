@@ -198,7 +198,7 @@ mod tests {
             server_name: "test-server".to_string(),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("Plugin not found"));
         assert!(display.contains("test-server"));
     }
@@ -209,7 +209,7 @@ mod tests {
             server_name: "existing-server".to_string(),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("Plugin already exists"));
         assert!(display.contains("existing-server"));
     }
@@ -222,7 +222,7 @@ mod tests {
             actual: "def456".to_string(),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("Checksum mismatch"));
         assert!(display.contains("file.wasm"));
         assert!(display.contains("abc123"));
@@ -235,7 +235,7 @@ mod tests {
             reason: "missing required field 'version'".to_string(),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("Invalid metadata format"));
         assert!(display.contains("missing required field"));
     }
@@ -247,7 +247,7 @@ mod tests {
             reason: "contains path traversal".to_string(),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("Invalid server name"));
         assert!(display.contains("../escape"));
         assert!(display.contains("path traversal"));
@@ -260,7 +260,7 @@ mod tests {
             path: PathBuf::from("plugin.json"),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("Missing file"));
         assert!(display.contains("test"));
         assert!(display.contains("plugin.json"));
@@ -271,7 +271,7 @@ mod tests {
         let io_error = io::Error::new(io::ErrorKind::NotFound, "file not found");
         let error: PluginStoreError = io_error.into();
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("IO error"));
         assert!(display.contains("file not found"));
     }
@@ -282,7 +282,7 @@ mod tests {
         let json_error = serde_json::from_str::<serde_json::Value>(json_str).unwrap_err();
         let error: PluginStoreError = json_error.into();
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("JSON error"));
     }
 
@@ -351,12 +351,13 @@ mod tests {
             server_name: "test".to_string(),
         };
 
-        let debug_str = format!("{:?}", error);
+        let debug_str = format!("{error:?}");
         assert!(debug_str.contains("PluginNotFound"));
         assert!(debug_str.contains("test"));
     }
 
     #[test]
+    #[allow(clippy::unnecessary_wraps)]
     fn test_result_type_alias() {
         fn returns_result() -> Result<i32> {
             Ok(42)
@@ -394,8 +395,8 @@ mod tests {
         ];
 
         for error in &errors {
-            let debug = format!("{:?}", error);
-            let display = format!("{}", error);
+            let debug = format!("{error:?}");
+            let display = format!("{error}");
             assert!(!debug.is_empty());
             assert!(!display.is_empty());
         }
@@ -409,7 +410,7 @@ mod tests {
             actual: "b".repeat(64),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains(&"a".repeat(64)));
         assert!(display.contains(&"b".repeat(64)));
     }
@@ -422,7 +423,7 @@ mod tests {
         };
 
         assert!(error.is_recoverable());
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("empty name"));
     }
 
@@ -433,7 +434,7 @@ mod tests {
             path: PathBuf::from("subdir/nested/file.txt"),
         };
 
-        let display = format!("{}", error);
+        let display = format!("{error}");
         assert!(display.contains("subdir"));
         assert!(display.contains("file.txt"));
     }
@@ -452,17 +453,18 @@ mod tests {
                 reason: reason.to_string(),
             };
             assert!(error.is_recoverable());
-            assert!(format!("{}", error).contains(reason));
+            assert!(format!("{error}").contains(reason));
         }
     }
 
     #[test]
     fn test_error_source_chain() {
+        use std::error::Error;
+
         let io_error = io::Error::new(io::ErrorKind::NotFound, "file not found");
         let error: PluginStoreError = io_error.into();
 
         // Test that error can be used with source trait
-        use std::error::Error;
         let source = error.source();
         assert!(source.is_some());
     }
