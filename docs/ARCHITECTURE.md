@@ -45,7 +45,7 @@ mcp-execution/
 │   ├── mcp-bridge/           # MCP proxy with caching
 │   ├── mcp-wasm-runtime/     # WASM sandbox execution
 │   ├── mcp-vfs/              # Virtual filesystem
-│   ├── mcp-skill-generator/  # Claude Code skill generation
+│   ├── mcp-skill-generator/  # IDE skill generation
 │   ├── mcp-plugin-store/     # Plugin persistence (NEW in Phase 8.1)
 │   ├── mcp-examples/         # Examples and integration tests
 │   └── mcp-cli/              # CLI application
@@ -156,14 +156,14 @@ All crates → mcp-core (foundation)
 **Generators**:
 - TypeScript generator (with full types)
 - Rust generator (native WASM, experimental)
-- Skills generator (Claude Code integration)
+- Skills generator (IDE integration)
 - Manifest generator (metadata)
 
 **Template Engine**: Handlebars with custom helpers
 
 **Feature Modes**:
 - `wasm` - WASM module generation
-- `skills` - Claude Code skill generation
+- `skills` - IDE skill generation
 
 **Performance**: 0.19ms for 10 tools (526x faster than 100ms target)
 
@@ -236,13 +236,13 @@ All crates → mcp-core (foundation)
 
 **Status**: ✅ Complete (Phase 1) - 42 tests passing
 
-### 7. mcp-skill-generator - Claude Code Skills
+### 7. mcp-skill-generator - IDE Skills
 
-**Purpose**: Generate Claude Code skills from MCP tools.
+**Purpose**: Generate IDE skills from MCP tools.
 
 **Output**: `.skill` directories with metadata and code
 
-**Integration**: Seamless with Claude Code's skill system
+**Integration**: Seamless with IDE skill systems
 
 **Status**: ✅ Complete (Phase 3)
 
@@ -468,7 +468,7 @@ mcp-cli completions <shell>
 2. **ADR-002**: Wasmtime Over Wasmer - Security focus, pooling allocator
 3. **ADR-003**: Strong Types Over Primitives - Compiler-enforced correctness
 4. **ADR-004**: Use rmcp Official SDK - Protocol compliance, maintained
-5. **ADR-005**: Claude Code Skill Generation - Seamless Claude integration
+5. **ADR-005**: IDE Skill Generation - Seamless IDE integration
 6. **ADR-006**: Plugin Persistence Design - Disk storage, integrity verification (NEW)
 
 All ADRs are in `docs/adr/` with full rationale and alternatives considered.

@@ -36,7 +36,7 @@ mcp-execution/
 │   ├── mcp-bridge/           # MCP proxy with caching (rmcp client)
 │   ├── mcp-wasm-runtime/     # Wasmtime 38.0 sandbox
 │   ├── mcp-vfs/              # Virtual filesystem
-│   ├── mcp-skill-generator/  # Claude Code skills
+│   ├── mcp-skill-generator/  # IDE skill generation
 │   ├── mcp-plugin-store/     # Plugin persistence (NEW in Phase 8.1)
 │   ├── mcp-examples/         # Examples and integration tests
 │   └── mcp-cli/              # CLI application
@@ -328,7 +328,7 @@ See [docs/adr/](docs/adr/) for security architecture decisions.
 
 Phase 6 is **DEFERRED**. Current performance already exceeds all targets by 5-6,578x.
 
-**See [PROJECT-STATUS.md](PROJECT-STATUS.md) for current status and [GETTING_STARTED.md](GETTING_STARTED.md) for usage guide.**
+**See [GETTING_STARTED.md](GETTING_STARTED.md) for usage guide and [CHANGELOG.md](CHANGELOG.md) for detailed release history.**
 
 ## License
 

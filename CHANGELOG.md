@@ -401,7 +401,7 @@ plugins/
 
 #### Feature Flags
 - `wasm` - WASM code generation (default)
-- `skills` - Claude Code skills generation (optional)
+- `skills` - IDE skills generation (optional)
 
 #### Documentation
 - Architecture Decision Records (ADRs):
