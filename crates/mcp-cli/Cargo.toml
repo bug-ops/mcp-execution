@@ -28,6 +28,7 @@ mcp-plugin-store.workspace = true
 
 # CLI parsing
 clap.workspace = true
+clap_complete.workspace = true
 
 # Error handling (anyhow for applications)
 anyhow.workspace = true

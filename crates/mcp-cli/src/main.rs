@@ -36,6 +36,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use mcp_core::cli::{ExitCode, OutputFormat};
 use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -54,7 +55,7 @@ use actions::{ConfigAction, DebugAction, ServerAction};
 #[command(name = "mcp-cli")]
 #[command(version, about, long_about = None)]
 #[command(author = "MCP Execution Team")]
-struct Cli {
+pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
     command: Commands,
@@ -70,7 +71,7 @@ struct Cli {
 
 /// Available CLI subcommands.
 #[derive(Subcommand, Debug)]
-enum Commands {
+pub enum Commands {
     /// Introspect an MCP server and display its capabilities.
     ///
     /// Connects to an MCP server, discovers its tools, and displays
@@ -180,6 +181,16 @@ enum Commands {
         #[command(subcommand)]
         action: commands::plugin::PluginAction,
     },
+
+    /// Generate shell completions.
+    ///
+    /// Generates completion scripts for various shells that can be
+    /// sourced or saved to enable tab completion for this CLI.
+    Completions {
+        /// Target shell for completion generation
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[tokio::main]
@@ -267,6 +278,11 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         Commands::Debug { action } => commands::debug::run(action, output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
         Commands::Plugin { action } => commands::plugin::run(action, output_format).await,
+        Commands::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            commands::completions::run(shell, &mut cmd).await
+        }
     }
 }
 
@@ -365,5 +381,21 @@ mod tests {
     #[test]
     fn test_output_format_parsing_invalid() {
         assert!("invalid".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_completions_bash() {
+        let cli = Cli::parse_from(["mcp-cli", "completions", "bash"]);
+        assert!(matches!(cli.command, Commands::Completions { .. }));
+    }
+
+    #[test]
+    fn test_cli_parsing_completions_zsh() {
+        let cli = Cli::parse_from(["mcp-cli", "completions", "zsh"]);
+        if let Commands::Completions { shell } = cli.command {
+            assert_eq!(shell, Shell::Zsh);
+        } else {
+            panic!("Expected Completions command");
+        }
     }
 }
