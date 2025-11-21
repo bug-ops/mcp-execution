@@ -14,6 +14,7 @@
 MCP Code Execution is a **production-ready framework** for secure WebAssembly-based execution of Model Context Protocol tools, achieving 80-90% token savings through progressive tool loading and code generation.
 
 **Key Achievements**:
+
 - ✅ 397+ tests passing (100% pass rate)
 - ✅ Performance exceeds targets by 5-6,578x
 - ✅ Security rating: 5/5 stars
@@ -31,7 +32,7 @@ MCP Code Execution is a **production-ready framework** for secure WebAssembly-ba
 
 ## Workspace Structure
 
-```
+```text
 mcp-execution/
 ├── Cargo.toml                (workspace root, Rust 2024)
 ├── CLAUDE.md                 (development guidelines)
@@ -60,7 +61,7 @@ mcp-execution/
 
 ## Dependency Graph
 
-```
+```text
 mcp-cli (bin) - CLI application
   ├─> mcp-wasm-runtime      # WASM execution
   ├─> mcp-codegen           # Code generation
@@ -108,6 +109,7 @@ All crates → mcp-core (foundation)
 **Purpose**: Shared types, traits, and errors for all crates.
 
 **Strong Types**:
+
 - `ServerId` - Server identifier (not `String`)
 - `ToolName` - Tool identifier (not `String`)
 - `SessionId` - Execution session ID
@@ -116,6 +118,7 @@ All crates → mcp-core (foundation)
 - `PluginMetadata` - Plugin metadata (NEW)
 
 **Error Hierarchy**:
+
 - `Error` - Main error type with backtrace
 - `ConnectionError` - Server connection failures
 - `ExecutionError` - WASM execution failures
@@ -124,6 +127,7 @@ All crates → mcp-core (foundation)
 - `PluginError` - Plugin operations (NEW)
 
 **Core Traits**:
+
 - `CodeExecutor` - Execute code in sandbox
 - `MCPBridge` - Proxy MCP calls
 - `CacheProvider` - Result caching
@@ -139,6 +143,7 @@ All crates → mcp-core (foundation)
 **Implementation**: Uses `rmcp` SDK (official Rust MCP implementation)
 
 **Capabilities**:
+
 - Server discovery and connection via stdio/HTTP
 - Tool list extraction via MCP `tools/list`
 - JSON schema validation and normalization
@@ -154,6 +159,7 @@ All crates → mcp-core (foundation)
 **Purpose**: Generates executable code from MCP tool schemas.
 
 **Generators**:
+
 - TypeScript generator (with full types)
 - Rust generator (native WASM, experimental)
 - Skills generator (IDE integration)
@@ -162,6 +168,7 @@ All crates → mcp-core (foundation)
 **Template Engine**: Handlebars with custom helpers
 
 **Feature Modes**:
+
 - `wasm` - WASM module generation
 - `skills` - IDE skill generation
 
@@ -174,6 +181,7 @@ All crates → mcp-core (foundation)
 **Purpose**: Proxies WASM calls to real MCP servers with optimization.
 
 **Features**:
+
 - Connection pooling (configurable per server)
 - LRU cache (1000 entries, Blake3 keys)
 - Rate limiting per tool
@@ -190,6 +198,7 @@ All crates → mcp-core (foundation)
 **Purpose**: Secure WASM execution using Wasmtime 38.0.
 
 **Security Boundaries**:
+
 - Memory limit: 256MB via pooling allocator
 - CPU limit: Fuel-based metering (configurable)
 - Filesystem: WASI with preopened dirs only
@@ -197,12 +206,14 @@ All crates → mcp-core (foundation)
 - Session-isolated state (per-session prefixing)
 
 **Host Functions**:
+
 - `callTool(server, tool, params)` - Validated MCP calls
 - `readFile(path)` - VFS access with path validation
 - `setState(key, value)` / `getState(key)` - Isolated state
 - `log(level, message)` - Structured logging
 
 **Performance**:
+
 - WASM compilation: ~15ms (6.6x faster than target)
 - Execution overhead: ~3ms (16.7x faster than target)
 - Module caching: <1ms (Blake3-based)
@@ -214,6 +225,7 @@ All crates → mcp-core (foundation)
 **Purpose**: Virtual filesystem for progressive tool discovery.
 
 **Structure**:
+
 ```text
 /mcp-tools/
 ├── servers/
@@ -229,6 +241,7 @@ All crates → mcp-core (foundation)
 ```
 
 **Features**:
+
 - In-memory filesystem (no disk I/O)
 - Path validation (prevents traversal)
 - Progressive loading (on-demand)
@@ -251,7 +264,8 @@ All crates → mcp-core (foundation)
 **Purpose**: Save and load pre-generated MCP tool plugins to disk.
 
 **Storage Format**:
-```
+
+```text
 plugins/
 └── vkteams-bot/
     ├── metadata.json      # PluginMetadata (server info, timestamps)
@@ -261,6 +275,7 @@ plugins/
 ```
 
 **Security Features**:
+
 - Blake3 checksums for integrity verification
 - Constant-time comparison (timing attack prevention)
 - Atomic file operations (crash safety)
@@ -268,11 +283,13 @@ plugins/
 - Secure permissions (0o600 for sensitive files)
 
 **Performance**:
+
 - Save: ~2-5ms for typical plugin
 - Load: ~1-3ms with integrity check
 - Checksum: <1ms (Blake3)
 
 **CLI Integration**:
+
 ```bash
 # Save plugin during generation
 mcp-cli generate vkteams-bot --save-plugin
@@ -297,6 +314,7 @@ mcp-cli plugin remove vkteams-bot
 **Purpose**: Integration tests and real-world examples.
 
 **Examples**:
+
 - `e2e_workflow.rs` - Complete introspect → generate → execute flow
 - `token_analysis.rs` - Token savings calculation
 - `performance_test.rs` - Benchmark all components
@@ -311,6 +329,7 @@ mcp-cli plugin remove vkteams-bot
 **Purpose**: User-facing CLI for all operations.
 
 **Commands**:
+
 ```bash
 # Server introspection
 mcp-cli introspect <server>
@@ -339,6 +358,7 @@ mcp-cli completions <shell>
 ```
 
 **Architecture**:
+
 - Clap 4.5 for argument parsing
 - Strong types (`ServerConnectionString`, `ExitCode`, `OutputFormat`)
 - Security hardening (command injection prevention, path validation)
@@ -373,35 +393,35 @@ mcp-cli completions <shell>
 ┌────────────────────────────────────────────────┐
 │ Host Process (Trusted)                         │
 │                                                │
-│  ┌──────────────────────────────────────────┐ │
-│  │ WASM Sandbox (Untrusted)                 │ │
-│  │                                          │ │
-│  │  Memory: 256MB hard limit                │ │
-│  │  CPU: Fuel-based (30s default timeout)   │ │
-│  │  FS: /mcp-tools (read-only)              │ │
-│  │      /workspace (read-write, validated)  │ │
-│  │  Network: None (only via bridge)         │ │
-│  │  State: Session-isolated                 │ │
-│  └──────────────────────────────────────────┘ │
-│          ▲                                    │
-│          │ Host Function Interface            │
-│          │ (validated, rate-limited)          │
-│          ▼                                    │
-│  ┌──────────────────────────────────────────┐ │
-│  │ MCP Bridge (Security Gateway)            │ │
-│  │  - Server whitelist                      │ │
-│  │  - Rate limiting per tool                │ │
-│  │  - Parameter size limits                 │ │
-│  │  - Response validation                   │ │
-│  └──────────────────────────────────────────┘ │
-│          ▲                                    │
-│          │ rmcp (Official SDK)                │
-│          ▼                                    │
-│  ┌──────────────────────────────────────────┐ │
-│  │ MCP Servers (External)                   │ │
-│  │  - stdio transport                       │ │
-│  │  - HTTP/SSE transport                    │ │
-│  └──────────────────────────────────────────┘ │
+│  ┌──────────────────────────────────────────┐  │
+│  │ WASM Sandbox (Untrusted)                 │  │
+│  │                                          │  │
+│  │  Memory: 256MB hard limit                │  │
+│  │  CPU: Fuel-based (30s default timeout)   │  │
+│  │  FS: /mcp-tools (read-only)              │  │
+│  │      /workspace (read-write, validated)  │  │
+│  │  Network: None (only via bridge)         │  │
+│  │  State: Session-isolated                 │  │
+│  └──────────────────────────────────────────┘  │
+│          ▲                                     │
+│          │ Host Function Interface             │
+│          │ (validated, rate-limited)           │
+│          ▼                                     │
+│  ┌──────────────────────────────────────────┐  │
+│  │ MCP Bridge (Security Gateway)            │  │
+│  │  - Server whitelist                      │  │
+│  │  - Rate limiting per tool                │  │
+│  │  - Parameter size limits                 │  │
+│  │  - Response validation                   │  │
+│  └──────────────────────────────────────────┘  │
+│          ▲                                     │
+│          │ rmcp (Official SDK)                 │
+│          ▼                                     │
+│  ┌──────────────────────────────────────────┐  │
+│  │ MCP Servers (External)                   │  │
+│  │  - stdio transport                       │  │
+│  │  - HTTP/SSE transport                    │  │
+│  └──────────────────────────────────────────┘  │
 └────────────────────────────────────────────────┘
 ```
 
@@ -435,6 +455,7 @@ mcp-cli completions <shell>
 | **Token Savings** | ≥90% | ~80-83% | Asymptotic limit ⚠️ |
 
 **Notes**:
+
 - Token savings limited by base tool descriptions (cannot be eliminated)
 - All other metrics exceed targets significantly
 - Performance targets are conservative; actual usage will vary
@@ -552,7 +573,7 @@ pub fn connect(server: ServerId) -> Result<()> {
 
 ### Test Pyramid
 
-```
+```text
           Integration Tests (61)
         /                      \
    Unit Tests (282)     Doc Tests (54)
@@ -613,6 +634,7 @@ cargo test --doc --workspace
 See `.local/ROADMAP-2025-11.md` for detailed planning.
 
 **Immediate Priorities** (v0.1.0):
+
 1. Phase 7.2 - CLI Command Implementation (or merge plugin work first)
 2. Phase 8.2 - Binary Distribution Setup
 3. Phase 8.3 - crates.io Publishing
@@ -622,6 +644,7 @@ See `.local/ROADMAP-2025-11.md` for detailed planning.
 ## References
 
 ### Internal Documentation
+
 - `CLAUDE.md` - Development guidelines
 - `README.md` - Project overview
 - `GETTING_STARTED.md` - Setup guide
@@ -630,6 +653,7 @@ See `.local/ROADMAP-2025-11.md` for detailed planning.
 - `.local/PHASE-8-PLUGIN-PERSISTENCE-GUIDE.md` - Plugin system guide
 
 ### External Resources
+
 - [rmcp Documentation](https://docs.rs/rmcp/0.8.5) - Official Rust MCP SDK
 - [MCP Specification](https://spec.modelcontextprotocol.io/) - Protocol spec
 - [Wasmtime Book](https://docs.wasmtime.dev/) - WASM runtime

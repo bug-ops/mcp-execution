@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/branch/master/graph/badge.svg)](https://codecov.io/gh/bug-ops/mcp-execution)
-[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](https://blog.rust-lang.org/2025/01/09/Rust-1.88.0.html)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://blog.rust-lang.org/2025/01/23/Rust-1.89.0.html)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 

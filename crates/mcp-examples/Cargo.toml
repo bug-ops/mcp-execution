@@ -10,32 +10,21 @@ publish = false
 workspace = true
 
 [dependencies]
-# Internal workspace crates
-mcp-core.workspace = true
-mcp-introspector.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
 mcp-bridge.workspace = true
 mcp-codegen.workspace = true
+mcp-core.workspace = true
+mcp-introspector.workspace = true
+mcp-plugin-store.workspace = true
 mcp-vfs.workspace = true
 mcp-wasm-runtime.workspace = true
-mcp-plugin-store.workspace = true
-
-# Async runtime
-tokio.workspace = true
-
-# Error handling
-anyhow.workspace = true
-thiserror.workspace = true
-
-# Serialization
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-
-# Logging
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing.workspace = true
-tracing-subscriber.workspace = true
-
-# Utilities
-blake3.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }

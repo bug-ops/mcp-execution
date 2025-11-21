@@ -10,44 +10,25 @@ workspace = true
 
 [features]
 default = ["wasm"]
-
-# Execution environment targets
-wasm = []          # WebAssembly sandbox with host functions
-skills = []        # Claude Code Skills with shell execution
-
-# Meta features
-all = ["wasm", "skills"]  # Enable all for development
+wasm = []
+skills = []
+all = ["wasm", "skills"]
 
 [dependencies]
+chrono = { workspace = true, features = ["serde"] }
+handlebars.workspace = true
 mcp-core.workspace = true
 mcp-introspector.workspace = true
-
-# Template engine
-handlebars.workspace = true
-
-# Code generation
-syn.workspace = true
-quote.workspace = true
 proc-macro2.workspace = true
-
-# Serialization
-serde.workspace = true
+quote.workspace = true
+regex.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-
-# Date/time
-chrono.workspace = true
-
-# Error handling
+syn = { workspace = true, features = ["full", "parsing", "proc-macro"] }
 thiserror.workspace = true
-
-# Logging
 tracing.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
-mcp-vfs.workspace = true
 criterion.workspace = true
-
-[[bench]]
-name = "code_generation"
-harness = false
+mcp-vfs.workspace = true
+tempfile.workspace = true

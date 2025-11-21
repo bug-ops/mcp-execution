@@ -204,7 +204,7 @@ jobs:
 
   # MSRV check (Minimum Supported Rust Version)
   msrv:
-    name: Check MSRV (1.88)
+    name: Check MSRV (1.89)
     needs: [check]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -213,10 +213,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Rust 1.88
+      - name: Install Rust 1.89
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -254,7 +254,7 @@ jobs:
           shared-key: "bench"
 
       - name: Build benchmarks (no run)
-        run: cargo bench --no-run --workspace
+        run: cargo bench --no-run --profile bench-fast --workspace
 
       - name: sccache stats
         run: sccache --show-stats

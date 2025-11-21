@@ -17,45 +17,30 @@ name = "mcp-cli"
 path = "src/main.rs"
 
 [dependencies]
-# Internal crates
-mcp-wasm-runtime.workspace = true
-mcp-introspector.workspace = true
-mcp-codegen.workspace = true
-mcp-bridge.workspace = true
-mcp-vfs.workspace = true
-mcp-core.workspace = true
-mcp-plugin-store.workspace = true
-
-# CLI parsing
-clap.workspace = true
-clap_complete.workspace = true
-
-# Error handling (anyhow for applications)
 anyhow.workspace = true
-
-# Serialization
-serde.workspace = true
-serde_json.workspace = true
-
-# Async runtime
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
-
-# Logging
-tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
-
-# CLI User Experience (Phase 7.2 - for future use)
-indicatif.workspace = true
+clap = { workspace = true, features = ["derive", "env", "cargo", "color"] }
+clap_complete.workspace = true
 colored.workspace = true
-dialoguer.workspace = true
 console.workspace = true
-human-panic.workspace = true
-
-# Configuration (Phase 7.5 - for future use)
-toml.workspace = true
+dialoguer.workspace = true
 dirs.workspace = true
+human-panic.workspace = true
+indicatif.workspace = true
+mcp-bridge.workspace = true
+mcp-codegen.workspace = true
+mcp-core.workspace = true
+mcp-introspector.workspace = true
+mcp-plugin-store.workspace = true
+mcp-vfs.workspace = true
+mcp-wasm-runtime.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 [dev-dependencies]
-wat.workspace = true
 tempfile.workspace = true
+wat.workspace = true
