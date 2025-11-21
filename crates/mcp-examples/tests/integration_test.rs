@@ -115,10 +115,7 @@ fn test_codegen_generates_expected_files() {
 
     // Should generate tool files
     assert!(
-        generated
-            .files
-            .iter()
-            .any(|f| f.path.contains("tools/")),
+        generated.files.iter().any(|f| f.path.contains("tools/")),
         "Should generate tool implementation files"
     );
 }
