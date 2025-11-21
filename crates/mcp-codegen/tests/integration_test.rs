@@ -1,7 +1,7 @@
 //! End-to-end integration tests for mcp-codegen.
 //!
 //! Tests the complete workflow:
-//! 1. Create ServerInfo (from mcp-introspector)
+//! 1. Create `ServerInfo` (from mcp-introspector)
 //! 2. Generate code (mcp-codegen)
 //! 3. Load into VFS (mcp-vfs)
 //! 4. Verify all files exist and are valid
@@ -310,7 +310,11 @@ fn test_generated_typescript_is_syntactically_valid() {
     let generated = generator.generate(&server_info).unwrap();
 
     for file in &generated.files {
-        if file.path.ends_with(".ts") {
+        if std::path::Path::new(&file.path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ts"))
+        {
             // Basic TypeScript syntax checks
             let content = &file.content;
 
@@ -366,8 +370,7 @@ fn test_index_exports_all_tools() {
         let ts_name = mcp_codegen::common::typescript::to_camel_case(tool_info.name.as_str());
         assert!(
             index_file.content.contains(&ts_name),
-            "Index should export {}",
-            ts_name
+            "Index should export {ts_name}"
         );
     }
 }
@@ -446,8 +449,8 @@ fn test_performance_large_server() {
     let mut tools = Vec::new();
     for i in 0..50 {
         tools.push(ToolInfo {
-            name: ToolName::new(format!("tool_{}", i)),
-            description: format!("Tool number {}", i),
+            name: ToolName::new(format!("tool_{i}")),
+            description: format!("Tool number {i}"),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -481,8 +484,7 @@ fn test_performance_large_server() {
     // Should complete in reasonable time (<100ms for 50 tools)
     assert!(
         duration.as_millis() < 100,
-        "Generation took too long: {:?}",
-        duration
+        "Generation took too long: {duration:?}"
     );
 
     // Should generate all files
@@ -501,8 +503,7 @@ fn test_performance_large_server() {
 
     assert!(
         vfs_duration.as_millis() < 50,
-        "VFS loading took too long: {:?}",
-        vfs_duration
+        "VFS loading took too long: {vfs_duration:?}"
     );
 
     assert_eq!(vfs.file_count(), 53);

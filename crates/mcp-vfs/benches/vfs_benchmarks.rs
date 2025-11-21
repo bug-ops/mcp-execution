@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mcp_vfs::{Vfs, VfsBuilder};
 use std::hint::black_box;
 
-/// Benchmark read_file operation across different VFS sizes
+/// Benchmark `read_file` operation across different VFS sizes
 fn bench_read_file(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_file");
 
@@ -43,7 +43,7 @@ fn bench_exists(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark list_dir operation (identifies scaling issues)
+/// Benchmark `list_dir` operation (identifies scaling issues)
 fn bench_list_dir(c: &mut Criterion) {
     let mut group = c.benchmark_group("list_dir");
 
@@ -69,8 +69,8 @@ fn bench_add_file(c: &mut Criterion) {
                 let mut vfs = Vfs::new();
                 for i in 0..size {
                     vfs.add_file(
-                        format!("/test_{}.ts", i),
-                        format!("export const VERSION_{} = '1.0';", i),
+                        format!("/test_{i}.ts"),
+                        format!("export const VERSION_{i} = '1.0';"),
                     )
                     .unwrap();
                 }
@@ -82,7 +82,7 @@ fn bench_add_file(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark VfsBuilder construction
+/// Benchmark `VfsBuilder` construction
 fn bench_builder(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder");
 
@@ -90,8 +90,8 @@ fn bench_builder(c: &mut Criterion) {
         let files: Vec<_> = (0..size)
             .map(|i| {
                 (
-                    format!("/test_{}.ts", i),
-                    format!("export const VERSION_{} = '1.0';", i),
+                    format!("/test_{i}.ts"),
+                    format!("export const VERSION_{i} = '1.0';"),
                 )
             })
             .collect();
@@ -136,8 +136,8 @@ fn bench_typical_workflow(c: &mut Criterion) {
         let files: Vec<_> = (0..size)
             .map(|i| {
                 (
-                    format!("/mcp-tools/servers/test/file_{}.ts", i),
-                    format!("export const VERSION_{} = '1.0';", i),
+                    format!("/mcp-tools/servers/test/file_{i}.ts"),
+                    format!("export const VERSION_{i} = '1.0';"),
                 )
             })
             .collect();
@@ -149,7 +149,7 @@ fn bench_typical_workflow(c: &mut Criterion) {
 
                 // Perform typical operations
                 for i in 0..size.min(10) {
-                    let path = format!("/mcp-tools/servers/test/file_{}.ts", i);
+                    let path = format!("/mcp-tools/servers/test/file_{i}.ts");
                     let _ = vfs.read_file(&path).unwrap();
                 }
 
@@ -161,7 +161,7 @@ fn bench_typical_workflow(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark memory overhead by checking file_count performance
+/// Benchmark memory overhead by checking `file_count` performance
 fn bench_file_count(c: &mut Criterion) {
     let mut group = c.benchmark_group("file_count");
 
@@ -176,7 +176,7 @@ fn bench_file_count(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark all_paths operation (sorts paths)
+/// Benchmark `all_paths` operation (sorts paths)
 fn bench_all_paths(c: &mut Criterion) {
     let mut group = c.benchmark_group("all_paths");
 
@@ -196,8 +196,8 @@ fn create_vfs_with_files(count: usize) -> Vfs {
     let mut vfs = Vfs::new();
     for i in 0..count {
         vfs.add_file(
-            format!("/mcp-tools/servers/test/file_{}.ts", i),
-            format!("export const VERSION_{} = '1.0';\n// File {}", i, i),
+            format!("/mcp-tools/servers/test/file_{i}.ts"),
+            format!("export const VERSION_{i} = '1.0';\n// File {i}"),
         )
         .unwrap();
     }

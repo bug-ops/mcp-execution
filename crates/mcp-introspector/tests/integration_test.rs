@@ -132,7 +132,7 @@ fn test_server_count() {
     assert_eq!(introspector.server_count(), 0);
 }
 
-/// Tests ServerInfo serialization
+/// Tests `ServerInfo` serialization
 #[test]
 fn test_server_info_serialization() {
     let info = ServerInfo {
@@ -158,7 +158,7 @@ fn test_server_info_serialization() {
     assert_eq!(deserialized.name, "Test Server");
 }
 
-/// Tests ToolInfo serialization
+/// Tests `ToolInfo` serialization
 #[test]
 fn test_tool_info_serialization() {
     let tool = ToolInfo {
@@ -180,7 +180,7 @@ fn test_tool_info_serialization() {
     assert!(deserialized.output_schema.is_none());
 }
 
-/// Tests ServerCapabilities
+/// Tests `ServerCapabilities`
 #[test]
 fn test_server_capabilities() {
     let caps = ServerCapabilities {
@@ -228,6 +228,7 @@ async fn test_concurrent_introspector_access() {
         let handle = tokio::spawn(async move {
             let intro = introspector_clone.lock().await;
             assert_eq!(intro.server_count(), 0);
+            drop(intro); // Explicitly drop lock before returning
             i
         });
         handles.push(handle);
@@ -239,7 +240,7 @@ async fn test_concurrent_introspector_access() {
     }
 }
 
-/// Tests Debug implementation for ServerInfo
+/// Tests Debug implementation for `ServerInfo`
 #[test]
 fn test_server_info_debug() {
     let info = ServerInfo {
@@ -254,12 +255,12 @@ fn test_server_info_debug() {
         },
     };
 
-    let debug_str = format!("{:?}", info);
+    let debug_str = format!("{info:?}");
     assert!(debug_str.contains("Test Server"));
     assert!(debug_str.contains("1.0.0"));
 }
 
-/// Tests Debug implementation for ToolInfo
+/// Tests Debug implementation for `ToolInfo`
 #[test]
 fn test_tool_info_debug() {
     let tool = ToolInfo {
@@ -269,7 +270,7 @@ fn test_tool_info_debug() {
         output_schema: None,
     };
 
-    let debug_str = format!("{:?}", tool);
+    let debug_str = format!("{tool:?}");
     assert!(debug_str.contains("test"));
     assert!(debug_str.contains("Description"));
 }
@@ -338,7 +339,7 @@ fn test_complex_tool_schema() {
     let tool = ToolInfo {
         name: ToolName::new("complex_tool"),
         description: "A tool with complex schema".to_string(),
-        input_schema: complex_schema.clone(),
+        input_schema: complex_schema,
         output_schema: Some(json!({"type": "boolean"})),
     };
 

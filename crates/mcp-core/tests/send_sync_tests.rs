@@ -2,7 +2,7 @@
 
 use mcp_core::*;
 
-fn assert_send_sync<T: Send + Sync>() {}
+const fn assert_send_sync<T: Send + Sync>() {}
 
 #[test]
 fn test_domain_types_are_send_sync() {

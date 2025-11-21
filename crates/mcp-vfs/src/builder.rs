@@ -123,7 +123,7 @@ impl VfsBuilder {
         let base_normalized = if base.ends_with('/') {
             base.into_owned()
         } else {
-            format!("{}/", base)
+            format!("{base}/")
         };
 
         for file in code.files {

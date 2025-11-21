@@ -401,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_cache_hit_rate() {
         let cache = ModuleCache::new(10);
         let (hits, total, rate) = cache.hit_rate();

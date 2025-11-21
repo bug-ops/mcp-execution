@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✓ Code generation complete");
     println!("  Files generated: {}", generated.file_count());
-    println!("  Total code size: {} bytes", total_bytes);
+    println!("  Total code size: {total_bytes} bytes");
 
     for file in &generated.files {
         println!("    - {}", file.path);
@@ -112,12 +112,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vfs = VfsBuilder::from_generated_code(generated, vfs_root).build()?;
 
     println!("✓ VFS loaded");
-    println!("  Root:  {}", vfs_root);
+    println!("  Root:  {vfs_root}");
     println!("  Files: {}", vfs.file_count());
 
     // Verify key files exist
-    let manifest_path = format!("{}/manifest.json", vfs_root);
-    let types_path = format!("{}/types.ts", vfs_root);
+    let manifest_path = format!("{vfs_root}/manifest.json");
+    let types_path = format!("{vfs_root}/types.ts");
 
     if vfs.exists(&manifest_path) {
         println!("  ✓ manifest.json available");
@@ -185,10 +185,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match result {
         Ok(value) => {
             println!("✓ Execution successful");
-            println!("  Result: {}", value);
+            println!("  Result: {value}");
         }
         Err(e) => {
-            println!("✗ Execution failed: {}", e);
+            println!("✗ Execution failed: {e}");
             println!("  (This is expected for demo - using minimal WASM module)");
         }
     }
@@ -203,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Simulate a realistic workflow with multiple tool calls
     let num_calls = 10;
-    println!("→ Analyzing token usage for {} tool calls...", num_calls);
+    println!("→ Analyzing token usage for {num_calls} tool calls...");
 
     let token_analysis = TokenAnalysis::analyze(&server_info, num_calls);
 

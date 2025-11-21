@@ -3,7 +3,7 @@
 //! Demonstrates:
 //! - Creating a WASM runtime with security config
 //! - Executing a simple WASM module
-//! - Using host functions (host_add)
+//! - Using host functions (`host_add`)
 //!
 //! Run with:
 //! ```bash

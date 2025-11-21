@@ -367,13 +367,14 @@ mod tests {
         let err = Error::SecurityViolation {
             reason: "Unauthorized".to_string(),
         };
-        let display = format!("{}", err);
+        let display = format!("{err}");
         assert!(display.contains("Security policy violation"));
         assert!(display.contains("Unauthorized"));
     }
 
     #[test]
     fn test_result_alias() {
+        #[allow(clippy::unnecessary_wraps)]
         fn returns_ok() -> Result<i32> {
             Ok(42)
         }

@@ -12,7 +12,7 @@ fn bench_cache_key_generation(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_key_generation");
 
     // Test with varying parameter sizes
-    for size in [10, 100, 1000, 10000].iter() {
+    for size in &[10, 100, 1000, 10000] {
         let params = "x".repeat(*size);
 
         group.throughput(Throughput::Bytes(*size as u64));
@@ -66,7 +66,7 @@ fn bench_cache_key_comparison(c: &mut Criterion) {
     });
 }
 
-/// Benchmarks cache key hashing for HashMap lookups
+/// Benchmarks cache key hashing for `HashMap` lookups
 fn bench_cache_key_hash(c: &mut Criterion) {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

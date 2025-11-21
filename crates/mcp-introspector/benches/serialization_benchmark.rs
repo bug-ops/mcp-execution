@@ -1,7 +1,7 @@
 //! Benchmarks for mcp-introspector serialization performance
 //!
 //! These benchmarks measure JSON serialization/deserialization of
-//! ServerInfo and ToolInfo structures.
+//! `ServerInfo` and `ToolInfo` structures.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_core::{ServerId, ToolName};
@@ -9,12 +9,12 @@ use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 use std::hint::black_box;
 
-/// Creates a sample ServerInfo for benchmarking
+/// Creates a sample `ServerInfo` for benchmarking
 fn create_server_info(tool_count: usize) -> ServerInfo {
     let tools = (0..tool_count)
         .map(|i| ToolInfo {
-            name: ToolName::new(format!("tool_{}", i)),
-            description: format!("Test tool number {}", i),
+            name: ToolName::new(format!("tool_{i}")),
+            description: format!("Test tool number {i}"),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -40,11 +40,11 @@ fn create_server_info(tool_count: usize) -> ServerInfo {
     }
 }
 
-/// Benchmarks ServerInfo serialization
+/// Benchmarks `ServerInfo` serialization
 fn bench_server_info_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("server_info_serialization");
 
-    for tool_count in [1, 10, 50, 100].iter() {
+    for tool_count in &[1, 10, 50, 100] {
         let server_info = create_server_info(*tool_count);
 
         group.throughput(Throughput::Elements(*tool_count as u64));
@@ -62,11 +62,11 @@ fn bench_server_info_serialization(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks ServerInfo deserialization
+/// Benchmarks `ServerInfo` deserialization
 fn bench_server_info_deserialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("server_info_deserialization");
 
-    for tool_count in [1, 10, 50, 100].iter() {
+    for tool_count in &[1, 10, 50, 100] {
         let server_info = create_server_info(*tool_count);
         let json = serde_json::to_string(&server_info).unwrap();
 
@@ -85,7 +85,7 @@ fn bench_server_info_deserialization(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks ToolInfo serialization
+/// Benchmarks `ToolInfo` serialization
 fn bench_tool_info_serialization(c: &mut Criterion) {
     let tool = ToolInfo {
         name: ToolName::new("test_tool"),
@@ -113,7 +113,7 @@ fn bench_tool_info_serialization(c: &mut Criterion) {
     });
 }
 
-/// Benchmarks ToolInfo deserialization
+/// Benchmarks `ToolInfo` deserialization
 fn bench_tool_info_deserialization(c: &mut Criterion) {
     let tool = ToolInfo {
         name: ToolName::new("test_tool"),
@@ -131,7 +131,7 @@ fn bench_tool_info_deserialization(c: &mut Criterion) {
     });
 }
 
-/// Benchmarks ServerCapabilities serialization
+/// Benchmarks `ServerCapabilities` serialization
 fn bench_capabilities_serialization(c: &mut Criterion) {
     let caps = ServerCapabilities {
         supports_tools: true,

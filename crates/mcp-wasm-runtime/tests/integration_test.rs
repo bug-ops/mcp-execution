@@ -1,4 +1,5 @@
 //! Integration tests for WASM runtime with real WASM modules.
+#![allow(clippy::ignore_without_reason)]
 
 use mcp_bridge::Bridge;
 use mcp_wasm_runtime::{Runtime, SecurityConfig};
@@ -123,16 +124,14 @@ async fn test_execution_timeout() {
     assert!(result.is_err(), "Expected timeout error");
     assert!(
         elapsed.as_secs() >= 1 && elapsed.as_secs() <= 3,
-        "Expected ~1 second timeout, got {:?}",
-        elapsed
+        "Expected ~1 second timeout, got {elapsed:?}"
     );
 
     if let Err(e) = result {
-        let error_str = format!("{:?}", e);
+        let error_str = format!("{e:?}");
         assert!(
             error_str.contains("Timeout") || error_str.contains("timeout"),
-            "Expected timeout error, got: {}",
-            error_str
+            "Expected timeout error, got: {error_str}"
         );
     }
 }

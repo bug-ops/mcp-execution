@@ -185,12 +185,11 @@ mod tests {
 
         for cmd in dangerous {
             let result = validate_command(cmd);
-            assert!(result.is_err(), "Should reject dangerous command: {}", cmd);
+            assert!(result.is_err(), "Should reject dangerous command: {cmd}");
             if let Err(Error::SecurityViolation { reason }) = result {
                 assert!(
                     reason.contains("forbidden") || reason.contains("metacharacter"),
-                    "Error should mention forbidden character: {}",
-                    reason
+                    "Error should mention forbidden character: {reason}"
                 );
             }
         }

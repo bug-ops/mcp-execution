@@ -1,4 +1,11 @@
 //! MCP Code Execution CLI.
+#![allow(clippy::format_push_string)]
+#![allow(clippy::unused_async)] // MVP: Many functions are async stubs
+#![allow(clippy::cast_possible_truncation)] // u128->u64 for millis is safe
+#![allow(clippy::missing_errors_doc)] // MVP: Will add comprehensive docs in Phase 7.3
+#![allow(clippy::needless_collect)]
+#![allow(clippy::unnecessary_wraps)] // API design requires Result for consistency
+#![allow(clippy::unnecessary_literal_unwrap)]
 //!
 //! Command-line interface for executing code in MCP sandbox,
 //! inspecting servers, and generating virtual filesystems.
@@ -34,6 +41,7 @@ use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
+pub mod formatters;
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -91,6 +99,10 @@ enum Commands {
         /// Code generation feature mode (wasm, skills)
         #[arg(short, long, default_value = "wasm")]
         feature: String,
+
+        /// Overwrite existing output directory without prompting
+        #[arg(short = 'F', long)]
+        force: bool,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -170,7 +182,7 @@ enum ServerAction {
 }
 
 /// Debug actions.
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 enum DebugAction {
     /// Show system and runtime information
     Info,
@@ -218,7 +230,7 @@ async fn main() -> Result<()> {
     let output_format = cli
         .format
         .parse::<OutputFormat>()
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Execute command and get exit code
     let exit_code = execute_command(cli.command, output_format).await?;
@@ -265,7 +277,8 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             server,
             output,
             feature,
-        } => commands::generate::run(server, output, feature, output_format).await,
+            force,
+        } => commands::generate::run(server, output, feature, force, output_format).await,
         Commands::Execute {
             module,
             entry,
@@ -298,6 +311,14 @@ mod tests {
         let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--output", "/tmp"]);
         if let Commands::Generate { output, .. } = cli.command {
             assert_eq!(output, Some(PathBuf::from("/tmp")));
+        } else {
+            panic!("Expected Generate command");
+        }
+
+        // Test with force flag
+        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--force"]);
+        if let Commands::Generate { force, .. } = cli.command {
+            assert!(force);
         } else {
             panic!("Expected Generate command");
         }

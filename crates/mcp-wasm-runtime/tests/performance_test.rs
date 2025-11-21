@@ -1,4 +1,5 @@
 //! Performance tests for WASM runtime.
+#![allow(clippy::format_push_string)]
 //!
 //! Tests performance characteristics:
 //! - Module compilation time
@@ -233,8 +234,7 @@ async fn test_large_module_performance() {
     // Add 100 functions
     for i in 0..100 {
         wat.push_str(&format!(
-            "  (func $func{} (param i32) (result i32)\n    local.get 0\n    i32.const {}\n    i32.add\n  )\n",
-            i, i
+            "  (func $func{i} (param i32) (result i32)\n    local.get 0\n    i32.const {i}\n    i32.add\n  )\n"
         ));
     }
 
@@ -282,7 +282,7 @@ fn test_cache_lru_performance() {
     // Create and cache modules
     for i in 0..5 {
         let module = wasmtime::Module::new(&engine, &wasm).unwrap();
-        let key = ModuleCache::cache_key_for_code(format!("module_{}", i).as_bytes());
+        let key = ModuleCache::cache_key_for_code(format!("module_{i}").as_bytes());
         cache.insert(key, module);
     }
 
@@ -363,7 +363,7 @@ fn test_cache_statistics() {
     // Add some modules
     for i in 0..5 {
         let module = wasmtime::Module::new(&engine, &wasm).unwrap();
-        let key = ModuleCache::cache_key_for_code(format!("test_{}", i).as_bytes());
+        let key = ModuleCache::cache_key_for_code(format!("test_{i}").as_bytes());
         cache.insert(key, module);
     }
 
@@ -373,5 +373,5 @@ fn test_cache_statistics() {
     let (hits, total, rate) = cache.hit_rate();
     assert_eq!(hits, 5);
     assert_eq!(total, 10);
-    assert_eq!(rate, 50.0); // 5/10 = 50%
+    assert!((rate - 50.0).abs() < f64::EPSILON); // 5/10 = 50%
 }

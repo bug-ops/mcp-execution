@@ -687,10 +687,10 @@ mod tests {
     #[test]
     fn test_memory_limit_display() {
         let limit = MemoryLimit::default();
-        assert_eq!(format!("{}", limit), "256MB");
+        assert_eq!(format!("{limit}"), "256MB");
 
         let custom = MemoryLimit::new(100 * 1024 * 1024).unwrap();
-        assert_eq!(format!("{}", custom), "100MB");
+        assert_eq!(format!("{custom}"), "100MB");
     }
 
     #[test]

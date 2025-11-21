@@ -88,7 +88,7 @@ impl VfsError {
     /// assert!(error.is_not_found());
     /// ```
     #[must_use]
-    pub fn is_not_found(&self) -> bool {
+    pub const fn is_not_found(&self) -> bool {
         matches!(self, Self::FileNotFound { .. })
     }
 
@@ -106,7 +106,7 @@ impl VfsError {
     /// assert!(error.is_not_directory());
     /// ```
     #[must_use]
-    pub fn is_not_directory(&self) -> bool {
+    pub const fn is_not_directory(&self) -> bool {
         matches!(self, Self::NotADirectory { .. })
     }
 
@@ -124,7 +124,7 @@ impl VfsError {
     /// assert!(error.is_invalid_path());
     /// ```
     #[must_use]
-    pub fn is_invalid_path(&self) -> bool {
+    pub const fn is_invalid_path(&self) -> bool {
         matches!(
             self,
             Self::InvalidPath { .. }
@@ -136,7 +136,7 @@ impl VfsError {
 
 /// A validated virtual filesystem path.
 ///
-/// VfsPath ensures paths use Unix-style conventions on all platforms:
+/// `VfsPath` ensures paths use Unix-style conventions on all platforms:
 /// - Must start with '/' (absolute paths only)
 /// - Free of parent directory references ('..')
 /// - Use forward slashes as separators
@@ -168,14 +168,14 @@ impl VfsError {
 pub struct VfsPath(String);
 
 impl VfsPath {
-    /// Creates a new VfsPath from a path-like type.
+    /// Creates a new `VfsPath` from a path-like type.
     ///
     /// The path must be absolute (start with '/') and must not contain parent
     /// directory references ('..').
     ///
-    /// VfsPath uses Unix-style path conventions on all platforms, ensuring
+    /// `VfsPath` uses Unix-style path conventions on all platforms, ensuring
     /// consistent behavior on Linux, macOS, and Windows. Paths are validated
-    /// using string-based checks rather than platform-specific Path::is_absolute(),
+    /// using string-based checks rather than platform-specific `Path::is_absolute()`,
     /// which enables cross-platform compatibility.
     ///
     /// # Errors
@@ -287,15 +287,15 @@ impl VfsPath {
     /// # Ok::<(), mcp_vfs::VfsError>(())
     /// ```
     #[must_use]
-    pub fn parent(&self) -> Option<VfsPath> {
+    pub fn parent(&self) -> Option<Self> {
         // Find the last '/' separator
         self.0.rfind('/').map(|pos| {
             if pos == 0 {
                 // Parent of "/foo" is "/" (root)
-                VfsPath("/".to_string())
+                Self("/".to_string())
             } else {
                 // Parent of "/foo/bar" is "/foo"
-                VfsPath(self.0[..pos].to_string())
+                Self(self.0[..pos].to_string())
             }
         })
     }
@@ -399,7 +399,7 @@ impl VfsFile {
     /// assert_eq!(file.size(), 5);
     /// ```
     #[must_use]
-    pub fn size(&self) -> usize {
+    pub const fn size(&self) -> usize {
         self.content.len()
     }
 }
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn test_vfs_path_display() {
         let path = VfsPath::new("/test.ts").unwrap();
-        assert_eq!(format!("{}", path), "/test.ts");
+        assert_eq!(format!("{path}"), "/test.ts");
     }
 
     #[test]
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn test_vfs_error_is_invalid_path() {
         let error = VfsError::InvalidPath {
-            path: "".to_string(),
+            path: String::new(),
         };
         assert!(error.is_invalid_path());
 

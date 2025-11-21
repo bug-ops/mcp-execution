@@ -478,7 +478,7 @@ mod tests {
                 supports_prompts: false,
             },
         };
-        let debug_str = format!("{:?}", info);
+        let debug_str = format!("{info:?}");
         assert!(debug_str.contains("Test Server"));
         assert!(debug_str.contains("1.0.0"));
     }

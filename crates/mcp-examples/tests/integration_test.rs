@@ -114,13 +114,8 @@ fn test_codegen_generates_expected_files() {
     assert!(has_types, "Should generate types.ts");
 
     // Should generate tool files
-    let tool_files: Vec<_> = generated
-        .files
-        .iter()
-        .filter(|f| f.path.contains("tools/"))
-        .collect();
     assert!(
-        !tool_files.is_empty(),
+        generated.files.iter().any(|f| f.path.contains("tools/")),
         "Should generate tool implementation files"
     );
 }
@@ -144,7 +139,7 @@ fn test_codegen_to_vfs() {
     let vfs = result.unwrap();
 
     // Verify files are accessible
-    assert!(vfs.exists(format!("{}/manifest.json", vfs_root)));
+    assert!(vfs.exists(format!("{vfs_root}/manifest.json")));
 }
 
 #[test]
@@ -161,7 +156,7 @@ fn test_vfs_file_reading() {
         .unwrap();
 
     // Read manifest
-    let manifest_path = format!("{}/manifest.json", vfs_root);
+    let manifest_path = format!("{vfs_root}/manifest.json");
     let content = vfs.read_file(&manifest_path);
 
     assert!(content.is_ok());

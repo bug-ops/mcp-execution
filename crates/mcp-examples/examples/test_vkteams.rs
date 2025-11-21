@@ -41,8 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server_id = ServerId::new("vkteams-bot");
     let server_command = "vkteams-bot-server";
 
-    println!("→ Attempting to discover server: {}", server_id);
-    println!("  Command: {}", server_command);
+    println!("→ Attempting to discover server: {server_id}");
+    println!("  Command: {server_command}");
 
     match introspector
         .discover_server(server_id.clone(), server_command)
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Check connection stats
                     let conn_count = bridge.connection_count().await;
-                    println!("  Active connections: {}", conn_count);
+                    println!("  Active connections: {conn_count}");
 
                     let cache_stats = bridge.cache_stats().await;
                     println!("  Cache capacity: {}", cache_stats.capacity);
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  (Not calling tools to avoid side effects)");
                 }
                 Err(e) => {
-                    println!("✗ Bridge connection failed: {}", e);
+                    println!("✗ Bridge connection failed: {e}");
                     println!("  This may indicate the server is not running");
                 }
             }
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Active connections: {}", bridge.connection_count().await);
 
             if let Some(call_count) = bridge.connection_call_count(&server_id).await {
-                println!("  Tool calls made: {}", call_count);
+                println!("  Tool calls made: {call_count}");
             }
 
             println!("\n╔════════════════════════════════════════════════╗");
@@ -136,7 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("╚════════════════════════════════════════════════╝");
         }
         Err(e) => {
-            println!("✗ Server discovery failed: {}", e);
+            println!("✗ Server discovery failed: {e}");
             println!();
             println!("This is expected if vkteams-bot server is not installed.");
             println!();

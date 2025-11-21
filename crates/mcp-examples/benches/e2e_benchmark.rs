@@ -114,11 +114,11 @@ fn bench_scaling_with_tools(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("scaling_tools");
 
-    for num_tools in [1, 5, 10, 20, 50].iter() {
+    for num_tools in &[1, 5, 10, 20, 50] {
         let tools: Vec<ToolInfo> = (0..*num_tools)
             .map(|i| ToolInfo {
-                name: ToolName::new(format!("tool_{}", i)),
-                description: format!("Tool number {}", i),
+                name: ToolName::new(format!("tool_{i}")),
+                description: format!("Tool number {i}"),
                 input_schema: json!({"type": "object"}),
                 output_schema: None,
             })
