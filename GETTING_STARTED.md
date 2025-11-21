@@ -18,7 +18,7 @@ This guide walks you through using the MCP Code Execution library step by step, 
 
 Before you begin, ensure you have:
 
-- **Rust 1.85+** with Edition 2024 support
+- **Rust 1.88+** with Edition 2024 support
 - **Tokio** async runtime knowledge
 - Basic understanding of:
   - WebAssembly concepts
@@ -35,7 +35,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup update stable
 
 # Verify installation
-rustc --version  # Should be 1.85.0 or higher
+rustc --version  # Should be 1.88.0 or higher
 ```
 
 ## Installation
@@ -68,9 +68,10 @@ cd mcp-execution
 cargo build --workspace
 
 # Run tests to verify
-cargo test --workspace
+cargo nextest run --workspace
+# Or: cargo test --workspace
 
-# Expected output: 48/48 tests passing
+# Expected output: 696/696 tests passing
 ```
 
 ## Basic WASM Execution
@@ -697,7 +698,7 @@ let config = SecurityConfig::builder()
 
 #### 4. "WASM execution failed: all fuel consumed"
 
-**Cause**: Fuel was enabled but not initialized (Wasmtime 37.0 issue).
+**Cause**: Fuel was enabled but not initialized (Wasmtime issue).
 
 **Solution**:
 

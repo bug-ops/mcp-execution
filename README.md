@@ -291,35 +291,42 @@ See [docs/adr/](docs/adr/) for security architecture decisions.
 - [x] Memory and timeout validation
 - [x] E2E workflow examples (61 tests)
 
-### Phase 7.1: CLI Foundation ✅ COMPLETE
+### Phase 7: CLI ✅ COMPLETE
 
+#### Phase 7.1: CLI Foundation
 - [x] Clap 4.5-based CLI with strong types
-- [x] 7 subcommands (introspect, generate, execute, server, stats, debug, config)
+- [x] 9 subcommands (introspect, generate, execute, server, stats, debug, config, plugin, completions)
 - [x] Security hardening (command injection prevention, path validation)
 - [x] Multiple output formats (JSON, text, pretty)
 - [x] Shell completions (bash, zsh, fish, PowerShell)
 - [x] 268 tests with 5/5 security rating
 
-### Phase 8.1: Plugin Persistence ✅ COMPLETE
+#### Phase 7.2: CLI Implementation
+- [x] `introspect` command - analyze MCP servers
+- [x] `generate` command - generate code with --save-plugin
+- [x] `execute` command - run WASM modules
+- [x] `server`, `stats`, `debug`, `config` commands
+- [x] Full integration with all crates
+- [x] 428 additional tests
 
+### Phase 8: Plugin Persistence ✅ COMPLETE
+
+#### Phase 8.1: Plugin Store
 - [x] New `mcp-plugin-store` crate for disk persistence
 - [x] Blake3 integrity verification with constant-time comparison
 - [x] Atomic file operations for crash safety
-- [x] CLI commands: `plugin list|load|info|remove`
-- [x] Path validation and security hardening
 - [x] 70 tests (38 unit + 32 integration)
 - [x] 16-33x faster plugin loading vs regeneration
+
+#### Phase 8.2: CLI Integration
+- [x] `plugin list|load|info|remove` commands
+- [x] Path validation and security hardening
+- [x] Integration with generate command
+- [x] Plugin directory management
 
 ### Phase 6: Optimization 🟡 DEFERRED
 
 Phase 6 is **DEFERRED**. Current performance already exceeds all targets by 5-6,578x.
-
-### Phase 7.2: CLI Implementation 🔵 PLANNED
-
-- [ ] Implement `introspect` command (connect to servers, display tools)
-- [ ] Implement `generate` command (generate code, save plugins)
-- [ ] Implement `execute` command (run WASM modules)
-- [ ] Implement remaining commands (server, stats, debug, config)
 
 **See [PROJECT-STATUS.md](PROJECT-STATUS.md) for current status and [GETTING_STARTED.md](GETTING_STARTED.md) for usage guide.**
 
