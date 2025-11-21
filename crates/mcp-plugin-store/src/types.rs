@@ -1,0 +1,324 @@
+//! Core types for plugin metadata and storage.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Metadata for a saved plugin.
+///
+/// Contains all information about a plugin including server details,
+/// generation timestamp, checksums for integrity verification, and tool list.
+/// This is serialized to `plugin.json` in the plugin directory.
+///
+/// # Format Version
+///
+/// The `format_version` field enables future schema migrations. Current
+/// version is "1.0".
+///
+/// # Examples
+///
+/// ```
+/// use mcp_plugin_store::{PluginMetadata, ServerInfo, Checksums, ToolInfo};
+/// use chrono::Utc;
+/// use std::collections::HashMap;
+///
+/// let metadata = PluginMetadata {
+///     format_version: "1.0".to_string(),
+///     server: ServerInfo {
+///         name: "my-server".to_string(),
+///         version: "1.0.0".to_string(),
+///         protocol_version: "2024-11-05".to_string(),
+///     },
+///     generated_at: Utc::now(),
+///     generator_version: "0.1.0".to_string(),
+///     checksums: Checksums {
+///         wasm: "blake3:abc123".to_string(),
+///         generated: HashMap::new(),
+///     },
+///     tools: vec![
+///         ToolInfo {
+///             name: "send_message".to_string(),
+///             description: "Send a message".to_string(),
+///         }
+///     ],
+/// };
+///
+/// // Can be serialized to JSON
+/// let json = serde_json::to_string_pretty(&metadata).unwrap();
+/// assert!(json.contains("format_version"));
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginMetadata {
+    /// Metadata format version for future schema migrations.
+    ///
+    /// Current version: "1.0"
+    pub format_version: String,
+
+    /// Server identification and version information.
+    pub server: ServerInfo,
+
+    /// Timestamp when this plugin was generated.
+    pub generated_at: DateTime<Utc>,
+
+    /// Version of mcp-execution that generated this plugin.
+    pub generator_version: String,
+
+    /// Blake3 checksums for integrity verification.
+    pub checksums: Checksums,
+
+    /// List of tools provided by this plugin.
+    pub tools: Vec<ToolInfo>,
+}
+
+/// Server identification information.
+///
+/// Identifies the MCP server that this plugin was generated from, including
+/// version information and MCP protocol version.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_plugin_store::ServerInfo;
+///
+/// let info = ServerInfo {
+///     name: "vkteams-bot".to_string(),
+///     version: "0.1.0".to_string(),
+///     protocol_version: "2024-11-05".to_string(),
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServerInfo {
+    /// Unique server identifier (used as directory name).
+    ///
+    /// This should be a valid directory name without path separators.
+    pub name: String,
+
+    /// Server version string (e.g., "1.0.0").
+    pub version: String,
+
+    /// MCP protocol version (e.g., "2024-11-05").
+    pub protocol_version: String,
+}
+
+/// Checksum information for plugin integrity verification.
+///
+/// Contains Blake3 hashes for the WASM module and all generated files.
+/// Checksums are verified when loading a plugin to detect corruption or
+/// tampering.
+///
+/// # Format
+///
+/// Checksums are stored as `"blake3:<hex>"` where `<hex>` is the Blake3 hash
+/// in lowercase hexadecimal.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_plugin_store::Checksums;
+/// use std::collections::HashMap;
+///
+/// let mut generated = HashMap::new();
+/// generated.insert("index.ts".to_string(), "blake3:abc123".to_string());
+/// generated.insert("types.ts".to_string(), "blake3:def456".to_string());
+///
+/// let checksums = Checksums {
+///     wasm: "blake3:789xyz".to_string(),
+///     generated,
+/// };
+///
+/// assert_eq!(checksums.generated.len(), 2);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checksums {
+    /// Blake3 checksum of the WASM module.
+    ///
+    /// Format: `"blake3:<hex>"`
+    pub wasm: String,
+
+    /// Blake3 checksums of generated TypeScript files.
+    ///
+    /// Map from file path (relative to `generated/` directory) to checksum.
+    /// Format: `"blake3:<hex>"`
+    pub generated: HashMap<String, String>,
+}
+
+/// Tool information summary.
+///
+/// Brief description of a tool provided by the plugin. Used for quick
+/// reference without loading the full plugin.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_plugin_store::ToolInfo;
+///
+/// let tool = ToolInfo {
+///     name: "send_message".to_string(),
+///     description: "Sends a message to a chat".to_string(),
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolInfo {
+    /// Tool name as defined in MCP server.
+    pub name: String,
+
+    /// Human-readable tool description.
+    pub description: String,
+}
+
+/// Loaded plugin with all components.
+///
+/// Contains everything needed to use a plugin: metadata, VFS with generated
+/// code, and compiled WASM module.
+///
+/// This is returned by [`PluginStore::load_plugin()`](crate::PluginStore::load_plugin)
+/// after verifying all checksums.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_plugin_store::PluginStore;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = PluginStore::new("./plugins")?;
+/// let plugin = store.load_plugin("my-server")?;
+///
+/// println!("Server: {} v{}", plugin.metadata.server.name, plugin.metadata.server.version);
+/// println!("Tools: {}", plugin.metadata.tools.len());
+/// println!("VFS files: {}", plugin.vfs.file_count());
+/// println!("WASM size: {} bytes", plugin.wasm_module.len());
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct LoadedPlugin {
+    /// Plugin metadata including checksums and tool list.
+    pub metadata: PluginMetadata,
+
+    /// Virtual filesystem with generated TypeScript code.
+    pub vfs: mcp_vfs::Vfs,
+
+    /// Compiled WASM module bytes.
+    pub wasm_module: Vec<u8>,
+}
+
+/// Brief plugin information for listing.
+///
+/// Lightweight summary of a plugin suitable for displaying in lists without
+/// loading the entire plugin.
+///
+/// Returned by [`PluginStore::list_plugins()`](crate::PluginStore::list_plugins).
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_plugin_store::PluginStore;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = PluginStore::new("./plugins")?;
+///
+/// for plugin in store.list_plugins()? {
+///     println!("{} v{} - {} tools (generated {})",
+///         plugin.server_name,
+///         plugin.version,
+///         plugin.tool_count,
+///         plugin.generated_at.format("%Y-%m-%d")
+///     );
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct PluginInfo {
+    /// Server name (identifier).
+    pub server_name: String,
+
+    /// Server version string.
+    pub version: String,
+
+    /// When the plugin was generated.
+    pub generated_at: DateTime<Utc>,
+
+    /// Number of tools in the plugin.
+    pub tool_count: usize,
+}
+
+// Constants for plugin structure
+/// Current metadata format version.
+pub const FORMAT_VERSION: &str = "1.0";
+
+/// Name of the metadata file in each plugin directory.
+pub const METADATA_FILE: &str = "plugin.json";
+
+/// Name of the WASM module file in each plugin directory.
+pub const WASM_FILE: &str = "module.wasm";
+
+/// Name of the directory containing generated TypeScript files.
+pub const GENERATED_DIR: &str = "generated";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_plugin_metadata_serialization() {
+        let metadata = PluginMetadata {
+            format_version: FORMAT_VERSION.to_string(),
+            server: ServerInfo {
+                name: "test-server".to_string(),
+                version: "1.0.0".to_string(),
+                protocol_version: "2024-11-05".to_string(),
+            },
+            generated_at: Utc::now(),
+            generator_version: "0.1.0".to_string(),
+            checksums: Checksums {
+                wasm: "blake3:test".to_string(),
+                generated: HashMap::new(),
+            },
+            tools: vec![ToolInfo {
+                name: "test_tool".to_string(),
+                description: "Test tool".to_string(),
+            }],
+        };
+
+        // Should serialize and deserialize correctly
+        let json = serde_json::to_string(&metadata).unwrap();
+        let deserialized: PluginMetadata = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.format_version, FORMAT_VERSION);
+        assert_eq!(deserialized.server.name, "test-server");
+        assert_eq!(deserialized.tools.len(), 1);
+    }
+
+    #[test]
+    fn test_server_info_equality() {
+        let info1 = ServerInfo {
+            name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            protocol_version: "2024-11-05".to_string(),
+        };
+
+        let info2 = ServerInfo {
+            name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            protocol_version: "2024-11-05".to_string(),
+        };
+
+        assert_eq!(info1, info2);
+    }
+
+    #[test]
+    fn test_tool_info_equality() {
+        let tool1 = ToolInfo {
+            name: "tool".to_string(),
+            description: "desc".to_string(),
+        };
+
+        let tool2 = ToolInfo {
+            name: "tool".to_string(),
+            description: "desc".to_string(),
+        };
+
+        assert_eq!(tool1, tool2);
+    }
+}

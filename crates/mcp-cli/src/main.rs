@@ -36,12 +36,16 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use mcp_core::cli::{ExitCode, OutputFormat};
 use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod actions;
 mod commands;
 pub mod formatters;
+
+use actions::{ConfigAction, DebugAction, ServerAction};
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -51,7 +55,7 @@ pub mod formatters;
 #[command(name = "mcp-cli")]
 #[command(version, about, long_about = None)]
 #[command(author = "MCP Execution Team")]
-struct Cli {
+pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
     command: Commands,
@@ -67,7 +71,7 @@ struct Cli {
 
 /// Available CLI subcommands.
 #[derive(Subcommand, Debug)]
-enum Commands {
+pub enum Commands {
     /// Introspect an MCP server and display its capabilities.
     ///
     /// Connects to an MCP server, discovers its tools, and displays
@@ -103,6 +107,14 @@ enum Commands {
         /// Overwrite existing output directory without prompting
         #[arg(short = 'F', long)]
         force: bool,
+
+        /// Save generated code as a plugin
+        #[arg(long)]
+        save_plugin: bool,
+
+        /// Plugin directory for save/load operations
+        #[arg(long, default_value = "./plugins")]
+        plugin_dir: PathBuf,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -160,61 +172,24 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
-}
 
-/// Server management actions.
-#[derive(Subcommand, Debug)]
-enum ServerAction {
-    /// List all configured servers
-    List,
-
-    /// Show detailed information about a server
-    Info {
-        /// Server name
-        server: String,
+    /// Manage saved plugins.
+    ///
+    /// Save, load, list, and manage plugins stored on disk.
+    Plugin {
+        /// Plugin management action
+        #[command(subcommand)]
+        action: commands::plugin::PluginAction,
     },
 
-    /// Validate a server command
-    Validate {
-        /// Server command to validate
-        command: String,
-    },
-}
-
-/// Debug actions.
-#[derive(Subcommand, Debug, Clone)]
-enum DebugAction {
-    /// Show system and runtime information
-    Info,
-
-    /// Display cache statistics
-    CacheStats,
-
-    /// Show runtime metrics
-    RuntimeMetrics,
-}
-
-/// Configuration actions.
-#[derive(Subcommand, Debug)]
-enum ConfigAction {
-    /// Initialize configuration file
-    Init,
-
-    /// Show current configuration
-    Show,
-
-    /// Set a configuration value
-    Set {
-        /// Configuration key
-        key: String,
-        /// Configuration value
-        value: String,
-    },
-
-    /// Get a configuration value
-    Get {
-        /// Configuration key
-        key: String,
+    /// Generate shell completions.
+    ///
+    /// Generates completion scripts for various shells that can be
+    /// sourced or saved to enable tab completion for this CLI.
+    Completions {
+        /// Target shell for completion generation
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
@@ -278,7 +253,20 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             output,
             feature,
             force,
-        } => commands::generate::run(server, output, feature, force, output_format).await,
+            save_plugin,
+            plugin_dir,
+        } => {
+            commands::generate::run(
+                server,
+                output,
+                feature,
+                force,
+                save_plugin,
+                plugin_dir,
+                output_format,
+            )
+            .await
+        }
         Commands::Execute {
             module,
             entry,
@@ -289,6 +277,12 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         Commands::Stats { category } => commands::stats::run(category, output_format).await,
         Commands::Debug { action } => commands::debug::run(action, output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
+        Commands::Plugin { action } => commands::plugin::run(action, output_format).await,
+        Commands::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            commands::completions::run(shell, &mut cmd).await
+        }
     }
 }
 
@@ -387,5 +381,21 @@ mod tests {
     #[test]
     fn test_output_format_parsing_invalid() {
         assert!("invalid".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_completions_bash() {
+        let cli = Cli::parse_from(["mcp-cli", "completions", "bash"]);
+        assert!(matches!(cli.command, Commands::Completions { .. }));
+    }
+
+    #[test]
+    fn test_cli_parsing_completions_zsh() {
+        let cli = Cli::parse_from(["mcp-cli", "completions", "zsh"]);
+        if let Commands::Completions { shell } = cli.command {
+            assert_eq!(shell, Shell::Zsh);
+        } else {
+            panic!("Expected Completions command");
+        }
     }
 }

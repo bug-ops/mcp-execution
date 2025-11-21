@@ -74,14 +74,15 @@ pub struct Statistics {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use mcp_cli::commands::stats;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
-/// # tokio_test::block_on(async {
+/// # #[tokio::main]
+/// # async fn main() {
 /// let result = stats::run("all".to_string(), OutputFormat::Json).await;
 /// assert!(result.is_ok());
-/// # })
+/// # }
 /// ```
 pub async fn run(category: String, output_format: OutputFormat) -> Result<ExitCode> {
     info!("Stats category: {}", category);

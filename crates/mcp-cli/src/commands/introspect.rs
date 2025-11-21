@@ -17,9 +17,7 @@ use tracing::info;
 /// # Examples
 ///
 /// ```
-/// use mcp_cli::commands::introspect::IntrospectionResult;
-/// use mcp_introspector::{ServerInfo, ServerCapabilities};
-/// use mcp_core::ServerId;
+/// use mcp_cli::commands::introspect::{IntrospectionResult, ServerMetadata};
 ///
 /// let result = IntrospectionResult {
 ///     server: ServerMetadata {
@@ -198,6 +196,7 @@ pub async fn run(server: String, detailed: bool, output_format: OutputFormat) ->
 /// assert_eq!(result.server.name, "Test Server");
 /// assert_eq!(result.tools.len(), 0);
 /// ```
+#[must_use]
 pub fn build_result(server_info: &ServerInfo, detailed: bool) -> IntrospectionResult {
     let server = ServerMetadata {
         id: server_info.id.as_str().to_string(),

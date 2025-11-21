@@ -17,6 +17,7 @@ MCP Code Execution implements the Code Execution pattern for MCP, enabling AI ag
 ### Key Features
 
 - **90-98% Token Reduction**: Progressive tool loading vs. full tool definitions
+- **Plugin Persistence**: Save and load pre-generated tools to disk
 - **Secure Sandbox**: Wasmtime-based WASM execution with memory/CPU limits
 - **Zero Overhead**: <50ms execution overhead per call
 - **100% MCP Compatible**: Works with all existing MCP servers
@@ -43,6 +44,7 @@ mcp-execution/
 │   ├── mcp-bridge/        # MCP proxy using rmcp client
 │   ├── mcp-wasm-runtime/  # WASM sandbox
 │   ├── mcp-vfs/           # Virtual filesystem
+│   ├── mcp-plugin-store/  # Plugin persistence
 │   └── mcp-cli/           # CLI application
 ├── examples/              # Usage examples
 ├── tests/                 # Integration tests
@@ -109,6 +111,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 See [examples/](crates/mcp-wasm-runtime/examples/) for complete usage examples and [GETTING_STARTED.md](GETTING_STARTED.md) for step-by-step guide.
+
+### CLI Usage
+
+The `mcp-cli` tool provides commands for generating, managing, and executing MCP plugins.
+
+#### Generate and Save Plugin
+
+```bash
+# Generate TypeScript code and save as reusable plugin
+mcp-cli generate vkteams-bot --save-plugin
+
+# Custom plugin directory
+mcp-cli generate vkteams-bot --save-plugin --plugin-dir ~/.mcp-plugins
+```
+
+#### Load and Manage Plugins
+
+```bash
+# List saved plugins
+mcp-cli plugin list
+
+# Load a plugin
+mcp-cli plugin load vkteams-bot -o pretty
+
+# Show plugin details
+mcp-cli plugin info vkteams-bot
+
+# Remove a plugin
+mcp-cli plugin remove vkteams-bot -y
+```
+
+Plugin persistence features:
+- **Blake3 checksums** for integrity verification
+- **Constant-time comparison** to prevent timing attacks
+- **Atomic operations** to avoid race conditions
+- **Path validation** to reject malicious paths
+
+See [Phase 8 Plugin Persistence Guide](.local/PHASE-8-PLUGIN-PERSISTENCE-GUIDE.md) for detailed documentation.
 
 ## Development
 

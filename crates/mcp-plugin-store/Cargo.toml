@@ -1,0 +1,37 @@
+[package]
+name = "mcp-plugin-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mcp-core.workspace = true
+mcp-vfs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+walkdir.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "large_vfs"
+harness = false
+
+[[bench]]
+name = "wasm_sizes"
+harness = false
+
+[[bench]]
+name = "concurrent"
+harness = false

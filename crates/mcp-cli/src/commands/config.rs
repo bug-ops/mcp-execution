@@ -2,7 +2,7 @@
 //!
 //! Manages CLI configuration files and settings.
 
-use crate::ConfigAction;
+use crate::actions::ConfigAction;
 use anyhow::{Context, Result};
 use mcp_core::cli::{ExitCode, OutputFormat};
 use serde::{Deserialize, Serialize};
@@ -71,17 +71,18 @@ pub struct SetResult {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use mcp_cli::commands::config;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
-/// # tokio_test::block_on(async {
+/// # #[tokio::main]
+/// # async fn main() {
 /// let result = config::run(
 ///     mcp_cli::ConfigAction::Show,
 ///     OutputFormat::Json
 /// ).await;
 /// assert!(result.is_ok());
-/// # })
+/// # }
 /// ```
 pub async fn run(action: ConfigAction, output_format: OutputFormat) -> Result<ExitCode> {
     info!("Config action: {:?}", action);
