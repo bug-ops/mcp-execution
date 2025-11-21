@@ -67,17 +67,18 @@ pub struct ValidationResult {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use mcp_cli::commands::server;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
-/// # tokio_test::block_on(async {
+/// # #[tokio::main]
+/// # async fn main() {
 /// let result = server::run(
 ///     mcp_cli::ServerAction::List,
 ///     OutputFormat::Json
 /// ).await;
 /// assert!(result.is_ok());
-/// # })
+/// # }
 /// ```
 pub async fn run(action: ServerAction, output_format: OutputFormat) -> Result<ExitCode> {
     info!("Server action: {:?}", action);

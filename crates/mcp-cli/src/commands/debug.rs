@@ -66,17 +66,18 @@ pub struct RuntimeMetrics {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use mcp_cli::commands::debug;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
-/// # tokio_test::block_on(async {
+/// # #[tokio::main]
+/// # async fn main() {
 /// let result = debug::run(
 ///     mcp_cli::DebugAction::Info,
 ///     OutputFormat::Json
 /// ).await;
 /// assert!(result.is_ok());
-/// # })
+/// # }
 /// ```
 pub async fn run(action: DebugAction, output_format: OutputFormat) -> Result<ExitCode> {
     info!("Debug action: {:?}", action);

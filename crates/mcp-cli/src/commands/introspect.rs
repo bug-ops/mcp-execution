@@ -17,9 +17,7 @@ use tracing::info;
 /// # Examples
 ///
 /// ```
-/// use mcp_cli::commands::introspect::IntrospectionResult;
-/// use mcp_introspector::{ServerInfo, ServerCapabilities};
-/// use mcp_core::ServerId;
+/// use mcp_cli::commands::introspect::{IntrospectionResult, ServerMetadata};
 ///
 /// let result = IntrospectionResult {
 ///     server: ServerMetadata {
