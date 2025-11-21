@@ -312,19 +312,20 @@ mod tests {
         let relative = "tools/sendMessage.ts";
         let full_path = base.join(relative);
 
-        assert_eq!(
-            full_path.to_str(),
-            Some("/tmp/generated/tools/sendMessage.ts")
-        );
+        // Test path components instead of string representation (cross-platform)
+        assert_eq!(full_path.file_name().unwrap(), "sendMessage.ts");
+        assert!(full_path.to_string_lossy().contains("tools"));
+        assert!(full_path.to_string_lossy().contains("generated"));
     }
 
     #[tokio::test]
     async fn test_parent_directory_extraction() {
-        let path = PathBuf::from("/tmp/generated/tools/sendMessage.ts");
+        let base = PathBuf::from("/tmp/generated");
+        let path = base.join("tools").join("sendMessage.ts");
         let parent = path.parent();
 
         assert!(parent.is_some());
-        assert_eq!(parent.unwrap().to_str(), Some("/tmp/generated/tools"));
+        assert_eq!(parent.unwrap().file_name().unwrap(), "tools");
     }
 
     #[test]
