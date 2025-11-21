@@ -2,7 +2,7 @@
 //!
 //! Generates code for a large number of tools to capture performance profile.
 //!
-//! Run with: cargo flamegraph --example profile_generation
+//! Run with: cargo flamegraph --example `profile_generation`
 
 use mcp_codegen::CodeGenerator;
 use mcp_core::{ServerId, ToolName};
@@ -11,8 +11,8 @@ use serde_json::json;
 
 fn create_moderate_tool(index: usize) -> ToolInfo {
     ToolInfo {
-        name: ToolName::new(format!("tool_{}", index)),
-        description: format!("Tool {}", index),
+        name: ToolName::new(format!("tool_{index}")),
+        description: format!("Tool {index}"),
         input_schema: json!({
             "type": "object",
             "properties": {

@@ -224,7 +224,7 @@ mod tests {
 
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("test-server"));
-        assert!(json.contains("5"));
+        assert!(json.contains('5'));
         assert!(json.contains("250"));
     }
 

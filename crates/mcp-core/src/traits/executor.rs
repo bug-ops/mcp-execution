@@ -193,7 +193,7 @@ mod tests {
                     source: None,
                 });
             }
-            Ok(Value::String(format!("executed: {}", code)))
+            Ok(Value::String(format!("executed: {code}")))
         }
 
         fn set_memory_limit(&mut self, limit: MemoryLimit) {

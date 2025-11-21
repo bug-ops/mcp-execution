@@ -396,6 +396,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::similar_names)]
     async fn test_vfs_operations() {
         let bridge = Bridge::new(1000);
         let mut context = HostContext::new(Arc::new(bridge));

@@ -75,11 +75,11 @@ fn main() {
     println!("To achieve 90% token savings:");
     println!("  Server:       {}", server_info.name);
     println!("  Tools:        {}", server_info.tools.len());
-    println!("  Min calls:    {}", min_calls);
+    println!("  Min calls:    {min_calls}");
     println!();
 
     let analysis_target = TokenAnalysis::analyze(server_info, min_calls);
-    println!("At minimum threshold ({} calls):", min_calls);
+    println!("At minimum threshold ({min_calls} calls):");
     println!("  Token savings: {:.2}%", analysis_target.savings_percent);
     println!(
         "  Target met:    {}",
@@ -157,7 +157,7 @@ fn main() {
     println!();
     println!("Break-even Point:");
     println!("  For 90% savings: N ≥ 6.67T");
-    println!("  For this server: N ≥ {}", min_calls);
+    println!("  For this server: N ≥ {min_calls}");
     println!();
     println!("Practical Implications:");
     println!("  • Low call count (1-5):    Moderate savings (60-75%)");

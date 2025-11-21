@@ -70,6 +70,7 @@ impl MockMcpServer {
     ///
     /// let server = MockMcpServer::new(info);
     /// ```
+    #[must_use] 
     pub fn new(info: ServerInfo) -> Self {
         Self {
             info,
@@ -77,9 +78,9 @@ impl MockMcpServer {
         }
     }
 
-    /// Creates a mock VKTeams Bot server with realistic tools.
+    /// Creates a mock `VKTeams` Bot server with realistic tools.
     ///
-    /// This server simulates the VKTeams Bot MCP server with the following tools:
+    /// This server simulates the `VKTeams` Bot MCP server with the following tools:
     /// - `send_message`: Send a message to a chat
     /// - `get_message`: Retrieve a message by ID
     /// - `get_chat`: Get chat information
@@ -94,6 +95,7 @@ impl MockMcpServer {
     /// assert_eq!(server.server_info().name, "vkteams-bot");
     /// assert_eq!(server.server_info().tools.len(), 4);
     /// ```
+    #[must_use] 
     pub fn new_vkteams_bot() -> Self {
         let tools = vec![
             ToolInfo {
@@ -258,7 +260,8 @@ impl MockMcpServer {
     /// let info = server.server_info();
     /// assert!(info.capabilities.supports_tools);
     /// ```
-    pub fn server_info(&self) -> &ServerInfo {
+    #[must_use] 
+    pub const fn server_info(&self) -> &ServerInfo {
         &self.info
     }
 
@@ -325,8 +328,7 @@ impl MockMcpServer {
                     && !obj.contains_key(field_name)
                 {
                     return Err(MockServerError::InvalidParameters(format!(
-                        "missing required field: {}",
-                        field_name
+                        "missing required field: {field_name}"
                     )));
                 }
             }
@@ -351,6 +353,7 @@ impl MockMcpServer {
     /// let tools = server.tool_names();
     /// assert!(tools.contains(&"send_message".to_string()));
     /// ```
+    #[must_use] 
     pub fn tool_names(&self) -> Vec<String> {
         self.info
             .tools

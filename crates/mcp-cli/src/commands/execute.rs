@@ -273,7 +273,7 @@ mod tests {
             status: "success".to_string(),
         };
 
-        let debug_str = format!("{:?}", result);
+        let debug_str = format!("{result:?}");
         assert!(debug_str.contains("ExecutionResult"));
         assert!(debug_str.contains("exit_code: 0"));
     }
@@ -356,8 +356,7 @@ mod tests {
         // Verify it's either success (42) or error (-1), not some random value
         assert!(
             exit_code == ExitCode::from_i32(42) || exit_code == ExitCode::from_i32(-1),
-            "Exit code should be either 42 (success) or -1 (error), got: {:?}",
-            exit_code
+            "Exit code should be either 42 (success) or -1 (error), got: {exit_code:?}"
         );
 
         drop(temp_file);
@@ -514,11 +513,10 @@ mod tests {
                 (module
                     (import "env" "host_add" (func $add (param i32 i32) (result i32)))
                     (func (export "main") (result i32)
-                        (call $add (i32.const {}) (i32.const 0))
+                        (call $add (i32.const {expected_code}) (i32.const 0))
                     )
                 )
-                "#,
-                expected_code
+                "#
             );
 
             let wasm_bytes = wat::parse_str(&wat).expect("Failed to parse WAT");
@@ -544,9 +542,7 @@ mod tests {
             assert!(
                 exit_code == ExitCode::from_i32(expected_code)
                     || exit_code == ExitCode::from_i32(-1),
-                "Exit code should be {} (success) or -1 (error), got: {:?}",
-                expected_code,
-                exit_code
+                "Exit code should be {expected_code} (success) or -1 (error), got: {exit_code:?}"
             );
         }
     }

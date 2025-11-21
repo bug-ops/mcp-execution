@@ -23,6 +23,7 @@ async fn test_bridge_creation() {
 
 /// Tests cache statistics tracking
 #[tokio::test]
+#[allow(clippy::float_cmp)]
 async fn test_cache_statistics() {
     let bridge = Bridge::new(100);
 
@@ -92,8 +93,9 @@ async fn test_cache_clearing() {
     assert_eq!(stats.size, 0);
 }
 
-/// Tests CacheStats helper methods
+/// Tests `CacheStats` helper methods
 #[test]
+#[allow(clippy::float_cmp)]
 fn test_cache_stats_methods() {
     let empty = CacheStats {
         size: 0,

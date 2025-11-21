@@ -653,6 +653,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_cache_stats_usage_percent() {
         let stats = CacheStats {
             size: 50,
@@ -674,6 +675,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_cache_stats_zero_capacity() {
         let stats = CacheStats {
             size: 0,

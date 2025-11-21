@@ -137,7 +137,7 @@ async fn show_token_stats(output_format: OutputFormat) -> Result<ExitCode> {
 /// Gets all statistics.
 ///
 /// For MVP, returns stub data. Real metrics collection will be added in Phase 7.4.
-fn get_all_stats() -> Statistics {
+const fn get_all_stats() -> Statistics {
     Statistics {
         cache: get_cache_stats(),
         performance: get_performance_stats(),

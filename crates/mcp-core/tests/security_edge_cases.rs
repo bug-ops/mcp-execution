@@ -7,6 +7,7 @@ use mcp_core::cli::{CacheDir, ServerConnectionString};
 
 /// Test that zero-width Unicode characters are rejected.
 #[test]
+#[allow(clippy::similar_names)]
 fn test_zero_width_unicode_rejected() {
     // Zero-width joiner
     let zwj = "server\u{200D}malicious";
@@ -118,11 +119,10 @@ fn test_all_control_chars_rejected() {
     ];
 
     for (control, name) in controls {
-        let input = format!("server{}", control);
+        let input = format!("server{control}");
         assert!(
             ServerConnectionString::new(&input).is_err(),
-            "Control character {} should be rejected",
-            name
+            "Control character {name} should be rejected"
         );
     }
 }
@@ -143,12 +143,12 @@ fn test_space_handling() {
     );
 }
 
-/// Test CacheDir with very long paths.
+/// Test `CacheDir` with very long paths.
 #[test]
 fn test_cache_dir_long_path() {
     // Test a reasonably long path (not extreme to avoid OS issues)
     let long_segment = "a".repeat(200);
-    let long_path = format!("mcp/{}", long_segment);
+    let long_path = format!("mcp/{long_segment}");
 
     // Should still work (no explicit length limit currently)
     let result = CacheDir::new(&long_path);
@@ -158,7 +158,7 @@ fn test_cache_dir_long_path() {
     );
 }
 
-/// Test CacheDir with multiple path components.
+/// Test `CacheDir` with multiple path components.
 #[test]
 fn test_cache_dir_nested_valid() {
     // Deeply nested but valid path

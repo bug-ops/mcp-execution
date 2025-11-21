@@ -476,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_empty_server_string() {
-        let result = run("".to_string(), false, OutputFormat::Json).await;
+        let result = run(String::new(), false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -533,7 +533,7 @@ mod tests {
     fn test_tool_metadata_empty_description() {
         let metadata = ToolMetadata {
             name: "tool".to_string(),
-            description: "".to_string(),
+            description: String::new(),
             input_schema: None,
             output_schema: None,
         };

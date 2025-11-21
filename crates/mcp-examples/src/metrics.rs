@@ -89,7 +89,8 @@ impl Metrics {
     /// let metrics = Metrics::new();
     /// assert_eq!(metrics.total_time_ms, 0);
     /// ```
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             introspection_time_ms: 0,
             code_generation_time_ms: 0,
@@ -199,7 +200,8 @@ impl Metrics {
     ///
     /// assert_eq!(metrics.total_overhead_ms(), 250);
     /// ```
-    pub fn total_overhead_ms(&self) -> u64 {
+    #[must_use] 
+    pub const fn total_overhead_ms(&self) -> u64 {
         self.introspection_time_ms
             + self.code_generation_time_ms
             + self.vfs_load_time_ms
@@ -220,7 +222,8 @@ impl Metrics {
     /// metrics.execution_time_ms = 60;
     /// assert!(!metrics.meets_execution_target());
     /// ```
-    pub fn meets_execution_target(&self) -> bool {
+    #[must_use] 
+    pub const fn meets_execution_target(&self) -> bool {
         self.execution_time_ms < 50
     }
 
@@ -238,7 +241,8 @@ impl Metrics {
     /// metrics.wasm_compilation_time_ms = 120;
     /// assert!(!metrics.meets_compilation_target());
     /// ```
-    pub fn meets_compilation_target(&self) -> bool {
+    #[must_use] 
+    pub const fn meets_compilation_target(&self) -> bool {
         self.wasm_compilation_time_ms < 100
     }
 
@@ -256,6 +260,7 @@ impl Metrics {
     /// metrics.token_savings_percent = 85.0;
     /// assert!(!metrics.meets_token_target());
     /// ```
+    #[must_use] 
     pub fn meets_token_target(&self) -> bool {
         self.token_savings_percent >= 90.0
     }
@@ -279,6 +284,7 @@ impl Metrics {
     ///
     /// assert!(metrics.meets_all_targets());
     /// ```
+    #[must_use] 
     pub fn meets_all_targets(&self) -> bool {
         self.meets_execution_target()
             && self.meets_compilation_target()
@@ -300,6 +306,7 @@ impl Metrics {
     /// assert!(report.contains("Total Time"));
     /// assert!(report.contains("Token Savings"));
     /// ```
+    #[must_use] 
     pub fn format_report(&self) -> String {
         let mut report = String::new();
 

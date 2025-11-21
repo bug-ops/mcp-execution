@@ -227,7 +227,7 @@ mod tests {
     async fn test_server_validate_empty_command() {
         let result = run(
             ServerAction::Validate {
-                command: "".to_string(),
+                command: String::new(),
             },
             OutputFormat::Json,
         )

@@ -1,7 +1,7 @@
 //! Virtual filesystem implementation.
 //!
 //! Provides an in-memory, read-only virtual filesystem for MCP tool definitions.
-//! Files are stored in a HashMap for O(1) lookup performance.
+//! Files are stored in a `HashMap` for O(1) lookup performance.
 //!
 //! # Examples
 //!
@@ -112,7 +112,7 @@ impl Vfs {
         let vfs_path = VfsPath::new(path)?;
         self.files
             .get(&vfs_path)
-            .map(|f| f.content())
+            .map(super::types::VfsFile::content)
             .ok_or_else(|| VfsError::FileNotFound {
                 path: vfs_path.as_str().to_string(),
             })
@@ -179,7 +179,7 @@ impl Vfs {
         let normalized_dir = if path_str.ends_with('/') {
             path_str.to_string()
         } else {
-            format!("{}/", path_str)
+            format!("{path_str}/")
         };
 
         for file_path in self.files.keys() {

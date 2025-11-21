@@ -43,7 +43,7 @@ fn scenario_typical() {
     let vfs = VfsBuilder::new()
         .add_files((0..100).map(|i| {
             (
-                format!("/mcp-tools/servers/test/file_{}.ts", i),
+                format!("/mcp-tools/servers/test/file_{i}.ts"),
                 generate_typescript_file(i, 5000), // ~5KB per file
             )
         }))
@@ -55,14 +55,14 @@ fn scenario_typical() {
 
     // Read all files
     for i in 0..100 {
-        let path = format!("/mcp-tools/servers/test/file_{}.ts", i);
+        let path = format!("/mcp-tools/servers/test/file_{i}.ts");
         let _ = vfs.read_file(&path).unwrap();
     }
     println!("  - Read all files");
 
     // Check existence
     for i in 0..100 {
-        let path = format!("/mcp-tools/servers/test/file_{}.ts", i);
+        let path = format!("/mcp-tools/servers/test/file_{i}.ts");
         assert!(vfs.exists(&path));
     }
     println!("  - Checked existence of all files");
@@ -77,7 +77,7 @@ fn scenario_typical() {
 
     let total_size: usize = (0..100)
         .map(|i| {
-            let path = format!("/mcp-tools/servers/test/file_{}.ts", i);
+            let path = format!("/mcp-tools/servers/test/file_{i}.ts");
             vfs.read_file(&path).unwrap().len()
         })
         .sum();
@@ -93,7 +93,7 @@ fn scenario_large() {
     let vfs = VfsBuilder::new()
         .add_files((0..1000).map(|i| {
             (
-                format!("/mcp-tools/servers/test/file_{}.ts", i),
+                format!("/mcp-tools/servers/test/file_{i}.ts"),
                 generate_typescript_file(i, 5000), // ~5KB per file
             )
         }))
@@ -104,7 +104,7 @@ fn scenario_large() {
 
     // Sample read operations (10% of files)
     for i in (0..1000).step_by(10) {
-        let path = format!("/mcp-tools/servers/test/file_{}.ts", i);
+        let path = format!("/mcp-tools/servers/test/file_{i}.ts");
         let _ = vfs.read_file(&path).unwrap();
     }
     println!("  - Read 10% of files (100 reads)");
@@ -114,7 +114,7 @@ fn scenario_large() {
 
     let total_size: usize = (0..1000)
         .map(|i| {
-            let path = format!("/mcp-tools/servers/test/file_{}.ts", i);
+            let path = format!("/mcp-tools/servers/test/file_{i}.ts");
             vfs.read_file(&path).unwrap().len()
         })
         .sum();
@@ -172,33 +172,30 @@ fn generate_typescript_file(index: usize, target_size: usize) -> String {
 
     // File header
     content.push_str(&format!(
-        "// Generated TypeScript file #{}\n\
-         // This is a sample MCP tool definition\n\n",
-        index
+        "// Generated TypeScript file #{index}\n\
+         // This is a sample MCP tool definition\n\n"
     ));
 
     // Type definitions
     content.push_str(&format!(
-        "export interface Params{} {{\n\
+        "export interface Params{index} {{\n\
          \x20\x20chatId: string;\n\
          \x20\x20messageId?: string;\n\
          \x20\x20text: string;\n\
          \x20\x20attachments?: Attachment[];\n\
-         }}\n\n",
-        index
+         }}\n\n"
     ));
 
     // Function definition
     content.push_str(&format!(
-        "export async function tool_{}(params: Params{}): Promise<Result> {{\n\
+        "export async function tool_{index}(params: Params{index}): Promise<Result> {{\n\
          \x20\x20// Tool implementation\n\
          \x20\x20const result = await mcpBridge.callTool(\n\
-         \x20\x20\x20\x20'tool_{}',\n\
+         \x20\x20\x20\x20'tool_{index}',\n\
          \x20\x20\x20\x20JSON.stringify(params)\n\
          \x20\x20);\n\
          \x20\x20return JSON.parse(result) as Result;\n\
-         }}\n\n",
-        index, index, index
+         }}\n\n"
     ));
 
     // Add comments to reach target size

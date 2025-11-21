@@ -96,16 +96,14 @@ async fn test_execution_timeout_enforcement() {
     assert!(result.is_err(), "Expected timeout error");
     assert!(
         elapsed.as_secs() >= 1 && elapsed.as_secs() <= 3,
-        "Expected ~1 second timeout, got {:?}",
-        elapsed
+        "Expected ~1 second timeout, got {elapsed:?}"
     );
 
     if let Err(e) = result {
-        let error_str = format!("{:?}", e);
+        let error_str = format!("{e:?}");
         assert!(
             error_str.contains("Timeout") || error_str.contains("timeout"),
-            "Expected timeout error, got: {}",
-            error_str
+            "Expected timeout error, got: {error_str}"
         );
     }
 }
@@ -267,7 +265,7 @@ async fn test_missing_entry_point() {
     assert!(result.is_err(), "Missing entry point should cause error");
 
     if let Err(e) = result {
-        let error_str = format!("{:?}", e);
+        let error_str = format!("{e:?}");
         assert!(
             error_str.contains("main") || error_str.contains("not found"),
             "Error should mention missing entry point"

@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         codegen_times.push(elapsed);
 
         if i == 1 {
-            println!("  Run {}: {}ms (cold start)", i, elapsed);
+            println!("  Run {i}: {elapsed}ms (cold start)");
         }
     }
 
@@ -78,9 +78,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_codegen = *codegen_times.iter().max().unwrap();
 
     println!("\n  Results:");
-    println!("    Average:  {}ms", avg_codegen);
-    println!("    Min:      {}ms", min_codegen);
-    println!("    Max:      {}ms", max_codegen);
+    println!("    Average:  {avg_codegen}ms");
+    println!("    Min:      {min_codegen}ms");
+    println!("    Max:      {max_codegen}ms");
     println!("    Target:   No specific target (informational)");
     println!("    Status:   ✓ MEASURED");
 
@@ -108,9 +108,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_vfs = *vfs_times.iter().max().unwrap();
 
     println!("  Results:");
-    println!("    Average:  {}ms", avg_vfs);
-    println!("    Min:      {}ms", min_vfs);
-    println!("    Max:      {}ms", max_vfs);
+    println!("    Average:  {avg_vfs}ms");
+    println!("    Min:      {min_vfs}ms");
+    println!("    Max:      {max_vfs}ms");
     println!("    Target:   No specific target (informational)");
     println!("    Status:   ✓ MEASURED");
 
@@ -136,7 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         compile_times.push(elapsed);
 
         if i == 1 {
-            println!("  Run {}: {}ms (cold start)", i, elapsed);
+            println!("  Run {i}: {elapsed}ms (cold start)");
         }
     }
 
@@ -145,9 +145,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_compile = *compile_times.iter().max().unwrap();
 
     println!("\n  Results:");
-    println!("    Average:  {}ms", avg_compile);
-    println!("    Min:      {}ms", min_compile);
-    println!("    Max:      {}ms", max_compile);
+    println!("    Average:  {avg_compile}ms");
+    println!("    Min:      {min_compile}ms");
+    println!("    Max:      {max_compile}ms");
     println!("    Target:   <100ms");
     println!(
         "    Status:   {}",
@@ -177,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         exec_times.push(elapsed);
 
         if i == 1 {
-            println!("  Run {}: {}ms (first execution)", i, elapsed);
+            println!("  Run {i}: {elapsed}ms (first execution)");
         }
     }
 
@@ -186,9 +186,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_exec = *exec_times.iter().max().unwrap();
 
     println!("\n  Results:");
-    println!("    Average:  {}ms", avg_exec);
-    println!("    Min:      {}ms", min_exec);
-    println!("    Max:      {}ms", max_exec);
+    println!("    Average:  {avg_exec}ms");
+    println!("    Min:      {min_exec}ms");
+    println!("    Max:      {max_exec}ms");
     println!("    Target:   <50ms");
     println!(
         "    Status:   {}",
@@ -267,29 +267,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Compilation target
     total += 1;
     if avg_compile < 100 {
-        println!("  ✓ WASM Compilation <100ms:  PASS ({}ms)", avg_compile);
+        println!("  ✓ WASM Compilation <100ms:  PASS ({avg_compile}ms)");
         passed += 1;
     } else {
-        println!("  ✗ WASM Compilation <100ms:  FAIL ({}ms)", avg_compile);
+        println!("  ✗ WASM Compilation <100ms:  FAIL ({avg_compile}ms)");
     }
 
     // Execution target
     total += 1;
     if avg_exec < 50 {
-        println!("  ✓ Execution <50ms:          PASS ({}ms)", avg_exec);
+        println!("  ✓ Execution <50ms:          PASS ({avg_exec}ms)");
         passed += 1;
     } else {
-        println!("  ✗ Execution <50ms:          FAIL ({}ms)", avg_exec);
+        println!("  ✗ Execution <50ms:          FAIL ({avg_exec}ms)");
     }
 
     println!();
     println!("Additional Metrics (informational):");
-    println!("  • Code Generation:  {}ms", avg_codegen);
-    println!("  • VFS Loading:      {}ms", avg_vfs);
+    println!("  • Code Generation:  {avg_codegen}ms");
+    println!("  • VFS Loading:      {avg_vfs}ms");
     println!("  • Total E2E:        {}ms", metrics.total_time_ms);
 
     println!();
-    println!("Score: {}/{} targets passed", passed, total);
+    println!("Score: {passed}/{total} targets passed");
 
     println!("\n╔═══════════════════════════════════════════════════╗");
     if passed == total {
