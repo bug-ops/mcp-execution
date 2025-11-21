@@ -186,7 +186,11 @@ pub async fn run(action: PluginAction, output_format: OutputFormat) -> Result<Ex
 /// # Errors
 ///
 /// Returns an error if the plugin doesn't exist or fails checksum verification.
-fn load_plugin(name: &str, plugin_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
+pub fn load_plugin(
+    name: &str,
+    plugin_dir: &PathBuf,
+    output_format: OutputFormat,
+) -> Result<ExitCode> {
     info!("Loading plugin: {}", name);
 
     let store = PluginStore::new(plugin_dir).context("failed to initialize plugin store")?;
@@ -219,7 +223,7 @@ fn load_plugin(name: &str, plugin_dir: &PathBuf, output_format: OutputFormat) ->
 /// # Errors
 ///
 /// Returns an error if the plugin directory cannot be read.
-fn list_plugins(plugin_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
+pub fn list_plugins(plugin_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
     info!("Listing plugins in: {}", plugin_dir.display());
 
     let store = PluginStore::new(&plugin_dir).context("failed to initialize plugin store")?;
@@ -259,7 +263,7 @@ fn list_plugins(plugin_dir: &PathBuf, output_format: OutputFormat) -> Result<Exi
 /// # Errors
 ///
 /// Returns an error if the plugin doesn't exist or cannot be removed.
-fn remove_plugin(
+pub fn remove_plugin(
     name: &str,
     plugin_dir: &PathBuf,
     yes: bool,
@@ -312,7 +316,7 @@ fn remove_plugin(
 /// # Errors
 ///
 /// Returns an error if the plugin doesn't exist or cannot be loaded.
-fn show_plugin_info(
+pub fn show_plugin_info(
     name: &str,
     plugin_dir: &PathBuf,
     output_format: OutputFormat,

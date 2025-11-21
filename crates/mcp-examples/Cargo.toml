@@ -17,6 +17,7 @@ mcp-bridge.workspace = true
 mcp-codegen.workspace = true
 mcp-vfs.workspace = true
 mcp-wasm-runtime.workspace = true
+mcp-plugin-store.workspace = true
 
 # Async runtime
 tokio.workspace = true

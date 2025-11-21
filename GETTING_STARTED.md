@@ -426,6 +426,127 @@ export const {{typescript_name}} = async (params) => {
 let generator = CodeGenerator::with_engine(engine);
 ```
 
+## Plugin Persistence
+
+Save and load pre-generated MCP plugins to avoid regenerating code on every use.
+
+### Save Plugin During Generation
+
+Generate code and save as a reusable plugin:
+
+```bash
+# Generate and save
+mcp-cli generate vkteams-bot --save-plugin
+
+# Custom plugin directory
+mcp-cli generate vkteams-bot --save-plugin --plugin-dir ~/.mcp-plugins
+```
+
+This creates a plugin directory structure:
+
+```text
+./plugins/vkteams-bot/
+├── plugin.json       # Metadata with checksums
+├── module.wasm       # WASM module
+└── generated/        # TypeScript files
+    ├── index.ts
+    ├── send_message.ts
+    └── ...
+```
+
+### Load Saved Plugin
+
+Load a plugin without regenerating:
+
+```bash
+# Load from default directory (./plugins)
+mcp-cli plugin load vkteams-bot
+
+# Load from custom directory
+mcp-cli plugin load vkteams-bot --plugin-dir ~/.mcp-plugins
+
+# JSON output
+mcp-cli plugin load vkteams-bot -o json
+```
+
+### List Available Plugins
+
+See all saved plugins:
+
+```bash
+# List plugins
+mcp-cli plugin list
+
+# JSON output for scripting
+mcp-cli plugin list -o json
+```
+
+Output:
+
+```text
+Available plugins (2):
+  • vkteams-bot (v1.0.0)
+    Tools: 10 | Files: 15 | Generated: 2025-11-21
+  • github (v2.0.0)
+    Tools: 8 | Files: 12 | Generated: 2025-11-20
+```
+
+### Show Plugin Details
+
+Get detailed information about a plugin:
+
+```bash
+# Show info
+mcp-cli plugin info vkteams-bot
+
+# Pretty JSON output
+mcp-cli plugin info vkteams-bot -o pretty
+```
+
+### Remove Plugin
+
+Delete a saved plugin:
+
+```bash
+# Remove with confirmation
+mcp-cli plugin remove vkteams-bot
+
+# Skip confirmation
+mcp-cli plugin remove vkteams-bot -y
+```
+
+### Security Features
+
+Plugin persistence includes security measures:
+
+1. **Blake3 Checksums**: All files verified on load
+2. **Constant-Time Comparison**: Prevents timing attacks
+3. **Atomic Operations**: No race conditions during save
+4. **Path Validation**: Rejects malicious paths (../, etc.)
+5. **Control Character Rejection**: Prevents injection attacks
+
+### Programmatic Usage
+
+Use plugins from Rust code:
+
+```rust
+use mcp_plugin_store::PluginStore;
+
+// Create store
+let store = PluginStore::new("./plugins")?;
+
+// Load plugin
+let plugin = store.load_plugin("vkteams-bot")?;
+
+println!("WASM size: {} bytes", plugin.wasm_module.len());
+println!("VFS files: {}", plugin.vfs.file_count());
+println!("Tools: {}", plugin.metadata.tools.len());
+
+// Use the loaded VFS and WASM
+let runtime = Runtime::new(Arc::new(bridge), config)?;
+let result = runtime.execute(&plugin.wasm_module, "main", &[]).await?;
+```
+
 ## Advanced Usage
 
 ### Compilation Caching

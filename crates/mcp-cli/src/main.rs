@@ -40,8 +40,11 @@ use mcp_core::cli::{ExitCode, OutputFormat};
 use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod actions;
 mod commands;
 pub mod formatters;
+
+use actions::{ConfigAction, DebugAction, ServerAction};
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -176,62 +179,6 @@ enum Commands {
         /// Plugin management action
         #[command(subcommand)]
         action: commands::plugin::PluginAction,
-    },
-}
-
-/// Server management actions.
-#[derive(Subcommand, Debug)]
-enum ServerAction {
-    /// List all configured servers
-    List,
-
-    /// Show detailed information about a server
-    Info {
-        /// Server name
-        server: String,
-    },
-
-    /// Validate a server command
-    Validate {
-        /// Server command to validate
-        command: String,
-    },
-}
-
-/// Debug actions.
-#[derive(Subcommand, Debug, Clone)]
-enum DebugAction {
-    /// Show system and runtime information
-    Info,
-
-    /// Display cache statistics
-    CacheStats,
-
-    /// Show runtime metrics
-    RuntimeMetrics,
-}
-
-/// Configuration actions.
-#[derive(Subcommand, Debug)]
-enum ConfigAction {
-    /// Initialize configuration file
-    Init,
-
-    /// Show current configuration
-    Show,
-
-    /// Set a configuration value
-    Set {
-        /// Configuration key
-        key: String,
-        /// Configuration value
-        value: String,
-    },
-
-    /// Get a configuration value
-    Get {
-        /// Configuration key
-        key: String,
     },
 }
 

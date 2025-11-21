@@ -2,7 +2,7 @@
 //!
 //! Provides debugging utilities and diagnostic information.
 
-use crate::DebugAction;
+use crate::actions::DebugAction;
 use anyhow::{Context, Result};
 use mcp_core::cli::{ExitCode, OutputFormat};
 use serde::Serialize;

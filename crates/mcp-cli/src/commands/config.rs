@@ -2,7 +2,7 @@
 //!
 //! Manages CLI configuration files and settings.
 
-use crate::ConfigAction;
+use crate::actions::ConfigAction;
 use anyhow::{Context, Result};
 use mcp_core::cli::{ExitCode, OutputFormat};
 use serde::{Deserialize, Serialize};

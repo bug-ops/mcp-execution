@@ -8,6 +8,10 @@ license.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "mcp_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "mcp-cli"
 path = "src/main.rs"

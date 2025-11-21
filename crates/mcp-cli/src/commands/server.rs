@@ -2,7 +2,7 @@
 //!
 //! Manages MCP server connections and configurations.
 
-use crate::ServerAction;
+use crate::actions::ServerAction;
 use anyhow::Result;
 use mcp_core::cli::{ExitCode, OutputFormat};
 use serde::Serialize;
