@@ -70,7 +70,7 @@ impl MockMcpServer {
     ///
     /// let server = MockMcpServer::new(info);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn new(info: ServerInfo) -> Self {
         Self {
             info,
@@ -95,7 +95,7 @@ impl MockMcpServer {
     /// assert_eq!(server.server_info().name, "vkteams-bot");
     /// assert_eq!(server.server_info().tools.len(), 4);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn new_vkteams_bot() -> Self {
         let tools = vec![
             ToolInfo {
@@ -260,7 +260,7 @@ impl MockMcpServer {
     /// let info = server.server_info();
     /// assert!(info.capabilities.supports_tools);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub const fn server_info(&self) -> &ServerInfo {
         &self.info
     }
@@ -353,7 +353,7 @@ impl MockMcpServer {
     /// let tools = server.tool_names();
     /// assert!(tools.contains(&"send_message".to_string()));
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn tool_names(&self) -> Vec<String> {
         self.info
             .tools

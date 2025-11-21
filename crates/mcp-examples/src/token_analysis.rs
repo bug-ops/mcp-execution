@@ -86,7 +86,7 @@ impl TokenAnalysis {
     /// let analysis = TokenAnalysis::analyze(&server, 5);
     /// assert!(analysis.savings_percent > 0.0);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn analyze(server_info: &ServerInfo, num_calls: usize) -> Self {
         let num_tools = server_info.tools.len();
 
@@ -140,7 +140,7 @@ impl TokenAnalysis {
     /// let breakdown = TokenAnalysis::analyze_detailed(&server, 5);
     /// assert!(breakdown.contains_key("standard_tool_listing"));
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn analyze_detailed(
         server_info: &ServerInfo,
         num_calls: usize,
@@ -182,7 +182,7 @@ impl TokenAnalysis {
     ///
     /// assert!(analysis.is_significant_savings());
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn is_significant_savings(&self) -> bool {
         self.savings_percent >= 90.0
     }
@@ -203,7 +203,7 @@ impl TokenAnalysis {
     /// let report = analysis.format_report();
     /// assert!(report.contains("TOKEN USAGE COMPARISON"));
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn format_report(&self) -> String {
         let mut report = String::new();
 
@@ -276,7 +276,7 @@ impl TokenAnalysis {
 /// let min_calls = min_calls_for_target(10);
 /// assert!(min_calls > 0);
 /// ```
-#[must_use] 
+#[must_use]
 pub fn min_calls_for_target(num_tools: usize) -> usize {
     // Solving for 80% savings:
     // (300T + 250N) / (500T + 300N) >= 0.80
