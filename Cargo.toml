@@ -8,6 +8,7 @@ members = [
     "crates/mcp-vfs",
     "crates/mcp-cli",
     "crates/mcp-skill-generator",
+    "crates/mcp-plugin-store",
     "crates/mcp-examples",
 ]
 resolver = "2"
@@ -29,6 +30,7 @@ mcp-bridge = { path = "crates/mcp-bridge" }
 mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
 mcp-vfs = { path = "crates/mcp-vfs" }
 mcp-skill-generator = { path = "crates/mcp-skill-generator" }
+mcp-plugin-store = { path = "crates/mcp-plugin-store" }
 
 # Official MCP Protocol Implementation (v0.8.5 as of Nov 2025)
 # Using 'client' feature for client-side MCP operations
