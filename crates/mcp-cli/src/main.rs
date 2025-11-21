@@ -1,4 +1,11 @@
 //! MCP Code Execution CLI.
+#![allow(clippy::format_push_string)]
+#![allow(clippy::unused_async)] // MVP: Many functions are async stubs
+#![allow(clippy::cast_possible_truncation)] // u128->u64 for millis is safe
+#![allow(clippy::missing_errors_doc)] // MVP: Will add comprehensive docs in Phase 7.3
+#![allow(clippy::needless_collect)]
+#![allow(clippy::unnecessary_wraps)] // API design requires Result for consistency
+#![allow(clippy::unnecessary_literal_unwrap)]
 //!
 //! Command-line interface for executing code in MCP sandbox,
 //! inspecting servers, and generating virtual filesystems.

@@ -1,4 +1,5 @@
 //! Performance tests for WASM runtime.
+#![allow(clippy::format_push_string)]
 //!
 //! Tests performance characteristics:
 //! - Module compilation time

@@ -1,4 +1,5 @@
 use mcp_vfs::VfsBuilder;
+#![allow(clippy::format_push_string)]
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]

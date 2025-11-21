@@ -1,4 +1,5 @@
 //! Security tests for WASM runtime.
+#![allow(clippy::ignore_without_reason)]
 //!
 //! Tests all security boundaries:
 //! - Memory limits

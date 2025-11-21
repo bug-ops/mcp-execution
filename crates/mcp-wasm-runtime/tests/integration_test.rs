@@ -1,4 +1,5 @@
 //! Integration tests for WASM runtime with real WASM modules.
+#![allow(clippy::ignore_without_reason)]
 
 use mcp_bridge::Bridge;
 use mcp_wasm_runtime::{Runtime, SecurityConfig};

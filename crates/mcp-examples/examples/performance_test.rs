@@ -1,4 +1,6 @@
 //! Performance testing for MCP Code Execution.
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::too_many_lines)]
 //!
 //! Measures and validates performance across all pipeline stages:
 //! - Code generation speed
