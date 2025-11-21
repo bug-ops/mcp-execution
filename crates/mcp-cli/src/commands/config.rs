@@ -107,7 +107,7 @@ async fn init_config(output_format: OutputFormat) -> Result<ExitCode> {
 
     let formatted = crate::formatters::format_output(&result, output_format)
         .context("failed to format init result")?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -120,7 +120,7 @@ async fn show_config(output_format: OutputFormat) -> Result<ExitCode> {
 
     let formatted = crate::formatters::format_output(&config, output_format)
         .context("failed to format configuration")?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -138,7 +138,7 @@ async fn set_config(key: String, value: String, output_format: OutputFormat) -> 
             success: true,
             key: key.clone(),
             value: value.clone(),
-            message: format!("set '{}' to '{}' (in-memory only for MVP)", key, value),
+            message: format!("set '{key}' to '{value}' (in-memory only for MVP)"),
         }
     } else {
         SetResult {
@@ -151,7 +151,7 @@ async fn set_config(key: String, value: String, output_format: OutputFormat) -> 
 
     let formatted = crate::formatters::format_output(&result, output_format)
         .context("failed to format result")?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -174,10 +174,10 @@ async fn get_config(key: String, output_format: OutputFormat) -> Result<ExitCode
             let result = ConfigValue { key, value: v };
             let formatted = crate::formatters::format_output(&result, output_format)
                 .context("failed to format config value")?;
-            println!("{}", formatted);
+            println!("{formatted}");
             Ok(ExitCode::SUCCESS)
         }
-        None => Err(anyhow::anyhow!("configuration key '{}' not found", key)),
+        None => Err(anyhow::anyhow!("configuration key '{key}' not found")),
     }
 }
 

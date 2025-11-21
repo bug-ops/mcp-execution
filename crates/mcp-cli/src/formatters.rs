@@ -50,7 +50,7 @@ pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<Str
 
 /// JSON output formatting.
 pub mod json {
-    use super::*;
+    use super::{Result, Serialize};
 
     /// Format data as JSON.
     ///
@@ -69,7 +69,7 @@ pub mod json {
 
 /// Plain text output formatting.
 pub mod text {
-    use super::*;
+    use super::{Result, Serialize, json};
 
     /// Format data as plain text.
     ///
@@ -83,7 +83,7 @@ pub mod text {
 
 /// Pretty (human-readable) output formatting.
 pub mod pretty {
-    use super::*;
+    use super::{Colorize, Result, Serialize};
 
     /// Format data as colorized, human-readable output.
     ///

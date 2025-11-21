@@ -198,7 +198,7 @@ pub async fn run(
 
     // Format and display result
     let formatted = crate::formatters::format_output(&result, output_format)?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     info!(
         "Successfully generated {} files ({} lines) in {}",

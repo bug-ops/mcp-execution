@@ -94,7 +94,7 @@ async fn show_debug_info(output_format: OutputFormat) -> Result<ExitCode> {
     let info = get_debug_info();
     let formatted =
         crate::formatters::format_output(&info, output_format).context("failed to format info")?;
-    println!("{}", formatted);
+    println!("{formatted}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -103,7 +103,7 @@ async fn show_cache_stats(output_format: OutputFormat) -> Result<ExitCode> {
     let stats = get_cache_statistics();
     let formatted = crate::formatters::format_output(&stats, output_format)
         .context("failed to format cache statistics")?;
-    println!("{}", formatted);
+    println!("{formatted}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -112,7 +112,7 @@ async fn show_runtime_metrics(output_format: OutputFormat) -> Result<ExitCode> {
     let metrics = get_runtime_metrics();
     let formatted = crate::formatters::format_output(&metrics, output_format)
         .context("failed to format runtime metrics")?;
-    println!("{}", formatted);
+    println!("{formatted}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -147,7 +147,7 @@ fn get_target_triple() -> String {
 /// Gets cache statistics.
 ///
 /// For MVP, returns stub data. Real cache introspection will be added in Phase 7.4.
-fn get_cache_statistics() -> CacheStatistics {
+const fn get_cache_statistics() -> CacheStatistics {
     CacheStatistics {
         bridge_cache_size: 42,
         runtime_cache_size: 15,
@@ -159,7 +159,7 @@ fn get_cache_statistics() -> CacheStatistics {
 /// Gets runtime performance metrics.
 ///
 /// For MVP, returns stub data. Real metrics collection will be added in Phase 7.4.
-fn get_runtime_metrics() -> RuntimeMetrics {
+const fn get_runtime_metrics() -> RuntimeMetrics {
     RuntimeMetrics {
         uptime_seconds: 3600.0,
         total_requests: 1250,

@@ -191,7 +191,7 @@ pub async fn run(
                 duration_ms: duration.as_millis() as u64,
                 memory_used_mb: 0.0,
                 host_calls: 0,
-                status: format!("error: {}", e),
+                status: format!("error: {e}"),
             }
         }
     };
@@ -199,7 +199,7 @@ pub async fn run(
     // Format and display result
     let formatted = crate::formatters::format_output(&exec_result, output_format)
         .context("failed to format output")?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     // Return appropriate exit code
     Ok(ExitCode::from_i32(exec_result.exit_code))

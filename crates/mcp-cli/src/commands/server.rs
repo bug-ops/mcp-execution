@@ -106,7 +106,7 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
     };
 
     let formatted = crate::formatters::format_output(&server_list, output_format)?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -128,7 +128,7 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
     };
 
     let formatted = crate::formatters::format_output(&server_info, output_format)?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -152,7 +152,7 @@ async fn validate_command(command: String, output_format: OutputFormat) -> Resul
     };
 
     let formatted = crate::formatters::format_output(&result, output_format)?;
-    println!("{}", formatted);
+    println!("{formatted}");
 
     Ok(ExitCode::SUCCESS)
 }

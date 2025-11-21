@@ -93,8 +93,7 @@ pub async fn run(category: String, output_format: OutputFormat) -> Result<ExitCo
         "performance" => show_performance_stats(output_format).await,
         "tokens" => show_token_stats(output_format).await,
         invalid => Err(anyhow::anyhow!(
-            "invalid category '{}' (must be: all, cache, performance, tokens)",
-            invalid
+            "invalid category '{invalid}' (must be: all, cache, performance, tokens)"
         )),
     }
 }
@@ -104,7 +103,7 @@ async fn show_all_stats(output_format: OutputFormat) -> Result<ExitCode> {
     let stats = get_all_stats();
     let formatted = crate::formatters::format_output(&stats, output_format)
         .context("failed to format statistics")?;
-    println!("{}", formatted);
+    println!("{formatted}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -113,7 +112,7 @@ async fn show_cache_stats(output_format: OutputFormat) -> Result<ExitCode> {
     let stats = get_cache_stats();
     let formatted = crate::formatters::format_output(&stats, output_format)
         .context("failed to format cache statistics")?;
-    println!("{}", formatted);
+    println!("{formatted}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -122,7 +121,7 @@ async fn show_performance_stats(output_format: OutputFormat) -> Result<ExitCode>
     let stats = get_performance_stats();
     let formatted = crate::formatters::format_output(&stats, output_format)
         .context("failed to format performance statistics")?;
-    println!("{}", formatted);
+    println!("{formatted}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -131,7 +130,7 @@ async fn show_token_stats(output_format: OutputFormat) -> Result<ExitCode> {
     let stats = get_token_stats();
     let formatted = crate::formatters::format_output(&stats, output_format)
         .context("failed to format token statistics")?;
-    println!("{}", formatted);
+    println!("{formatted}");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -149,7 +148,7 @@ fn get_all_stats() -> Statistics {
 /// Gets cache statistics.
 ///
 /// For MVP, returns stub data showing demonstration values.
-fn get_cache_stats() -> CacheStats {
+const fn get_cache_stats() -> CacheStats {
     CacheStats {
         bridge_hit_rate: 0.85,
         runtime_hit_rate: 0.92,
@@ -162,7 +161,7 @@ fn get_cache_stats() -> CacheStats {
 /// Gets performance statistics.
 ///
 /// For MVP, returns stub data showing demonstration values.
-fn get_performance_stats() -> PerformanceStats {
+const fn get_performance_stats() -> PerformanceStats {
     PerformanceStats {
         avg_execution_ms: 12.5,
         peak_memory_mb: 128.0,
@@ -174,7 +173,7 @@ fn get_performance_stats() -> PerformanceStats {
 /// Gets token statistics.
 ///
 /// For MVP, returns stub data showing demonstration values.
-fn get_token_stats() -> TokenStats {
+const fn get_token_stats() -> TokenStats {
     TokenStats {
         tokens_saved: 45000,
         baseline_tokens: 50000,

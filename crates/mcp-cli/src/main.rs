@@ -223,7 +223,7 @@ async fn main() -> Result<()> {
     let output_format = cli
         .format
         .parse::<OutputFormat>()
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Execute command and get exit code
     let exit_code = execute_command(cli.command, output_format).await?;

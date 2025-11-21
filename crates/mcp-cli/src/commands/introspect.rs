@@ -131,8 +131,7 @@ pub async fn run(server: String, detailed: bool, output_format: OutputFormat) ->
     // Validate server connection string
     let conn_string = ServerConnectionString::new(&server).with_context(|| {
         format!(
-            "invalid server connection string: '{}' (allowed characters: a-z, A-Z, 0-9, -, _, ., /, :)",
-            server
+            "invalid server connection string: '{server}' (allowed characters: a-z, A-Z, 0-9, -, _, ., /, :)"
         )
     })?;
 
@@ -146,8 +145,7 @@ pub async fn run(server: String, detailed: bool, output_format: OutputFormat) ->
         .await
         .with_context(|| {
             format!(
-                "failed to connect to server '{}' - ensure the server is installed and accessible",
-                server
+                "failed to connect to server '{server}' - ensure the server is installed and accessible"
             )
         })?;
 
@@ -163,7 +161,7 @@ pub async fn run(server: String, detailed: bool, output_format: OutputFormat) ->
     let formatted = crate::formatters::format_output(&result, output_format)
         .context("failed to format introspection results")?;
 
-    println!("{}", formatted);
+    println!("{formatted}");
 
     Ok(ExitCode::SUCCESS)
 }
