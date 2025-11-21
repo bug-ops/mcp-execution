@@ -401,9 +401,7 @@ async fn test_discover_server_shell_operators() {
     ];
 
     for cmd in dangerous_commands {
-        let result = introspector
-            .discover_server(server_id.clone(), cmd)
-            .await;
+        let result = introspector.discover_server(server_id.clone(), cmd).await;
 
         // Should fail validation
         assert!(result.is_err(), "Command should be rejected: {}", cmd);
@@ -718,8 +716,7 @@ fn test_server_info_serialization_with_tools() {
     assert!(json.contains("test_tool"));
     assert!(json.contains("Test Server"));
 
-    let deserialized: ServerInfo =
-        serde_json::from_str(&json).expect("Deserialization failed");
+    let deserialized: ServerInfo = serde_json::from_str(&json).expect("Deserialization failed");
     assert_eq!(deserialized.tools.len(), 1);
     assert_eq!(deserialized.tools[0].name.as_str(), "test_tool");
 }

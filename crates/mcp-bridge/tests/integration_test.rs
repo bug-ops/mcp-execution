@@ -358,7 +358,9 @@ async fn test_cache_with_different_params() {
 
     // Both will fail (no connection), but cache key logic is tested
     let result1 = bridge.call_tool(&server_id, &tool_name, params1).await;
-    let result2 = bridge.call_tool(&server_id, &tool_name, params2.clone()).await;
+    let result2 = bridge
+        .call_tool(&server_id, &tool_name, params2.clone())
+        .await;
 
     assert!(result1.is_err());
     assert!(result2.is_err());
