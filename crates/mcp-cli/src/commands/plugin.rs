@@ -175,7 +175,9 @@ pub async fn run(action: PluginAction, output_format: OutputFormat) -> Result<Ex
             plugin_dir,
             yes,
         } => remove_plugin(&name, &plugin_dir, yes, output_format),
-        PluginAction::Info { name, plugin_dir } => show_plugin_info(&name, &plugin_dir, output_format),
+        PluginAction::Info { name, plugin_dir } => {
+            show_plugin_info(&name, &plugin_dir, output_format)
+        }
     }
 }
 
@@ -222,9 +224,7 @@ fn list_plugins(plugin_dir: &PathBuf, output_format: OutputFormat) -> Result<Exi
 
     let store = PluginStore::new(&plugin_dir).context("failed to initialize plugin store")?;
 
-    let plugins = store
-        .list_plugins()
-        .context("failed to list plugins")?;
+    let plugins = store.list_plugins().context("failed to list plugins")?;
 
     if plugins.is_empty() {
         warn!("No plugins found in {}", plugin_dir.display());

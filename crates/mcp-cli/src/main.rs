@@ -297,16 +297,18 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             force,
             save_plugin,
             plugin_dir,
-        } => commands::generate::run(
-            server,
-            output,
-            feature,
-            force,
-            save_plugin,
-            plugin_dir,
-            output_format,
-        )
-        .await,
+        } => {
+            commands::generate::run(
+                server,
+                output,
+                feature,
+                force,
+                save_plugin,
+                plugin_dir,
+                output_format,
+            )
+            .await
+        }
         Commands::Execute {
             module,
             entry,

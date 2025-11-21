@@ -207,8 +207,7 @@ pub async fn run(
         let mock_wasm = create_mock_wasm();
 
         // Create plugin store
-        let store = PluginStore::new(&plugin_dir)
-            .context("failed to initialize plugin store")?;
+        let store = PluginStore::new(&plugin_dir).context("failed to initialize plugin store")?;
 
         // Build VFS from generated code
         let mut vfs_builder = VfsBuilder::new();
@@ -217,7 +216,8 @@ pub async fn run(
             let vfs_path = format!("/{}", file.path);
             vfs_builder = vfs_builder.add_file(&vfs_path, file.content.clone());
         }
-        let vfs = vfs_builder.build()
+        let vfs = vfs_builder
+            .build()
             .context("failed to create VFS from generated code")?;
 
         // Extract server info from introspection
