@@ -1,4 +1,4 @@
-//! Core types for plugin metadata and storage.
+//! Core types for skill metadata and storage.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -219,10 +219,10 @@ pub struct LoadedSkill {
 ///
 /// for skill in store.list_skills()? {
 ///     println!("{} v{} - {} tools (generated {})",
-///         plugin.server_name,
-///         plugin.version,
-///         plugin.tool_count,
-///         plugin.generated_at.format("%Y-%m-%d")
+///         skill.server_name,
+///         skill.version,
+///         skill.tool_count,
+///         skill.generated_at.format("%Y-%m-%d")
 ///     );
 /// }
 /// # Ok(())

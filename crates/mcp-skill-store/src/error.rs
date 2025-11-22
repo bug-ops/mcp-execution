@@ -1,11 +1,11 @@
-//! Error types for plugin store operations.
+//! Error types for skill store operations.
 
 use std::path::PathBuf;
 
-/// Result type for plugin store operations.
+/// Result type for skill store operations.
 pub type Result<T> = std::result::Result<T, SkillStoreError>;
 
-/// Errors that can occur during plugin store operations.
+/// Errors that can occur during skill store operations.
 #[derive(thiserror::Error, Debug)]
 pub enum SkillStoreError {
     /// Skill was not found in the store.
@@ -23,12 +23,12 @@ pub enum SkillStoreError {
     /// let store = SkillStore::new(temp.path())?;
     ///
     /// let result = store.load_skill("nonexistent");
-    /// assert!(matches!(result, Err(SkillStoreError::PluginNotFound { .. })));
+    /// assert!(matches!(result, Err(SkillStoreError::SkillNotFound { .. })));
     /// # Ok(())
     /// # }
     /// ```
     #[error("Skill not found: {server_name}")]
-    PluginNotFound {
+    SkillNotFound {
         /// Name of the server whose skill was not found
         server_name: String,
     },
@@ -61,17 +61,17 @@ pub enum SkillStoreError {
     ///
     /// // Second save fails
     /// let result = store.save_skill("test", &vfs, &wasm, server_info, vec![]);
-    /// assert!(matches!(result, Err(SkillStoreError::PluginAlreadyExists { .. })));
+    /// assert!(matches!(result, Err(SkillStoreError::SkillAlreadyExists { .. })));
     /// # Ok(())
     /// # }
     /// ```
     #[error("Skill already exists: {server_name}")]
-    PluginAlreadyExists {
+    SkillAlreadyExists {
         /// Name of the server whose skill already exists
         server_name: String,
     },
 
-    /// Checksum verification failed during plugin load.
+    /// Checksum verification failed during skill load.
     ///
     /// This error indicates that a file's content hash doesn't match the
     /// expected value in the metadata, suggesting file corruption or tampering.
@@ -179,8 +179,8 @@ impl SkillStoreError {
     pub const fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            Self::PluginNotFound { .. }
-                | Self::PluginAlreadyExists { .. }
+            Self::SkillNotFound { .. }
+                | Self::SkillAlreadyExists { .. }
                 | Self::InvalidServerName { .. }
                 | Self::InvalidMetadata { .. }
         )
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_plugin_not_found_display() {
-        let error = SkillStoreError::PluginNotFound {
+        let error = SkillStoreError::SkillNotFound {
             server_name: "test-server".to_string(),
         };
 
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_plugin_already_exists_display() {
-        let error = SkillStoreError::PluginAlreadyExists {
+        let error = SkillStoreError::SkillAlreadyExists {
             server_name: "existing-server".to_string(),
         };
 
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_is_recoverable_plugin_not_found() {
-        let error = SkillStoreError::PluginNotFound {
+        let error = SkillStoreError::SkillNotFound {
             server_name: "test".to_string(),
         };
         assert!(error.is_recoverable());
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_is_recoverable_plugin_already_exists() {
-        let error = SkillStoreError::PluginAlreadyExists {
+        let error = SkillStoreError::SkillAlreadyExists {
             server_name: "test".to_string(),
         };
         assert!(error.is_recoverable());
@@ -347,12 +347,12 @@ mod tests {
 
     #[test]
     fn test_error_debug() {
-        let error = SkillStoreError::PluginNotFound {
+        let error = SkillStoreError::SkillNotFound {
             server_name: "test".to_string(),
         };
 
         let debug_str = format!("{error:?}");
-        assert!(debug_str.contains("PluginNotFound"));
+        assert!(debug_str.contains("SkillNotFound"));
         assert!(debug_str.contains("test"));
     }
 
@@ -370,10 +370,10 @@ mod tests {
     #[test]
     fn test_multiple_error_variants_debug() {
         let errors = vec![
-            SkillStoreError::PluginNotFound {
+            SkillStoreError::SkillNotFound {
                 server_name: "test1".to_string(),
             },
-            SkillStoreError::PluginAlreadyExists {
+            SkillStoreError::SkillAlreadyExists {
                 server_name: "test2".to_string(),
             },
             SkillStoreError::InvalidServerName {

@@ -1,6 +1,6 @@
 //! Blake3 checksum utilities for skill integrity verification.
 //!
-//! Provides functions to calculate and verify Blake3 checksums for plugin
+//! Provides functions to calculate and verify Blake3 checksums for skill
 //! files. Checksums are stored in the format `"blake3:<hex>"` for easy
 //! identification and future algorithm upgrades.
 

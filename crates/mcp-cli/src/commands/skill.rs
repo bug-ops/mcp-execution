@@ -1,6 +1,6 @@
 //! Plugin management command implementation.
 //!
-//! Provides commands to save, load, list, and manage plugins saved to disk.
+//! Provides commands to save, load, list, and manage skills saved to disk.
 //! Plugins are stored in a directory structure with VFS files and WASM modules.
 
 use anyhow::{Context, Result, bail};
@@ -14,7 +14,7 @@ use tracing::{info, warn};
 /// Plugin management actions.
 #[derive(Subcommand, Debug)]
 pub enum SkillAction {
-    /// Load a plugin from disk
+    /// Load a skill from disk
     Load {
         /// Skill name (server name)
         name: String,
@@ -24,7 +24,7 @@ pub enum SkillAction {
         skill_dir: PathBuf,
     },
 
-    /// List available plugins
+    /// List available skills
     List {
         /// Skill directory
         #[arg(long, default_value = "./plugins")]
@@ -56,7 +56,7 @@ pub enum SkillAction {
     },
 }
 
-/// Result of loading a plugin.
+/// Result of loading a skill.
 #[derive(Debug, Serialize)]
 struct LoadResult {
     /// Skill name
@@ -95,7 +95,7 @@ struct SkillSummary {
     generated_at: String,
 }
 
-/// Result of showing plugin info.
+/// Result of showing skill info.
 #[derive(Debug, Serialize)]
 struct InfoResult {
     /// Skill name
@@ -127,7 +127,7 @@ struct ToolSummary {
     description: String,
 }
 
-/// Result of removing a plugin.
+/// Result of removing a skill.
 #[derive(Debug, Serialize)]
 struct RemoveResult {
     /// Skill name
@@ -136,9 +136,9 @@ struct RemoveResult {
     success: bool,
 }
 
-/// Runs the plugin management command.
+/// Runs the skill management command.
 ///
-/// Routes plugin actions to their respective handlers.
+/// Routes skill actions to their respective handlers.
 ///
 /// # Arguments
 ///
@@ -147,12 +147,12 @@ struct RemoveResult {
 ///
 /// # Errors
 ///
-/// Returns an error if the plugin operation fails.
+/// Returns an error if the skill operation fails.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::plugin::{SkillAction, run};
+/// use mcp_cli::commands::skill::{SkillAction, run};
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 /// use std::path::PathBuf;
 ///
@@ -179,11 +179,11 @@ pub async fn run(action: SkillAction, output_format: OutputFormat) -> Result<Exi
     }
 }
 
-/// Loads a plugin from disk.
+/// Loads a skill from disk.
 ///
 /// # Errors
 ///
-/// Returns an error if the plugin doesn't exist or fails checksum verification.
+/// Returns an error if the skill doesn't exist or fails checksum verification.
 pub fn load_skill(
     name: &str,
     skill_dir: &PathBuf,
@@ -216,7 +216,7 @@ pub fn load_skill(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Lists all available plugins.
+/// Lists all available skills.
 ///
 /// # Errors
 ///
@@ -256,11 +256,11 @@ pub fn list_skills(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<E
     Ok(ExitCode::SUCCESS)
 }
 
-/// Removes a plugin from disk.
+/// Removes a skill from disk.
 ///
 /// # Errors
 ///
-/// Returns an error if the plugin doesn't exist or cannot be removed.
+/// Returns an error if the skill doesn't exist or cannot be removed.
 pub fn remove_skill(
     name: &str,
     skill_dir: &PathBuf,
@@ -271,7 +271,7 @@ pub fn remove_skill(
 
     let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
 
-    // Check if plugin exists
+    // Check if skill exists
     if !store.skill_exists(name)? {
         bail!("plugin '{name}' not found");
     }
@@ -309,11 +309,11 @@ pub fn remove_skill(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Shows detailed information about a plugin.
+/// Shows detailed information about a skill.
 ///
 /// # Errors
 ///
-/// Returns an error if the plugin doesn't exist or cannot be loaded.
+/// Returns an error if the skill doesn't exist or cannot be loaded.
 pub fn show_skill_info(
     name: &str,
     skill_dir: &PathBuf,

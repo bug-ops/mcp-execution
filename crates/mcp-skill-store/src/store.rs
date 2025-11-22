@@ -1,7 +1,7 @@
 //! Skill storage implementation.
 //!
 //! Provides the main [`SkillStore`] type for saving, loading, and managing
-//! plugins on disk.
+//! skills on disk.
 
 use crate::checksum::{calculate_checksum, verify_checksum};
 use crate::error::{Result, SkillStoreError};
@@ -19,7 +19,7 @@ use walkdir::WalkDir;
 /// RAII guard for skill directory cleanup on error.
 ///
 /// Automatically removes a skill directory if the save operation fails
-/// or panics, preventing partial plugin state on disk.
+/// or panics, preventing partial skill state on disk.
 ///
 /// This guard ensures atomic-like behavior: the skill directory is either
 /// fully written or completely removed on error.
@@ -69,7 +69,7 @@ impl Drop for SkillDirGuard {
 /// Skill storage manager.
 ///
 /// Manages a directory of saved skills, providing operations to save, load,
-/// list, and remove plugins. Each skill is stored in its own subdirectory
+/// list, and remove skills. Each skill is stored in its own subdirectory
 /// named after the server.
 ///
 /// # Directory Structure
@@ -128,7 +128,7 @@ pub struct SkillStore {
 }
 
 impl SkillStore {
-    /// Creates a new plugin store at the given directory.
+    /// Creates a new skill store at the given directory.
     ///
     /// Creates the base directory if it doesn't exist.
     ///
@@ -173,8 +173,8 @@ impl SkillStore {
     /// # Concurrency
     ///
     /// Safe for concurrent calls with different `server_name` values.
-    /// Concurrent saves to the same plugin will result in one success and
-    /// one [`SkillStoreError::PluginAlreadyExists`] error (atomic directory creation).
+    /// Concurrent saves to the same skill will result in one success and
+    /// one [`SkillStoreError::SkillAlreadyExists`] error (atomic directory creation).
     ///
     /// # Arguments
     ///
@@ -186,7 +186,7 @@ impl SkillStore {
     ///
     /// # Errors
     ///
-    /// * [`SkillStoreError::PluginAlreadyExists`] - Skill directory exists
+    /// * [`SkillStoreError::SkillAlreadyExists`] - Skill directory exists
     /// * [`SkillStoreError::InvalidServerName`] - Invalid server name
     /// * I/O errors if writing fails
     ///
@@ -237,7 +237,7 @@ impl SkillStore {
                 tracing::debug!("Created skill directory: {}", skill_dir.display());
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(SkillStoreError::PluginAlreadyExists {
+                return Err(SkillStoreError::SkillAlreadyExists {
                     server_name: server_name.to_string(),
                 });
             }
@@ -307,7 +307,7 @@ impl SkillStore {
         let metadata_path = skill_dir.join(METADATA_FILE);
         let metadata_json = serde_json::to_string_pretty(&metadata)?;
         fs::write(&metadata_path, metadata_json)?;
-        tracing::debug!("Wrote plugin metadata");
+        tracing::debug!("Wrote skill metadata");
 
         // Success - disable cleanup
         guard.commit();
@@ -328,7 +328,7 @@ impl SkillStore {
     ///
     /// # Errors
     ///
-    /// * [`SkillStoreError::PluginNotFound`] - Plugin doesn't exist
+    /// * [`SkillStoreError::SkillNotFound`] - Plugin doesn't exist
     /// * [`SkillStoreError::ChecksumMismatch`] - File hash mismatch
     /// * [`SkillStoreError::InvalidMetadata`] - Malformed metadata
     /// * [`SkillStoreError::MissingFile`] - Required file missing
@@ -353,7 +353,7 @@ impl SkillStore {
         // Check plugin exists
         let skill_dir = self.skill_path(server_name);
         if !skill_dir.exists() {
-            return Err(SkillStoreError::PluginNotFound {
+            return Err(SkillStoreError::SkillNotFound {
                 server_name: server_name.to_string(),
             });
         }
@@ -483,9 +483,9 @@ impl SkillStore {
     ///
     /// for skill in store.list_skills()? {
     ///     println!("{} v{} - {} tools",
-    ///         plugin.server_name,
-    ///         plugin.version,
-    ///         plugin.tool_count
+    ///         skill.server_name,
+    ///         skill.version,
+    ///         skill.tool_count
     ///     );
     /// }
     /// # Ok(())
@@ -559,7 +559,7 @@ impl SkillStore {
     ///
     /// # Errors
     ///
-    /// * [`SkillStoreError::PluginNotFound`] - Plugin doesn't exist
+    /// * [`SkillStoreError::SkillNotFound`] - Plugin doesn't exist
     /// * I/O errors if deletion fails
     ///
     /// # Examples
@@ -578,7 +578,7 @@ impl SkillStore {
 
         let skill_dir = self.skill_path(server_name);
         if !skill_dir.exists() {
-            return Err(SkillStoreError::PluginNotFound {
+            return Err(SkillStoreError::SkillNotFound {
                 server_name: server_name.to_string(),
             });
         }
@@ -609,7 +609,7 @@ impl SkillStore {
         self.base_dir.join(server_name)
     }
 
-    /// Reads and parses plugin metadata from disk.
+    /// Reads and parses skill metadata from disk.
     fn read_metadata(metadata_path: &Path) -> Result<SkillMetadata> {
         let content = fs::read_to_string(metadata_path)?;
         let metadata: SkillMetadata =
@@ -831,7 +831,7 @@ mod tests {
         let result = store.save_skill("test-server", &vfs, &wasm, server_info, tools);
         assert!(matches!(
             result,
-            Err(SkillStoreError::PluginAlreadyExists { .. })
+            Err(SkillStoreError::SkillAlreadyExists { .. })
         ));
     }
 
@@ -883,7 +883,7 @@ mod tests {
         let result = store.load_skill("nonexistent");
         assert!(matches!(
             result,
-            Err(SkillStoreError::PluginNotFound { .. })
+            Err(SkillStoreError::SkillNotFound { .. })
         ));
     }
 
@@ -1038,7 +1038,7 @@ mod tests {
         let result = store.load_skill("to-remove");
         assert!(matches!(
             result,
-            Err(SkillStoreError::PluginNotFound { .. })
+            Err(SkillStoreError::SkillNotFound { .. })
         ));
     }
 
@@ -1109,7 +1109,7 @@ mod tests {
         let success_count = [&r1, &r2].iter().filter(|r| r.is_ok()).count();
         let already_exists_count = [&r1, &r2]
             .iter()
-            .filter(|r| matches!(r, Err(SkillStoreError::PluginAlreadyExists { .. })))
+            .filter(|r| matches!(r, Err(SkillStoreError::SkillAlreadyExists { .. })))
             .count();
 
         assert_eq!(success_count, 1, "Exactly one save should succeed");
@@ -1144,7 +1144,7 @@ mod tests {
         let result = store.save_skill("cleanup-test", &vfs, &wasm, server_info, tools);
         assert!(matches!(
             result,
-            Err(SkillStoreError::PluginAlreadyExists { .. })
+            Err(SkillStoreError::SkillAlreadyExists { .. })
         ));
 
         // Directory should still exist since we created it manually
