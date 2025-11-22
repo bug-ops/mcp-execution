@@ -62,7 +62,7 @@ fn test_skill_store_directory_creation() {
     }
 
     // Create skill store (should create .claude/skills)
-    let store = SkillStore::new_claude().unwrap();
+    let _store = SkillStore::new_claude().unwrap();
 
     // Verify directory exists by checking the expected path
     let skill_dir = temp_dir.path().join(".claude/skills");

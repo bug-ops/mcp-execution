@@ -138,12 +138,9 @@ struct RemoveResult {
 /// ```no_run
 /// use mcp_cli::commands::skill::{SkillAction, run};
 /// use mcp_core::cli::{ExitCode, OutputFormat};
-/// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
-/// let action = SkillAction::List {
-///     skill_dir: PathBuf::from("./skills"),
-/// };
+/// let action = SkillAction::List;
 ///
 /// let result = run(action, OutputFormat::Pretty).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);
