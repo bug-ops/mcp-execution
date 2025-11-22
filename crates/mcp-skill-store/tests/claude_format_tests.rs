@@ -19,7 +19,7 @@ use mcp_skill_store::{
 use std::fs;
 use tempfile::TempDir;
 
-/// Creates test SkillData for testing.
+/// Creates test `SkillData` for testing.
 fn create_test_skill_data(name: &str, tool_count: usize) -> SkillData {
     let tools: Vec<ToolData> = (0..tool_count)
         .map(|i| ToolData {

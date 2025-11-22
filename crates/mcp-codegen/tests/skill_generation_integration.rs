@@ -11,7 +11,7 @@ use mcp_core::{ServerId, SkillDescription, SkillName, ToolName};
 use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 
-/// Creates a realistic mock ServerInfo for testing.
+/// Creates a realistic mock `ServerInfo` for testing.
 fn create_mock_server_info() -> ServerInfo {
     ServerInfo {
         id: ServerId::new("test-server"),
@@ -368,8 +368,7 @@ fn test_pipeline_yaml_frontmatter_format() {
         .iter()
         .skip(1)
         .position(|line| *line == "---")
-        .map(|pos| pos + 1) // Adjust for skip(1)
-        .unwrap_or(0);
+        .map_or(0, |pos| pos + 1); // Adjust for skip(1)
     assert!(frontmatter_end > 1, "YAML frontmatter should have content");
 
     // Verify required YAML fields are present

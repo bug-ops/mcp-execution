@@ -5,8 +5,8 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
-use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_core::SkillName;
+use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_skill_store::SkillStore;
 use serde::Serialize;
 use tracing::{info, warn};

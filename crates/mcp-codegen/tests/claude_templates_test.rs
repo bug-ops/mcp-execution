@@ -253,8 +253,7 @@ fn test_skill_md_no_xml_tags_in_output() {
         if !in_code_block {
             assert!(
                 !line.contains("{{") && !line.contains("}}"),
-                "Should not have template syntax in output: {}",
-                line
+                "Should not have template syntax in output: {line}"
             );
         }
     }
@@ -411,7 +410,7 @@ fn test_skill_description_max_length_respected() {
     );
 
     let rendered = render_skill_md(&engine, &data).unwrap();
-    assert!(rendered.len() > 0);
+    assert!(!rendered.is_empty());
 }
 
 #[test]
@@ -454,8 +453,7 @@ fn test_skill_name_format_compliance() {
     for ch in name.chars() {
         assert!(
             ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_',
-            "Invalid character in skill name: {}",
-            ch
+            "Invalid character in skill name: {ch}"
         );
     }
 }

@@ -331,10 +331,7 @@ mod tests {
     fn test_default_description_format() {
         let server_name = "vkteams-bot";
         let tool_count = 5;
-        let desc = format!(
-            "Interact with {} MCP server ({} tools available)",
-            server_name, tool_count
-        );
+        let desc = format!("Interact with {server_name} MCP server ({tool_count} tools available)");
 
         assert!(desc.contains("vkteams-bot"));
         assert!(desc.contains("5 tools"));
