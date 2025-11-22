@@ -17,7 +17,7 @@ MCP Code Execution implements the Code Execution pattern for MCP, enabling AI ag
 ### Key Features
 
 - **80-90% Token Reduction**: Progressive tool loading vs. full tool definitions
-- **Plugin Persistence**: Save and load pre-generated tools to disk with Blake3 integrity
+- **Skill Persistence**: Save and load pre-generated tools to disk with Blake3 integrity
 - **Secure Sandbox**: Wasmtime 38.0-based WASM execution with memory/CPU limits
 - **Lightning Fast**: <3ms execution overhead per call (16.7x faster than target)
 - **100% MCP Compatible**: Works with all existing MCP servers via official rmcp SDK
@@ -37,7 +37,7 @@ mcp-execution/
 │   ├── mcp-wasm-runtime/     # Wasmtime 38.0 sandbox
 │   ├── mcp-vfs/              # Virtual filesystem
 │   ├── mcp-skill-generator/  # IDE skill generation
-│   ├── mcp-plugin-store/     # Plugin persistence (NEW in Phase 8.1)
+│   ├── mcp-skill-store/     # Skill persistence (NEW in Phase 8.1)
 │   ├── mcp-examples/         # Examples and integration tests
 │   └── mcp-cli/              # CLI application
 ├── examples/              # E2E workflows
@@ -110,35 +110,35 @@ See [examples/](crates/mcp-wasm-runtime/examples/) for complete usage examples a
 
 ### CLI Usage
 
-The `mcp-cli` tool provides commands for generating, managing, and executing MCP plugins.
+The `mcp-cli` tool provides commands for generating, managing, and executing MCP skills.
 
-#### Generate and Save Plugin
-
-```bash
-# Generate TypeScript code and save as reusable plugin
-mcp-cli generate vkteams-bot --save-plugin
-
-# Custom plugin directory
-mcp-cli generate vkteams-bot --save-plugin --plugin-dir ~/.mcp-plugins
-```
-
-#### Load and Manage Plugins
+#### Generate and Save Skill
 
 ```bash
-# List saved plugins
-mcp-cli plugin list
+# Generate TypeScript code and save as reusable skill
+mcp-cli generate vkteams-bot --save-skill
 
-# Load a plugin
-mcp-cli plugin load vkteams-bot -o pretty
-
-# Show plugin details
-mcp-cli plugin info vkteams-bot
-
-# Remove a plugin
-mcp-cli plugin remove vkteams-bot -y
+# Custom skill directory
+mcp-cli generate vkteams-bot --save-skill --skill-dir ~/.mcp-skills
 ```
 
-Plugin persistence features:
+#### Load and Manage Skills
+
+```bash
+# List saved skills
+mcp-cli skill list
+
+# Load a skill
+mcp-cli skill load vkteams-bot -o pretty
+
+# Show skill details
+mcp-cli skill info vkteams-bot
+
+# Remove a skill
+mcp-cli skill remove vkteams-bot -y
+```
+
+Skill persistence features:
 - **Blake3 checksums** for integrity verification
 - **Constant-time comparison** to prevent timing attacks
 - **Atomic operations** to avoid race conditions
@@ -153,7 +153,7 @@ mcp-cli completions zsh > ~/.zsh/completions/_mcp-cli
 mcp-cli completions fish > ~/.config/fish/completions/mcp-cli.fish
 ```
 
-See [Phase 8 Plugin Persistence Guide](.local/PHASE-8-PLUGIN-PERSISTENCE-GUIDE.md) for detailed plugin documentation.
+See [Phase 8 Skill Persistence Guide](.local/PHASE-8-SKILL-PERSISTENCE-GUIDE.md) for detailed skill documentation.
 
 ## Development
 
@@ -295,7 +295,7 @@ See [docs/adr/](docs/adr/) for security architecture decisions.
 
 #### Phase 7.1: CLI Foundation
 - [x] Clap 4.5-based CLI with strong types
-- [x] 9 subcommands (introspect, generate, execute, server, stats, debug, config, plugin, completions)
+- [x] 9 subcommands (introspect, generate, execute, server, stats, debug, config, skill, completions)
 - [x] Security hardening (command injection prevention, path validation)
 - [x] Multiple output formats (JSON, text, pretty)
 - [x] Shell completions (bash, zsh, fish, PowerShell)
@@ -303,26 +303,26 @@ See [docs/adr/](docs/adr/) for security architecture decisions.
 
 #### Phase 7.2: CLI Implementation
 - [x] `introspect` command - analyze MCP servers
-- [x] `generate` command - generate code with --save-plugin
+- [x] `generate` command - generate code with --save-skill
 - [x] `execute` command - run WASM modules
 - [x] `server`, `stats`, `debug`, `config` commands
 - [x] Full integration with all crates
 - [x] 428 additional tests
 
-### Phase 8: Plugin Persistence ✅ COMPLETE
+### Phase 8: Skill Persistence ✅ COMPLETE
 
-#### Phase 8.1: Plugin Store
-- [x] New `mcp-plugin-store` crate for disk persistence
+#### Phase 8.1: Skill Store
+- [x] New `mcp-skill-store` crate for disk persistence
 - [x] Blake3 integrity verification with constant-time comparison
 - [x] Atomic file operations for crash safety
 - [x] 70 tests (38 unit + 32 integration)
-- [x] 16-33x faster plugin loading vs regeneration
+- [x] 16-33x faster skill loading vs regeneration
 
 #### Phase 8.2: CLI Integration
-- [x] `plugin list|load|info|remove` commands
+- [x] `skill list|load|info|remove` commands
 - [x] Path validation and security hardening
 - [x] Integration with generate command
-- [x] Plugin directory management
+- [x] Skill directory management
 
 ### Phase 6: Optimization 🟡 DEFERRED
 
@@ -361,7 +361,7 @@ Contributions welcome! Please:
 
 🟢 **CORE PRODUCTION READY** - Phases 1-5, 7.1, 8.1 Complete
 
-**Current Branch**: `feature/plugin-persistence` (Phase 8.1)
+**Current Branch**: `refactor/rename-plugin-to-skill` (Terminology Alignment)
 
 **Completed Phases**:
 - ✅ Phase 1: Core Infrastructure
@@ -370,19 +370,19 @@ Contributions welcome! Please:
 - ✅ Phase 4: WASM Runtime (Wasmtime 38.0)
 - ✅ Phase 5: Integration & Testing
 - ✅ Phase 7.1: CLI Foundation
-- ✅ Phase 8.1: Plugin Persistence **← Current**
+- ✅ Phase 8.1: Skill Persistence **← Current**
 
 **Quality Metrics**:
 - **Tests**: 397/397 passing (100% pass rate)
 - **Performance**: All targets exceeded by 5-6,578x
 - **Security**: 5/5 stars (zero critical vulnerabilities)
-- **Crates**: 10 (added `mcp-plugin-store`)
+- **Crates**: 10 (added `mcp-skill-store`)
 - **Code**: ~18,000+ lines Rust
 - **Documentation**: Complete (docs/ARCHITECTURE.md, 6 ADRs, guides)
 
 **Production Status**: Core is production-ready ✅
 
 **Next Steps**:
-1. Merge Phase 8.1 (plugin persistence) - **READY**
+1. Merge Phase 8.1 (skill persistence) - **READY**
 2. Implement Phase 7.2 (CLI commands) or Phase 8.2 (distribution)
 3. Release v0.1.0
