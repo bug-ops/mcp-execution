@@ -79,8 +79,8 @@ jobs:
         uses: actions-rust-lang/audit@v1
         with:
           # Ignore advisories that don't apply or are low severity
-          # Add specific ignores here if needed, e.g.:
-          # ignore: RUSTSEC-2024-0001
+          # RUSTSEC-2024-0436: paste crate is unmaintained (comes from rmcp SDK dependency)
+          ignore: RUSTSEC-2024-0436
           denyWarnings: true
 
   # Cross-platform tests with matrix
