@@ -1,7 +1,7 @@
-//! Plugin management command implementation.
+//! Skill management command implementation.
 //!
 //! Provides commands to save, load, list, and manage skills saved to disk.
-//! Plugins are stored in a directory structure with VFS files and WASM modules.
+//! Skills are stored in a directory structure with VFS files and WASM modules.
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
@@ -19,15 +19,15 @@ pub enum SkillAction {
         /// Skill name (server name)
         name: String,
 
-        /// Skill directory (defaults to ./plugins)
-        #[arg(long, default_value = "./plugins")]
+        /// Skill directory (defaults to ./skills)
+        #[arg(long, default_value = "./skills")]
         skill_dir: PathBuf,
     },
 
     /// List available skills
     List {
         /// Skill directory
-        #[arg(long, default_value = "./plugins")]
+        #[arg(long, default_value = "./skills")]
         skill_dir: PathBuf,
     },
 
@@ -37,7 +37,7 @@ pub enum SkillAction {
         name: String,
 
         /// Skill directory
-        #[arg(long, default_value = "./plugins")]
+        #[arg(long, default_value = "./skills")]
         skill_dir: PathBuf,
 
         /// Skip confirmation
@@ -51,7 +51,7 @@ pub enum SkillAction {
         name: String,
 
         /// Skill directory
-        #[arg(long, default_value = "./plugins")]
+        #[arg(long, default_value = "./skills")]
         skill_dir: PathBuf,
     },
 }
@@ -158,7 +158,7 @@ struct RemoveResult {
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
 /// let action = SkillAction::List {
-///     skill_dir: PathBuf::from("./plugins"),
+///     skill_dir: PathBuf::from("./skills"),
 /// };
 ///
 /// let result = run(action, OutputFormat::Pretty).await?;
@@ -189,13 +189,13 @@ pub fn load_skill(
     skill_dir: &PathBuf,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    info!("Loading plugin: {}", name);
+    info!("Loading skill: {}", name);
 
     let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
 
     let loaded = store
         .load_skill(name)
-        .with_context(|| format!("failed to load plugin '{name}'"))?;
+        .with_context(|| format!("failed to load skill '{name}'"))?;
 
     let result = LoadResult {
         name: loaded.metadata.server.name,
@@ -209,7 +209,7 @@ pub fn load_skill(
     println!("{formatted}");
 
     info!(
-        "Successfully loaded plugin: {} (v{}, {} tools)",
+        "Successfully loaded skill: {} (v{}, {} tools)",
         result.name, result.version, result.tool_count
     );
 
@@ -222,7 +222,7 @@ pub fn load_skill(
 ///
 /// Returns an error if the skill directory cannot be read.
 pub fn list_skills(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
-    info!("Listing plugins in: {}", skill_dir.display());
+    info!("Listing skills in: {}", skill_dir.display());
 
     let store = SkillStore::new(&skill_dir).context("failed to initialize skill store")?;
 
@@ -267,13 +267,13 @@ pub fn remove_skill(
     yes: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    info!("Removing plugin: {}", name);
+    info!("Removing skill: {}", name);
 
     let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
 
     // Check if skill exists
     if !store.skill_exists(name)? {
-        bail!("plugin '{name}' not found");
+        bail!("skill '{name}' not found");
     }
 
     // Prompt for confirmation unless --yes flag is set
@@ -281,20 +281,20 @@ pub fn remove_skill(
         use dialoguer::Confirm;
 
         let confirmed = Confirm::new()
-            .with_prompt(format!("Are you sure you want to remove plugin '{name}'?"))
+            .with_prompt(format!("Are you sure you want to remove skill '{name}'?"))
             .default(false)
             .interact()
             .context("failed to read confirmation")?;
 
         if !confirmed {
-            info!("Plugin removal cancelled by user");
+            info!("Skill removal cancelled by user");
             return Ok(ExitCode::SUCCESS);
         }
     }
 
     store
         .remove_skill(name)
-        .with_context(|| format!("failed to remove plugin '{name}'"))?;
+        .with_context(|| format!("failed to remove skill '{name}'"))?;
 
     let result = RemoveResult {
         name: name.to_string(),
@@ -304,7 +304,7 @@ pub fn remove_skill(
     let formatted = crate::formatters::format_output(&result, output_format)?;
     println!("{formatted}");
 
-    info!("Successfully removed plugin: {}", name);
+    info!("Successfully removed skill: {}", name);
 
     Ok(ExitCode::SUCCESS)
 }
@@ -319,13 +319,13 @@ pub fn show_skill_info(
     skill_dir: &PathBuf,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    info!("Showing info for plugin: {}", name);
+    info!("Showing info for skill: {}", name);
 
     let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
 
     let loaded = store
         .load_skill(name)
-        .with_context(|| format!("failed to load plugin '{name}'"))?;
+        .with_context(|| format!("failed to load skill '{name}'"))?;
 
     let tools: Vec<ToolSummary> = loaded
         .metadata
@@ -381,13 +381,13 @@ mod tests {
             skill_count: 2,
             skills: vec![
                 SkillSummary {
-                    name: "plugin1".to_string(),
+                    name: "skill1".to_string(),
                     version: "1.0.0".to_string(),
                     tool_count: 3,
                     generated_at: "2025-11-21T12:00:00Z".to_string(),
                 },
                 SkillSummary {
-                    name: "plugin2".to_string(),
+                    name: "skill2".to_string(),
                     version: "2.0.0".to_string(),
                     tool_count: 5,
                     generated_at: "2025-11-21T13:00:00Z".to_string(),
@@ -396,8 +396,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("plugin1"));
-        assert!(json.contains("plugin2"));
+        assert!(json.contains("skill1"));
+        assert!(json.contains("skill2"));
     }
 
     #[test]

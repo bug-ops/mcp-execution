@@ -152,7 +152,7 @@ impl SkillStore {
         // Create directory if it doesn't exist
         if !base_dir.exists() {
             fs::create_dir_all(&base_dir)?;
-            tracing::debug!("Created plugin store directory: {}", base_dir.display());
+            tracing::debug!("Created skill store directory: {}", base_dir.display());
         }
 
         Ok(Self { base_dir })
@@ -881,10 +881,7 @@ mod tests {
         let store = SkillStore::new(temp.path()).unwrap();
 
         let result = store.load_skill("nonexistent");
-        assert!(matches!(
-            result,
-            Err(SkillStoreError::SkillNotFound { .. })
-        ));
+        assert!(matches!(result, Err(SkillStoreError::SkillNotFound { .. })));
     }
 
     #[test]
@@ -1036,10 +1033,7 @@ mod tests {
 
         // Load should fail
         let result = store.load_skill("to-remove");
-        assert!(matches!(
-            result,
-            Err(SkillStoreError::SkillNotFound { .. })
-        ));
+        assert!(matches!(result, Err(SkillStoreError::SkillNotFound { .. })));
     }
 
     #[test]

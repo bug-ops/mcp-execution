@@ -37,7 +37,7 @@ pub enum SkillStoreError {
     ///
     /// This error occurs when attempting to save a skill with a server name
     /// that already has a skill saved. To overwrite, remove the existing
-    /// plugin first.
+    /// skill first.
     ///
     /// # Examples
     ///
@@ -91,7 +91,7 @@ pub enum SkillStoreError {
         actual: String,
     },
 
-    /// Plugin metadata is invalid or malformed.
+    /// Skill metadata is invalid or malformed.
     ///
     /// This error occurs when `skill.json` cannot be parsed or contains
     /// invalid data (e.g., missing required fields, invalid format version).
