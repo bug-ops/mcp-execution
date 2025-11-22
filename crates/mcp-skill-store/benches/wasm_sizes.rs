@@ -6,8 +6,8 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mcp_plugin_store::checksum::calculate_checksum;
-use mcp_plugin_store::{PluginStore, ServerInfo};
+use mcp_skill_store::checksum::calculate_checksum;
+use mcp_skill_store::{ServerInfo, SkillStore};
 use mcp_vfs::VfsBuilder;
 use std::hint::black_box;
 use tempfile::TempDir;
@@ -59,7 +59,7 @@ fn bench_wasm_save(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(size_mb), &size_mb, |b, _| {
             let temp = TempDir::new().unwrap();
-            let store = PluginStore::new(temp.path()).unwrap();
+            let store = SkillStore::new(temp.path()).unwrap();
 
             let server_info = ServerInfo {
                 name: format!("wasm-bench-{size_mb}mb"),
@@ -71,7 +71,7 @@ fn bench_wasm_save(c: &mut Criterion) {
             b.iter(|| {
                 let server_name = format!("wasm-{size_mb}mb-{iteration}");
                 store
-                    .save_plugin(
+                    .save_skill(
                         &server_name,
                         black_box(&vfs),
                         black_box(&wasm),
@@ -80,7 +80,7 @@ fn bench_wasm_save(c: &mut Criterion) {
                     )
                     .unwrap();
 
-                store.remove_plugin(&server_name).unwrap();
+                store.remove_skill(&server_name).unwrap();
                 iteration += 1;
             });
         });
@@ -103,7 +103,7 @@ fn bench_wasm_load(c: &mut Criterion) {
 
         // Setup: Create plugin once
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let server_info = ServerInfo {
             name: format!("wasm-load-{size_mb}mb"),
@@ -113,12 +113,12 @@ fn bench_wasm_load(c: &mut Criterion) {
 
         let server_name = format!("wasm-load-{size_mb}mb");
         store
-            .save_plugin(&server_name, &vfs, &wasm, server_info, vec![])
+            .save_skill(&server_name, &vfs, &wasm, server_info, vec![])
             .unwrap();
 
         group.bench_with_input(BenchmarkId::from_parameter(size_mb), &size_mb, |b, _| {
             b.iter(|| {
-                let plugin = store.load_plugin(black_box(&server_name)).unwrap();
+                let plugin = store.load_skill(black_box(&server_name)).unwrap();
                 black_box(plugin);
             });
         });

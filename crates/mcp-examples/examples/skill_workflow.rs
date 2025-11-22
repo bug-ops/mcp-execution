@@ -3,10 +3,10 @@
 //! Demonstrates end-to-end skill lifecycle:
 //! 1. Create skill data (simulating code generation)
 //! 2. Save as a reusable skill with checksums
-//! 3. List available plugins
+//! 3. List available skills
 //! 4. Load skill from disk with integrity verification
 //! 5. Verify all checksums match
-//! 6. Remove plugin
+//! 6. Remove skill
 //!
 //! Run with: cargo run --example `skill_workflow`
 
@@ -115,12 +115,12 @@ async fn main() -> Result<()> {
     println!("  ✓ WASM module created ({} bytes)", wasm_module.len());
 
     // 5. Save skill to disk
-    println!("\n💾 Step 4: Saving plugin...");
+    println!("\n💾 Step 4: Saving skill...");
     let store = SkillStore::new(&skill_dir).context("failed to create skill store")?;
 
     let metadata = store
-        .save_plugin(server_name, &vfs, &wasm_module, server_info, tools.clone())
-        .context("failed to save plugin")?;
+        .save_skill(server_name, &vfs, &wasm_module, server_info, tools.clone())
+        .context("failed to save skill")?;
 
     println!("  ✓ Skill saved: {server_name}");
     println!("  ✓ Format version: {}", metadata.format_version);
@@ -132,21 +132,21 @@ async fn main() -> Result<()> {
         metadata.checksums.generated.len()
     );
 
-    // 6. List available plugins
-    println!("\n📋 Step 5: Listing plugins...");
-    let plugins = store.list_plugins().context("failed to list plugins")?;
-    println!("  ✓ Found {} plugin(s)", plugins.len());
-    for skill_info in &plugins {
+    // 6. List available skills
+    println!("\n📋 Step 5: Listing skills...");
+    let skills = store.list_skills().context("failed to list skills")?;
+    println!("  ✓ Found {} skill(s)", skills.len());
+    for skill_info in &skills {
         println!("    - {} v{}", skill_info.server_name, skill_info.version);
         println!("      Tools: {}", skill_info.tool_count);
         println!("      Generated: {}", skill_info.generated_at);
     }
 
     // 7. Load skill from disk
-    println!("\n📦 Step 6: Loading plugin...");
+    println!("\n📦 Step 6: Loading skill...");
     let loaded = store
-        .load_plugin(server_name)
-        .context("failed to load plugin")?;
+        .load_skill(server_name)
+        .context("failed to load skill")?;
 
     println!("  ✓ Skill loaded successfully");
     println!(
@@ -228,11 +228,11 @@ async fn main() -> Result<()> {
     );
     println!("  ✓ Existence checks passed");
 
-    // 11. Remove plugin
-    println!("\n🗑️  Step 10: Removing plugin...");
+    // 11. Remove skill
+    println!("\n🗑️  Step 10: Removing skill...");
     store
-        .remove_plugin(server_name)
-        .context("failed to remove plugin")?;
+        .remove_skill(server_name)
+        .context("failed to remove skill")?;
     println!("  ✓ Skill removed: {server_name}");
 
     // 12. Verify removal
@@ -243,14 +243,14 @@ async fn main() -> Result<()> {
             .context("skill_exists failed")?,
         "Skill should not exist after removal"
     );
-    let removed_list = store.list_plugins().context("failed to list plugins")?;
+    let removed_list = store.list_skills().context("failed to list skills")?;
     assert!(removed_list.is_empty(), "Skill list should be empty");
     println!("  ✓ Skill successfully removed");
     println!("  ✓ Skill directory cleaned up");
 
     // 13. Try to load removed skill (should fail)
     println!("\n🔍 Step 12: Confirming skill is gone...");
-    let load_result = store.load_plugin(server_name);
+    let load_result = store.load_skill(server_name);
     assert!(load_result.is_err(), "Loading removed skill should fail");
     println!("  ✓ Loading removed skill correctly fails");
 

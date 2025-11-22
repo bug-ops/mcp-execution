@@ -168,14 +168,14 @@ struct RemoveResult {
 /// ```
 pub async fn run(action: SkillAction, output_format: OutputFormat) -> Result<ExitCode> {
     match action {
-        SkillAction::Load { name, skill_dir } => load_plugin(&name, &skill_dir, output_format),
-        SkillAction::List { skill_dir } => list_plugins(&skill_dir, output_format),
+        SkillAction::Load { name, skill_dir } => load_skill(&name, &skill_dir, output_format),
+        SkillAction::List { skill_dir } => list_skills(&skill_dir, output_format),
         SkillAction::Remove {
             name,
             skill_dir,
             yes,
-        } => remove_plugin(&name, &skill_dir, yes, output_format),
-        SkillAction::Info { name, skill_dir } => show_plugin_info(&name, &skill_dir, output_format),
+        } => remove_skill(&name, &skill_dir, yes, output_format),
+        SkillAction::Info { name, skill_dir } => show_skill_info(&name, &skill_dir, output_format),
     }
 }
 
@@ -184,7 +184,7 @@ pub async fn run(action: SkillAction, output_format: OutputFormat) -> Result<Exi
 /// # Errors
 ///
 /// Returns an error if the plugin doesn't exist or fails checksum verification.
-pub fn load_plugin(
+pub fn load_skill(
     name: &str,
     skill_dir: &PathBuf,
     output_format: OutputFormat,
@@ -221,7 +221,7 @@ pub fn load_plugin(
 /// # Errors
 ///
 /// Returns an error if the skill directory cannot be read.
-pub fn list_plugins(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
+pub fn list_skills(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
     info!("Listing plugins in: {}", skill_dir.display());
 
     let store = SkillStore::new(&skill_dir).context("failed to initialize skill store")?;
@@ -261,7 +261,7 @@ pub fn list_plugins(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<
 /// # Errors
 ///
 /// Returns an error if the plugin doesn't exist or cannot be removed.
-pub fn remove_plugin(
+pub fn remove_skill(
     name: &str,
     skill_dir: &PathBuf,
     yes: bool,
@@ -314,7 +314,7 @@ pub fn remove_plugin(
 /// # Errors
 ///
 /// Returns an error if the plugin doesn't exist or cannot be loaded.
-pub fn show_plugin_info(
+pub fn show_skill_info(
     name: &str,
     skill_dir: &PathBuf,
     output_format: OutputFormat,
@@ -377,9 +377,9 @@ mod tests {
     #[test]
     fn test_list_result_serialization() {
         let result = ListResult {
-            skill_dir: "./plugins".to_string(),
+            skill_dir: "./skills".to_string(),
             skill_count: 2,
-            plugins: vec![
+            skills: vec![
                 SkillSummary {
                     name: "plugin1".to_string(),
                     version: "1.0.0".to_string(),
