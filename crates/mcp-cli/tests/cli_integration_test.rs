@@ -1,7 +1,23 @@
 //! Integration tests for CLI skill generation workflow.
 
 use std::env;
+use std::path::Path;
 use tempfile::TempDir;
+
+/// Sets home directory for testing in a cross-platform way.
+/// On Unix: sets HOME
+/// On Windows: sets USERPROFILE
+///
+/// # Safety
+///
+/// This function uses `env::set_var` which is unsafe in multi-threaded context.
+unsafe fn set_test_home(path: &Path) {
+    unsafe {
+        env::set_var("HOME", path);
+        #[cfg(windows)]
+        env::set_var("USERPROFILE", path);
+    }
+}
 
 /// Tests that CLI parsing works for generate command with all arguments.
 #[test]
@@ -58,7 +74,7 @@ fn test_skill_store_directory_creation() {
     // Create temporary directory for testing
     let temp_dir = TempDir::new().unwrap();
     unsafe {
-        env::set_var("HOME", temp_dir.path());
+        set_test_home(temp_dir.path());
     }
 
     // Create skill store (should create .claude/skills)
@@ -76,7 +92,7 @@ fn test_list_empty_skills() {
 
     let temp_dir = TempDir::new().unwrap();
     unsafe {
-        env::set_var("HOME", temp_dir.path());
+        set_test_home(temp_dir.path());
     }
 
     let store = SkillStore::new_claude().unwrap();
@@ -92,7 +108,7 @@ fn test_skill_exists_check() {
 
     let temp_dir = TempDir::new().unwrap();
     unsafe {
-        env::set_var("HOME", temp_dir.path());
+        set_test_home(temp_dir.path());
     }
 
     let skill_name = SkillName::new("nonexistent").unwrap();

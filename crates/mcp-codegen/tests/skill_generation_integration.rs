@@ -91,34 +91,36 @@ fn test_full_skill_generation_pipeline() {
     // 5. Render to SKILL.md
     let engine = TemplateEngine::new().unwrap();
     let skill_md = render_skill_md(&engine, &skill_data).unwrap();
+    // Normalize line endings for cross-platform compatibility
+    let normalized = skill_md.replace("\r\n", "\n");
 
     // 6. Verify SKILL.md output
     assert!(
-        skill_md.starts_with("---\n"),
+        normalized.starts_with("---\n"),
         "Should start with YAML frontmatter"
     );
     assert!(
-        skill_md.contains("name: test-skill"),
+        normalized.contains("name: test-skill"),
         "Should contain skill name"
     );
     assert!(
-        skill_md.contains("description: |"),
+        normalized.contains("description: |"),
         "Should contain description field"
     );
     assert!(
-        skill_md.contains("Test skill for MCP server integration"),
+        normalized.contains("Test skill for MCP server integration"),
         "Should contain description text"
     );
     assert!(
-        skill_md.contains("## Available Tools"),
+        normalized.contains("## Available Tools"),
         "Should have tools section"
     );
     assert!(
-        skill_md.contains("send_message"),
+        normalized.contains("send_message"),
         "Should list send_message tool"
     );
     assert!(
-        skill_md.contains("get_chat_info"),
+        normalized.contains("get_chat_info"),
         "Should list get_chat_info tool"
     );
 
@@ -358,10 +360,12 @@ fn test_pipeline_yaml_frontmatter_format() {
 
     let engine = TemplateEngine::new().unwrap();
     let skill_md = render_skill_md(&engine, &skill_data).unwrap();
+    // Normalize line endings for cross-platform compatibility
+    let normalized = skill_md.replace("\r\n", "\n");
 
     // Verify YAML frontmatter structure
-    assert!(skill_md.starts_with("---\n"));
-    let lines: Vec<&str> = skill_md.lines().collect();
+    assert!(normalized.starts_with("---\n"));
+    let lines: Vec<&str> = normalized.lines().collect();
 
     // Find the closing --- (skip the first one at index 0)
     let frontmatter_end = lines

@@ -80,16 +80,18 @@ fn test_skill_md_renders_yaml_frontmatter() {
     let data = create_test_data();
 
     let rendered = render_skill_md(&engine, &data).expect("Failed to render SKILL.md");
+    // Normalize line endings for cross-platform compatibility
+    let normalized = rendered.replace("\r\n", "\n");
 
     // Must start with YAML frontmatter
     assert!(
-        rendered.starts_with("---\n"),
+        normalized.starts_with("---\n"),
         "SKILL.md must start with YAML frontmatter"
     );
 
     // Must have closing frontmatter
     assert!(
-        rendered.contains("\n---\n"),
+        normalized.contains("\n---\n"),
         "SKILL.md must have closing YAML frontmatter"
     );
 }
