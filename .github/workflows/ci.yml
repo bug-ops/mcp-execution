@@ -70,25 +70,37 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-
       - name: Check security advisories
-        run: cargo deny check advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warn
+          command: check
+          arguments: --all-features
+          command-arguments: advisories
 
       - name: Check licenses
-        run: cargo deny check licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warn
+          command: check
+          arguments: --all-features
+          command-arguments: licenses
 
       - name: Check banned dependencies
-        run: cargo deny check bans
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warn
+          command: check
+          arguments: --all-features
+          command-arguments: bans
 
       - name: Check sources
-        run: cargo deny check sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          log-level: warn
+          command: check
+          arguments: --all-features
+          command-arguments: sources
 
   # Cross-platform tests with matrix
   test:
