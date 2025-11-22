@@ -1,23 +1,6 @@
 //! Integration tests for CLI skill generation workflow.
 
-use std::env;
-use std::path::Path;
 use tempfile::TempDir;
-
-/// Sets home directory for testing in a cross-platform way.
-/// On Unix: sets HOME
-/// On Windows: sets USERPROFILE
-///
-/// # Safety
-///
-/// This function uses `env::set_var` which is unsafe in multi-threaded context.
-unsafe fn set_test_home(path: &Path) {
-    unsafe {
-        env::set_var("HOME", path);
-        #[cfg(windows)]
-        env::set_var("USERPROFILE", path);
-    }
-}
 
 /// Tests that CLI parsing works for generate command with all arguments.
 #[test]
@@ -73,15 +56,13 @@ fn test_skill_store_directory_creation() {
 
     // Create temporary directory for testing
     let temp_dir = TempDir::new().unwrap();
-    unsafe {
-        set_test_home(temp_dir.path());
-    }
+    let skill_dir = temp_dir.path().join(".claude/skills");
 
     // Create skill store (should create .claude/skills)
-    let _store = SkillStore::new_claude().unwrap();
+    // Note: On Windows, dirs::home_dir() doesn't use env vars, so we pass the path directly
+    let _store = SkillStore::new(&skill_dir).unwrap();
 
-    // Verify directory exists by checking the expected path
-    let skill_dir = temp_dir.path().join(".claude/skills");
+    // Verify directory exists
     assert!(skill_dir.exists());
 }
 
@@ -91,11 +72,9 @@ fn test_list_empty_skills() {
     use mcp_skill_store::SkillStore;
 
     let temp_dir = TempDir::new().unwrap();
-    unsafe {
-        set_test_home(temp_dir.path());
-    }
+    let skill_dir = temp_dir.path().join(".claude/skills");
 
-    let store = SkillStore::new_claude().unwrap();
+    let store = SkillStore::new(&skill_dir).unwrap();
     let skills = store.list_claude_skills().unwrap();
 
     assert_eq!(skills.len(), 0);
@@ -107,10 +86,6 @@ fn test_skill_exists_check() {
     use mcp_core::SkillName;
 
     let temp_dir = TempDir::new().unwrap();
-    unsafe {
-        set_test_home(temp_dir.path());
-    }
-
     let skill_name = SkillName::new("nonexistent").unwrap();
     let skill_path = temp_dir
         .path()
