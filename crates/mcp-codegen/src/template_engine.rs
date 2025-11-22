@@ -122,9 +122,29 @@ impl<'a> TemplateEngine<'a> {
 
     /// Registers Skills-specific templates.
     #[cfg(feature = "skills")]
-    fn register_skills_templates(_handlebars: &mut Handlebars<'a>) -> Result<()> {
-        // Placeholder for future Skills templates
-        // TODO: Implement Skills template registration
+    fn register_skills_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
+        // Claude skill template: generates SKILL.md with YAML frontmatter
+        handlebars
+            .register_template_string(
+                "claude_skill",
+                include_str!("../templates/claude/skill.md.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register Claude skill template: {}", e),
+                source: None,
+            })?;
+
+        // Claude reference template: generates REFERENCE.md with detailed API docs
+        handlebars
+            .register_template_string(
+                "claude_reference",
+                include_str!("../templates/claude/reference.md.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register Claude reference template: {}", e),
+                source: None,
+            })?;
+
         Ok(())
     }
 

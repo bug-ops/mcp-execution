@@ -5,70 +5,54 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
+use mcp_core::SkillName;
 use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_skill_store::SkillStore;
 use serde::Serialize;
-use std::path::PathBuf;
 use tracing::{info, warn};
 
-/// Plugin management actions.
+/// Skill management actions.
 #[derive(Subcommand, Debug)]
 pub enum SkillAction {
-    /// Load a skill from disk
+    /// Load a Claude skill from disk
     Load {
-        /// Skill name (server name)
+        /// Skill name
         name: String,
-
-        /// Skill directory (defaults to ./skills)
-        #[arg(long, default_value = "./skills")]
-        skill_dir: PathBuf,
     },
 
-    /// List available skills
-    List {
-        /// Skill directory
-        #[arg(long, default_value = "./skills")]
-        skill_dir: PathBuf,
-    },
+    /// List available Claude skills
+    List,
 
-    /// Remove a skill
+    /// Remove a Claude skill
     Remove {
         /// Skill name
         name: String,
-
-        /// Skill directory
-        #[arg(long, default_value = "./skills")]
-        skill_dir: PathBuf,
 
         /// Skip confirmation
         #[arg(short = 'y', long)]
         yes: bool,
     },
 
-    /// Show skill information
+    /// Show Claude skill information
     Info {
         /// Skill name
         name: String,
-
-        /// Skill directory
-        #[arg(long, default_value = "./skills")]
-        skill_dir: PathBuf,
     },
 }
 
-/// Result of loading a skill.
+/// Result of loading a Claude skill.
 #[derive(Debug, Serialize)]
 struct LoadResult {
     /// Skill name
     name: String,
-    /// Server version
-    version: String,
+    /// Server name
+    server_name: String,
     /// Number of tools
     tool_count: usize,
-    /// Number of VFS files
-    file_count: usize,
-    /// WASM module size in bytes
-    wasm_size: usize,
+    /// Skill file size
+    skill_md_size: usize,
+    /// Reference file size
+    reference_md_size: usize,
 }
 
 /// Result of listing skills.
@@ -154,12 +138,9 @@ struct RemoveResult {
 /// ```no_run
 /// use mcp_cli::commands::skill::{SkillAction, run};
 /// use mcp_core::cli::{ExitCode, OutputFormat};
-/// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
-/// let action = SkillAction::List {
-///     skill_dir: PathBuf::from("./skills"),
-/// };
+/// let action = SkillAction::List;
 ///
 /// let result = run(action, OutputFormat::Pretty).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);
@@ -168,65 +149,65 @@ struct RemoveResult {
 /// ```
 pub async fn run(action: SkillAction, output_format: OutputFormat) -> Result<ExitCode> {
     match action {
-        SkillAction::Load { name, skill_dir } => load_skill(&name, &skill_dir, output_format),
-        SkillAction::List { skill_dir } => list_skills(&skill_dir, output_format),
-        SkillAction::Remove {
-            name,
-            skill_dir,
-            yes,
-        } => remove_skill(&name, &skill_dir, yes, output_format),
-        SkillAction::Info { name, skill_dir } => show_skill_info(&name, &skill_dir, output_format),
+        SkillAction::Load { name } => load_skill(&name, output_format),
+        SkillAction::List => list_skills(output_format),
+        SkillAction::Remove { name, yes } => remove_skill(&name, yes, output_format),
+        SkillAction::Info { name } => show_skill_info(&name, output_format),
     }
 }
 
-/// Loads a skill from disk.
+/// Loads a Claude skill from disk.
 ///
 /// # Errors
 ///
 /// Returns an error if the skill doesn't exist or fails checksum verification.
-pub fn load_skill(
-    name: &str,
-    skill_dir: &PathBuf,
-    output_format: OutputFormat,
-) -> Result<ExitCode> {
-    info!("Loading skill: {}", name);
+pub fn load_skill(name: &str, output_format: OutputFormat) -> Result<ExitCode> {
+    info!("Loading Claude skill: {}", name);
 
-    let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
+    let skill_name = SkillName::new(name).context("invalid skill name")?;
+
+    let store = SkillStore::new_claude().context("failed to initialize skill store")?;
 
     let loaded = store
-        .load_skill(name)
+        .load_claude_skill(&skill_name)
         .with_context(|| format!("failed to load skill '{name}'"))?;
 
     let result = LoadResult {
-        name: loaded.metadata.server.name,
-        version: loaded.metadata.server.version,
-        tool_count: loaded.metadata.tools.len(),
-        file_count: loaded.vfs.file_count(),
-        wasm_size: loaded.wasm_module.len(),
+        name: loaded.metadata.skill_name.clone(),
+        server_name: loaded.metadata.server_name.clone(),
+        tool_count: loaded.metadata.tool_count,
+        skill_md_size: loaded.skill_md.len(),
+        reference_md_size: loaded.reference_md.as_ref().map_or(0, String::len),
     };
 
     let formatted = crate::formatters::format_output(&result, output_format)?;
     println!("{formatted}");
 
     info!(
-        "Successfully loaded skill: {} (v{}, {} tools)",
-        result.name, result.version, result.tool_count
+        "Successfully loaded skill: {} ({} tools)",
+        result.name, result.tool_count
     );
 
     Ok(ExitCode::SUCCESS)
 }
 
-/// Lists all available skills.
+/// Lists all available Claude skills.
 ///
 /// # Errors
 ///
 /// Returns an error if the skill directory cannot be read.
-pub fn list_skills(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
-    info!("Listing skills in: {}", skill_dir.display());
+pub fn list_skills(output_format: OutputFormat) -> Result<ExitCode> {
+    let store = SkillStore::new_claude().context("failed to initialize skill store")?;
 
-    let store = SkillStore::new(&skill_dir).context("failed to initialize skill store")?;
+    // Get skill directory from HOME/.claude/skills
+    let home = dirs::home_dir().context("failed to get home directory")?;
+    let skill_dir = home.join(".claude/skills");
 
-    let skills = store.list_skills().context("failed to list skills")?;
+    info!("Listing Claude skills in: {}", skill_dir.display());
+
+    let skills = store
+        .list_claude_skills()
+        .context("failed to list skills")?;
 
     if skills.is_empty() {
         warn!("No skills found in {}", skill_dir.display());
@@ -235,8 +216,8 @@ pub fn list_skills(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<E
     let summaries: Vec<SkillSummary> = skills
         .iter()
         .map(|p| SkillSummary {
-            name: p.server_name.clone(),
-            version: p.version.clone(),
+            name: p.skill_name.clone(),
+            version: p.server_version.clone(),
             tool_count: p.tool_count,
             generated_at: p.generated_at.to_rfc3339(),
         })
@@ -256,23 +237,22 @@ pub fn list_skills(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<E
     Ok(ExitCode::SUCCESS)
 }
 
-/// Removes a skill from disk.
+/// Removes a Claude skill from disk.
 ///
 /// # Errors
 ///
 /// Returns an error if the skill doesn't exist or cannot be removed.
-pub fn remove_skill(
-    name: &str,
-    skill_dir: &PathBuf,
-    yes: bool,
-    output_format: OutputFormat,
-) -> Result<ExitCode> {
-    info!("Removing skill: {}", name);
+pub fn remove_skill(name: &str, yes: bool, output_format: OutputFormat) -> Result<ExitCode> {
+    info!("Removing Claude skill: {}", name);
 
-    let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
+    let skill_name = SkillName::new(name).context("invalid skill name")?;
 
-    // Check if skill exists
-    if !store.skill_exists(name)? {
+    let store = SkillStore::new_claude().context("failed to initialize skill store")?;
+
+    // Check if skill exists by checking the directory
+    let home = dirs::home_dir().context("failed to get home directory")?;
+    let skill_path = home.join(".claude/skills").join(skill_name.as_str());
+    if !skill_path.exists() {
         bail!("skill '{name}' not found");
     }
 
@@ -293,7 +273,7 @@ pub fn remove_skill(
     }
 
     store
-        .remove_skill(name)
+        .remove_claude_skill(&skill_name)
         .with_context(|| format!("failed to remove skill '{name}'"))?;
 
     let result = RemoveResult {
@@ -309,43 +289,35 @@ pub fn remove_skill(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Shows detailed information about a skill.
+/// Shows detailed information about a Claude skill.
 ///
 /// # Errors
 ///
 /// Returns an error if the skill doesn't exist or cannot be loaded.
-pub fn show_skill_info(
-    name: &str,
-    skill_dir: &PathBuf,
-    output_format: OutputFormat,
-) -> Result<ExitCode> {
-    info!("Showing info for skill: {}", name);
+pub fn show_skill_info(name: &str, output_format: OutputFormat) -> Result<ExitCode> {
+    info!("Showing info for Claude skill: {}", name);
 
-    let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
+    let skill_name = SkillName::new(name).context("invalid skill name")?;
+
+    let store = SkillStore::new_claude().context("failed to initialize skill store")?;
 
     let loaded = store
-        .load_skill(name)
+        .load_claude_skill(&skill_name)
         .with_context(|| format!("failed to load skill '{name}'"))?;
 
-    let tools: Vec<ToolSummary> = loaded
-        .metadata
-        .tools
-        .iter()
-        .map(|t| ToolSummary {
-            name: t.name.clone(),
-            description: t.description.clone(),
-        })
-        .collect();
+    // Parse tools from skill data if available (for detailed view)
+    // For now, we don't have individual tool data in metadata, so show empty list
+    let tools: Vec<ToolSummary> = vec![];
 
     let result = InfoResult {
-        name: loaded.metadata.server.name,
-        version: loaded.metadata.server.version,
-        protocol_version: loaded.metadata.server.protocol_version,
+        name: loaded.metadata.skill_name,
+        version: loaded.metadata.server_version,
+        protocol_version: loaded.metadata.protocol_version,
         generated_at: loaded.metadata.generated_at.to_rfc3339(),
         generator_version: loaded.metadata.generator_version,
-        tool_count: loaded.metadata.tools.len(),
-        file_count: loaded.vfs.file_count(),
-        wasm_size: loaded.wasm_module.len(),
+        tool_count: loaded.metadata.tool_count,
+        file_count: 2, // SKILL.md and REFERENCE.md
+        wasm_size: 0,  // No WASM in Claude format
         tools,
     };
 
@@ -362,16 +334,17 @@ mod tests {
     #[test]
     fn test_load_result_serialization() {
         let result = LoadResult {
-            name: "test-server".to_string(),
-            version: "1.0.0".to_string(),
+            name: "test-skill".to_string(),
+            server_name: "test-server".to_string(),
             tool_count: 5,
-            file_count: 10,
-            wasm_size: 1024,
+            skill_md_size: 1024,
+            reference_md_size: 2048,
         };
 
         let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("test-skill"));
         assert!(json.contains("test-server"));
-        assert!(json.contains("1.0.0"));
+        assert!(json.contains('5'));
     }
 
     #[test]

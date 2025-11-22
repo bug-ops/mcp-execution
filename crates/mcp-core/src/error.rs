@@ -142,6 +142,30 @@ pub enum Error {
     /// Raised when CLI arguments or function parameters are invalid.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// Validation error for domain types.
+    ///
+    /// Raised when creating or validating domain types like `SkillName`,
+    /// `SkillDescription`, etc. that have specific format requirements.
+    #[error("Validation error in {field}: {reason}")]
+    ValidationError {
+        /// The field that failed validation
+        field: String,
+        /// Detailed reason for the validation failure
+        reason: String,
+    },
+
+    /// Reserved word detected in skill name.
+    ///
+    /// Raised when a skill name contains forbidden reserved words
+    /// like "anthropic" or "claude" (case-insensitive).
+    #[error("Reserved word '{reserved_word}' detected in skill name: {name}")]
+    ReservedWord {
+        /// The attempted skill name
+        name: String,
+        /// The reserved word that was detected
+        reserved_word: String,
+    },
 }
 
 impl Error {
@@ -265,6 +289,42 @@ impl Error {
     #[must_use]
     pub const fn is_wasm_error(&self) -> bool {
         matches!(self, Self::WasmError { .. })
+    }
+
+    /// Returns `true` if this is a validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::Error;
+    ///
+    /// let err = Error::ValidationError {
+    ///     field: "skill_name".to_string(),
+    ///     reason: "Invalid characters".to_string(),
+    /// };
+    /// assert!(err.is_validation_error());
+    /// ```
+    #[must_use]
+    pub const fn is_validation_error(&self) -> bool {
+        matches!(self, Self::ValidationError { .. })
+    }
+
+    /// Returns `true` if this is a reserved word error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::Error;
+    ///
+    /// let err = Error::ReservedWord {
+    ///     name: "anthropic-skill".to_string(),
+    ///     reserved_word: "anthropic".to_string(),
+    /// };
+    /// assert!(err.is_reserved_word_error());
+    /// ```
+    #[must_use]
+    pub const fn is_reserved_word_error(&self) -> bool {
+        matches!(self, Self::ReservedWord { .. })
     }
 }
 

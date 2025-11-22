@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 blake3.workspace = true
 chrono = { workspace = true, features = ["serde"] }
+dirs.workspace = true
+mcp-codegen = { workspace = true, features = ["skills"] }
 mcp-core.workspace = true
 mcp-vfs.workspace = true
 secrecy.workspace = true

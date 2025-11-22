@@ -1,81 +1,76 @@
 //! Generate command implementation.
 //!
-//! Generates code from MCP server tool definitions using a two-step process:
-//! 1. Introspect the server to discover tools and schemas
-//! 2. Generate TypeScript/Rust code using the codegen library
+//! Generates Claude skills from MCP server tool definitions.
+//! This command:
+//! 1. Introspects the server to discover tools and schemas
+//! 2. Prompts user for skill name and description
+//! 3. Converts to `SkillData` and renders templates
+//! 4. Saves skill to `.claude/skills/` directory
 
 use anyhow::{Context, Result, bail};
-use mcp_codegen::CodeGenerator;
-use mcp_core::ServerId;
+use mcp_codegen::TemplateEngine;
+use mcp_codegen::skills::claude::{render_reference_md, render_skill_md};
+use mcp_codegen::skills::converter::SkillConverter;
 use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
+use mcp_core::{ServerId, SkillDescription, SkillName};
 use mcp_introspector::Introspector;
-use mcp_skill_store::{ServerInfo, SkillStore, ToolInfo};
-use mcp_vfs::VfsBuilder;
+use mcp_skill_store::SkillStore;
 use serde::Serialize;
-use std::path::PathBuf;
-use tokio::fs;
 use tracing::{info, warn};
 
-/// Result of code generation.
+/// Result of Claude skill generation.
 #[derive(Debug, Serialize)]
 struct GenerationResult {
-    /// Server connection string
-    server: String,
-    /// Output directory path
-    output_dir: String,
-    /// Feature mode used (wasm or skills)
-    feature_mode: String,
-    /// Number of files created
-    files_created: usize,
-    /// Total lines of code generated
-    total_lines: usize,
-    /// Skill saved location (if --save-skill was used)
-    skill_saved: Option<String>,
+    /// Skill name
+    skill_name: String,
+    /// Server name
+    server_name: String,
+    /// Number of tools in skill
+    tool_count: usize,
+    /// Path where skill was saved
+    skill_path: String,
 }
 
 /// Runs the generate command.
 ///
-/// Introspects a server and generates code for tool execution.
+/// Generates a Claude skill from an MCP server.
 ///
-/// This command performs a two-step process:
-/// 1. Uses `mcp-introspector` to connect to the server and discover tools
-/// 2. Uses `mcp-codegen` to generate TypeScript/Rust code from the schemas
+/// This command performs the following steps:
+/// 1. Introspects the MCP server to discover tools
+/// 2. Prompts user for skill name and description (or uses CLI args)
+/// 3. Converts server info to `SkillData`
+/// 4. Renders `SKILL.md` and `REFERENCE.md` templates
+/// 5. Saves skill to `.claude/skills/` directory
 ///
 /// # Arguments
 ///
-/// * `server` - Server connection string or command
-/// * `output` - Optional output directory (defaults to "./generated")
-/// * `feature` - Code generation feature mode ("wasm" or "skills")
-/// * `force` - Overwrite existing output directory without prompting
-/// * `save_skill` - Save generated code as a skill
-/// * `skill_dir` - Plugin directory for save operations
+/// * `server_name` - MCP server name to introspect
+/// * `server_command` - Optional server command (defaults to `server_name`)
+/// * `skill_name` - Optional skill name (interactive if not provided)
+/// * `skill_description` - Optional skill description (interactive if not provided)
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - Server connection string is invalid
-/// - Feature mode is invalid (not "wasm" or "skills")
-/// - Server introspection fails
-/// - Code generation fails
+/// - Server connection fails
+/// - Server has no tools
+/// - Skill name/description validation fails
+/// - Template rendering fails
 /// - File system operations fail
-/// - Skill save fails (if --save-skill is used)
 ///
 /// # Examples
 ///
 /// ```no_run
 /// use mcp_cli::commands::generate;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
-/// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
 /// let result = generate::run(
 ///     "vkteams-bot".to_string(),
-///     Some(PathBuf::from("./generated")),
-///     "wasm".to_string(),
-///     false,
-///     false,
-///     PathBuf::from("./skills"),
+///     None,
+///     Some("vkteams".to_string()),
+///     Some("VK Teams bot integration".to_string()),
 ///     OutputFormat::Pretty,
 /// ).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);
@@ -83,210 +78,162 @@ struct GenerationResult {
 /// # }
 /// ```
 pub async fn run(
-    server: String,
-    output: Option<PathBuf>,
-    feature: String,
-    force: bool,
-    save_skill: bool,
-    skill_dir: PathBuf,
+    server_name: String,
+    server_command: Option<String>,
+    skill_name_input: Option<String>,
+    skill_description_input: Option<String>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    // Validate inputs
-    info!("Validating inputs");
+    info!("Generating Claude skill for server: {}", server_name);
 
-    // Validate server connection string
+    // Step 1: Introspect MCP server
     let server_conn =
-        ServerConnectionString::new(&server).context("invalid server connection string")?;
+        ServerConnectionString::new(&server_name).context("invalid server connection string")?;
 
-    // Parse feature mode (currently only wasm is implemented)
-    if feature != "wasm" {
-        bail!("invalid feature mode '{feature}' (currently only 'wasm' is supported)");
-    }
-
-    // Determine output directory
-    let output_dir = output.unwrap_or_else(|| PathBuf::from("./generated"));
-
-    // Check for existing files if not force mode
-    if !force && output_dir.exists() {
-        let output_display = output_dir.display();
-        let entries = fs::read_dir(&output_dir)
-            .await
-            .with_context(|| format!("failed to read output directory: {output_display}"))?
-            .next_entry()
-            .await
-            .context("failed to check directory contents")?;
-
-        if entries.is_some() {
-            bail!(
-                "output directory '{output_display}' already exists and is not empty (use --force to overwrite)"
-            );
-        }
-    }
-
-    // Step 1: Introspect server
-    info!("Introspecting server: {server}");
-
-    let mut introspector = Introspector::new();
     let server_id = ServerId::new(server_conn.as_str());
+    let mut introspector = Introspector::new();
 
+    let server_cmd = server_command.as_deref().unwrap_or(server_conn.as_str());
     let server_info = introspector
-        .discover_server(server_id, server_conn.as_str())
+        .discover_server(server_id, server_cmd)
         .await
-        .with_context(|| format!("failed to introspect server '{server}'"))?;
+        .context("failed to introspect MCP server")?;
 
     if server_info.tools.is_empty() {
-        warn!("Server '{server}' has no tools");
-        bail!("no tools found on server '{server}'");
+        warn!("Server '{server_name}' has no tools");
+        bail!("no tools found on server '{server_name}'");
     }
 
-    info!(
-        "Found {} tools on server '{server}'",
-        server_info.tools.len()
-    );
+    info!("Discovered {} tools from server", server_info.tools.len());
 
-    // Step 2: Generate code
-    info!("Generating code with feature mode: {feature}");
-
-    let generator = CodeGenerator::new().context("failed to create code generator")?;
-
-    let generated_code = generator
-        .generate(&server_info)
-        .context("code generation failed")?;
-
-    if generated_code.file_count() == 0 {
-        warn!("No files were generated");
-        bail!("code generation produced no files");
-    }
-
-    info!(
-        "Generated {} files for server '{server}'",
-        generated_code.file_count()
-    );
-
-    // Step 3: Write files to disk
-    let output_display = output_dir.display();
-    info!("Writing files to output directory: {output_display}");
-
-    // Create output directory
-    fs::create_dir_all(&output_dir)
-        .await
-        .with_context(|| format!("failed to create output directory: {output_display}"))?;
-
-    let mut total_lines = 0;
-
-    for file in &generated_code.files {
-        let full_path = output_dir.join(&file.path);
-
-        // Create parent directories if needed
-        if let Some(parent) = full_path.parent() {
-            let parent_display = parent.display();
-            fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("failed to create parent directory: {parent_display}"))?;
-        }
-
-        // Write file
-        let full_path_display = full_path.display();
-        fs::write(&full_path, &file.content)
-            .await
-            .with_context(|| format!("failed to write file: {full_path_display}"))?;
-
-        // Count lines
-        total_lines += file.content.lines().count();
-
-        let file_path = &file.path;
-        info!("Created file: {file_path}");
-    }
-
-    // Step 4: Save skill if requested
-    let skill_saved = if save_skill {
-        info!("Saving skill to: {}", skill_dir.display());
-
-        // For MVP, we use mock WASM since we don't have TypeScript compilation
-        // In production, this would compile the generated TypeScript to WASM
-        let mock_wasm = create_mock_wasm();
-
-        // Create skill store
-        let store = SkillStore::new(&skill_dir).context("failed to initialize skill store")?;
-
-        // Build VFS from generated code
-        let mut vfs_builder = VfsBuilder::new();
-        for file in &generated_code.files {
-            // Convert relative paths to VFS absolute paths (prepend /)
-            let vfs_path = format!("/{}", file.path);
-            vfs_builder = vfs_builder.add_file(&vfs_path, file.content.clone());
-        }
-        let vfs = vfs_builder
-            .build()
-            .context("failed to create VFS from generated code")?;
-
-        // Extract server info from introspection
-        // Note: Using "2024-11-05" as default protocol version for MVP
-        let skill_server_info = ServerInfo {
-            name: server.clone(),
-            version: server_info.version.clone(),
-            protocol_version: "2024-11-05".to_string(),
-        };
-
-        // Extract tool info
-        let tool_info: Vec<ToolInfo> = server_info
-            .tools
-            .iter()
-            .map(|t| ToolInfo {
-                name: t.name.to_string(),
-                description: t.description.clone(),
-            })
-            .collect();
-
-        // Save skill
-        store
-            .save_skill(&server, &vfs, &mock_wasm, skill_server_info, tool_info)
-            .with_context(|| format!("failed to save skill for server '{server}'"))?;
-
-        let skill_path = store.skill_path(&server);
-        info!("Skill saved to: {}", skill_path.display());
-
-        Some(skill_path.display().to_string())
+    // Step 2: Get skill metadata (interactive or from CLI args)
+    let skill_name = if let Some(name) = skill_name_input {
+        SkillName::new(&name).context("invalid skill name")?
     } else {
-        None
+        prompt_skill_name(&server_name)?
     };
 
-    // Build result
+    let skill_description = if let Some(desc) = skill_description_input {
+        SkillDescription::new(&desc).context("invalid skill description")?
+    } else {
+        prompt_skill_description(&server_name, &server_info)?
+    };
+
+    info!("Creating skill: {}", skill_name.as_str());
+
+    // Step 3: Convert to SkillData
+    let skill_data = SkillConverter::convert(&server_info, &skill_name, &skill_description)
+        .context("failed to convert server info to skill data")?;
+
+    // Step 4: Render templates
+    let engine = TemplateEngine::new().context("failed to create template engine")?;
+    let skill_md = render_skill_md(&engine, &skill_data).context("failed to render SKILL.md")?;
+    let reference_md =
+        render_reference_md(&engine, &skill_data).context("failed to render REFERENCE.md")?;
+
+    info!("Generated SKILL.md ({} bytes)", skill_md.len());
+    info!("Generated REFERENCE.md ({} bytes)", reference_md.len());
+
+    // Step 5: Save to .claude/skills/
+    let store = SkillStore::new_claude().context("failed to initialize skill store")?;
+    store
+        .save_claude_skill(&skill_name, &skill_md, &reference_md, &skill_data)
+        .context("failed to save Claude skill")?;
+
+    // Get skill path from HOME/.claude/skills/skill-name
+    let home = dirs::home_dir().context("failed to get home directory")?;
+    let skill_path = home.join(".claude/skills").join(skill_name.as_str());
+    info!("Skill saved to: {}", skill_path.display());
+
+    // Step 6: Output success message
     let result = GenerationResult {
-        server: server.clone(),
-        output_dir: output_dir.display().to_string(),
-        feature_mode: feature.clone(),
-        files_created: generated_code.file_count(),
-        total_lines,
-        skill_saved: skill_saved.clone(),
+        skill_name: skill_name.to_string(),
+        server_name: server_info.name,
+        tool_count: server_info.tools.len(),
+        skill_path: skill_path.display().to_string(),
     };
 
-    // Format and display result
     let formatted = crate::formatters::format_output(&result, output_format)?;
     println!("{formatted}");
 
     info!(
-        "Successfully generated {} files ({} lines) in {}",
-        result.files_created, result.total_lines, result.output_dir
+        "Successfully created skill '{}' with {} tools",
+        result.skill_name, result.tool_count
     );
-
-    if let Some(skill_path) = skill_saved {
-        info!("Skill saved to: {}", skill_path);
-    }
 
     Ok(ExitCode::SUCCESS)
 }
 
-/// Creates a mock WASM module for MVP.
+/// Prompts user for skill name interactively.
 ///
-/// In production, this would compile the generated TypeScript to WASM.
-/// For now, we use a minimal valid WASM module.
-fn create_mock_wasm() -> Vec<u8> {
-    // WASM magic number + version
-    vec![
-        0x00, 0x61, 0x73, 0x6D, // magic: \0asm
-        0x01, 0x00, 0x00, 0x00, // version: 1
-    ]
+/// Generates a sensible default from the server name by:
+/// - Removing common suffixes (-server, -bot)
+/// - Converting to lowercase
+/// - Replacing underscores with hyphens
+///
+/// # Errors
+///
+/// Returns an error if user input cannot be read or validation fails repeatedly.
+fn prompt_skill_name(server_name: &str) -> Result<SkillName> {
+    use dialoguer::Input;
+
+    let default_name = server_name
+        .trim_end_matches("-server")
+        .trim_end_matches("-bot")
+        .to_lowercase()
+        .replace('_', "-");
+
+    loop {
+        let input: String = Input::new()
+            .with_prompt("Skill name (lowercase, alphanumeric, hyphens)")
+            .default(default_name.clone())
+            .interact()
+            .context("failed to read user input")?;
+
+        match SkillName::new(&input) {
+            Ok(name) => return Ok(name),
+            Err(e) => {
+                eprintln!("Invalid skill name: {e}");
+                eprintln!("Requirements: 1-64 chars, [a-z0-9-_], start with letter");
+            }
+        }
+    }
+}
+
+/// Prompts user for skill description interactively.
+///
+/// Generates a default description from server metadata.
+///
+/// # Errors
+///
+/// Returns an error if user input cannot be read or validation fails repeatedly.
+fn prompt_skill_description(
+    server_name: &str,
+    server_info: &mcp_introspector::ServerInfo,
+) -> Result<SkillDescription> {
+    use dialoguer::Input;
+
+    let default_desc = format!(
+        "Interact with {} MCP server ({} tools available)",
+        server_name,
+        server_info.tools.len()
+    );
+
+    loop {
+        let input: String = Input::new()
+            .with_prompt("Skill description (max 1024 chars, actionable)")
+            .default(default_desc.clone())
+            .interact()
+            .context("failed to read user input")?;
+
+        match SkillDescription::new(&input) {
+            Ok(desc) => return Ok(desc),
+            Err(e) => {
+                eprintln!("Invalid description: {e}");
+                eprintln!("Requirements: max 1024 chars, no XML tags, no reserved words");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -296,70 +243,31 @@ mod tests {
     #[test]
     fn test_generation_result_serialization() {
         let result = GenerationResult {
-            server: "test-server".to_string(),
-            output_dir: "/tmp/generated".to_string(),
-            feature_mode: "wasm".to_string(),
-            files_created: 5,
-            total_lines: 250,
-            skill_saved: None,
+            skill_name: "test-skill".to_string(),
+            server_name: "test-server".to_string(),
+            tool_count: 5,
+            skill_path: "/home/user/.claude/skills/test-skill".to_string(),
         };
 
         let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("test-skill"));
         assert!(json.contains("test-server"));
         assert!(json.contains('5'));
-        assert!(json.contains("250"));
-    }
-
-    #[test]
-    fn test_feature_mode_validation() {
-        // Valid feature mode
-        assert_eq!("wasm", "wasm");
-
-        // Invalid feature modes would be caught by the CLI
-        assert_ne!("invalid", "wasm");
-    }
-
-    #[tokio::test]
-    async fn test_output_directory_default() {
-        let default_path = PathBuf::from("./generated");
-        assert_eq!(default_path.to_str(), Some("./generated"));
-    }
-
-    #[tokio::test]
-    async fn test_output_directory_custom() {
-        let custom_path = Some(PathBuf::from("/tmp/custom"));
-        assert!(custom_path.is_some());
-        assert_eq!(custom_path.unwrap().to_str(), Some("/tmp/custom"));
     }
 
     #[test]
     fn test_generation_result_fields() {
         let result = GenerationResult {
-            server: "test".to_string(),
-            output_dir: "/tmp".to_string(),
-            feature_mode: "wasm".to_string(),
-            files_created: 10,
-            total_lines: 500,
-            skill_saved: Some("./skills/test".to_string()),
+            skill_name: "my-skill".to_string(),
+            server_name: "my-server".to_string(),
+            tool_count: 10,
+            skill_path: "/path/to/skill".to_string(),
         };
 
-        assert_eq!(result.server, "test");
-        assert_eq!(result.output_dir, "/tmp");
-        assert_eq!(result.feature_mode, "wasm");
-        assert_eq!(result.files_created, 10);
-        assert_eq!(result.total_lines, 500);
-        assert_eq!(result.skill_saved, Some("./skills/test".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_directory_creation_path() {
-        use std::env;
-
-        // Test that we can construct a valid path
-        let temp_dir = env::temp_dir();
-        let test_path = temp_dir.join("mcp-cli-test-generate");
-
-        assert!(test_path.parent().is_some());
+        assert_eq!(result.skill_name, "my-skill");
+        assert_eq!(result.server_name, "my-server");
+        assert_eq!(result.tool_count, 10);
+        assert_eq!(result.skill_path, "/path/to/skill");
     }
 
     #[test]
@@ -376,77 +284,56 @@ mod tests {
     }
 
     #[test]
-    fn test_line_counting() {
-        let content = "line1\nline2\nline3";
-        let lines = content.lines().count();
-        assert_eq!(lines, 3);
+    fn test_skill_name_default_generation() {
+        // Test suffix removal
+        let server1 = "vkteams-bot";
+        let default1 = server1.trim_end_matches("-bot").to_lowercase();
+        assert_eq!(default1, "vkteams");
 
-        let empty_content = "";
-        let empty_lines = empty_content.lines().count();
-        assert_eq!(empty_lines, 0);
+        let server2 = "my-server";
+        let default2 = server2.trim_end_matches("-server").to_lowercase();
+        assert_eq!(default2, "my");
 
-        let single_line = "single";
-        let single_count = single_line.lines().count();
-        assert_eq!(single_count, 1);
-    }
-
-    #[tokio::test]
-    async fn test_path_joining() {
-        let base = PathBuf::from("/tmp/generated");
-        let relative = "tools/sendMessage.ts";
-        let full_path = base.join(relative);
-
-        // Test path components instead of string representation (cross-platform)
-        assert_eq!(full_path.file_name().unwrap(), "sendMessage.ts");
-        assert!(full_path.to_string_lossy().contains("tools"));
-        assert!(full_path.to_string_lossy().contains("generated"));
-    }
-
-    #[tokio::test]
-    async fn test_parent_directory_extraction() {
-        let base = PathBuf::from("/tmp/generated");
-        let path = base.join("tools").join("sendMessage.ts");
-        let parent = path.parent();
-
-        assert!(parent.is_some());
-        assert_eq!(parent.unwrap().file_name().unwrap(), "tools");
+        // Test underscore replacement
+        let server3 = "my_cool_server";
+        let default3 = server3.to_lowercase().replace('_', "-");
+        assert_eq!(default3, "my-cool-server");
     }
 
     #[test]
-    fn test_force_flag_logic() {
-        // When force is true, should skip existence check
-        let force = true;
-        assert!(force);
+    fn test_skill_name_validation() {
+        // Valid skill names
+        assert!(SkillName::new("valid-skill").is_ok());
+        assert!(SkillName::new("skill123").is_ok());
+        assert!(SkillName::new("a").is_ok());
 
-        // When force is false, should check existence
-        let no_force = false;
-        assert!(!no_force);
-    }
-
-    #[tokio::test]
-    async fn test_error_message_formatting() {
-        let path = "/tmp/test";
-        let error_msg = format!("output directory '{path}' already exists");
-        assert!(error_msg.contains("/tmp/test"));
-        assert!(error_msg.contains("already exists"));
+        // Invalid skill names
+        assert!(SkillName::new("").is_err());
+        assert!(SkillName::new("Invalid-Skill").is_err()); // uppercase
+        assert!(SkillName::new("skill with spaces").is_err());
+        assert!(SkillName::new("123skill").is_err()); // starts with number
     }
 
     #[test]
-    fn test_generation_result_display() {
-        let result = GenerationResult {
-            server: "vkteams-bot".to_string(),
-            output_dir: "./generated".to_string(),
-            feature_mode: "wasm".to_string(),
-            files_created: 8,
-            total_lines: 400,
-            skill_saved: None,
-        };
+    fn test_skill_description_validation() {
+        // Valid descriptions
+        assert!(SkillDescription::new("A valid description").is_ok());
+        assert!(SkillDescription::new("Interact with VK Teams bot").is_ok());
 
-        // Test that all fields are accessible
-        assert!(!result.server.is_empty());
-        assert!(!result.output_dir.is_empty());
-        assert!(!result.feature_mode.is_empty());
-        assert!(result.files_created > 0);
-        assert!(result.total_lines > 0);
+        // Invalid descriptions
+        assert!(SkillDescription::new("").is_err());
+        assert!(SkillDescription::new("<xml>Invalid</xml>").is_err()); // XML tags
+        let long_desc = "a".repeat(1025);
+        assert!(SkillDescription::new(&long_desc).is_err()); // too long
+    }
+
+    #[test]
+    fn test_default_description_format() {
+        let server_name = "vkteams-bot";
+        let tool_count = 5;
+        let desc = format!("Interact with {server_name} MCP server ({tool_count} tools available)");
+
+        assert!(desc.contains("vkteams-bot"));
+        assert!(desc.contains("5 tools"));
     }
 }

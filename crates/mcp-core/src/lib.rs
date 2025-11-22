@@ -44,7 +44,9 @@ pub mod traits;
 pub use error::{Error, Result};
 
 // Re-export domain types
-pub use types::{CacheKey, MemoryLimit, ServerId, SessionId, ToolName};
+pub use types::{
+    CacheKey, MemoryLimit, ServerId, SessionId, SkillDescription, SkillName, ToolName,
+};
 
 // Re-export configuration types
 pub use config::{RuntimeConfig, RuntimeConfigBuilder, SecurityPolicy};

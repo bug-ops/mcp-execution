@@ -1,0 +1,58 @@
+---
+name: {{skill_name}}
+description: |
+  {{skill_description}}
+---
+
+# {{skill_name}}
+
+{{skill_description}}
+
+## When to Use This Skill
+
+Use this skill when you need to interact with the {{server_name}} MCP server.
+
+Available capabilities:
+{{#each tools}}
+- **{{name}}**: {{description}}
+{{/each}}
+
+## Available Tools
+
+{{#each tools}}
+### {{name}}
+
+{{description}}
+
+**Parameters**:
+{{#if parameters}}
+{{#each parameters}}
+- `{{name}}` ({{type_name}}){{#if required}} *required*{{/if}}: {{description}}
+{{/each}}
+{{else}}
+No parameters required.
+{{/if}}
+
+**Example**:
+```typescript
+// Call {{name}} tool
+const result = await mcpClient.callTool("{{name}}", {
+  {{#each parameters}}
+  {{name}}: {{example_value}},
+  {{/each}}
+});
+```
+
+{{/each}}
+
+## Setup
+
+1. Ensure the {{server_name}} MCP server is configured in your Claude Desktop config
+2. The server must be running and accessible
+3. Verify server capabilities include the required tools
+
+## Notes
+
+- This skill provides access to {{tool_count}} tool(s) from the {{server_name}} MCP server
+- Generated on {{generated_at}}
+- MCP Protocol Version: {{protocol_version}}

@@ -27,7 +27,7 @@ dirs.workspace = true
 human-panic.workspace = true
 indicatif.workspace = true
 mcp-bridge.workspace = true
-mcp-codegen.workspace = true
+mcp-codegen = { workspace = true, features = ["skills"] }
 mcp-core.workspace = true
 mcp-introspector.workspace = true
 mcp-skill-store.workspace = true

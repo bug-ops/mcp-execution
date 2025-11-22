@@ -243,7 +243,7 @@ pub struct SkillInfo {
     pub tool_count: usize,
 }
 
-// Constants for plugin structure
+// Constants for legacy plugin structure (deprecated)
 /// Current metadata format version.
 pub const FORMAT_VERSION: &str = "1.0";
 
@@ -255,6 +255,153 @@ pub const WASM_FILE: &str = "module.wasm";
 
 /// Name of the directory containing generated TypeScript files.
 pub const GENERATED_DIR: &str = "generated";
+
+// Constants for Claude skill format
+/// Name of the main skill file in Claude format.
+pub const CLAUDE_SKILL_FILE: &str = "SKILL.md";
+
+/// Name of the reference documentation file in Claude format.
+pub const CLAUDE_REFERENCE_FILE: &str = "REFERENCE.md";
+
+/// Name of the metadata file for Claude skills.
+pub const CLAUDE_METADATA_FILE: &str = ".metadata.json";
+
+/// Loaded Claude skill with all components.
+///
+/// Contains everything needed to use a Claude skill: SKILL.md content,
+/// optional REFERENCE.md content, and metadata.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_skill_store::SkillStore;
+/// use mcp_core::SkillName;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = SkillStore::new_claude()?;
+/// let skill_name = SkillName::new("my-skill")?;
+/// let skill = store.load_claude_skill(&skill_name)?;
+///
+/// println!("Skill: {}", skill.name);
+/// println!("Tools: {}", skill.metadata.tool_count);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct LoadedClaudeSkill {
+    /// Skill name
+    pub name: String,
+    /// SKILL.md content
+    pub skill_md: String,
+    /// REFERENCE.md content (optional)
+    pub reference_md: Option<String>,
+    /// Metadata
+    pub metadata: ClaudeSkillMetadata,
+}
+
+/// Metadata for Claude skills (stored in .metadata.json).
+///
+/// Contains information about skill generation, checksums for integrity
+/// verification, and tool count.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_skill_store::{ClaudeSkillMetadata, SkillChecksums};
+/// use chrono::Utc;
+///
+/// let metadata = ClaudeSkillMetadata {
+///     skill_name: "my-skill".to_string(),
+///     server_name: "my-server".to_string(),
+///     server_version: "1.0.0".to_string(),
+///     protocol_version: "1.0".to_string(),
+///     tool_count: 3,
+///     generated_at: Utc::now(),
+///     generator_version: "0.1.0".to_string(),
+///     checksums: SkillChecksums {
+///         skill_md: "blake3:abc123".to_string(),
+///         reference_md: Some("blake3:def456".to_string()),
+///     },
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeSkillMetadata {
+    /// Skill name
+    pub skill_name: String,
+    /// Server name
+    pub server_name: String,
+    /// Server version
+    pub server_version: String,
+    /// Protocol version
+    pub protocol_version: String,
+    /// Number of tools
+    pub tool_count: usize,
+    /// Generation timestamp
+    pub generated_at: DateTime<Utc>,
+    /// Generator version
+    pub generator_version: String,
+    /// Blake3 checksums for integrity
+    pub checksums: SkillChecksums,
+}
+
+/// Blake3 checksums for Claude skill files.
+///
+/// Contains checksums for SKILL.md and optionally REFERENCE.md.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_skill_store::SkillChecksums;
+///
+/// let checksums = SkillChecksums {
+///     skill_md: "blake3:abc123".to_string(),
+///     reference_md: Some("blake3:def456".to_string()),
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillChecksums {
+    /// SKILL.md checksum
+    pub skill_md: String,
+    /// REFERENCE.md checksum (if present)
+    pub reference_md: Option<String>,
+}
+
+/// Summary of a Claude skill (for listing).
+///
+/// Lightweight summary suitable for displaying in lists without loading
+/// the entire skill.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_skill_store::SkillStore;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = SkillStore::new_claude()?;
+///
+/// for skill in store.list_claude_skills()? {
+///     println!("{} v{} - {} tools",
+///         skill.skill_name,
+///         skill.server_version,
+///         skill.tool_count
+///     );
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaudeSkillSummary {
+    /// Skill name
+    pub skill_name: String,
+    /// Server name
+    pub server_name: String,
+    /// Server version
+    pub server_version: String,
+    /// Number of tools
+    pub tool_count: usize,
+    /// Generation timestamp
+    pub generated_at: DateTime<Utc>,
+}
 
 #[cfg(test)]
 mod tests {

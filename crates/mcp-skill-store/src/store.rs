@@ -6,10 +6,13 @@
 use crate::checksum::{calculate_checksum, verify_checksum};
 use crate::error::{Result, SkillStoreError};
 use crate::types::{
-    Checksums, FORMAT_VERSION, GENERATED_DIR, LoadedSkill, METADATA_FILE, ServerInfo, SkillInfo,
-    SkillMetadata, ToolInfo, WASM_FILE,
+    CLAUDE_METADATA_FILE, CLAUDE_REFERENCE_FILE, CLAUDE_SKILL_FILE, Checksums, ClaudeSkillMetadata,
+    ClaudeSkillSummary, FORMAT_VERSION, GENERATED_DIR, LoadedClaudeSkill, LoadedSkill,
+    METADATA_FILE, ServerInfo, SkillChecksums, SkillInfo, SkillMetadata, ToolInfo, WASM_FILE,
 };
 use chrono::Utc;
+use mcp_codegen::skills::claude::SkillData;
+use mcp_core::SkillName;
 use mcp_vfs::{Vfs, VfsBuilder};
 use std::collections::HashMap;
 use std::fs;
@@ -628,6 +631,433 @@ impl SkillStore {
         }
 
         Ok(metadata)
+    }
+
+    // Anthropic Format Methods
+
+    /// Creates a new skill store for Claude format (.claude/skills/).
+    ///
+    /// Attempts to find the .claude/skills directory in the following order:
+    /// 1. Current directory (./.claude/skills)
+    /// 2. Home directory (~/.claude/skills)
+    /// 3. `XDG_CONFIG_HOME`/claude/skills (if set)
+    ///
+    /// If not found, creates ~/.claude/skills by default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Home directory cannot be determined
+    /// - Directory cannot be created
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    /// // Uses ~/.claude/skills by default
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new_claude() -> Result<Self> {
+        let base_dir = Self::default_claude_dir()?;
+        Self::new(&base_dir)
+    }
+
+    /// Returns default .claude/skills directory.
+    ///
+    /// Search order:
+    /// 1. ./.claude/skills (current directory)
+    /// 2. ~/.claude/skills (home directory)
+    /// 3. `$XDG_CONFIG_HOME`/claude/skills (if set)
+    ///
+    /// Creates ~/.claude/skills if none exist.
+    fn default_claude_dir() -> Result<PathBuf> {
+        // Try current directory first
+        let current_dir = std::env::current_dir()
+            .ok()
+            .map(|p| p.join(".claude/skills"));
+
+        if let Some(ref dir) = current_dir
+            && dir.exists()
+        {
+            tracing::debug!(
+                "Using .claude/skills in current directory: {}",
+                dir.display()
+            );
+            return Ok(dir.clone());
+        }
+
+        // Try XDG_CONFIG_HOME
+        if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
+            let xdg_dir = PathBuf::from(xdg_config).join("claude/skills");
+            if xdg_dir.exists() {
+                tracing::debug!("Using XDG_CONFIG_HOME claude/skills: {}", xdg_dir.display());
+                return Ok(xdg_dir);
+            }
+        }
+
+        // Default to home directory
+        let home = dirs::home_dir().ok_or_else(|| SkillStoreError::InvalidMetadata {
+            reason: "Cannot determine home directory".to_string(),
+        })?;
+
+        let home_dir = home.join(".claude/skills");
+
+        // Create if doesn't exist
+        if !home_dir.exists() {
+            fs::create_dir_all(&home_dir)?;
+            tracing::info!("Created .claude/skills directory: {}", home_dir.display());
+        }
+
+        Ok(home_dir)
+    }
+
+    /// Saves skill in Claude format.
+    ///
+    /// Creates `.claude/skills/skill-name/` directory with:
+    /// - SKILL.md (rendered skill file)
+    /// - REFERENCE.md (rendered reference documentation)
+    /// - .metadata.json (internal metadata with checksums)
+    ///
+    /// # Atomicity
+    ///
+    /// Uses atomic write operations (temp file + rename) to ensure skills
+    /// are either fully written or not written at all.
+    ///
+    /// # Arguments
+    ///
+    /// * `skill_name` - Validated skill name
+    /// * `skill_md` - Rendered SKILL.md content
+    /// * `reference_md` - Rendered REFERENCE.md content
+    /// * `skill_data` - Original `SkillData` for metadata
+    ///
+    /// # Errors
+    ///
+    /// * [`SkillStoreError::SkillAlreadyExists`] - Skill directory exists
+    /// * [`SkillStoreError::InvalidServerName`] - Invalid skill name
+    /// * I/O errors if writing fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use mcp_codegen::skills::claude::SkillData;
+    /// use mcp_core::SkillName;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    /// let name = SkillName::new("vkteams")?;
+    /// let skill_data = SkillData::new(
+    ///     "vkteams".to_string(),
+    ///     "VK Teams bot".to_string(),
+    ///     "vkteams-bot".to_string(),
+    ///     "1.0.0".to_string(),
+    ///     "VK Teams server".to_string(),
+    ///     "1.0".to_string(),
+    ///     vec![],
+    ///     vec![],
+    /// );
+    /// let skill_md = "# Skill content";
+    /// let reference_md = "# Reference content";
+    ///
+    /// store.save_claude_skill(&name, skill_md, reference_md, &skill_data)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn save_claude_skill(
+        &self,
+        skill_name: &SkillName,
+        skill_md: &str,
+        reference_md: &str,
+        skill_data: &SkillData,
+    ) -> Result<()> {
+        let skill_dir = self.skill_path(skill_name.as_str());
+
+        // Create directory atomically - fails if already exists
+        match fs::create_dir(&skill_dir) {
+            Ok(()) => {
+                tracing::debug!("Created Claude skill directory: {}", skill_dir.display());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(SkillStoreError::SkillAlreadyExists {
+                    server_name: skill_name.as_str().to_string(),
+                });
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+
+        // Set up cleanup guard
+        let guard = SkillDirGuard::new(skill_dir.clone());
+
+        tracing::info!("Saving Claude skill: {}", skill_name.as_str());
+
+        // Write SKILL.md atomically
+        let skill_path = skill_dir.join(CLAUDE_SKILL_FILE);
+        Self::write_file_atomic(&skill_path, skill_md.as_bytes())?;
+        let skill_checksum = calculate_checksum(skill_md.as_bytes());
+        tracing::debug!("Wrote SKILL.md: {} bytes", skill_md.len());
+
+        // Write REFERENCE.md atomically
+        let reference_path = skill_dir.join(CLAUDE_REFERENCE_FILE);
+        Self::write_file_atomic(&reference_path, reference_md.as_bytes())?;
+        let reference_checksum = calculate_checksum(reference_md.as_bytes());
+        tracing::debug!("Wrote REFERENCE.md: {} bytes", reference_md.len());
+
+        // Create metadata with checksums
+        let metadata = ClaudeSkillMetadata {
+            skill_name: skill_name.as_str().to_string(),
+            server_name: skill_data.server_name.clone(),
+            server_version: skill_data.server_version.clone(),
+            protocol_version: skill_data.protocol_version.clone(),
+            tool_count: skill_data.tool_count,
+            generated_at: Utc::now(),
+            generator_version: env!("CARGO_PKG_VERSION").to_string(),
+            checksums: SkillChecksums {
+                skill_md: skill_checksum,
+                reference_md: Some(reference_checksum),
+            },
+        };
+
+        // Write metadata atomically
+        let metadata_path = skill_dir.join(CLAUDE_METADATA_FILE);
+        let metadata_json = serde_json::to_string_pretty(&metadata)?;
+        Self::write_file_atomic(&metadata_path, metadata_json.as_bytes())?;
+        tracing::debug!("Wrote .metadata.json");
+
+        // Success - disable cleanup
+        guard.commit();
+
+        tracing::info!(
+            "Successfully saved Claude skill: {} ({} tools)",
+            skill_name.as_str(),
+            skill_data.tool_count
+        );
+
+        Ok(())
+    }
+
+    /// Writes a file atomically using temp file + rename.
+    ///
+    /// This ensures that the file is either fully written or not written at all,
+    /// preventing partial writes on failure.
+    fn write_file_atomic(path: &Path, content: &[u8]) -> Result<()> {
+        // Create temp file in same directory
+        let temp_path = path.with_extension("tmp");
+
+        // Write to temp file
+        fs::write(&temp_path, content)?;
+
+        // Atomic rename
+        fs::rename(&temp_path, path)?;
+
+        Ok(())
+    }
+
+    /// Loads skill from Claude format.
+    ///
+    /// Reads SKILL.md, REFERENCE.md (if present), and .metadata.json,
+    /// verifying checksums for integrity.
+    ///
+    /// # Errors
+    ///
+    /// * [`SkillStoreError::SkillNotFound`] - Skill doesn't exist
+    /// * [`SkillStoreError::ChecksumMismatch`] - File hash mismatch
+    /// * [`SkillStoreError::InvalidMetadata`] - Malformed metadata
+    /// * [`SkillStoreError::MissingFile`] - Required file missing
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use mcp_core::SkillName;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    /// let name = SkillName::new("vkteams")?;
+    /// let skill = store.load_claude_skill(&name)?;
+    ///
+    /// println!("Loaded skill: {}", skill.name);
+    /// println!("Tools: {}", skill.metadata.tool_count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn load_claude_skill(&self, skill_name: &SkillName) -> Result<LoadedClaudeSkill> {
+        let skill_dir = self.skill_path(skill_name.as_str());
+        if !skill_dir.exists() {
+            return Err(SkillStoreError::SkillNotFound {
+                server_name: skill_name.as_str().to_string(),
+            });
+        }
+
+        tracing::info!("Loading Claude skill: {}", skill_name.as_str());
+
+        // Read and parse .metadata.json
+        let metadata_path = skill_dir.join(CLAUDE_METADATA_FILE);
+        if !metadata_path.exists() {
+            return Err(SkillStoreError::MissingFile {
+                server_name: skill_name.as_str().to_string(),
+                path: CLAUDE_METADATA_FILE.into(),
+            });
+        }
+        let metadata = Self::read_claude_metadata(&metadata_path)?;
+
+        // Read and verify SKILL.md
+        let skill_path = skill_dir.join(CLAUDE_SKILL_FILE);
+        if !skill_path.exists() {
+            return Err(SkillStoreError::MissingFile {
+                server_name: skill_name.as_str().to_string(),
+                path: CLAUDE_SKILL_FILE.into(),
+            });
+        }
+        let skill_md = fs::read_to_string(&skill_path)?;
+        verify_checksum(
+            skill_md.as_bytes(),
+            &metadata.checksums.skill_md,
+            CLAUDE_SKILL_FILE,
+        )?;
+        tracing::debug!("Verified SKILL.md checksum: {} bytes", skill_md.len());
+
+        // Read and verify REFERENCE.md (optional)
+        let reference_path = skill_dir.join(CLAUDE_REFERENCE_FILE);
+        let reference_md = if reference_path.exists() {
+            let content = fs::read_to_string(&reference_path)?;
+            if let Some(expected_checksum) = &metadata.checksums.reference_md {
+                verify_checksum(content.as_bytes(), expected_checksum, CLAUDE_REFERENCE_FILE)?;
+                tracing::debug!("Verified REFERENCE.md checksum: {} bytes", content.len());
+            }
+            Some(content)
+        } else {
+            None
+        };
+
+        tracing::info!(
+            "Successfully loaded Claude skill: {} ({} tools)",
+            skill_name.as_str(),
+            metadata.tool_count
+        );
+
+        Ok(LoadedClaudeSkill {
+            name: skill_name.as_str().to_string(),
+            skill_md,
+            reference_md,
+            metadata,
+        })
+    }
+
+    /// Reads and parses Claude skill metadata from disk.
+    fn read_claude_metadata(metadata_path: &Path) -> Result<ClaudeSkillMetadata> {
+        let content = fs::read_to_string(metadata_path)?;
+        let metadata: ClaudeSkillMetadata =
+            serde_json::from_str(&content).map_err(|e| SkillStoreError::InvalidMetadata {
+                reason: format!("Failed to parse JSON: {e}"),
+            })?;
+
+        Ok(metadata)
+    }
+
+    /// Lists all Claude skills.
+    ///
+    /// Scans .claude/skills/ for subdirectories and reads their metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the skill directory fails or if metadata
+    /// files cannot be parsed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    ///
+    /// for skill in store.list_claude_skills()? {
+    ///     println!("{} v{} - {} tools",
+    ///         skill.skill_name,
+    ///         skill.server_version,
+    ///         skill.tool_count
+    ///     );
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn list_claude_skills(&self) -> Result<Vec<ClaudeSkillSummary>> {
+        let mut skills = Vec::new();
+
+        // Iterate over subdirectories in base_dir
+        for entry in fs::read_dir(&self.base_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_dir() {
+                continue;
+            }
+
+            // Try to read metadata
+            let metadata_path = path.join(CLAUDE_METADATA_FILE);
+            if !metadata_path.exists() {
+                tracing::warn!("Skipping directory without metadata: {}", path.display());
+                continue;
+            }
+
+            match Self::read_claude_metadata(&metadata_path) {
+                Ok(metadata) => {
+                    skills.push(ClaudeSkillSummary {
+                        skill_name: metadata.skill_name,
+                        server_name: metadata.server_name,
+                        server_version: metadata.server_version,
+                        tool_count: metadata.tool_count,
+                        generated_at: metadata.generated_at,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read metadata from {}: {}", path.display(), e);
+                }
+            }
+        }
+
+        Ok(skills)
+    }
+
+    /// Removes an Claude skill.
+    ///
+    /// Deletes the entire .claude/skills/skill-name/ directory.
+    ///
+    /// # Errors
+    ///
+    /// * [`SkillStoreError::SkillNotFound`] - Skill doesn't exist
+    /// * I/O errors if deletion fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use mcp_core::SkillName;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    /// let name = SkillName::new("old-skill")?;
+    /// store.remove_claude_skill(&name)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn remove_claude_skill(&self, skill_name: &SkillName) -> Result<()> {
+        let skill_dir = self.skill_path(skill_name.as_str());
+        if !skill_dir.exists() {
+            return Err(SkillStoreError::SkillNotFound {
+                server_name: skill_name.as_str().to_string(),
+            });
+        }
+
+        fs::remove_dir_all(&skill_dir)?;
+        tracing::info!("Removed Claude skill: {}", skill_name.as_str());
+        Ok(())
     }
 }
 

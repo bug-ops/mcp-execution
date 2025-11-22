@@ -1,9 +1,43 @@
 //! Skills code generation module.
 //!
-//! Generates executable TypeScript scripts for Claude Code Skills.
+//! Generates skill files in the Claude Agent Skills format.
 //! Only available when the `skills` feature is enabled.
 //!
-//! # Status
+//! # Format
 //!
-//! This module is currently a placeholder for future implementation.
-//! See `.local/codegen-feature-flags-design.md` for design details.
+//! This module generates skills exclusively in the Claude format:
+//! - Storage: `.claude/skills/skill-name/`
+//! - Main file: `SKILL.md` with YAML frontmatter
+//! - Reference: `REFERENCE.md` with detailed API docs
+//!
+//! # Examples
+//!
+//! ```no_run
+//! use mcp_codegen::skills::converter::SkillConverter;
+//! use mcp_codegen::skills::claude::render_skill_md;
+//! use mcp_codegen::TemplateEngine;
+//! use mcp_introspector::{Introspector, ServerInfo};
+//! use mcp_core::{ServerId, SkillName, SkillDescription};
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // 1. Introspect MCP server
+//! let mut introspector = Introspector::new();
+//! let server_id = ServerId::new("vkteams-bot");
+//! let server_info = introspector.discover_server(server_id, "vkteams-bot-server").await?;
+//!
+//! // 2. Create skill metadata
+//! let name = SkillName::new("vkteams")?;
+//! let desc = SkillDescription::new("VK Teams bot integration")?;
+//!
+//! // 3. Convert to SkillData
+//! let skill_data = SkillConverter::convert(&server_info, &name, &desc)?;
+//!
+//! // 4. Render skill file
+//! let engine = TemplateEngine::new()?;
+//! let skill_md = render_skill_md(&engine, &skill_data)?;
+//! # Ok(())
+//! # }
+//! ```
+
+pub mod claude;
+pub mod converter;
