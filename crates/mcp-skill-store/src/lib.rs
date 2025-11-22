@@ -1,18 +1,18 @@
-//! Plugin persistence layer for MCP execution.
+//! Skill persistence layer for MCP execution.
 //!
-//! Provides functionality to save generated plugins to disk and load them later,
-//! enabling offline usage and plugin distribution. Each plugin consists of:
+//! Provides functionality to save generated skills to disk and load them later,
+//! enabling offline usage and skill distribution. Each skill consists of:
 //! - Generated TypeScript code (from VFS)
 //! - Compiled WASM module
 //! - Metadata with checksums for integrity verification
 //!
 //! # Architecture
 //!
-//! Plugins are stored in a simple directory structure:
+//! Skills are stored in a simple directory structure:
 //! ```text
-//! ./plugins/
+//! ./skills/
 //! ├── server-name/
-//! │   ├── plugin.json       # Metadata + checksums
+//! │   ├── skill.json       # Metadata + checksums
 //! │   ├── generated/        # TypeScript files
 //! │   │   ├── tools/
 //! │   │   │   └── *.ts
@@ -23,25 +23,25 @@
 //!
 //! # Features
 //!
-//! - **Save/Load**: Persist plugins to disk and restore them
+//! - **Save/Load**: Persist skills to disk and restore them
 //! - **Integrity**: Blake3 checksums verify file contents on load
-//! - **Management**: List, check existence, and remove plugins
+//! - **Management**: List, check existence, and remove skills
 //! - **Version Control**: Simple file-based format suitable for git
 //! - **Security**: Checksum verification prevents tampering
 //!
 //! # Examples
 //!
-//! ## Saving a plugin
+//! ## Saving a skill
 //!
 //! ```no_run
-//! use mcp_plugin_store::{PluginStore, ServerInfo, ToolInfo};
+//! use mcp_skill_store::{SkillStore, ServerInfo, ToolInfo};
 //! use mcp_vfs::VfsBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create plugin store
-//! let store = PluginStore::new("./plugins")?;
+//! // Create skill store
+//! let store = SkillStore::new("./skills")?;
 //!
-//! // Prepare plugin data
+//! // Prepare skill data
 //! let vfs = VfsBuilder::new()
 //!     .add_file("/tools/tool.ts", "export function tool() {}")
 //!     .build()?;
@@ -58,44 +58,44 @@
 //!     description: "Example tool".to_string(),
 //! }];
 //!
-//! // Save plugin
-//! let metadata = store.save_plugin("my-server", &vfs, &wasm_module, server_info, tools)?;
-//! println!("Plugin saved with {} tools", metadata.tools.len());
+//! // Save skill
+//! let metadata = store.save_skill("my-server", &vfs, &wasm_module, server_info, tools)?;
+//! println!("Skill saved with {} tools", metadata.tools.len());
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ## Loading a plugin
+//! ## Loading a skill
 //!
 //! ```no_run
-//! use mcp_plugin_store::PluginStore;
+//! use mcp_skill_store::SkillStore;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let store = PluginStore::new("./plugins")?;
+//! let store = SkillStore::new("./skills")?;
 //!
-//! // Load plugin with checksum verification
-//! let plugin = store.load_plugin("my-server")?;
+//! // Load skill with checksum verification
+//! let skill = store.load_skill("my-server")?;
 //!
-//! println!("Loaded plugin with {} tools", plugin.metadata.tools.len());
-//! println!("VFS has {} files", plugin.vfs.file_count());
-//! println!("WASM module size: {} bytes", plugin.wasm_module.len());
+//! println!("Loaded skill with {} tools", skill.metadata.tools.len());
+//! println!("VFS has {} files", skill.vfs.file_count());
+//! println!("WASM module size: {} bytes", skill.wasm_module.len());
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ## Listing plugins
+//! ## Listing skills
 //!
 //! ```no_run
-//! use mcp_plugin_store::PluginStore;
+//! use mcp_skill_store::SkillStore;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let store = PluginStore::new("./plugins")?;
+//! let store = SkillStore::new("./skills")?;
 //!
-//! for plugin in store.list_plugins()? {
+//! for skill in store.list_skills()? {
 //!     println!("{} v{} ({} tools)",
-//!         plugin.server_name,
-//!         plugin.version,
-//!         plugin.tool_count
+//!         skill.server_name,
+//!         skill.version,
+//!         skill.tool_count
 //!     );
 //! }
 //! # Ok(())
@@ -105,14 +105,14 @@
 //! # Security
 //!
 //! Blake3 checksums are used for integrity verification but not for security
-//! against adversarial attacks. This crate assumes plugins are from trusted
-//! sources. For untrusted plugins, additional cryptographic signatures would
+//! against adversarial attacks. This crate assumes skills are from trusted
+//! sources. For untrusted skills, additional cryptographic signatures would
 //! be required (not implemented in MVP).
 //!
 //! # Performance
 //!
-//! - **Small plugins** (10 files): < 50ms save/load
-//! - **Large plugins** (1000+ files): < 1s save/load
+//! - **Small skills** (10 files): < 50ms save/load
+//! - **Large skills** (1000+ files): < 1s save/load
 //! - **Checksum calculation**: < 10ms for 1MB WASM module
 
 #![deny(unsafe_code)]
@@ -125,6 +125,6 @@ pub mod types;
 
 // Re-export main types
 pub use checksum::constant_time_compare;
-pub use error::{PluginStoreError, Result};
-pub use store::PluginStore;
-pub use types::{Checksums, LoadedPlugin, PluginInfo, PluginMetadata, ServerInfo, ToolInfo};
+pub use error::{Result, SkillStoreError};
+pub use store::SkillStore;
+pub use types::{Checksums, LoadedSkill, ServerInfo, SkillInfo, SkillMetadata, ToolInfo};

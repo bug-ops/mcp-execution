@@ -1,13 +1,13 @@
-//! Plugin storage implementation.
+//! Skill storage implementation.
 //!
-//! Provides the main [`PluginStore`] type for saving, loading, and managing
+//! Provides the main [`SkillStore`] type for saving, loading, and managing
 //! plugins on disk.
 
 use crate::checksum::{calculate_checksum, verify_checksum};
-use crate::error::{PluginStoreError, Result};
+use crate::error::{Result, SkillStoreError};
 use crate::types::{
-    Checksums, FORMAT_VERSION, GENERATED_DIR, LoadedPlugin, METADATA_FILE, PluginInfo,
-    PluginMetadata, ServerInfo, ToolInfo, WASM_FILE,
+    Checksums, FORMAT_VERSION, GENERATED_DIR, LoadedSkill, METADATA_FILE, ServerInfo, SkillInfo,
+    SkillMetadata, ToolInfo, WASM_FILE,
 };
 use chrono::Utc;
 use mcp_vfs::{Vfs, VfsBuilder};
@@ -16,20 +16,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// RAII guard for plugin directory cleanup on error.
+/// RAII guard for skill directory cleanup on error.
 ///
-/// Automatically removes a plugin directory if the save operation fails
+/// Automatically removes a skill directory if the save operation fails
 /// or panics, preventing partial plugin state on disk.
 ///
-/// This guard ensures atomic-like behavior: the plugin directory is either
+/// This guard ensures atomic-like behavior: the skill directory is either
 /// fully written or completely removed on error.
-struct PluginDirGuard {
+struct SkillDirGuard {
     path: PathBuf,
     cleanup: bool,
 }
 
-impl PluginDirGuard {
-    /// Creates a new guard for the given plugin directory.
+impl SkillDirGuard {
+    /// Creates a new guard for the given skill directory.
     ///
     /// The directory will be removed on drop unless [`commit`](Self::commit) is called.
     const fn new(path: PathBuf) -> Self {
@@ -41,24 +41,24 @@ impl PluginDirGuard {
 
     /// Commits the save operation, disabling cleanup on drop.
     ///
-    /// Call this after successfully writing all plugin files.
+    /// Call this after successfully writing all skill files.
     fn commit(mut self) {
         self.cleanup = false;
     }
 }
 
-impl Drop for PluginDirGuard {
+impl Drop for SkillDirGuard {
     fn drop(&mut self) {
         if self.cleanup {
             if let Err(e) = fs::remove_dir_all(&self.path) {
                 tracing::warn!(
-                    "Failed to cleanup plugin directory {}: {}",
+                    "Failed to cleanup skill directory {}: {}",
                     self.path.display(),
                     e
                 );
             } else {
                 tracing::debug!(
-                    "Cleaned up incomplete plugin directory: {}",
+                    "Cleaned up incomplete skill directory: {}",
                     self.path.display()
                 );
             }
@@ -66,10 +66,10 @@ impl Drop for PluginDirGuard {
     }
 }
 
-/// Plugin storage manager.
+/// Skill storage manager.
 ///
-/// Manages a directory of saved plugins, providing operations to save, load,
-/// list, and remove plugins. Each plugin is stored in its own subdirectory
+/// Manages a directory of saved skills, providing operations to save, load,
+/// list, and remove plugins. Each skill is stored in its own subdirectory
 /// named after the server.
 ///
 /// # Directory Structure
@@ -77,33 +77,33 @@ impl Drop for PluginDirGuard {
 /// ```text
 /// base_dir/
 /// ├── server1/
-/// │   ├── plugin.json
+/// │   ├── skill.json
 /// │   ├── generated/
 /// │   │   └── ...
 /// │   └── module.wasm
 /// └── server2/
-///     ├── plugin.json
+///     ├── skill.json
 ///     ├── generated/
 ///     └── module.wasm
 /// ```
 ///
 /// # Thread Safety
 ///
-/// `PluginStore` is `Send + Sync` and can be safely shared between threads.
-/// However, concurrent modifications to the same plugin directory may result
+/// `SkillStore` is `Send + Sync` and can be safely shared between threads.
+/// However, concurrent modifications to the same skill directory may result
 /// in undefined behavior. Use external synchronization if needed.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_plugin_store::{PluginStore, ServerInfo};
+/// use mcp_skill_store::{SkillStore, ServerInfo};
 /// use mcp_vfs::VfsBuilder;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// // Create store
-/// let store = PluginStore::new("./plugins")?;
+/// let store = SkillStore::new("./skills")?;
 ///
-/// // Save a plugin
+/// // Save a skill
 /// let vfs = VfsBuilder::new()
 ///     .add_file("/index.ts", "export * from './tools';")
 ///     .build()?;
@@ -114,20 +114,20 @@ impl Drop for PluginDirGuard {
 ///     protocol_version: "2024-11-05".to_string(),
 /// };
 ///
-/// store.save_plugin("my-server", &vfs, &wasm, server_info, vec![])?;
+/// store.save_skill("my-server", &vfs, &wasm, server_info, vec![])?;
 ///
 /// // Load it back
-/// let plugin = store.load_plugin("my-server")?;
+/// let plugin = store.load_skill("my-server")?;
 /// assert_eq!(plugin.metadata.server.name, "my-server");
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Debug, Clone)]
-pub struct PluginStore {
+pub struct SkillStore {
     base_dir: PathBuf,
 }
 
-impl PluginStore {
+impl SkillStore {
     /// Creates a new plugin store at the given directory.
     ///
     /// Creates the base directory if it doesn't exist.
@@ -139,10 +139,10 @@ impl PluginStore {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::PluginStore;
+    /// use mcp_skill_store::SkillStore;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = PluginStore::new("./plugins")?;
+    /// let store = SkillStore::new("./skills")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -158,23 +158,23 @@ impl PluginStore {
         Ok(Self { base_dir })
     }
 
-    /// Saves a plugin to disk.
+    /// Saves a skill to disk.
     ///
-    /// Writes the plugin files to a new subdirectory named after the server.
+    /// Writes the skill files to a new subdirectory named after the server.
     /// Calculates checksums for all files and stores them in metadata.
     ///
     /// # Atomicity
     ///
     /// This operation is atomic at the directory level:
     /// - Directory creation uses atomic `create_dir` (fails if exists)
-    /// - On error or panic, the partial plugin directory is automatically cleaned up
-    /// - Once complete, the plugin is fully saved or not saved at all
+    /// - On error or panic, the partial skill directory is automatically cleaned up
+    /// - Once complete, the skill is fully saved or not saved at all
     ///
     /// # Concurrency
     ///
     /// Safe for concurrent calls with different `server_name` values.
     /// Concurrent saves to the same plugin will result in one success and
-    /// one [`PluginStoreError::PluginAlreadyExists`] error (atomic directory creation).
+    /// one [`SkillStoreError::PluginAlreadyExists`] error (atomic directory creation).
     ///
     /// # Arguments
     ///
@@ -182,22 +182,22 @@ impl PluginStore {
     /// * `vfs` - Virtual filesystem with generated TypeScript code
     /// * `wasm_module` - Compiled WASM module bytes
     /// * `server_info` - Server identification information
-    /// * `tool_info` - List of tools provided by the plugin
+    /// * `tool_info` - List of tools provided by the skill
     ///
     /// # Errors
     ///
-    /// * [`PluginStoreError::PluginAlreadyExists`] - Plugin directory exists
-    /// * [`PluginStoreError::InvalidServerName`] - Invalid server name
+    /// * [`SkillStoreError::PluginAlreadyExists`] - Skill directory exists
+    /// * [`SkillStoreError::InvalidServerName`] - Invalid server name
     /// * I/O errors if writing fails
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::{PluginStore, ServerInfo, ToolInfo};
+    /// use mcp_skill_store::{SkillStore, ServerInfo, ToolInfo};
     /// use mcp_vfs::VfsBuilder;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = PluginStore::new("./plugins")?;
+    /// let store = SkillStore::new("./skills")?;
     /// let vfs = VfsBuilder::new().build()?;
     /// let wasm = vec![0x00, 0x61, 0x73, 0x6D];
     ///
@@ -212,32 +212,32 @@ impl PluginStore {
     ///     description: "Test tool".to_string(),
     /// }];
     ///
-    /// let metadata = store.save_plugin("test-server", &vfs, &wasm, server_info, tools)?;
-    /// println!("Saved plugin with {} tools", metadata.tools.len());
+    /// let metadata = store.save_skill("test-server", &vfs, &wasm, server_info, tools)?;
+    /// println!("Saved skill with {} tools", metadata.tools.len());
     /// # Ok(())
     /// # }
     /// ```
-    pub fn save_plugin(
+    pub fn save_skill(
         &self,
         server_name: &str,
         vfs: &Vfs,
         wasm_module: &[u8],
         server_info: ServerInfo,
         tool_info: Vec<ToolInfo>,
-    ) -> Result<PluginMetadata> {
+    ) -> Result<SkillMetadata> {
         // Validate server name
         validate_server_name(server_name)?;
 
-        let plugin_dir = self.plugin_path(server_name);
+        let skill_dir = self.skill_path(server_name);
 
         // Create directory atomically - fails if already exists
         // This prevents TOCTOU race condition
-        match fs::create_dir(&plugin_dir) {
+        match fs::create_dir(&skill_dir) {
             Ok(()) => {
-                tracing::debug!("Created plugin directory: {}", plugin_dir.display());
+                tracing::debug!("Created skill directory: {}", skill_dir.display());
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(PluginStoreError::PluginAlreadyExists {
+                return Err(SkillStoreError::PluginAlreadyExists {
                     server_name: server_name.to_string(),
                 });
             }
@@ -247,12 +247,12 @@ impl PluginStore {
         }
 
         // Set up cleanup guard - will remove directory if we panic or return error
-        let guard = PluginDirGuard::new(plugin_dir.clone());
+        let guard = SkillDirGuard::new(skill_dir.clone());
 
-        tracing::info!("Saving plugin for server: {}", server_name);
+        tracing::info!("Saving skill for server: {}", server_name);
 
-        // Create plugin directory structure
-        let generated_dir = plugin_dir.join(GENERATED_DIR);
+        // Create skill directory structure
+        let generated_dir = skill_dir.join(GENERATED_DIR);
         fs::create_dir_all(&generated_dir)?;
 
         // Track generated file checksums
@@ -262,7 +262,7 @@ impl PluginStore {
         for vfs_path in vfs.all_paths() {
             let content = vfs
                 .read_file(vfs_path.as_str())
-                .map_err(PluginStoreError::Vfs)?;
+                .map_err(SkillStoreError::Vfs)?;
 
             // Convert VFS path (absolute, starting with /) to relative path
             // Example: /tools/sendMessage.ts -> tools/sendMessage.ts
@@ -286,12 +286,12 @@ impl PluginStore {
 
         // Calculate WASM checksum and write module
         let wasm_checksum = calculate_checksum(wasm_module);
-        let wasm_path = plugin_dir.join(WASM_FILE);
+        let wasm_path = skill_dir.join(WASM_FILE);
         fs::write(&wasm_path, wasm_module)?;
         tracing::debug!("Wrote WASM module: {} bytes", wasm_module.len());
 
         // Create metadata with checksums
-        let metadata = PluginMetadata {
+        let metadata = SkillMetadata {
             format_version: FORMAT_VERSION.to_string(),
             server: server_info,
             generated_at: Utc::now(),
@@ -303,8 +303,8 @@ impl PluginStore {
             tools: tool_info,
         };
 
-        // Write metadata to plugin.json
-        let metadata_path = plugin_dir.join(METADATA_FILE);
+        // Write metadata to skill.json
+        let metadata_path = skill_dir.join(METADATA_FILE);
         let metadata_json = serde_json::to_string_pretty(&metadata)?;
         fs::write(&metadata_path, metadata_json)?;
         tracing::debug!("Wrote plugin metadata");
@@ -313,7 +313,7 @@ impl PluginStore {
         guard.commit();
 
         tracing::info!(
-            "Successfully saved plugin for server: {} ({} files, {} tools)",
+            "Successfully saved skill for server: {} ({} files, {} tools)",
             server_name,
             metadata.checksums.generated.len(),
             metadata.tools.len()
@@ -322,48 +322,48 @@ impl PluginStore {
         Ok(metadata)
     }
 
-    /// Loads a plugin from disk.
+    /// Loads a skill from disk.
     ///
-    /// Reads all plugin files and verifies checksums before returning.
+    /// Reads all skill files and verifies checksums before returning.
     ///
     /// # Errors
     ///
-    /// * [`PluginStoreError::PluginNotFound`] - Plugin doesn't exist
-    /// * [`PluginStoreError::ChecksumMismatch`] - File hash mismatch
-    /// * [`PluginStoreError::InvalidMetadata`] - Malformed metadata
-    /// * [`PluginStoreError::MissingFile`] - Required file missing
+    /// * [`SkillStoreError::PluginNotFound`] - Plugin doesn't exist
+    /// * [`SkillStoreError::ChecksumMismatch`] - File hash mismatch
+    /// * [`SkillStoreError::InvalidMetadata`] - Malformed metadata
+    /// * [`SkillStoreError::MissingFile`] - Required file missing
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::PluginStore;
+    /// use mcp_skill_store::SkillStore;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = PluginStore::new("./plugins")?;
-    /// let plugin = store.load_plugin("my-server")?;
+    /// let store = SkillStore::new("./skills")?;
+    /// let plugin = store.load_skill("my-server")?;
     ///
     /// println!("Loaded {} tools", plugin.metadata.tools.len());
     /// # Ok(())
     /// # }
     /// ```
-    pub fn load_plugin(&self, server_name: &str) -> Result<LoadedPlugin> {
+    pub fn load_skill(&self, server_name: &str) -> Result<LoadedSkill> {
         // Validate server name
         validate_server_name(server_name)?;
 
         // Check plugin exists
-        let plugin_dir = self.plugin_path(server_name);
-        if !plugin_dir.exists() {
-            return Err(PluginStoreError::PluginNotFound {
+        let skill_dir = self.skill_path(server_name);
+        if !skill_dir.exists() {
+            return Err(SkillStoreError::PluginNotFound {
                 server_name: server_name.to_string(),
             });
         }
 
-        tracing::info!("Loading plugin for server: {}", server_name);
+        tracing::info!("Loading skill for server: {}", server_name);
 
-        // Read and parse plugin.json
-        let metadata_path = plugin_dir.join(METADATA_FILE);
+        // Read and parse skill.json
+        let metadata_path = skill_dir.join(METADATA_FILE);
         if !metadata_path.exists() {
-            return Err(PluginStoreError::MissingFile {
+            return Err(SkillStoreError::MissingFile {
                 server_name: server_name.to_string(),
                 path: METADATA_FILE.into(),
             });
@@ -371,9 +371,9 @@ impl PluginStore {
         let metadata = Self::read_metadata(&metadata_path)?;
 
         // Read and verify WASM module
-        let wasm_path = plugin_dir.join(WASM_FILE);
+        let wasm_path = skill_dir.join(WASM_FILE);
         if !wasm_path.exists() {
-            return Err(PluginStoreError::MissingFile {
+            return Err(SkillStoreError::MissingFile {
                 server_name: server_name.to_string(),
                 path: WASM_FILE.into(),
             });
@@ -384,7 +384,7 @@ impl PluginStore {
 
         // Build VFS from generated files
         let mut vfs_builder = VfsBuilder::new();
-        let generated_dir = plugin_dir.join(GENERATED_DIR);
+        let generated_dir = skill_dir.join(GENERATED_DIR);
 
         // Walk the generated/ directory and load all files
         for entry in WalkDir::new(&generated_dir)
@@ -399,7 +399,7 @@ impl PluginStore {
 
             // Get relative path from generated/ directory
             let relative_path = file_path.strip_prefix(&generated_dir).map_err(|_| {
-                PluginStoreError::InvalidMetadata {
+                SkillStoreError::InvalidMetadata {
                     reason: format!("Failed to strip prefix from path: {}", file_path.display()),
                 }
             })?;
@@ -415,7 +415,7 @@ impl PluginStore {
                 .checksums
                 .generated
                 .get(&normalized_path)
-                .ok_or_else(|| PluginStoreError::InvalidMetadata {
+                .ok_or_else(|| SkillStoreError::InvalidMetadata {
                     reason: format!("File '{normalized_path}' not found in metadata checksums"),
                 })?;
 
@@ -428,7 +428,7 @@ impl PluginStore {
             // Add to VFS with absolute path (prepend /)
             let vfs_path = format!("/{normalized_path}");
             let content_str =
-                String::from_utf8(content).map_err(|e| PluginStoreError::InvalidMetadata {
+                String::from_utf8(content).map_err(|e| SkillStoreError::InvalidMetadata {
                     reason: format!("File '{normalized_path}' is not valid UTF-8: {e}"),
                 })?;
 
@@ -443,7 +443,7 @@ impl PluginStore {
         let loaded_count = vfs.file_count();
         let expected_count = metadata.checksums.generated.len();
         if loaded_count != expected_count {
-            return Err(PluginStoreError::InvalidMetadata {
+            return Err(SkillStoreError::InvalidMetadata {
                 reason: format!(
                     "File count mismatch: loaded {loaded_count} files but metadata lists {expected_count}"
                 ),
@@ -451,37 +451,37 @@ impl PluginStore {
         }
 
         tracing::info!(
-            "Successfully loaded plugin for server: {} ({} files, {} tools)",
+            "Successfully loaded skill for server: {} ({} files, {} tools)",
             server_name,
             vfs.file_count(),
             metadata.tools.len()
         );
 
-        Ok(LoadedPlugin {
+        Ok(LoadedSkill {
             metadata,
             vfs,
             wasm_module,
         })
     }
 
-    /// Lists all available plugins.
+    /// Lists all available skills.
     ///
-    /// Returns brief information about each plugin without loading full content.
+    /// Returns brief information about each skill without loading full content.
     ///
     /// # Errors
     ///
-    /// Returns an error if reading the plugin directory fails or if metadata
+    /// Returns an error if reading the skill directory fails or if metadata
     /// files cannot be parsed.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::PluginStore;
+    /// use mcp_skill_store::SkillStore;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = PluginStore::new("./plugins")?;
+    /// let store = SkillStore::new("./skills")?;
     ///
-    /// for plugin in store.list_plugins()? {
+    /// for skill in store.list_skills()? {
     ///     println!("{} v{} - {} tools",
     ///         plugin.server_name,
     ///         plugin.version,
@@ -491,7 +491,7 @@ impl PluginStore {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn list_plugins(&self) -> Result<Vec<PluginInfo>> {
+    pub fn list_skills(&self) -> Result<Vec<SkillInfo>> {
         let mut plugins = Vec::new();
 
         // Iterate over subdirectories in base_dir
@@ -512,7 +512,7 @@ impl PluginStore {
 
             match Self::read_metadata(&metadata_path) {
                 Ok(metadata) => {
-                    plugins.push(PluginInfo {
+                    plugins.push(SkillInfo {
                         server_name: metadata.server.name,
                         version: metadata.server.version,
                         generated_at: metadata.generated_at,
@@ -528,7 +528,7 @@ impl PluginStore {
         Ok(plugins)
     }
 
-    /// Checks if a plugin exists.
+    /// Checks if a skill exists.
     ///
     /// # Errors
     ///
@@ -537,89 +537,89 @@ impl PluginStore {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::PluginStore;
+    /// use mcp_skill_store::SkillStore;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = PluginStore::new("./plugins")?;
+    /// let store = SkillStore::new("./skills")?;
     ///
-    /// if store.plugin_exists("my-server")? {
+    /// if store.skill_exists("my-server")? {
     ///     println!("Plugin exists");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub fn plugin_exists(&self, server_name: &str) -> Result<bool> {
+    pub fn skill_exists(&self, server_name: &str) -> Result<bool> {
         validate_server_name(server_name)?;
-        Ok(self.plugin_path(server_name).exists())
+        Ok(self.skill_path(server_name).exists())
     }
 
-    /// Removes a plugin from disk.
+    /// Removes a skill from disk.
     ///
-    /// Deletes the entire plugin directory and all its contents.
+    /// Deletes the entire skill directory and all its contents.
     ///
     /// # Errors
     ///
-    /// * [`PluginStoreError::PluginNotFound`] - Plugin doesn't exist
+    /// * [`SkillStoreError::PluginNotFound`] - Plugin doesn't exist
     /// * I/O errors if deletion fails
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::PluginStore;
+    /// use mcp_skill_store::SkillStore;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = PluginStore::new("./plugins")?;
-    /// store.remove_plugin("old-server")?;
+    /// let store = SkillStore::new("./skills")?;
+    /// store.remove_skill("old-server")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn remove_plugin(&self, server_name: &str) -> Result<()> {
+    pub fn remove_skill(&self, server_name: &str) -> Result<()> {
         validate_server_name(server_name)?;
 
-        let plugin_dir = self.plugin_path(server_name);
-        if !plugin_dir.exists() {
-            return Err(PluginStoreError::PluginNotFound {
+        let skill_dir = self.skill_path(server_name);
+        if !skill_dir.exists() {
+            return Err(SkillStoreError::PluginNotFound {
                 server_name: server_name.to_string(),
             });
         }
 
-        fs::remove_dir_all(&plugin_dir)?;
+        fs::remove_dir_all(&skill_dir)?;
         tracing::info!("Removed plugin: {}", server_name);
         Ok(())
     }
 
-    /// Gets the path to a plugin directory.
+    /// Gets the path to a skill directory.
     ///
     /// Does not check if the directory exists.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::PluginStore;
+    /// use mcp_skill_store::SkillStore;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = PluginStore::new("./plugins")?;
-    /// let path = store.plugin_path("my-server");
+    /// let store = SkillStore::new("./skills")?;
+    /// let path = store.skill_path("my-server");
     /// println!("Plugin path: {}", path.display());
     /// # Ok(())
     /// # }
     /// ```
     #[must_use]
-    pub fn plugin_path(&self, server_name: &str) -> PathBuf {
+    pub fn skill_path(&self, server_name: &str) -> PathBuf {
         self.base_dir.join(server_name)
     }
 
     /// Reads and parses plugin metadata from disk.
-    fn read_metadata(metadata_path: &Path) -> Result<PluginMetadata> {
+    fn read_metadata(metadata_path: &Path) -> Result<SkillMetadata> {
         let content = fs::read_to_string(metadata_path)?;
-        let metadata: PluginMetadata =
-            serde_json::from_str(&content).map_err(|e| PluginStoreError::InvalidMetadata {
+        let metadata: SkillMetadata =
+            serde_json::from_str(&content).map_err(|e| SkillStoreError::InvalidMetadata {
                 reason: format!("Failed to parse JSON: {e}"),
             })?;
 
         // Validate format version
         if metadata.format_version != FORMAT_VERSION {
-            return Err(PluginStoreError::InvalidMetadata {
+            return Err(SkillStoreError::InvalidMetadata {
                 reason: format!(
                     "Unsupported format version: {} (expected {})",
                     metadata.format_version, FORMAT_VERSION
@@ -641,31 +641,31 @@ impl PluginStore {
 ///
 /// # Errors
 ///
-/// Returns [`PluginStoreError::InvalidServerName`] if the name is invalid.
+/// Returns [`SkillStoreError::InvalidServerName`] if the name is invalid.
 fn validate_server_name(server_name: &str) -> Result<()> {
     if server_name.is_empty() {
-        return Err(PluginStoreError::InvalidServerName {
+        return Err(SkillStoreError::InvalidServerName {
             server_name: server_name.to_string(),
             reason: "Server name cannot be empty".to_string(),
         });
     }
 
     if server_name == "." || server_name == ".." {
-        return Err(PluginStoreError::InvalidServerName {
+        return Err(SkillStoreError::InvalidServerName {
             server_name: server_name.to_string(),
             reason: "Server name cannot be '.' or '..'".to_string(),
         });
     }
 
     if server_name.contains('/') || server_name.contains('\\') {
-        return Err(PluginStoreError::InvalidServerName {
+        return Err(SkillStoreError::InvalidServerName {
             server_name: server_name.to_string(),
             reason: "Server name cannot contain path separators".to_string(),
         });
     }
 
     if server_name.chars().any(char::is_control) {
-        return Err(PluginStoreError::InvalidServerName {
+        return Err(SkillStoreError::InvalidServerName {
             server_name: server_name.to_string(),
             reason: "Server name cannot contain control characters".to_string(),
         });
@@ -683,18 +683,18 @@ mod tests {
     #[test]
     fn test_new_creates_directory() {
         let temp = TempDir::new().unwrap();
-        let store_path = temp.path().join("plugins");
+        let store_path = temp.path().join("skills");
 
-        let _store = PluginStore::new(&store_path).unwrap();
+        let _store = SkillStore::new(&store_path).unwrap();
         assert!(store_path.exists());
     }
 
     #[test]
-    fn test_plugin_path() {
+    fn test_skill_path() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
-        let path = store.plugin_path("test-server");
+        let path = store.skill_path("test-server");
         assert!(path.ends_with("test-server"));
     }
 
@@ -715,19 +715,19 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_exists_nonexistent() {
+    fn test_skill_exists_nonexistent() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
-        assert!(!store.plugin_exists("nonexistent").unwrap());
+        assert!(!store.skill_exists("nonexistent").unwrap());
     }
 
     #[test]
-    fn test_list_plugins_empty() {
+    fn test_list_skills_empty() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
-        let plugins = store.list_plugins().unwrap();
+        let plugins = store.list_skills().unwrap();
         assert_eq!(plugins.len(), 0);
     }
 
@@ -768,9 +768,9 @@ mod tests {
     }
 
     #[test]
-    fn test_save_plugin_success() {
+    fn test_save_skill_success() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D]; // WASM magic bytes
@@ -778,7 +778,7 @@ mod tests {
         let tools = create_test_tools();
 
         let metadata = store
-            .save_plugin("test-server", &vfs, &wasm, server_info, tools)
+            .save_skill("test-server", &vfs, &wasm, server_info, tools)
             .unwrap();
 
         // Verify metadata
@@ -788,14 +788,14 @@ mod tests {
         assert_eq!(metadata.format_version, FORMAT_VERSION);
 
         // Verify directory structure
-        let plugin_dir = store.plugin_path("test-server");
-        assert!(plugin_dir.exists());
-        assert!(plugin_dir.join(METADATA_FILE).exists());
-        assert!(plugin_dir.join(WASM_FILE).exists());
-        assert!(plugin_dir.join(GENERATED_DIR).exists());
+        let skill_dir = store.skill_path("test-server");
+        assert!(skill_dir.exists());
+        assert!(skill_dir.join(METADATA_FILE).exists());
+        assert!(skill_dir.join(WASM_FILE).exists());
+        assert!(skill_dir.join(GENERATED_DIR).exists());
 
         // Verify generated files exist
-        let generated_dir = plugin_dir.join(GENERATED_DIR);
+        let generated_dir = skill_dir.join(GENERATED_DIR);
         assert!(generated_dir.join("index.ts").exists());
         assert!(generated_dir.join("tools/sendMessage.ts").exists());
         assert!(generated_dir.join("tools/getChatInfo.ts").exists());
@@ -807,9 +807,9 @@ mod tests {
     }
 
     #[test]
-    fn test_save_plugin_already_exists() {
+    fn test_save_skill_already_exists() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
@@ -818,7 +818,7 @@ mod tests {
 
         // First save succeeds
         store
-            .save_plugin(
+            .save_skill(
                 "test-server",
                 &vfs,
                 &wasm,
@@ -828,30 +828,30 @@ mod tests {
             .unwrap();
 
         // Second save fails
-        let result = store.save_plugin("test-server", &vfs, &wasm, server_info, tools);
+        let result = store.save_skill("test-server", &vfs, &wasm, server_info, tools);
         assert!(matches!(
             result,
-            Err(PluginStoreError::PluginAlreadyExists { .. })
+            Err(SkillStoreError::PluginAlreadyExists { .. })
         ));
     }
 
     #[test]
     fn test_save_load_roundtrip() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00]; // WASM header
         let server_info = create_test_server_info("roundtrip-server");
         let tools = create_test_tools();
 
-        // Save plugin
+        // Save skill
         let save_metadata = store
-            .save_plugin("roundtrip-server", &vfs, &wasm, server_info, tools)
+            .save_skill("roundtrip-server", &vfs, &wasm, server_info, tools)
             .unwrap();
 
-        // Load plugin
-        let loaded = store.load_plugin("roundtrip-server").unwrap();
+        // Load skill
+        let loaded = store.load_skill("roundtrip-server").unwrap();
 
         // Verify metadata matches
         assert_eq!(loaded.metadata.server.name, save_metadata.server.name);
@@ -876,108 +876,108 @@ mod tests {
     }
 
     #[test]
-    fn test_load_plugin_not_found() {
+    fn test_load_skill_not_found() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
-        let result = store.load_plugin("nonexistent");
+        let result = store.load_skill("nonexistent");
         assert!(matches!(
             result,
-            Err(PluginStoreError::PluginNotFound { .. })
+            Err(SkillStoreError::PluginNotFound { .. })
         ));
     }
 
     #[test]
-    fn test_load_plugin_checksum_mismatch_wasm() {
+    fn test_load_skill_checksum_mismatch_wasm() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
         let server_info = create_test_server_info("corrupt-wasm");
         let tools = create_test_tools();
 
-        // Save plugin
+        // Save skill
         store
-            .save_plugin("corrupt-wasm", &vfs, &wasm, server_info, tools)
+            .save_skill("corrupt-wasm", &vfs, &wasm, server_info, tools)
             .unwrap();
 
         // Corrupt WASM file
-        let wasm_path = store.plugin_path("corrupt-wasm").join(WASM_FILE);
+        let wasm_path = store.skill_path("corrupt-wasm").join(WASM_FILE);
         fs::write(&wasm_path, b"corrupted data").unwrap();
 
         // Load should fail with checksum mismatch
-        let result = store.load_plugin("corrupt-wasm");
+        let result = store.load_skill("corrupt-wasm");
         assert!(matches!(
             result,
-            Err(PluginStoreError::ChecksumMismatch { .. })
+            Err(SkillStoreError::ChecksumMismatch { .. })
         ));
     }
 
     #[test]
-    fn test_load_plugin_checksum_mismatch_generated() {
+    fn test_load_skill_checksum_mismatch_generated() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
         let server_info = create_test_server_info("corrupt-generated");
         let tools = create_test_tools();
 
-        // Save plugin
+        // Save skill
         store
-            .save_plugin("corrupt-generated", &vfs, &wasm, server_info, tools)
+            .save_skill("corrupt-generated", &vfs, &wasm, server_info, tools)
             .unwrap();
 
         // Corrupt a generated file
         let file_path = store
-            .plugin_path("corrupt-generated")
+            .skill_path("corrupt-generated")
             .join(GENERATED_DIR)
             .join("index.ts");
         fs::write(&file_path, "corrupted content").unwrap();
 
         // Load should fail with checksum mismatch
-        let result = store.load_plugin("corrupt-generated");
+        let result = store.load_skill("corrupt-generated");
         assert!(matches!(
             result,
-            Err(PluginStoreError::ChecksumMismatch { .. })
+            Err(SkillStoreError::ChecksumMismatch { .. })
         ));
     }
 
     #[test]
-    fn test_load_plugin_missing_file() {
+    fn test_load_skill_missing_file() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
         let server_info = create_test_server_info("missing-file");
         let tools = create_test_tools();
 
-        // Save plugin
+        // Save skill
         store
-            .save_plugin("missing-file", &vfs, &wasm, server_info, tools)
+            .save_skill("missing-file", &vfs, &wasm, server_info, tools)
             .unwrap();
 
         // Delete a generated file
         let file_path = store
-            .plugin_path("missing-file")
+            .skill_path("missing-file")
             .join(GENERATED_DIR)
             .join("index.ts");
         fs::remove_file(&file_path).unwrap();
 
         // Load should fail with invalid metadata (file count mismatch)
-        let result = store.load_plugin("missing-file");
+        let result = store.load_skill("missing-file");
         assert!(matches!(
             result,
-            Err(PluginStoreError::InvalidMetadata { .. })
+            Err(SkillStoreError::InvalidMetadata { .. })
         ));
     }
 
     #[test]
     fn test_multiple_plugins_same_store() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs1 = create_test_vfs();
         let vfs2 = create_test_vfs();
@@ -988,64 +988,64 @@ mod tests {
 
         // Save two different plugins
         store
-            .save_plugin("plugin1", &vfs1, &wasm, server_info1, tools.clone())
+            .save_skill("plugin1", &vfs1, &wasm, server_info1, tools.clone())
             .unwrap();
         store
-            .save_plugin("plugin2", &vfs2, &wasm, server_info2, tools)
+            .save_skill("plugin2", &vfs2, &wasm, server_info2, tools)
             .unwrap();
 
         // Both should exist
-        assert!(store.plugin_exists("plugin1").unwrap());
-        assert!(store.plugin_exists("plugin2").unwrap());
+        assert!(store.skill_exists("plugin1").unwrap());
+        assert!(store.skill_exists("plugin2").unwrap());
 
         // List should show both
-        let plugins = store.list_plugins().unwrap();
+        let plugins = store.list_skills().unwrap();
         assert_eq!(plugins.len(), 2);
 
         // Load both
-        let loaded1 = store.load_plugin("plugin1").unwrap();
-        let loaded2 = store.load_plugin("plugin2").unwrap();
+        let loaded1 = store.load_skill("plugin1").unwrap();
+        let loaded2 = store.load_skill("plugin2").unwrap();
 
         assert_eq!(loaded1.metadata.server.name, "plugin1");
         assert_eq!(loaded2.metadata.server.name, "plugin2");
     }
 
     #[test]
-    fn test_remove_plugin_and_reload() {
+    fn test_remove_skill_and_reload() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
         let server_info = create_test_server_info("to-remove");
         let tools = create_test_tools();
 
-        // Save plugin
+        // Save skill
         store
-            .save_plugin("to-remove", &vfs, &wasm, server_info, tools)
+            .save_skill("to-remove", &vfs, &wasm, server_info, tools)
             .unwrap();
 
         // Verify it exists
-        assert!(store.plugin_exists("to-remove").unwrap());
+        assert!(store.skill_exists("to-remove").unwrap());
 
         // Remove it
-        store.remove_plugin("to-remove").unwrap();
+        store.remove_skill("to-remove").unwrap();
 
         // Should no longer exist
-        assert!(!store.plugin_exists("to-remove").unwrap());
+        assert!(!store.skill_exists("to-remove").unwrap());
 
         // Load should fail
-        let result = store.load_plugin("to-remove");
+        let result = store.load_skill("to-remove");
         assert!(matches!(
             result,
-            Err(PluginStoreError::PluginNotFound { .. })
+            Err(SkillStoreError::PluginNotFound { .. })
         ));
     }
 
     #[test]
-    fn test_save_plugin_empty_vfs() {
+    fn test_save_skill_empty_vfs() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = VfsBuilder::new().build().unwrap();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
@@ -1053,14 +1053,14 @@ mod tests {
 
         // Should succeed with empty VFS
         let metadata = store
-            .save_plugin("empty-vfs", &vfs, &wasm, server_info, vec![])
+            .save_skill("empty-vfs", &vfs, &wasm, server_info, vec![])
             .unwrap();
 
         assert_eq!(metadata.checksums.generated.len(), 0);
         assert_eq!(metadata.tools.len(), 0);
 
         // Should be able to load it back
-        let loaded = store.load_plugin("empty-vfs").unwrap();
+        let loaded = store.load_skill("empty-vfs").unwrap();
         assert_eq!(loaded.vfs.file_count(), 0);
     }
 
@@ -1070,7 +1070,7 @@ mod tests {
         use std::thread;
 
         let temp = TempDir::new().unwrap();
-        let store = Arc::new(PluginStore::new(temp.path()).unwrap());
+        let store = Arc::new(SkillStore::new(temp.path()).unwrap());
 
         let vfs = create_test_vfs();
         let wasm = vec![0x00, 0x61, 0x73, 0x6D];
@@ -1082,7 +1082,7 @@ mod tests {
         let wasm1 = wasm.clone();
         let tools1 = tools.clone();
         let t1 = thread::spawn(move || {
-            store1.save_plugin(
+            store1.save_skill(
                 "concurrent-test",
                 &vfs1,
                 &wasm1,
@@ -1093,7 +1093,7 @@ mod tests {
 
         let store2 = Arc::clone(&store);
         let t2 = thread::spawn(move || {
-            store2.save_plugin(
+            store2.save_skill(
                 "concurrent-test",
                 &vfs,
                 &wasm,
@@ -1109,7 +1109,7 @@ mod tests {
         let success_count = [&r1, &r2].iter().filter(|r| r.is_ok()).count();
         let already_exists_count = [&r1, &r2]
             .iter()
-            .filter(|r| matches!(r, Err(PluginStoreError::PluginAlreadyExists { .. })))
+            .filter(|r| matches!(r, Err(SkillStoreError::PluginAlreadyExists { .. })))
             .count();
 
         assert_eq!(success_count, 1, "Exactly one save should succeed");
@@ -1119,15 +1119,15 @@ mod tests {
         );
 
         // Plugin should exist and be valid
-        assert!(store.plugin_exists("concurrent-test").unwrap());
-        let loaded = store.load_plugin("concurrent-test").unwrap();
+        assert!(store.skill_exists("concurrent-test").unwrap());
+        let loaded = store.load_skill("concurrent-test").unwrap();
         assert_eq!(loaded.metadata.server.name, "concurrent-test");
     }
 
     #[test]
-    fn test_save_plugin_cleanup_on_vfs_error() {
+    fn test_save_skill_cleanup_on_vfs_error() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         // Create VFS with a file, then we'll simulate an error by making
         // the generated directory read-only (on Unix systems)
@@ -1136,23 +1136,23 @@ mod tests {
         let server_info = create_test_server_info("cleanup-test");
         let tools = create_test_tools();
 
-        // First create the plugin directory manually
-        let plugin_dir = store.plugin_path("cleanup-test");
-        fs::create_dir(&plugin_dir).unwrap();
+        // First create the skill directory manually
+        let skill_dir = store.skill_path("cleanup-test");
+        fs::create_dir(&skill_dir).unwrap();
 
         // Now save should fail with AlreadyExists
-        let result = store.save_plugin("cleanup-test", &vfs, &wasm, server_info, tools);
+        let result = store.save_skill("cleanup-test", &vfs, &wasm, server_info, tools);
         assert!(matches!(
             result,
-            Err(PluginStoreError::PluginAlreadyExists { .. })
+            Err(SkillStoreError::PluginAlreadyExists { .. })
         ));
 
         // Directory should still exist since we created it manually
-        assert!(plugin_dir.exists());
+        assert!(skill_dir.exists());
     }
 
     #[test]
-    fn test_plugin_dir_guard_cleanup() {
+    fn test_skill_dir_guard_cleanup() {
         let temp = TempDir::new().unwrap();
         let test_dir = temp.path().join("test-guard");
 
@@ -1162,7 +1162,7 @@ mod tests {
 
         // Create guard and let it drop without commit
         {
-            let _guard = PluginDirGuard::new(test_dir.clone());
+            let _guard = SkillDirGuard::new(test_dir.clone());
             // Guard drops here
         }
 
@@ -1171,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_dir_guard_commit() {
+    fn test_skill_dir_guard_commit() {
         let temp = TempDir::new().unwrap();
         let test_dir = temp.path().join("test-guard-commit");
 
@@ -1181,7 +1181,7 @@ mod tests {
 
         // Create guard and commit it
         {
-            let guard = PluginDirGuard::new(test_dir.clone());
+            let guard = SkillDirGuard::new(test_dir.clone());
             guard.commit();
             // Guard drops here
         }
@@ -1191,9 +1191,9 @@ mod tests {
     }
 
     #[test]
-    fn test_save_plugin_with_nested_directories() {
+    fn test_save_skill_with_nested_directories() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let vfs = VfsBuilder::new()
             .add_file("/a/b/c/deep.ts", "export const DEEP = true;")
@@ -1206,19 +1206,19 @@ mod tests {
 
         // Save with nested directories
         let metadata = store
-            .save_plugin("nested", &vfs, &wasm, server_info, vec![])
+            .save_skill("nested", &vfs, &wasm, server_info, vec![])
             .unwrap();
 
         assert_eq!(metadata.checksums.generated.len(), 2);
 
         // Verify directory structure on disk
-        let plugin_dir = store.plugin_path("nested");
-        let generated_dir = plugin_dir.join(GENERATED_DIR);
+        let skill_dir = store.skill_path("nested");
+        let generated_dir = skill_dir.join(GENERATED_DIR);
         assert!(generated_dir.join("a/b/c/deep.ts").exists());
         assert!(generated_dir.join("x/y/file.ts").exists());
 
         // Load and verify
-        let loaded = store.load_plugin("nested").unwrap();
+        let loaded = store.load_skill("nested").unwrap();
         assert_eq!(loaded.vfs.file_count(), 2);
 
         let content = loaded.vfs.read_file("/a/b/c/deep.ts").unwrap();
@@ -1226,13 +1226,13 @@ mod tests {
     }
 
     #[test]
-    fn test_load_plugin_unsupported_format_version() {
+    fn test_load_skill_unsupported_format_version() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
-        // Create a plugin with future/unsupported format version
-        let plugin_dir = store.plugin_path("test-server");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
+        // Create a skill with future/unsupported format version
+        let skill_dir = store.skill_path("test-server");
+        std::fs::create_dir_all(&skill_dir).unwrap();
 
         let metadata = serde_json::json!({
             "format_version": "2.0",  // Future version
@@ -1251,18 +1251,18 @@ mod tests {
         });
 
         std::fs::write(
-            plugin_dir.join("plugin.json"),
+            skill_dir.join("skill.json"),
             serde_json::to_string_pretty(&metadata).unwrap(),
         )
         .unwrap();
 
         // Attempt to load should fail with InvalidMetadata
-        let result = store.load_plugin("test-server");
+        let result = store.load_skill("test-server");
         assert!(result.is_err());
 
         let err = result.unwrap_err();
         assert!(
-            matches!(err, PluginStoreError::InvalidMetadata { .. }),
+            matches!(err, SkillStoreError::InvalidMetadata { .. }),
             "Expected InvalidMetadata error for unsupported format version, got: {err:?}"
         );
     }
@@ -1304,30 +1304,30 @@ mod tests {
     }
 
     #[test]
-    fn test_load_plugin_missing_metadata() {
+    fn test_load_skill_missing_metadata() {
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
-        // Create plugin directory structure without metadata file
-        let plugin_dir = store.plugin_path("test-server");
-        let generated_dir = plugin_dir.join("generated");
+        // Create skill directory structure without metadata file
+        let skill_dir = store.skill_path("test-server");
+        let generated_dir = skill_dir.join("generated");
         std::fs::create_dir_all(&generated_dir).unwrap();
 
         // Create some generated files
         std::fs::write(generated_dir.join("test.ts"), "export const test = true;").unwrap();
 
         // Create WASM file
-        std::fs::write(plugin_dir.join("module.wasm"), b"fake wasm").unwrap();
+        std::fs::write(skill_dir.join("module.wasm"), b"fake wasm").unwrap();
 
-        // plugin.json is missing - should fail
-        let result = store.load_plugin("test-server");
+        // skill.json is missing - should fail
+        let result = store.load_skill("test-server");
         assert!(result.is_err());
 
         let err = result.unwrap_err();
         // Should be MissingFile error
         assert!(
-            matches!(err, PluginStoreError::MissingFile { .. }),
-            "Expected MissingFile error for missing plugin.json, got: {err:?}"
+            matches!(err, SkillStoreError::MissingFile { .. }),
+            "Expected MissingFile error for missing skill.json, got: {err:?}"
         );
     }
 }

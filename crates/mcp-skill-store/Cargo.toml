@@ -1,5 +1,5 @@
 [package]
-name = "mcp-plugin-store"
+name = "mcp-skill-store"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

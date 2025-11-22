@@ -1,10 +1,10 @@
-//! Blake3 checksum utilities for plugin integrity verification.
+//! Blake3 checksum utilities for skill integrity verification.
 //!
 //! Provides functions to calculate and verify Blake3 checksums for plugin
 //! files. Checksums are stored in the format `"blake3:<hex>"` for easy
 //! identification and future algorithm upgrades.
 
-use crate::error::{PluginStoreError, Result};
+use crate::error::{Result, SkillStoreError};
 
 /// Compares two strings in constant time to prevent timing attacks.
 ///
@@ -22,7 +22,7 @@ use crate::error::{PluginStoreError, Result};
 /// # Examples
 ///
 /// ```
-/// # use mcp_plugin_store::checksum::constant_time_compare;
+/// # use mcp_skill_store::checksum::constant_time_compare;
 /// // Identical strings
 /// assert!(constant_time_compare("blake3:abc123", "blake3:abc123"));
 ///
@@ -70,7 +70,7 @@ pub fn constant_time_compare(a: &str, b: &str) -> bool {
 /// # Examples
 ///
 /// ```
-/// use mcp_plugin_store::checksum::calculate_checksum;
+/// use mcp_skill_store::checksum::calculate_checksum;
 ///
 /// let data = b"Hello, world!";
 /// let checksum = calculate_checksum(data);
@@ -103,13 +103,13 @@ pub fn calculate_checksum(data: &[u8]) -> String {
 ///
 /// # Errors
 ///
-/// Returns [`PluginStoreError::ChecksumMismatch`] if the calculated checksum
+/// Returns [`SkillStoreError::ChecksumMismatch`] if the calculated checksum
 /// doesn't match the expected value.
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_plugin_store::checksum::{calculate_checksum, verify_checksum};
+/// use mcp_skill_store::checksum::{calculate_checksum, verify_checksum};
 ///
 /// let data = b"Hello, world!";
 /// let checksum = calculate_checksum(data);
@@ -126,7 +126,7 @@ pub fn verify_checksum(data: &[u8], expected: &str, path: &str) -> Result<()> {
 
     // Use constant-time comparison to prevent timing attacks
     if !constant_time_compare(&actual, expected) {
-        return Err(PluginStoreError::ChecksumMismatch {
+        return Err(SkillStoreError::ChecksumMismatch {
             path: path.to_string(),
             expected: expected.to_string(),
             actual,
@@ -144,7 +144,7 @@ pub fn verify_checksum(data: &[u8], expected: &str, path: &str) -> Result<()> {
 /// # Examples
 ///
 /// ```
-/// use mcp_plugin_store::checksum::is_valid_checksum_format;
+/// use mcp_skill_store::checksum::is_valid_checksum_format;
 ///
 /// // Valid format
 /// assert!(is_valid_checksum_format(
@@ -294,7 +294,7 @@ mod tests {
         assert!(result.is_err());
 
         match result {
-            Err(PluginStoreError::ChecksumMismatch {
+            Err(SkillStoreError::ChecksumMismatch {
                 path,
                 expected,
                 actual,

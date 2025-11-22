@@ -397,7 +397,6 @@ Before merging to master:
 ### Internal Documentation
 - ADR-005: Claude Code Skill Generation
 - ADR-006: Plugin Persistence Design (to be renamed)
-- `.local/PHASE-8-PLUGIN-PERSISTENCE-GUIDE.md` (to be renamed)
 
 ### Key Quotes
 

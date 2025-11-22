@@ -9,7 +9,7 @@ use mcp_codegen::CodeGenerator;
 use mcp_core::ServerId;
 use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
 use mcp_introspector::Introspector;
-use mcp_plugin_store::{PluginStore, ServerInfo, ToolInfo};
+use mcp_skill_store::{ServerInfo, SkillStore, ToolInfo};
 use mcp_vfs::VfsBuilder;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -47,8 +47,8 @@ struct GenerationResult {
 /// * `output` - Optional output directory (defaults to "./generated")
 /// * `feature` - Code generation feature mode ("wasm" or "skills")
 /// * `force` - Overwrite existing output directory without prompting
-/// * `save_plugin` - Save generated code as a plugin
-/// * `plugin_dir` - Plugin directory for save operations
+/// * `save_skill` - Save generated code as a plugin
+/// * `skill_dir` - Plugin directory for save operations
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -87,8 +87,8 @@ pub async fn run(
     output: Option<PathBuf>,
     feature: String,
     force: bool,
-    save_plugin: bool,
-    plugin_dir: PathBuf,
+    save_skill: bool,
+    skill_dir: PathBuf,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Validate inputs
@@ -199,15 +199,15 @@ pub async fn run(
     }
 
     // Step 4: Save plugin if requested
-    let plugin_saved = if save_plugin {
-        info!("Saving plugin to: {}", plugin_dir.display());
+    let plugin_saved = if save_skill {
+        info!("Saving plugin to: {}", skill_dir.display());
 
         // For MVP, we use mock WASM since we don't have TypeScript compilation
         // In production, this would compile the generated TypeScript to WASM
         let mock_wasm = create_mock_wasm();
 
         // Create plugin store
-        let store = PluginStore::new(&plugin_dir).context("failed to initialize plugin store")?;
+        let store = SkillStore::new(&skill_dir).context("failed to initialize plugin store")?;
 
         // Build VFS from generated code
         let mut vfs_builder = VfsBuilder::new();
@@ -240,10 +240,10 @@ pub async fn run(
 
         // Save plugin
         store
-            .save_plugin(&server, &vfs, &mock_wasm, plugin_server_info, tool_info)
+            .save_skill(&server, &vfs, &mock_wasm, plugin_server_info, tool_info)
             .with_context(|| format!("failed to save plugin for server '{server}'"))?;
 
-        let plugin_path = store.plugin_path(&server);
+        let plugin_path = store.skill_path(&server);
         info!("Plugin saved to: {}", plugin_path.display());
 
         Some(plugin_path.display().to_string())

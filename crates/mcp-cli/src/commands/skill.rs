@@ -6,60 +6,60 @@
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_plugin_store::PluginStore;
+use mcp_skill_store::SkillStore;
 use serde::Serialize;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
 /// Plugin management actions.
 #[derive(Subcommand, Debug)]
-pub enum PluginAction {
+pub enum SkillAction {
     /// Load a plugin from disk
     Load {
-        /// Plugin name (server name)
+        /// Skill name (server name)
         name: String,
 
-        /// Plugin directory (defaults to ./plugins)
+        /// Skill directory (defaults to ./plugins)
         #[arg(long, default_value = "./plugins")]
-        plugin_dir: PathBuf,
+        skill_dir: PathBuf,
     },
 
     /// List available plugins
     List {
-        /// Plugin directory
+        /// Skill directory
         #[arg(long, default_value = "./plugins")]
-        plugin_dir: PathBuf,
+        skill_dir: PathBuf,
     },
 
-    /// Remove a plugin
+    /// Remove a skill
     Remove {
-        /// Plugin name
+        /// Skill name
         name: String,
 
-        /// Plugin directory
+        /// Skill directory
         #[arg(long, default_value = "./plugins")]
-        plugin_dir: PathBuf,
+        skill_dir: PathBuf,
 
         /// Skip confirmation
         #[arg(short = 'y', long)]
         yes: bool,
     },
 
-    /// Show plugin information
+    /// Show skill information
     Info {
-        /// Plugin name
+        /// Skill name
         name: String,
 
-        /// Plugin directory
+        /// Skill directory
         #[arg(long, default_value = "./plugins")]
-        plugin_dir: PathBuf,
+        skill_dir: PathBuf,
     },
 }
 
 /// Result of loading a plugin.
 #[derive(Debug, Serialize)]
 struct LoadResult {
-    /// Plugin name
+    /// Skill name
     name: String,
     /// Server version
     version: String,
@@ -71,20 +71,20 @@ struct LoadResult {
     wasm_size: usize,
 }
 
-/// Result of listing plugins.
+/// Result of listing skills.
 #[derive(Debug, Serialize)]
 struct ListResult {
-    /// Plugin directory
-    plugin_dir: String,
-    /// Number of plugins found
-    plugin_count: usize,
-    /// Plugin information
-    plugins: Vec<PluginSummary>,
+    /// Skill directory
+    skill_dir: String,
+    /// Number of skills found
+    skill_count: usize,
+    /// Skill information
+    skills: Vec<SkillSummary>,
 }
 
-/// Summary of a plugin for listing.
+/// Summary of a skill for listing.
 #[derive(Debug, Serialize)]
-struct PluginSummary {
+struct SkillSummary {
     /// Server name
     name: String,
     /// Server version
@@ -98,7 +98,7 @@ struct PluginSummary {
 /// Result of showing plugin info.
 #[derive(Debug, Serialize)]
 struct InfoResult {
-    /// Plugin name
+    /// Skill name
     name: String,
     /// Server version
     version: String,
@@ -130,7 +130,7 @@ struct ToolSummary {
 /// Result of removing a plugin.
 #[derive(Debug, Serialize)]
 struct RemoveResult {
-    /// Plugin name
+    /// Skill name
     name: String,
     /// Whether removal was successful
     success: bool,
@@ -152,13 +152,13 @@ struct RemoveResult {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::plugin::{PluginAction, run};
+/// use mcp_cli::commands::plugin::{SkillAction, run};
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 /// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
-/// let action = PluginAction::List {
-///     plugin_dir: PathBuf::from("./plugins"),
+/// let action = SkillAction::List {
+///     skill_dir: PathBuf::from("./plugins"),
 /// };
 ///
 /// let result = run(action, OutputFormat::Pretty).await?;
@@ -166,18 +166,16 @@ struct RemoveResult {
 /// # Ok(())
 /// # }
 /// ```
-pub async fn run(action: PluginAction, output_format: OutputFormat) -> Result<ExitCode> {
+pub async fn run(action: SkillAction, output_format: OutputFormat) -> Result<ExitCode> {
     match action {
-        PluginAction::Load { name, plugin_dir } => load_plugin(&name, &plugin_dir, output_format),
-        PluginAction::List { plugin_dir } => list_plugins(&plugin_dir, output_format),
-        PluginAction::Remove {
+        SkillAction::Load { name, skill_dir } => load_plugin(&name, &skill_dir, output_format),
+        SkillAction::List { skill_dir } => list_plugins(&skill_dir, output_format),
+        SkillAction::Remove {
             name,
-            plugin_dir,
+            skill_dir,
             yes,
-        } => remove_plugin(&name, &plugin_dir, yes, output_format),
-        PluginAction::Info { name, plugin_dir } => {
-            show_plugin_info(&name, &plugin_dir, output_format)
-        }
+        } => remove_plugin(&name, &skill_dir, yes, output_format),
+        SkillAction::Info { name, skill_dir } => show_plugin_info(&name, &skill_dir, output_format),
     }
 }
 
@@ -188,15 +186,15 @@ pub async fn run(action: PluginAction, output_format: OutputFormat) -> Result<Ex
 /// Returns an error if the plugin doesn't exist or fails checksum verification.
 pub fn load_plugin(
     name: &str,
-    plugin_dir: &PathBuf,
+    skill_dir: &PathBuf,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     info!("Loading plugin: {}", name);
 
-    let store = PluginStore::new(plugin_dir).context("failed to initialize plugin store")?;
+    let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
 
     let loaded = store
-        .load_plugin(name)
+        .load_skill(name)
         .with_context(|| format!("failed to load plugin '{name}'"))?;
 
     let result = LoadResult {
@@ -222,21 +220,21 @@ pub fn load_plugin(
 ///
 /// # Errors
 ///
-/// Returns an error if the plugin directory cannot be read.
-pub fn list_plugins(plugin_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
-    info!("Listing plugins in: {}", plugin_dir.display());
+/// Returns an error if the skill directory cannot be read.
+pub fn list_plugins(skill_dir: &PathBuf, output_format: OutputFormat) -> Result<ExitCode> {
+    info!("Listing plugins in: {}", skill_dir.display());
 
-    let store = PluginStore::new(&plugin_dir).context("failed to initialize plugin store")?;
+    let store = SkillStore::new(&skill_dir).context("failed to initialize skill store")?;
 
-    let plugins = store.list_plugins().context("failed to list plugins")?;
+    let skills = store.list_skills().context("failed to list skills")?;
 
-    if plugins.is_empty() {
-        warn!("No plugins found in {}", plugin_dir.display());
+    if skills.is_empty() {
+        warn!("No skills found in {}", skill_dir.display());
     }
 
-    let summaries: Vec<PluginSummary> = plugins
+    let summaries: Vec<SkillSummary> = skills
         .iter()
-        .map(|p| PluginSummary {
+        .map(|p| SkillSummary {
             name: p.server_name.clone(),
             version: p.version.clone(),
             tool_count: p.tool_count,
@@ -245,15 +243,15 @@ pub fn list_plugins(plugin_dir: &PathBuf, output_format: OutputFormat) -> Result
         .collect();
 
     let result = ListResult {
-        plugin_dir: plugin_dir.display().to_string(),
-        plugin_count: plugins.len(),
-        plugins: summaries,
+        skill_dir: skill_dir.display().to_string(),
+        skill_count: skills.len(),
+        skills: summaries,
     };
 
     let formatted = crate::formatters::format_output(&result, output_format)?;
     println!("{formatted}");
 
-    info!("Found {} plugin(s)", result.plugin_count);
+    info!("Found {} skill(s)", result.skill_count);
 
     Ok(ExitCode::SUCCESS)
 }
@@ -265,16 +263,16 @@ pub fn list_plugins(plugin_dir: &PathBuf, output_format: OutputFormat) -> Result
 /// Returns an error if the plugin doesn't exist or cannot be removed.
 pub fn remove_plugin(
     name: &str,
-    plugin_dir: &PathBuf,
+    skill_dir: &PathBuf,
     yes: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     info!("Removing plugin: {}", name);
 
-    let store = PluginStore::new(plugin_dir).context("failed to initialize plugin store")?;
+    let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
 
     // Check if plugin exists
-    if !store.plugin_exists(name)? {
+    if !store.skill_exists(name)? {
         bail!("plugin '{name}' not found");
     }
 
@@ -295,7 +293,7 @@ pub fn remove_plugin(
     }
 
     store
-        .remove_plugin(name)
+        .remove_skill(name)
         .with_context(|| format!("failed to remove plugin '{name}'"))?;
 
     let result = RemoveResult {
@@ -318,15 +316,15 @@ pub fn remove_plugin(
 /// Returns an error if the plugin doesn't exist or cannot be loaded.
 pub fn show_plugin_info(
     name: &str,
-    plugin_dir: &PathBuf,
+    skill_dir: &PathBuf,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     info!("Showing info for plugin: {}", name);
 
-    let store = PluginStore::new(plugin_dir).context("failed to initialize plugin store")?;
+    let store = SkillStore::new(skill_dir).context("failed to initialize skill store")?;
 
     let loaded = store
-        .load_plugin(name)
+        .load_skill(name)
         .with_context(|| format!("failed to load plugin '{name}'"))?;
 
     let tools: Vec<ToolSummary> = loaded
@@ -379,16 +377,16 @@ mod tests {
     #[test]
     fn test_list_result_serialization() {
         let result = ListResult {
-            plugin_dir: "./plugins".to_string(),
-            plugin_count: 2,
+            skill_dir: "./plugins".to_string(),
+            skill_count: 2,
             plugins: vec![
-                PluginSummary {
+                SkillSummary {
                     name: "plugin1".to_string(),
                     version: "1.0.0".to_string(),
                     tool_count: 3,
                     generated_at: "2025-11-21T12:00:00Z".to_string(),
                 },
-                PluginSummary {
+                SkillSummary {
                     name: "plugin2".to_string(),
                     version: "2.0.0".to_string(),
                     tool_count: 5,

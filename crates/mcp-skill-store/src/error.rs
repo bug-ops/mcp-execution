@@ -3,51 +3,51 @@
 use std::path::PathBuf;
 
 /// Result type for plugin store operations.
-pub type Result<T> = std::result::Result<T, PluginStoreError>;
+pub type Result<T> = std::result::Result<T, SkillStoreError>;
 
 /// Errors that can occur during plugin store operations.
 #[derive(thiserror::Error, Debug)]
-pub enum PluginStoreError {
-    /// Plugin was not found in the store.
+pub enum SkillStoreError {
+    /// Skill was not found in the store.
     ///
-    /// This error occurs when attempting to load, remove, or access a plugin
-    /// that doesn't exist in the plugin directory.
+    /// This error occurs when attempting to load, remove, or access a skill
+    /// that doesn't exist in the skill directory.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_plugin_store::{PluginStore, PluginStoreError};
+    /// use mcp_skill_store::{SkillStore, SkillStoreError};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let temp = tempfile::tempdir()?;
-    /// let store = PluginStore::new(temp.path())?;
+    /// let store = SkillStore::new(temp.path())?;
     ///
-    /// let result = store.load_plugin("nonexistent");
-    /// assert!(matches!(result, Err(PluginStoreError::PluginNotFound { .. })));
+    /// let result = store.load_skill("nonexistent");
+    /// assert!(matches!(result, Err(SkillStoreError::PluginNotFound { .. })));
     /// # Ok(())
     /// # }
     /// ```
-    #[error("Plugin not found: {server_name}")]
+    #[error("Skill not found: {server_name}")]
     PluginNotFound {
-        /// Name of the server whose plugin was not found
+        /// Name of the server whose skill was not found
         server_name: String,
     },
 
-    /// Plugin already exists in the store.
+    /// Skill already exists in the store.
     ///
-    /// This error occurs when attempting to save a plugin with a server name
-    /// that already has a plugin saved. To overwrite, remove the existing
+    /// This error occurs when attempting to save a skill with a server name
+    /// that already has a skill saved. To overwrite, remove the existing
     /// plugin first.
     ///
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::{PluginStore, PluginStoreError, ServerInfo};
+    /// use mcp_skill_store::{SkillStore, SkillStoreError, ServerInfo};
     /// use mcp_vfs::VfsBuilder;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let temp = tempfile::tempdir()?;
-    /// let store = PluginStore::new(temp.path())?;
+    /// let store = SkillStore::new(temp.path())?;
     /// let vfs = VfsBuilder::new().build()?;
     /// let wasm = vec![0x00, 0x61, 0x73, 0x6D];
     /// let server_info = ServerInfo {
@@ -57,17 +57,17 @@ pub enum PluginStoreError {
     /// };
     ///
     /// // First save succeeds
-    /// store.save_plugin("test", &vfs, &wasm, server_info.clone(), vec![])?;
+    /// store.save_skill("test", &vfs, &wasm, server_info.clone(), vec![])?;
     ///
     /// // Second save fails
-    /// let result = store.save_plugin("test", &vfs, &wasm, server_info, vec![]);
-    /// assert!(matches!(result, Err(PluginStoreError::PluginAlreadyExists { .. })));
+    /// let result = store.save_skill("test", &vfs, &wasm, server_info, vec![]);
+    /// assert!(matches!(result, Err(SkillStoreError::PluginAlreadyExists { .. })));
     /// # Ok(())
     /// # }
     /// ```
-    #[error("Plugin already exists: {server_name}")]
+    #[error("Skill already exists: {server_name}")]
     PluginAlreadyExists {
-        /// Name of the server whose plugin already exists
+        /// Name of the server whose skill already exists
         server_name: String,
     },
 
@@ -79,7 +79,7 @@ pub enum PluginStoreError {
     /// # Security
     ///
     /// While Blake3 provides good integrity checking, this is not a security
-    /// boundary against adversarial attacks. For untrusted plugins, additional
+    /// boundary against adversarial attacks. For untrusted skills, additional
     /// cryptographic signatures would be required.
     #[error("Checksum mismatch for {path}: expected {expected}, got {actual}")]
     ChecksumMismatch {
@@ -93,7 +93,7 @@ pub enum PluginStoreError {
 
     /// Plugin metadata is invalid or malformed.
     ///
-    /// This error occurs when `plugin.json` cannot be parsed or contains
+    /// This error occurs when `skill.json` cannot be parsed or contains
     /// invalid data (e.g., missing required fields, invalid format version).
     #[error("Invalid metadata format: {reason}")]
     InvalidMetadata {
@@ -110,19 +110,19 @@ pub enum PluginStoreError {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_plugin_store::{PluginStore, PluginStoreError};
+    /// use mcp_skill_store::{SkillStore, SkillStoreError};
     /// use mcp_vfs::VfsBuilder;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let temp = tempfile::tempdir()?;
-    /// let store = PluginStore::new(temp.path())?;
+    /// let store = SkillStore::new(temp.path())?;
     /// let vfs = VfsBuilder::new().build()?;
     /// let wasm = vec![0x00, 0x61, 0x73, 0x6D];
     ///
     /// // These server names are invalid
-    /// assert!(store.plugin_exists("../escape").unwrap_err().to_string().contains("Invalid"));
-    /// assert!(store.plugin_exists("/absolute").unwrap_err().to_string().contains("Invalid"));
-    /// assert!(store.plugin_exists("sub/dir").unwrap_err().to_string().contains("Invalid"));
+    /// assert!(store.skill_exists("../escape").unwrap_err().to_string().contains("Invalid"));
+    /// assert!(store.skill_exists("/absolute").unwrap_err().to_string().contains("Invalid"));
+    /// assert!(store.skill_exists("sub/dir").unwrap_err().to_string().contains("Invalid"));
     /// # Ok(())
     /// # }
     /// ```
@@ -144,7 +144,7 @@ pub enum PluginStoreError {
     /// JSON serialization/deserialization error.
     ///
     /// This wraps errors from parsing or generating JSON, typically from
-    /// `plugin.json` metadata files.
+    /// `skill.json` metadata files.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -155,22 +155,22 @@ pub enum PluginStoreError {
     #[error("VFS error: {0}")]
     Vfs(#[from] mcp_vfs::VfsError),
 
-    /// File is missing from plugin directory.
+    /// File is missing from skill directory.
     ///
-    /// This indicates a required file (like `plugin.json` or `module.wasm`)
-    /// is missing from the plugin directory, suggesting an incomplete or
+    /// This indicates a required file (like `skill.json` or `module.wasm`)
+    /// is missing from the skill directory, suggesting an incomplete or
     /// corrupted plugin.
     #[error("Missing file in plugin {server_name}: {path}")]
     MissingFile {
-        /// Server name of the plugin with missing file
+        /// Server name of the skill with missing file
         server_name: String,
-        /// Path of the missing file relative to plugin directory
+        /// Path of the missing file relative to skill directory
         path: PathBuf,
     },
 }
 
 // Ensure error type follows Microsoft Rust Guidelines
-impl PluginStoreError {
+impl SkillStoreError {
     /// Returns true if this error is recoverable.
     ///
     /// Recoverable errors are typically user errors (invalid names, missing
@@ -194,29 +194,29 @@ mod tests {
 
     #[test]
     fn test_plugin_not_found_display() {
-        let error = PluginStoreError::PluginNotFound {
+        let error = SkillStoreError::PluginNotFound {
             server_name: "test-server".to_string(),
         };
 
         let display = format!("{error}");
-        assert!(display.contains("Plugin not found"));
+        assert!(display.contains("Skill not found"));
         assert!(display.contains("test-server"));
     }
 
     #[test]
     fn test_plugin_already_exists_display() {
-        let error = PluginStoreError::PluginAlreadyExists {
+        let error = SkillStoreError::PluginAlreadyExists {
             server_name: "existing-server".to_string(),
         };
 
         let display = format!("{error}");
-        assert!(display.contains("Plugin already exists"));
+        assert!(display.contains("Skill already exists"));
         assert!(display.contains("existing-server"));
     }
 
     #[test]
     fn test_checksum_mismatch_display() {
-        let error = PluginStoreError::ChecksumMismatch {
+        let error = SkillStoreError::ChecksumMismatch {
             path: "/path/to/file.wasm".to_string(),
             expected: "abc123".to_string(),
             actual: "def456".to_string(),
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_invalid_metadata_display() {
-        let error = PluginStoreError::InvalidMetadata {
+        let error = SkillStoreError::InvalidMetadata {
             reason: "missing required field 'version'".to_string(),
         };
 
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_invalid_server_name_display() {
-        let error = PluginStoreError::InvalidServerName {
+        let error = SkillStoreError::InvalidServerName {
             server_name: "../escape".to_string(),
             reason: "contains path traversal".to_string(),
         };
@@ -255,21 +255,21 @@ mod tests {
 
     #[test]
     fn test_missing_file_display() {
-        let error = PluginStoreError::MissingFile {
+        let error = SkillStoreError::MissingFile {
             server_name: "test".to_string(),
-            path: PathBuf::from("plugin.json"),
+            path: PathBuf::from("skill.json"),
         };
 
         let display = format!("{error}");
         assert!(display.contains("Missing file"));
         assert!(display.contains("test"));
-        assert!(display.contains("plugin.json"));
+        assert!(display.contains("skill.json"));
     }
 
     #[test]
     fn test_io_error_conversion() {
         let io_error = io::Error::new(io::ErrorKind::NotFound, "file not found");
-        let error: PluginStoreError = io_error.into();
+        let error: SkillStoreError = io_error.into();
 
         let display = format!("{error}");
         assert!(display.contains("IO error"));
@@ -280,7 +280,7 @@ mod tests {
     fn test_json_error_conversion() {
         let json_str = "{invalid json";
         let json_error = serde_json::from_str::<serde_json::Value>(json_str).unwrap_err();
-        let error: PluginStoreError = json_error.into();
+        let error: SkillStoreError = json_error.into();
 
         let display = format!("{error}");
         assert!(display.contains("JSON error"));
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_is_recoverable_plugin_not_found() {
-        let error = PluginStoreError::PluginNotFound {
+        let error = SkillStoreError::PluginNotFound {
             server_name: "test".to_string(),
         };
         assert!(error.is_recoverable());
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_is_recoverable_plugin_already_exists() {
-        let error = PluginStoreError::PluginAlreadyExists {
+        let error = SkillStoreError::PluginAlreadyExists {
             server_name: "test".to_string(),
         };
         assert!(error.is_recoverable());
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_is_recoverable_invalid_server_name() {
-        let error = PluginStoreError::InvalidServerName {
+        let error = SkillStoreError::InvalidServerName {
             server_name: "../test".to_string(),
             reason: "path traversal".to_string(),
         };
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_is_recoverable_invalid_metadata() {
-        let error = PluginStoreError::InvalidMetadata {
+        let error = SkillStoreError::InvalidMetadata {
             reason: "missing field".to_string(),
         };
         assert!(error.is_recoverable());
@@ -322,13 +322,13 @@ mod tests {
     #[test]
     fn test_is_not_recoverable_io_error() {
         let io_error = io::Error::new(io::ErrorKind::PermissionDenied, "access denied");
-        let error: PluginStoreError = io_error.into();
+        let error: SkillStoreError = io_error.into();
         assert!(!error.is_recoverable());
     }
 
     #[test]
     fn test_is_not_recoverable_checksum_mismatch() {
-        let error = PluginStoreError::ChecksumMismatch {
+        let error = SkillStoreError::ChecksumMismatch {
             path: "test.wasm".to_string(),
             expected: "abc".to_string(),
             actual: "def".to_string(),
@@ -338,16 +338,16 @@ mod tests {
 
     #[test]
     fn test_is_not_recoverable_missing_file() {
-        let error = PluginStoreError::MissingFile {
+        let error = SkillStoreError::MissingFile {
             server_name: "test".to_string(),
-            path: PathBuf::from("plugin.json"),
+            path: PathBuf::from("skill.json"),
         };
         assert!(!error.is_recoverable());
     }
 
     #[test]
     fn test_error_debug() {
-        let error = PluginStoreError::PluginNotFound {
+        let error = SkillStoreError::PluginNotFound {
             server_name: "test".to_string(),
         };
 
@@ -370,25 +370,25 @@ mod tests {
     #[test]
     fn test_multiple_error_variants_debug() {
         let errors = vec![
-            PluginStoreError::PluginNotFound {
+            SkillStoreError::PluginNotFound {
                 server_name: "test1".to_string(),
             },
-            PluginStoreError::PluginAlreadyExists {
+            SkillStoreError::PluginAlreadyExists {
                 server_name: "test2".to_string(),
             },
-            PluginStoreError::InvalidServerName {
+            SkillStoreError::InvalidServerName {
                 server_name: "../test3".to_string(),
                 reason: "invalid".to_string(),
             },
-            PluginStoreError::ChecksumMismatch {
+            SkillStoreError::ChecksumMismatch {
                 path: "file.wasm".to_string(),
                 expected: "abc".to_string(),
                 actual: "def".to_string(),
             },
-            PluginStoreError::InvalidMetadata {
+            SkillStoreError::InvalidMetadata {
                 reason: "bad format".to_string(),
             },
-            PluginStoreError::MissingFile {
+            SkillStoreError::MissingFile {
                 server_name: "test4".to_string(),
                 path: PathBuf::from("missing.json"),
             },
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_checksum_mismatch_with_long_hashes() {
-        let error = PluginStoreError::ChecksumMismatch {
+        let error = SkillStoreError::ChecksumMismatch {
             path: "module.wasm".to_string(),
             expected: "a".repeat(64),
             actual: "b".repeat(64),
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_invalid_server_name_empty() {
-        let error = PluginStoreError::InvalidServerName {
+        let error = SkillStoreError::InvalidServerName {
             server_name: String::new(),
             reason: "empty name".to_string(),
         };
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_missing_file_with_nested_path() {
-        let error = PluginStoreError::MissingFile {
+        let error = SkillStoreError::MissingFile {
             server_name: "test".to_string(),
             path: PathBuf::from("subdir/nested/file.txt"),
         };
@@ -449,7 +449,7 @@ mod tests {
         ];
 
         for reason in reasons {
-            let error = PluginStoreError::InvalidMetadata {
+            let error = SkillStoreError::InvalidMetadata {
                 reason: reason.to_string(),
             };
             assert!(error.is_recoverable());
@@ -462,7 +462,7 @@ mod tests {
         use std::error::Error;
 
         let io_error = io::Error::new(io::ErrorKind::NotFound, "file not found");
-        let error: PluginStoreError = io_error.into();
+        let error: SkillStoreError = io_error.into();
 
         // Test that error can be used with source trait
         let source = error.source();

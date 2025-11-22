@@ -6,7 +6,7 @@ members = [
     "crates/mcp-core",
     "crates/mcp-examples",
     "crates/mcp-introspector",
-    "crates/mcp-plugin-store",
+    "crates/mcp-skill-store",
     "crates/mcp-skill-generator",
     "crates/mcp-vfs",
     "crates/mcp-wasm-runtime",
@@ -41,7 +41,7 @@ mcp-bridge = { path = "crates/mcp-bridge" }
 mcp-codegen = { path = "crates/mcp-codegen" }
 mcp-core = { path = "crates/mcp-core" }
 mcp-introspector = { path = "crates/mcp-introspector" }
-mcp-plugin-store = { path = "crates/mcp-plugin-store" }
+mcp-skill-store = { path = "crates/mcp-skill-store" }
 mcp-skill-generator = { path = "crates/mcp-skill-generator" }
 mcp-vfs = { path = "crates/mcp-vfs" }
 mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
