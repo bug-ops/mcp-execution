@@ -127,4 +127,12 @@ pub mod types;
 pub use checksum::constant_time_compare;
 pub use error::{Result, SkillStoreError};
 pub use store::SkillStore;
+
+// Claude format types (primary API)
+pub use types::{
+    CLAUDE_METADATA_FILE, CLAUDE_REFERENCE_FILE, CLAUDE_SKILL_FILE, ClaudeSkillMetadata,
+    ClaudeSkillSummary, LoadedClaudeSkill, SkillChecksums,
+};
+
+// Legacy format types (deprecated - for backward compatibility only)
 pub use types::{Checksums, LoadedSkill, ServerInfo, SkillInfo, SkillMetadata, ToolInfo};

@@ -88,33 +88,25 @@ pub enum Commands {
         detailed: bool,
     },
 
-    /// Generate code from MCP server tools.
+    /// Generate Claude skill from MCP server.
     ///
-    /// Introspects a server and generates TypeScript or Rust code
-    /// for tool execution, optionally compiling to WASM.
+    /// Introspects an MCP server and generates a Claude skill
+    /// in the .claude/skills/ directory.
     Generate {
-        /// Server connection string or command
+        /// MCP server name to introspect
         server: String,
 
-        /// Output directory for generated code
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Code generation feature mode (wasm, skills)
-        #[arg(short, long, default_value = "wasm")]
-        feature: String,
-
-        /// Overwrite existing output directory without prompting
-        #[arg(short = 'F', long)]
-        force: bool,
-
-        /// Save generated code as a skill
+        /// MCP server command (defaults to server name)
         #[arg(long)]
-        save_skill: bool,
+        server_command: Option<String>,
 
-        /// Skill directory for save/load operations
-        #[arg(long, default_value = "./skills")]
-        skill_dir: PathBuf,
+        /// Skill name (interactive prompt if not provided)
+        #[arg(long)]
+        skill_name: Option<String>,
+
+        /// Skill description (interactive prompt if not provided)
+        #[arg(long)]
+        skill_description: Option<String>,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -250,19 +242,15 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         }
         Commands::Generate {
             server,
-            output,
-            feature,
-            force,
-            save_skill,
-            skill_dir,
+            server_command,
+            skill_name,
+            skill_description,
         } => {
             commands::generate::run(
                 server,
-                output,
-                feature,
-                force,
-                save_skill,
-                skill_dir,
+                server_command,
+                skill_name,
+                skill_description,
                 output_format,
             )
             .await
@@ -301,18 +289,27 @@ mod tests {
         let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
         assert!(matches!(cli.command, Commands::Generate { .. }));
 
-        // Test with output directory
-        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--output", "/tmp"]);
-        if let Commands::Generate { output, .. } = cli.command {
-            assert_eq!(output, Some(PathBuf::from("/tmp")));
+        // Test with skill name
+        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--skill-name", "my-skill"]);
+        if let Commands::Generate { skill_name, .. } = cli.command {
+            assert_eq!(skill_name, Some("my-skill".to_string()));
         } else {
             panic!("Expected Generate command");
         }
 
-        // Test with force flag
-        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--force"]);
-        if let Commands::Generate { force, .. } = cli.command {
-            assert!(force);
+        // Test with skill description
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "generate",
+            "server",
+            "--skill-description",
+            "Test description",
+        ]);
+        if let Commands::Generate {
+            skill_description, ..
+        } = cli.command
+        {
+            assert_eq!(skill_description, Some("Test description".to_string()));
         } else {
             panic!("Expected Generate command");
         }

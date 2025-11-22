@@ -10,10 +10,18 @@
 //! - Invalid values being passed
 //! - Accidental type conversions
 //!
+//! # Skill Generation
+//!
+//! This project generates skills **exclusively** in the Anthropic Claude Agent Skills format:
+//! - Skills are generated in `.claude/skills/skill-name/` directory
+//! - Each skill has a `SKILL.md` file with YAML frontmatter
+//! - Follows Anthropic's specification for Claude Code/Desktop integration
+//! - No legacy format support, no backward compatibility concerns
+//!
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{ServerId, SessionId, MemoryLimit};
+//! use mcp_core::{ServerId, SessionId, MemoryLimit, SkillName, SkillDescription};
 //!
 //! // Type-safe identifiers
 //! let server = ServerId::new("my-server");
@@ -22,6 +30,10 @@
 //! // Type-safe memory limits
 //! let limit = MemoryLimit::default();
 //! assert_eq!(limit.bytes(), 256 * 1024 * 1024);
+//!
+//! // Validated Anthropic skill types
+//! let name = SkillName::new("vkteams-bot").unwrap();
+//! let desc = SkillDescription::new("Sends messages to VK Teams. Use when...").unwrap();
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -575,6 +587,387 @@ impl From<&str> for CacheKey {
     }
 }
 
+/// Validated skill description for Anthropic Claude Agent Skills format.
+///
+/// Skill descriptions must follow strict validation rules per the Anthropic specification:
+/// - Maximum 1024 characters
+/// - No XML tags (`<` or `>`)
+/// - No template syntax (`{{` or `}}`)
+/// - Third-person voice recommended (not enforced)
+/// - Should include activation triggers (when to use the skill)
+///
+/// # Examples
+///
+/// ```
+/// use mcp_core::SkillDescription;
+///
+/// // Valid description
+/// let desc = SkillDescription::new(
+///     "Interact with VK Teams messenger to send messages, create chats, \
+///      and manage groups. Use when working with VK Teams or when user \
+///      mentions VK messenger integration."
+/// ).unwrap();
+/// assert!(desc.as_str().len() <= 1024);
+///
+/// // Too long
+/// let long = "x".repeat(1025);
+/// assert!(SkillDescription::new(&long).is_err());
+///
+/// // XML tags forbidden
+/// assert!(SkillDescription::new("<script>alert(1)</script>").is_err());
+///
+/// // Template syntax forbidden
+/// assert!(SkillDescription::new("Bad {{injection}}").is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SkillDescription(String);
+
+impl SkillDescription {
+    /// Maximum allowed description length (Anthropic specification).
+    pub const MAX_LENGTH: usize = 1024;
+
+    /// Creates a new validated skill description.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Description is empty
+    /// - Length exceeds `MAX_LENGTH` (1024 characters)
+    /// - Contains XML tags (`<` or `>`)
+    /// - Contains template syntax (`{{` or `}}`)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::SkillDescription;
+    ///
+    /// // Valid description
+    /// let desc = SkillDescription::new("Sends messages to VK Teams. Use when...").unwrap();
+    ///
+    /// // Invalid: too long
+    /// let result = SkillDescription::new(&"x".repeat(1025));
+    /// assert!(result.is_err());
+    ///
+    /// // Invalid: XML tags
+    /// let result = SkillDescription::new("<script>bad</script>");
+    /// assert!(result.is_err());
+    ///
+    /// // Invalid: template syntax
+    /// let result = SkillDescription::new("Bad {{injection}}");
+    /// assert!(result.is_err());
+    /// ```
+    pub fn new(description: impl AsRef<str>) -> crate::Result<Self> {
+        let desc = description.as_ref();
+
+        if desc.is_empty() {
+            return Err(crate::Error::ValidationError {
+                field: "description".to_string(),
+                reason: "Description cannot be empty".to_string(),
+            });
+        }
+
+        if desc.len() > Self::MAX_LENGTH {
+            return Err(crate::Error::ValidationError {
+                field: "description".to_string(),
+                reason: format!(
+                    "Description too long ({} > {} characters)",
+                    desc.len(),
+                    Self::MAX_LENGTH
+                ),
+            });
+        }
+
+        // Check for XML tags
+        if desc.contains('<') || desc.contains('>') {
+            return Err(crate::Error::ValidationError {
+                field: "description".to_string(),
+                reason: "Description cannot contain XML tags (< or >)".to_string(),
+            });
+        }
+
+        // Check for template syntax
+        if desc.contains("{{") || desc.contains("}}") {
+            return Err(crate::Error::ValidationError {
+                field: "description".to_string(),
+                reason: "Description cannot contain template syntax ({{ or }})".to_string(),
+            });
+        }
+
+        Ok(Self(desc.to_string()))
+    }
+
+    /// Returns the description as a string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::SkillDescription;
+    ///
+    /// let desc = SkillDescription::new("Test description").unwrap();
+    /// assert_eq!(desc.as_str(), "Test description");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes the `SkillDescription` and returns the inner `String`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::SkillDescription;
+    ///
+    /// let desc = SkillDescription::new("Test").unwrap();
+    /// let inner: String = desc.into_inner();
+    /// assert_eq!(inner, "Test");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for SkillDescription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<String> for SkillDescription {
+    type Error = crate::Error;
+
+    fn try_from(s: String) -> crate::Result<Self> {
+        Self::new(s)
+    }
+}
+
+impl TryFrom<&str> for SkillDescription {
+    type Error = crate::Error;
+
+    fn try_from(s: &str) -> crate::Result<Self> {
+        Self::new(s)
+    }
+}
+
+/// Skill name identifier with Anthropic Claude Agent Skills format validation.
+///
+/// Skill names must follow strict validation rules per the Anthropic specification:
+/// - Length: 1-64 characters
+/// - Characters: Only lowercase letters (a-z), numbers (0-9), hyphens (-), underscores (_)
+/// - Must start with a lowercase letter
+/// - Must end with a lowercase letter or number
+/// - Reserved words forbidden: "anthropic", "claude" (case-insensitive)
+/// - No XML tags
+///
+/// # Examples
+///
+/// ```
+/// use mcp_core::SkillName;
+///
+/// // Valid names
+/// assert!(SkillName::new("vkteams-bot").is_ok());
+/// assert!(SkillName::new("my_skill_123").is_ok());
+/// assert!(SkillName::new("a").is_ok());
+///
+/// // Invalid: reserved word
+/// assert!(SkillName::new("anthropic-skill").is_err());
+/// assert!(SkillName::new("claude-bot").is_err());
+///
+/// // Invalid: uppercase
+/// assert!(SkillName::new("MySkill").is_err());
+///
+/// // Invalid: starts with number
+/// assert!(SkillName::new("123skill").is_err());
+///
+/// // Invalid: ends with hyphen
+/// assert!(SkillName::new("skill-").is_err());
+///
+/// // Invalid: too long
+/// assert!(SkillName::new(&"x".repeat(65)).is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SkillName(String);
+
+impl SkillName {
+    /// Minimum allowed skill name length.
+    pub const MIN_LENGTH: usize = 1;
+
+    /// Maximum allowed skill name length (Anthropic specification).
+    pub const MAX_LENGTH: usize = 64;
+
+    /// Reserved words that cannot appear in skill names (case-insensitive).
+    pub const RESERVED_WORDS: &'static [&'static str] = &["anthropic", "claude"];
+
+    /// Creates a new validated skill name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Name is empty or exceeds 64 characters
+    /// - Contains reserved words ("anthropic", "claude")
+    /// - Contains XML tags
+    /// - Contains invalid characters (only a-z, 0-9, -, _ allowed)
+    /// - Does not start with a lowercase letter
+    /// - Does not end with a letter or number
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic. The `.unwrap()` calls on `chars().next()`
+    /// and `chars().last()` are safe because we check for empty strings first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::SkillName;
+    ///
+    /// // Valid names
+    /// let name1 = SkillName::new("vkteams-bot").unwrap();
+    /// let name2 = SkillName::new("my_skill_123").unwrap();
+    ///
+    /// // Invalid: reserved word
+    /// assert!(SkillName::new("anthropic-helper").is_err());
+    ///
+    /// // Invalid: uppercase
+    /// assert!(SkillName::new("MySkill").is_err());
+    ///
+    /// // Invalid: starts with number
+    /// assert!(SkillName::new("123skill").is_err());
+    /// ```
+    pub fn new(name: impl AsRef<str>) -> crate::Result<Self> {
+        let name = name.as_ref();
+
+        // Check length
+        if name.is_empty() {
+            return Err(crate::Error::ValidationError {
+                field: "skill_name".to_string(),
+                reason: "Skill name cannot be empty".to_string(),
+            });
+        }
+
+        if name.len() > Self::MAX_LENGTH {
+            return Err(crate::Error::ValidationError {
+                field: "skill_name".to_string(),
+                reason: format!(
+                    "Skill name too long ({} > {} characters)",
+                    name.len(),
+                    Self::MAX_LENGTH
+                ),
+            });
+        }
+
+        // Check reserved words (case-insensitive)
+        let lowercase_name = name.to_lowercase();
+        for reserved in Self::RESERVED_WORDS {
+            if lowercase_name.contains(reserved) {
+                return Err(crate::Error::ReservedWord {
+                    name: name.to_string(),
+                    reserved_word: (*reserved).to_string(),
+                });
+            }
+        }
+
+        // Check for XML tags
+        if name.contains('<') || name.contains('>') {
+            return Err(crate::Error::ValidationError {
+                field: "skill_name".to_string(),
+                reason: "Skill name cannot contain XML tags (< or >)".to_string(),
+            });
+        }
+
+        // Check first character (must be lowercase letter)
+        let first_char = name.chars().next().unwrap();
+        if !first_char.is_ascii_lowercase() {
+            return Err(crate::Error::ValidationError {
+                field: "skill_name".to_string(),
+                reason: format!(
+                    "Skill name must start with a lowercase letter, got '{first_char}'"
+                ),
+            });
+        }
+
+        // Check last character (must be letter or number)
+        let last_char = name.chars().last().unwrap();
+        if !last_char.is_ascii_lowercase() && !last_char.is_ascii_digit() {
+            return Err(crate::Error::ValidationError {
+                field: "skill_name".to_string(),
+                reason: format!("Skill name must end with a letter or number, got '{last_char}'"),
+            });
+        }
+
+        // Check all characters (only a-z, 0-9, hyphens, underscores)
+        for ch in name.chars() {
+            if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '-' && ch != '_' {
+                return Err(crate::Error::ValidationError {
+                    field: "skill_name".to_string(),
+                    reason: format!(
+                        "Invalid character '{ch}'. Only lowercase letters, numbers, hyphens, and underscores allowed"
+                    ),
+                });
+            }
+        }
+
+        Ok(Self(name.to_string()))
+    }
+
+    /// Returns the skill name as a string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::SkillName;
+    ///
+    /// let name = SkillName::new("test-skill").unwrap();
+    /// assert_eq!(name.as_str(), "test-skill");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes the `SkillName` and returns the inner `String`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::SkillName;
+    ///
+    /// let name = SkillName::new("test").unwrap();
+    /// let inner: String = name.into_inner();
+    /// assert_eq!(inner, "test");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for SkillName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<String> for SkillName {
+    type Error = crate::Error;
+
+    fn try_from(s: String) -> crate::Result<Self> {
+        Self::new(s)
+    }
+}
+
+impl TryFrom<&str> for SkillName {
+    type Error = crate::Error;
+
+    fn try_from(s: &str) -> crate::Result<Self> {
+        Self::new(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,5 +1242,440 @@ mod tests {
         assert_ne!(key2, key3);
         assert_ne!(key2, key4);
         assert_ne!(key3, key4);
+    }
+
+    // ========================================================================
+    // SkillDescription validation tests
+    // ========================================================================
+
+    #[test]
+    fn test_skill_description_valid() {
+        let desc = SkillDescription::new(
+            "Sends messages to VK Teams. Use when working with VK messenger.",
+        )
+        .unwrap();
+        assert_eq!(
+            desc.as_str(),
+            "Sends messages to VK Teams. Use when working with VK messenger."
+        );
+    }
+
+    #[test]
+    fn test_skill_description_max_length() {
+        // Exactly at max length should succeed
+        let max_desc = "x".repeat(SkillDescription::MAX_LENGTH);
+        assert!(SkillDescription::new(&max_desc).is_ok());
+    }
+
+    #[test]
+    fn test_skill_description_too_long() {
+        // One char over max length should fail
+        let too_long = "x".repeat(SkillDescription::MAX_LENGTH + 1);
+        let result = SkillDescription::new(&too_long);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_empty() {
+        let result = SkillDescription::new("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_xml_tags_less_than() {
+        let result = SkillDescription::new("Bad <script> tag");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_xml_tags_greater_than() {
+        let result = SkillDescription::new("Bad tag >");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_xml_tags_both() {
+        let result = SkillDescription::new("<script>alert(1)</script>");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_template_syntax_opening() {
+        let result = SkillDescription::new("Bad {{injection");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_template_syntax_closing() {
+        let result = SkillDescription::new("Bad injection}}");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_template_syntax_both() {
+        let result = SkillDescription::new("Bad {{injection}}");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_description_multiline() {
+        let desc = SkillDescription::new(
+            "Interact with VK Teams messenger to send messages.\n\
+             Use when working with VK Teams or when user mentions VK messenger.",
+        )
+        .unwrap();
+        assert!(desc.as_str().contains('\n'));
+    }
+
+    #[test]
+    fn test_skill_description_unicode() {
+        let desc = SkillDescription::new("Sends messages with emoji 🚀 and unicode ñ.").unwrap();
+        assert!(desc.as_str().contains('🚀'));
+    }
+
+    #[test]
+    fn test_skill_description_special_chars() {
+        // These should be allowed
+        let desc =
+            SkillDescription::new("Uses @mentions, #tags, $variables, and !commands.").unwrap();
+        assert!(desc.as_str().contains('@'));
+    }
+
+    #[test]
+    fn test_skill_description_display() {
+        let desc = SkillDescription::new("Test description").unwrap();
+        assert_eq!(format!("{desc}"), "Test description");
+    }
+
+    #[test]
+    fn test_skill_description_into_inner() {
+        let desc = SkillDescription::new("Test").unwrap();
+        let inner: String = desc.into_inner();
+        assert_eq!(inner, "Test");
+    }
+
+    #[test]
+    fn test_skill_description_try_from_string() {
+        use std::convert::TryFrom;
+
+        let result = SkillDescription::try_from(String::from("Valid description"));
+        assert!(result.is_ok());
+
+        let result = SkillDescription::try_from(String::from("<invalid>"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_skill_description_try_from_str() {
+        use std::convert::TryFrom;
+
+        let result = SkillDescription::try_from("Valid description");
+        assert!(result.is_ok());
+
+        let result = SkillDescription::try_from("{{invalid}}");
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // SkillName validation tests
+    // ========================================================================
+
+    #[test]
+    fn test_skill_name_valid_lowercase() {
+        assert!(SkillName::new("vkteams-bot").is_ok());
+        assert!(SkillName::new("my_skill").is_ok());
+        assert!(SkillName::new("skill123").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_valid_single_char() {
+        assert!(SkillName::new("a").is_ok());
+        assert!(SkillName::new("z").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_valid_max_length() {
+        let max_name = "a".to_string() + &"x".repeat(SkillName::MAX_LENGTH - 1);
+        assert!(SkillName::new(&max_name).is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_valid_with_numbers() {
+        assert!(SkillName::new("skill123").is_ok());
+        assert!(SkillName::new("a123b456").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_valid_with_hyphens() {
+        assert!(SkillName::new("my-skill").is_ok());
+        assert!(SkillName::new("vk-teams-bot").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_valid_with_underscores() {
+        assert!(SkillName::new("my_skill").is_ok());
+        assert!(SkillName::new("vk_teams_bot").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_valid_mixed() {
+        assert!(SkillName::new("my_skill-123").is_ok());
+        assert!(SkillName::new("vk-teams_bot_v2").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_empty() {
+        let result = SkillName::new("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_name_too_long() {
+        let too_long = "a".to_string() + &"x".repeat(SkillName::MAX_LENGTH);
+        let result = SkillName::new(&too_long);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    #[test]
+    fn test_skill_name_reserved_word_anthropic() {
+        assert!(SkillName::new("anthropic-skill").is_err());
+        assert!(SkillName::new("my-anthropic-bot").is_err());
+        assert!(SkillName::new("anthropic").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_reserved_word_claude() {
+        assert!(SkillName::new("claude-bot").is_err());
+        assert!(SkillName::new("my-claude-helper").is_err());
+        assert!(SkillName::new("claude").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_reserved_word_case_insensitive() {
+        assert!(SkillName::new("ANTHROPIC-skill").is_err());
+        assert!(SkillName::new("Claude-bot").is_err());
+        assert!(SkillName::new("AnThRoPiC").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_reserved_word_partial() {
+        // Should fail if reserved word appears anywhere
+        assert!(SkillName::new("myanthropicbot").is_err());
+        assert!(SkillName::new("claudehelper").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_xml_tags() {
+        assert!(SkillName::new("<script>").is_err());
+        assert!(SkillName::new("skill<tag>").is_err());
+        assert!(SkillName::new("tag>skill").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_uppercase() {
+        assert!(SkillName::new("MySkill").is_err());
+        assert!(SkillName::new("SKILL").is_err());
+        assert!(SkillName::new("Skill").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_starts_with_number() {
+        assert!(SkillName::new("123skill").is_err());
+        assert!(SkillName::new("1skill").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_starts_with_hyphen() {
+        assert!(SkillName::new("-skill").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_starts_with_underscore() {
+        assert!(SkillName::new("_skill").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_ends_with_hyphen() {
+        assert!(SkillName::new("skill-").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_ends_with_underscore() {
+        assert!(SkillName::new("skill_").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_ends_with_number() {
+        // This should be valid
+        assert!(SkillName::new("skill123").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_special_chars() {
+        assert!(SkillName::new("skill@bot").is_err());
+        assert!(SkillName::new("skill#tag").is_err());
+        assert!(SkillName::new("skill$var").is_err());
+        assert!(SkillName::new("skill!cmd").is_err());
+        assert!(SkillName::new("skill space").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_display() {
+        let name = SkillName::new("test-skill").unwrap();
+        assert_eq!(format!("{name}"), "test-skill");
+    }
+
+    #[test]
+    fn test_skill_name_into_inner() {
+        let name = SkillName::new("test").unwrap();
+        let inner: String = name.into_inner();
+        assert_eq!(inner, "test");
+    }
+
+    #[test]
+    fn test_skill_name_try_from_string() {
+        use std::convert::TryFrom;
+
+        let result = SkillName::try_from(String::from("valid-skill"));
+        assert!(result.is_ok());
+
+        let result = SkillName::try_from(String::from("INVALID"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_skill_name_try_from_str() {
+        use std::convert::TryFrom;
+
+        let result = SkillName::try_from("valid-skill");
+        assert!(result.is_ok());
+
+        let result = SkillName::try_from("anthropic-skill");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_skill_name_equality() {
+        let name1 = SkillName::new("test-skill").unwrap();
+        let name2 = SkillName::new("test-skill").unwrap();
+        let name3 = SkillName::new("other-skill").unwrap();
+
+        assert_eq!(name1, name2);
+        assert_ne!(name1, name3);
+    }
+
+    #[test]
+    fn test_skill_name_hash() {
+        use std::collections::HashSet;
+
+        let mut set = HashSet::new();
+        set.insert(SkillName::new("skill1").unwrap());
+        set.insert(SkillName::new("skill2").unwrap());
+        set.insert(SkillName::new("skill1").unwrap()); // Duplicate
+
+        assert_eq!(set.len(), 2);
+    }
+
+    // ========================================================================
+    // Error detection tests
+    // ========================================================================
+
+    #[test]
+    fn test_validation_error_detection() {
+        let err = SkillName::new("").unwrap_err();
+        assert!(err.is_validation_error());
+        assert!(!err.is_reserved_word_error());
+    }
+
+    #[test]
+    fn test_reserved_word_error_detection() {
+        let err = SkillName::new("anthropic-skill").unwrap_err();
+        assert!(err.is_reserved_word_error());
+        assert!(!err.is_validation_error());
+    }
+
+    #[test]
+    fn test_error_display_validation() {
+        let err = SkillName::new("").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("Validation error"));
+        assert!(msg.contains("skill_name"));
+    }
+
+    #[test]
+    fn test_error_display_reserved_word() {
+        let err = SkillName::new("claude-bot").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("Reserved word"));
+        assert!(msg.contains("claude"));
+    }
+
+    // ========================================================================
+    // Edge case and security tests
+    // ========================================================================
+
+    #[test]
+    fn test_skill_description_very_long() {
+        let desc = "x".repeat(10_000);
+        let result = SkillDescription::new(&desc);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_skill_description_null_bytes() {
+        // Null bytes should be allowed (no special handling)
+        let desc = SkillDescription::new("Test\0description").unwrap();
+        assert!(desc.as_str().contains('\0'));
+    }
+
+    #[test]
+    fn test_skill_name_unicode() {
+        // Unicode letters are not allowed (only ASCII lowercase)
+        assert!(SkillName::new("café").is_err());
+        assert!(SkillName::new("über").is_err());
+        assert!(SkillName::new("日本語").is_err());
+    }
+
+    #[test]
+    fn test_skill_name_boundaries() {
+        // Test exact length boundaries
+        assert!(SkillName::new("a").is_ok()); // Exactly 1
+        assert!(SkillName::new(&("a".to_string() + &"b".repeat(63))).is_ok()); // Exactly 64
+        assert!(SkillName::new(&("a".to_string() + &"b".repeat(64))).is_err()); // 65
+    }
+
+    #[test]
+    fn test_skill_description_boundaries() {
+        let at_max = "x".repeat(1024);
+        let over_max = "x".repeat(1025);
+
+        assert!(SkillDescription::new(&at_max).is_ok());
+        assert!(SkillDescription::new(&over_max).is_err());
+    }
+
+    #[test]
+    fn test_reserved_word_substring() {
+        // "anthropic" appears as substring
+        assert!(SkillName::new("myanthropicbot").is_err());
+        assert!(SkillName::new("anthropichelper").is_err());
+        assert!(SkillName::new("theanthropic").is_err());
+    }
+
+    #[test]
+    fn test_similar_to_reserved_words() {
+        // These should be allowed (not exact matches)
+        assert!(SkillName::new("anthro").is_ok());
+        assert!(SkillName::new("claud").is_ok());
+        assert!(SkillName::new("anthr0pic").is_ok()); // With zero
     }
 }

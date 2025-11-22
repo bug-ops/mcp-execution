@@ -1,0 +1,71 @@
+# {{server_name}} MCP Server Reference
+
+**Version**: {{server_version}}
+**Protocol**: {{protocol_version}}
+**Generated**: {{generated_at}}
+
+## Overview
+
+{{server_description}}
+
+## Tool Catalog
+
+{{#each tools}}
+---
+
+### {{name}}
+
+**Description**: {{description}}
+
+**Schema**:
+```json
+{
+  "name": "{{name}}",
+  "description": "{{description}}",
+  "inputSchema": {{{input_schema_json}}}
+}
+```
+
+**Parameters**:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+{{#each parameters}}
+| `{{name}}` | {{type_name}} | {{#if required}}✅{{else}}❌{{/if}} | {{description}} |
+{{/each}}
+
+**Example Request**:
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "{{name}}",
+    "arguments": {
+      {{#each parameters}}
+      "{{name}}": {{example_value}}{{#unless @last}},{{/unless}}
+      {{/each}}
+    }
+  }
+}
+```
+
+{{/each}}
+
+## Error Handling
+
+The MCP server may return the following error codes:
+- `InvalidParams`: Invalid parameters provided
+- `MethodNotFound`: Tool does not exist
+- `InternalError`: Server-side error
+
+## Server Information
+
+**Capabilities**:
+{{#each capabilities}}
+- {{this}}
+{{/each}}
+
+## Additional Resources
+
+- [MCP Specification](https://github.com/modelcontextprotocol/specification)
+- [rmcp Documentation](https://docs.rs/rmcp)

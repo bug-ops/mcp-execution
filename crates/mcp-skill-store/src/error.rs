@@ -159,8 +159,8 @@ pub enum SkillStoreError {
     ///
     /// This indicates a required file (like `skill.json` or `module.wasm`)
     /// is missing from the skill directory, suggesting an incomplete or
-    /// corrupted plugin.
-    #[error("Missing file in plugin {server_name}: {path}")]
+    /// corrupted skill.
+    #[error("Missing file in skill {server_name}: {path}")]
     MissingFile {
         /// Server name of the skill with missing file
         server_name: String,
