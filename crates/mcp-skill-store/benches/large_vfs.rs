@@ -4,7 +4,7 @@
 //! scaling characteristics and potential bottlenecks.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mcp_plugin_store::{PluginStore, ServerInfo};
+use mcp_skill_store::{ServerInfo, SkillStore};
 use mcp_vfs::VfsBuilder;
 use std::hint::black_box;
 use tempfile::TempDir;
@@ -29,7 +29,7 @@ fn bench_save_large_vfs(c: &mut Criterion) {
             |b, &count| {
                 // Setup happens outside the benchmark timing
                 let temp = TempDir::new().unwrap();
-                let store = PluginStore::new(temp.path()).unwrap();
+                let store = SkillStore::new(temp.path()).unwrap();
 
                 // Generate VFS with N files
                 let mut builder = VfsBuilder::new();
@@ -58,7 +58,7 @@ fn bench_save_large_vfs(c: &mut Criterion) {
                     // Each iteration uses a different server name to avoid conflicts
                     let server_name = format!("test-{count}-{iteration}");
                     store
-                        .save_plugin(
+                        .save_skill(
                             &server_name,
                             black_box(&vfs),
                             black_box(&wasm),
@@ -68,7 +68,7 @@ fn bench_save_large_vfs(c: &mut Criterion) {
                         .unwrap();
 
                     // Clean up for next iteration
-                    store.remove_plugin(&server_name).unwrap();
+                    store.remove_skill(&server_name).unwrap();
                     iteration += 1;
                 });
             },
@@ -84,7 +84,7 @@ fn bench_load_large_vfs(c: &mut Criterion) {
     for file_count in [10, 50, 100, 500, 1000] {
         // Setup: Create plugin once for all iterations
         let temp = TempDir::new().unwrap();
-        let store = PluginStore::new(temp.path()).unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
 
         let mut builder = VfsBuilder::new();
         for i in 0..file_count {
@@ -106,7 +106,7 @@ fn bench_load_large_vfs(c: &mut Criterion) {
 
         let server_name = format!("bench-{file_count}");
         store
-            .save_plugin(&server_name, &vfs, &wasm, server_info, vec![])
+            .save_skill(&server_name, &vfs, &wasm, server_info, vec![])
             .unwrap();
 
         group.bench_with_input(
@@ -114,7 +114,7 @@ fn bench_load_large_vfs(c: &mut Criterion) {
             &file_count,
             |b, _| {
                 b.iter(|| {
-                    let plugin = store.load_plugin(black_box(&server_name)).unwrap();
+                    let plugin = store.load_skill(black_box(&server_name)).unwrap();
                     black_box(plugin);
                 });
             },
@@ -133,7 +133,7 @@ fn bench_save_load_roundtrip(c: &mut Criterion) {
             &file_count,
             |b, &count| {
                 let temp = TempDir::new().unwrap();
-                let store = PluginStore::new(temp.path()).unwrap();
+                let store = SkillStore::new(temp.path()).unwrap();
 
                 let mut builder = VfsBuilder::new();
                 for i in 0..count {
@@ -156,7 +156,7 @@ fn bench_save_load_roundtrip(c: &mut Criterion) {
 
                     // Save
                     store
-                        .save_plugin(
+                        .save_skill(
                             &server_name,
                             black_box(&vfs),
                             black_box(&wasm),
@@ -166,11 +166,11 @@ fn bench_save_load_roundtrip(c: &mut Criterion) {
                         .unwrap();
 
                     // Load
-                    let plugin = store.load_plugin(black_box(&server_name)).unwrap();
+                    let plugin = store.load_skill(black_box(&server_name)).unwrap();
                     black_box(plugin);
 
                     // Cleanup
-                    store.remove_plugin(&server_name).unwrap();
+                    store.remove_skill(&server_name).unwrap();
                     iteration += 1;
                 });
             },

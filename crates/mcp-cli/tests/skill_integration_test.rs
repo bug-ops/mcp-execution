@@ -1,13 +1,13 @@
-//! Integration tests for CLI plugin management commands.
+//! Integration tests for CLI skill management commands.
 //!
 //! Tests the full workflow from command handlers to output formatting,
-//! ensuring all plugin management operations work correctly end-to-end.
+//! ensuring all skill management operations work correctly end-to-end.
 
-use mcp_cli::commands::plugin::{
-    PluginAction, list_plugins, load_plugin, remove_plugin, run, show_plugin_info,
+use mcp_cli::commands::skill::{
+    SkillAction, list_skills, load_skill, remove_skill, run, show_skill_info,
 };
 use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_plugin_store::{PluginStore, ServerInfo, ToolInfo};
+use mcp_skill_store::{ServerInfo, SkillStore, ToolInfo};
 use mcp_vfs::VfsBuilder;
 use tempfile::TempDir;
 
@@ -45,16 +45,16 @@ fn create_test_tools() -> Vec<ToolInfo> {
     ]
 }
 
-/// Helper function to save a test plugin.
-fn save_test_plugin(
-    store: &PluginStore,
+/// Helper function to save a test skill.
+fn save_test_skill(
+    store: &SkillStore,
     name: &str,
     vfs: &mcp_vfs::Vfs,
     wasm: &[u8],
-) -> mcp_plugin_store::Result<mcp_plugin_store::PluginMetadata> {
+) -> mcp_skill_store::Result<mcp_skill_store::SkillMetadata> {
     let server_info = create_test_server_info(name);
     let tools = create_test_tools();
-    store.save_plugin(name, vfs, wasm, server_info, tools)
+    store.save_skill(name, vfs, wasm, server_info, tools)
 }
 
 // ============================================================================
@@ -62,76 +62,76 @@ fn save_test_plugin(
 // ============================================================================
 
 #[test]
-fn test_list_plugins_empty_directory() {
+fn test_list_skills_empty_directory() {
     let temp = TempDir::new().unwrap();
 
-    let result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 }
 
 #[test]
-fn test_list_plugins_single_plugin() {
+fn test_list_skills_single_plugin() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D]; // WASM magic bytes
-    save_test_plugin(&store, "test-plugin", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "test-plugin", &vfs, &wasm).unwrap();
 
     // List plugins
-    let result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 }
 
 #[test]
-fn test_list_plugins_multiple_plugins() {
+fn test_list_skills_multiple_plugins() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save multiple plugins
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
 
-    save_test_plugin(&store, "plugin1", &vfs, &wasm).unwrap();
-    save_test_plugin(&store, "plugin2", &vfs, &wasm).unwrap();
-    save_test_plugin(&store, "plugin3", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "plugin1", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "plugin2", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "plugin3", &vfs, &wasm).unwrap();
 
     // List plugins with JSON format
-    let result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 }
 
 #[test]
-fn test_list_plugins_all_formats() {
+fn test_list_skills_all_formats() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "format-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "format-test", &vfs, &wasm).unwrap();
 
     // Test all output formats
     for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-        let result = list_plugins(&temp.path().to_path_buf(), format);
+        let result = list_skills(&temp.path().to_path_buf(), format);
         assert!(result.is_ok(), "List should succeed with {format:?} format");
         assert_eq!(result.unwrap(), ExitCode::SUCCESS);
     }
 }
 
 #[test]
-fn test_list_plugins_invalid_directory() {
+fn test_list_skills_invalid_directory() {
     let temp = TempDir::new().unwrap();
     let invalid_path = temp.path().join("nonexistent");
 
     // Should still succeed but list will be empty
-    let result = list_plugins(&invalid_path, OutputFormat::Json);
+    let result = list_skills(&invalid_path, OutputFormat::Json);
     assert!(result.is_ok());
 }
 
@@ -140,17 +140,17 @@ fn test_list_plugins_invalid_directory() {
 // ============================================================================
 
 #[test]
-fn test_load_plugin_success() {
+fn test_load_skill_success() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "loadable-plugin", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "loadable-plugin", &vfs, &wasm).unwrap();
 
     // Load plugin
-    let result = load_plugin(
+    let result = load_skill(
         "loadable-plugin",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -161,10 +161,10 @@ fn test_load_plugin_success() {
 }
 
 #[test]
-fn test_load_plugin_not_found() {
+fn test_load_skill_not_found() {
     let temp = TempDir::new().unwrap();
 
-    let result = load_plugin(
+    let result = load_skill(
         "nonexistent-plugin",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -176,27 +176,27 @@ fn test_load_plugin_not_found() {
 }
 
 #[test]
-fn test_load_plugin_all_formats() {
+fn test_load_skill_all_formats() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "format-load-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "format-load-test", &vfs, &wasm).unwrap();
 
     // Test all output formats
     for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-        let result = load_plugin("format-load-test", &temp.path().to_path_buf(), format);
+        let result = load_skill("format-load-test", &temp.path().to_path_buf(), format);
         assert!(result.is_ok(), "Load should succeed with {format:?} format");
         assert_eq!(result.unwrap(), ExitCode::SUCCESS);
     }
 }
 
 #[test]
-fn test_load_plugin_with_large_wasm() {
+fn test_load_skill_with_large_wasm() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin with larger WASM module
     let vfs = create_test_vfs();
@@ -205,19 +205,19 @@ fn test_load_plugin_with_large_wasm() {
         .chain(vec![0xFF; 1024 * 100]) // 100KB WASM
         .collect::<Vec<_>>();
 
-    save_test_plugin(&store, "large-wasm", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "large-wasm", &vfs, &wasm).unwrap();
 
     // Load plugin
-    let result = load_plugin("large-wasm", &temp.path().to_path_buf(), OutputFormat::Json);
+    let result = load_skill("large-wasm", &temp.path().to_path_buf(), OutputFormat::Json);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 }
 
 #[test]
-fn test_load_plugin_empty_vfs() {
+fn test_load_skill_empty_vfs() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin with empty VFS
     let vfs = VfsBuilder::new().build().unwrap();
@@ -225,11 +225,11 @@ fn test_load_plugin_empty_vfs() {
     let server_info = create_test_server_info("empty-vfs");
 
     store
-        .save_plugin("empty-vfs", &vfs, &wasm, server_info, vec![])
+        .save_skill("empty-vfs", &vfs, &wasm, server_info, vec![])
         .unwrap();
 
     // Load plugin
-    let result = load_plugin("empty-vfs", &temp.path().to_path_buf(), OutputFormat::Json);
+    let result = load_skill("empty-vfs", &temp.path().to_path_buf(), OutputFormat::Json);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
@@ -242,15 +242,15 @@ fn test_load_plugin_empty_vfs() {
 #[test]
 fn test_info_plugin_success() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "info-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "info-test", &vfs, &wasm).unwrap();
 
     // Show info
-    let result = show_plugin_info("info-test", &temp.path().to_path_buf(), OutputFormat::Json);
+    let result = show_skill_info("info-test", &temp.path().to_path_buf(), OutputFormat::Json);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
@@ -260,7 +260,7 @@ fn test_info_plugin_success() {
 fn test_info_plugin_not_found() {
     let temp = TempDir::new().unwrap();
 
-    let result = show_plugin_info(
+    let result = show_skill_info(
         "nonexistent",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -272,16 +272,16 @@ fn test_info_plugin_not_found() {
 #[test]
 fn test_info_plugin_all_formats() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "format-info-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "format-info-test", &vfs, &wasm).unwrap();
 
     // Test all output formats
     for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-        let result = show_plugin_info("format-info-test", &temp.path().to_path_buf(), format);
+        let result = show_skill_info("format-info-test", &temp.path().to_path_buf(), format);
         assert!(result.is_ok(), "Info should succeed with {format:?} format");
         assert_eq!(result.unwrap(), ExitCode::SUCCESS);
     }
@@ -290,7 +290,7 @@ fn test_info_plugin_all_formats() {
 #[test]
 fn test_info_plugin_with_many_tools() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Create plugin with many tools
     let vfs = create_test_vfs();
@@ -304,11 +304,11 @@ fn test_info_plugin_with_many_tools() {
         .collect();
 
     store
-        .save_plugin("many-tools", &vfs, &wasm, server_info, tools)
+        .save_skill("many-tools", &vfs, &wasm, server_info, tools)
         .unwrap();
 
     // Show info
-    let result = show_plugin_info("many-tools", &temp.path().to_path_buf(), OutputFormat::Json);
+    let result = show_skill_info("many-tools", &temp.path().to_path_buf(), OutputFormat::Json);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
@@ -319,17 +319,17 @@ fn test_info_plugin_with_many_tools() {
 // ============================================================================
 
 #[test]
-fn test_remove_plugin_with_yes_flag() {
+fn test_remove_skill_with_yes_flag() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "removable", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "removable", &vfs, &wasm).unwrap();
 
     // Remove with --yes flag (skip confirmation)
-    let result = remove_plugin(
+    let result = remove_skill(
         "removable",
         &temp.path().to_path_buf(),
         true,
@@ -340,14 +340,14 @@ fn test_remove_plugin_with_yes_flag() {
     assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 
     // Verify plugin was removed
-    assert!(!store.plugin_exists("removable").unwrap());
+    assert!(!store.skill_exists("removable").unwrap());
 }
 
 #[test]
-fn test_remove_plugin_not_found() {
+fn test_remove_skill_not_found() {
     let temp = TempDir::new().unwrap();
 
-    let result = remove_plugin(
+    let result = remove_skill(
         "nonexistent",
         &temp.path().to_path_buf(),
         true,
@@ -358,9 +358,9 @@ fn test_remove_plugin_not_found() {
 }
 
 #[test]
-fn test_remove_plugin_all_formats() {
+fn test_remove_skill_all_formats() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save multiple plugins for different formats
     let vfs = create_test_vfs();
@@ -372,9 +372,9 @@ fn test_remove_plugin_all_formats() {
         .enumerate()
     {
         let plugin_name = format!("remove-format-{i}");
-        save_test_plugin(&store, &plugin_name, &vfs, &wasm).unwrap();
+        save_test_skill(&store, &plugin_name, &vfs, &wasm).unwrap();
 
-        let result = remove_plugin(&plugin_name, &temp.path().to_path_buf(), true, *format);
+        let result = remove_skill(&plugin_name, &temp.path().to_path_buf(), true, *format);
         assert!(
             result.is_ok(),
             "Remove should succeed with {format:?} format"
@@ -382,22 +382,22 @@ fn test_remove_plugin_all_formats() {
         assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 
         // Verify removal
-        assert!(!store.plugin_exists(&plugin_name).unwrap());
+        assert!(!store.skill_exists(&plugin_name).unwrap());
     }
 }
 
 #[test]
-fn test_remove_plugin_and_reload_fails() {
+fn test_remove_skill_and_reload_fails() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "to-remove", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "to-remove", &vfs, &wasm).unwrap();
 
     // Remove it
-    let result = remove_plugin(
+    let result = remove_skill(
         "to-remove",
         &temp.path().to_path_buf(),
         true,
@@ -406,7 +406,7 @@ fn test_remove_plugin_and_reload_fails() {
     assert!(result.is_ok());
 
     // Try to load - should fail
-    let load_result = load_plugin("to-remove", &temp.path().to_path_buf(), OutputFormat::Json);
+    let load_result = load_skill("to-remove", &temp.path().to_path_buf(), OutputFormat::Json);
     assert!(load_result.is_err());
 }
 
@@ -417,17 +417,17 @@ fn test_remove_plugin_and_reload_fails() {
 #[tokio::test]
 async fn test_run_load_action() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "run-load-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "run-load-test", &vfs, &wasm).unwrap();
 
     // Test via run function
-    let action = PluginAction::Load {
+    let action = SkillAction::Load {
         name: "run-load-test".to_string(),
-        plugin_dir: temp.path().to_path_buf(),
+        skill_dir: temp.path().to_path_buf(),
     };
 
     let result = run(action, OutputFormat::Json).await;
@@ -438,17 +438,17 @@ async fn test_run_load_action() {
 #[tokio::test]
 async fn test_run_list_action() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save some plugins
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "run-list-1", &vfs, &wasm).unwrap();
-    save_test_plugin(&store, "run-list-2", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "run-list-1", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "run-list-2", &vfs, &wasm).unwrap();
 
     // Test via run function
-    let action = PluginAction::List {
-        plugin_dir: temp.path().to_path_buf(),
+    let action = SkillAction::List {
+        skill_dir: temp.path().to_path_buf(),
     };
 
     let result = run(action, OutputFormat::Json).await;
@@ -459,17 +459,17 @@ async fn test_run_list_action() {
 #[tokio::test]
 async fn test_run_info_action() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "run-info-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "run-info-test", &vfs, &wasm).unwrap();
 
     // Test via run function
-    let action = PluginAction::Info {
+    let action = SkillAction::Info {
         name: "run-info-test".to_string(),
-        plugin_dir: temp.path().to_path_buf(),
+        skill_dir: temp.path().to_path_buf(),
     };
 
     let result = run(action, OutputFormat::Json).await;
@@ -480,17 +480,17 @@ async fn test_run_info_action() {
 #[tokio::test]
 async fn test_run_remove_action() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "run-remove-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "run-remove-test", &vfs, &wasm).unwrap();
 
     // Test via run function
-    let action = PluginAction::Remove {
+    let action = SkillAction::Remove {
         name: "run-remove-test".to_string(),
-        plugin_dir: temp.path().to_path_buf(),
+        skill_dir: temp.path().to_path_buf(),
         yes: true,
     };
 
@@ -504,11 +504,11 @@ async fn test_run_remove_action() {
 // ============================================================================
 
 #[test]
-fn test_load_plugin_invalid_name() {
+fn test_load_skill_invalid_name() {
     let temp = TempDir::new().unwrap();
 
     // Try to load with invalid server name (path traversal)
-    let result = load_plugin(
+    let result = load_skill(
         "../etc/passwd",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -522,7 +522,7 @@ fn test_info_plugin_invalid_name() {
     let temp = TempDir::new().unwrap();
 
     // Try to get info with invalid server name
-    let result = show_plugin_info(
+    let result = show_skill_info(
         "invalid/name",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -532,11 +532,11 @@ fn test_info_plugin_invalid_name() {
 }
 
 #[test]
-fn test_remove_plugin_invalid_name() {
+fn test_remove_skill_invalid_name() {
     let temp = TempDir::new().unwrap();
 
     // Try to remove with invalid server name
-    let result = remove_plugin(
+    let result = remove_skill(
         "invalid\\name",
         &temp.path().to_path_buf(),
         true,
@@ -547,22 +547,22 @@ fn test_remove_plugin_invalid_name() {
 }
 
 #[test]
-fn test_list_plugins_with_corrupted_metadata() {
+fn test_list_skills_with_corrupted_metadata() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a valid plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "valid-plugin", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "valid-plugin", &vfs, &wasm).unwrap();
 
     // Create a corrupted plugin directory
     let corrupt_dir = temp.path().join("corrupt-plugin");
     std::fs::create_dir_all(&corrupt_dir).unwrap();
-    std::fs::write(corrupt_dir.join("plugin.json"), "invalid json").unwrap();
+    std::fs::write(corrupt_dir.join("skill.json"), "invalid json").unwrap();
 
     // List should still work but may skip corrupted plugins
-    let result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
 
     // The result should either succeed or fail gracefully
     // Implementation may choose to skip corrupted plugins or error out
@@ -576,9 +576,9 @@ fn test_list_plugins_with_corrupted_metadata() {
 }
 
 #[test]
-fn test_load_plugin_with_nested_vfs_paths() {
+fn test_load_skill_with_nested_vfs_paths() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Create VFS with deeply nested paths
     let vfs = VfsBuilder::new()
@@ -591,11 +591,11 @@ fn test_load_plugin_with_nested_vfs_paths() {
     let server_info = create_test_server_info("nested-paths");
 
     store
-        .save_plugin("nested-paths", &vfs, &wasm, server_info, vec![])
+        .save_skill("nested-paths", &vfs, &wasm, server_info, vec![])
         .unwrap();
 
     // Load should succeed
-    let result = load_plugin(
+    let result = load_skill(
         "nested-paths",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -612,19 +612,19 @@ fn test_load_plugin_with_nested_vfs_paths() {
 #[test]
 fn test_full_plugin_lifecycle() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // 1. Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "lifecycle-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "lifecycle-test", &vfs, &wasm).unwrap();
 
     // 2. List plugins - should find it
-    let list_result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let list_result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
     assert!(list_result.is_ok());
 
     // 3. Load plugin - should succeed
-    let load_result = load_plugin(
+    let load_result = load_skill(
         "lifecycle-test",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -632,7 +632,7 @@ fn test_full_plugin_lifecycle() {
     assert!(load_result.is_ok());
 
     // 4. Show info - should succeed
-    let info_result = show_plugin_info(
+    let info_result = show_skill_info(
         "lifecycle-test",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -640,7 +640,7 @@ fn test_full_plugin_lifecycle() {
     assert!(info_result.is_ok());
 
     // 5. Remove plugin - should succeed
-    let remove_result = remove_plugin(
+    let remove_result = remove_skill(
         "lifecycle-test",
         &temp.path().to_path_buf(),
         true,
@@ -649,11 +649,11 @@ fn test_full_plugin_lifecycle() {
     assert!(remove_result.is_ok());
 
     // 6. List again - should be empty or not include removed plugin
-    let list_after_result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let list_after_result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
     assert!(list_after_result.is_ok());
 
     // 7. Try to load removed plugin - should fail
-    let load_after_result = load_plugin(
+    let load_after_result = load_skill(
         "lifecycle-test",
         &temp.path().to_path_buf(),
         OutputFormat::Json,
@@ -664,22 +664,22 @@ fn test_full_plugin_lifecycle() {
 #[test]
 fn test_multiple_plugins_independent_operations() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save multiple plugins
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
 
-    save_test_plugin(&store, "plugin-a", &vfs, &wasm).unwrap();
-    save_test_plugin(&store, "plugin-b", &vfs, &wasm).unwrap();
-    save_test_plugin(&store, "plugin-c", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "plugin-a", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "plugin-b", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "plugin-c", &vfs, &wasm).unwrap();
 
     // Load one
-    let load_a = load_plugin("plugin-a", &temp.path().to_path_buf(), OutputFormat::Json);
+    let load_a = load_skill("plugin-a", &temp.path().to_path_buf(), OutputFormat::Json);
     assert!(load_a.is_ok());
 
     // Remove another
-    let remove_b = remove_plugin(
+    let remove_b = remove_skill(
         "plugin-b",
         &temp.path().to_path_buf(),
         true,
@@ -688,16 +688,16 @@ fn test_multiple_plugins_independent_operations() {
     assert!(remove_b.is_ok());
 
     // Show info for third
-    let info_c = show_plugin_info("plugin-c", &temp.path().to_path_buf(), OutputFormat::Json);
+    let info_c = show_skill_info("plugin-c", &temp.path().to_path_buf(), OutputFormat::Json);
     assert!(info_c.is_ok());
 
     // Verify states
-    assert!(store.plugin_exists("plugin-a").unwrap());
-    assert!(!store.plugin_exists("plugin-b").unwrap());
-    assert!(store.plugin_exists("plugin-c").unwrap());
+    assert!(store.skill_exists("plugin-a").unwrap());
+    assert!(!store.skill_exists("plugin-b").unwrap());
+    assert!(store.skill_exists("plugin-c").unwrap());
 
     // List should show remaining plugins
-    let list_result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let list_result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
     assert!(list_result.is_ok());
 }
 
@@ -708,15 +708,15 @@ fn test_multiple_plugins_independent_operations() {
 #[test]
 fn test_load_output_contains_expected_fields() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "field-test", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "field-test", &vfs, &wasm).unwrap();
 
     // Capture the actual function behavior by calling the underlying store
-    let loaded = store.load_plugin("field-test").unwrap();
+    let loaded = store.load_skill("field-test").unwrap();
 
     // Verify expected fields exist in loaded plugin
     assert_eq!(loaded.metadata.server.name, "field-test");
@@ -729,27 +729,27 @@ fn test_load_output_contains_expected_fields() {
 #[test]
 fn test_list_empty_returns_empty_list() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
-    let plugins = store.list_plugins().unwrap();
+    let plugins = store.list_skills().unwrap();
     assert_eq!(plugins.len(), 0);
 
-    let result = list_plugins(&temp.path().to_path_buf(), OutputFormat::Json);
+    let result = list_skills(&temp.path().to_path_buf(), OutputFormat::Json);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_info_output_includes_tool_details() {
     let temp = TempDir::new().unwrap();
-    let store = PluginStore::new(temp.path()).unwrap();
+    let store = SkillStore::new(temp.path()).unwrap();
 
     // Save a plugin with specific tools
     let vfs = create_test_vfs();
     let wasm = vec![0x00, 0x61, 0x73, 0x6D];
-    save_test_plugin(&store, "tool-details", &vfs, &wasm).unwrap();
+    save_test_skill(&store, "tool-details", &vfs, &wasm).unwrap();
 
     // Load to verify tool information is preserved
-    let loaded = store.load_plugin("tool-details").unwrap();
+    let loaded = store.load_skill("tool-details").unwrap();
 
     assert_eq!(loaded.metadata.tools.len(), 2);
     assert_eq!(loaded.metadata.tools[0].name, "send_message");

@@ -1,14 +1,14 @@
-//! Core types for plugin metadata and storage.
+//! Core types for skill metadata and storage.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Metadata for a saved plugin.
+/// Metadata for a saved skill.
 ///
-/// Contains all information about a plugin including server details,
+/// Contains all information about a skill including server details,
 /// generation timestamp, checksums for integrity verification, and tool list.
-/// This is serialized to `plugin.json` in the plugin directory.
+/// This is serialized to `skill.json` in the skill directory.
 ///
 /// # Format Version
 ///
@@ -18,11 +18,11 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```
-/// use mcp_plugin_store::{PluginMetadata, ServerInfo, Checksums, ToolInfo};
+/// use mcp_skill_store::{SkillMetadata, ServerInfo, Checksums, ToolInfo};
 /// use chrono::Utc;
 /// use std::collections::HashMap;
 ///
-/// let metadata = PluginMetadata {
+/// let metadata = SkillMetadata {
 ///     format_version: "1.0".to_string(),
 ///     server: ServerInfo {
 ///         name: "my-server".to_string(),
@@ -48,7 +48,7 @@ use std::collections::HashMap;
 /// assert!(json.contains("format_version"));
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginMetadata {
+pub struct SkillMetadata {
     /// Metadata format version for future schema migrations.
     ///
     /// Current version: "1.0"
@@ -57,7 +57,7 @@ pub struct PluginMetadata {
     /// Server identification and version information.
     pub server: ServerInfo,
 
-    /// Timestamp when this plugin was generated.
+    /// Timestamp when this skill was generated.
     pub generated_at: DateTime<Utc>,
 
     /// Version of mcp-execution that generated this plugin.
@@ -72,13 +72,13 @@ pub struct PluginMetadata {
 
 /// Server identification information.
 ///
-/// Identifies the MCP server that this plugin was generated from, including
+/// Identifies the MCP server that this skill was generated from, including
 /// version information and MCP protocol version.
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_plugin_store::ServerInfo;
+/// use mcp_skill_store::ServerInfo;
 ///
 /// let info = ServerInfo {
 ///     name: "vkteams-bot".to_string(),
@@ -100,10 +100,10 @@ pub struct ServerInfo {
     pub protocol_version: String,
 }
 
-/// Checksum information for plugin integrity verification.
+/// Checksum information for skill integrity verification.
 ///
 /// Contains Blake3 hashes for the WASM module and all generated files.
-/// Checksums are verified when loading a plugin to detect corruption or
+/// Checksums are verified when loading a skill to detect corruption or
 /// tampering.
 ///
 /// # Format
@@ -114,7 +114,7 @@ pub struct ServerInfo {
 /// # Examples
 ///
 /// ```
-/// use mcp_plugin_store::Checksums;
+/// use mcp_skill_store::Checksums;
 /// use std::collections::HashMap;
 ///
 /// let mut generated = HashMap::new();
@@ -144,13 +144,13 @@ pub struct Checksums {
 
 /// Tool information summary.
 ///
-/// Brief description of a tool provided by the plugin. Used for quick
+/// Brief description of a tool provided by the skill. Used for quick
 /// reference without loading the full plugin.
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_plugin_store::ToolInfo;
+/// use mcp_skill_store::ToolInfo;
 ///
 /// let tool = ToolInfo {
 ///     name: "send_message".to_string(),
@@ -166,22 +166,22 @@ pub struct ToolInfo {
     pub description: String,
 }
 
-/// Loaded plugin with all components.
+/// Loaded skill with all components.
 ///
-/// Contains everything needed to use a plugin: metadata, VFS with generated
+/// Contains everything needed to use a skill: metadata, VFS with generated
 /// code, and compiled WASM module.
 ///
-/// This is returned by [`PluginStore::load_plugin()`](crate::PluginStore::load_plugin)
+/// This is returned by [`SkillStore::load_skill()`](crate::SkillStore::load_skill)
 /// after verifying all checksums.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_plugin_store::PluginStore;
+/// use mcp_skill_store::SkillStore;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let store = PluginStore::new("./plugins")?;
-/// let plugin = store.load_plugin("my-server")?;
+/// let store = SkillStore::new("./skills")?;
+/// let plugin = store.load_skill("my-server")?;
 ///
 /// println!("Server: {} v{}", plugin.metadata.server.name, plugin.metadata.server.version);
 /// println!("Tools: {}", plugin.metadata.tools.len());
@@ -191,9 +191,9 @@ pub struct ToolInfo {
 /// # }
 /// ```
 #[derive(Debug, Clone)]
-pub struct LoadedPlugin {
+pub struct LoadedSkill {
     /// Plugin metadata including checksums and tool list.
-    pub metadata: PluginMetadata,
+    pub metadata: SkillMetadata,
 
     /// Virtual filesystem with generated TypeScript code.
     pub vfs: mcp_vfs::Vfs,
@@ -202,44 +202,44 @@ pub struct LoadedPlugin {
     pub wasm_module: Vec<u8>,
 }
 
-/// Brief plugin information for listing.
+/// Brief skill information for listing.
 ///
-/// Lightweight summary of a plugin suitable for displaying in lists without
+/// Lightweight summary of a skill suitable for displaying in lists without
 /// loading the entire plugin.
 ///
-/// Returned by [`PluginStore::list_plugins()`](crate::PluginStore::list_plugins).
+/// Returned by [`SkillStore::list_skills()`](crate::SkillStore::list_skills).
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_plugin_store::PluginStore;
+/// use mcp_skill_store::SkillStore;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let store = PluginStore::new("./plugins")?;
+/// let store = SkillStore::new("./skills")?;
 ///
-/// for plugin in store.list_plugins()? {
+/// for skill in store.list_skills()? {
 ///     println!("{} v{} - {} tools (generated {})",
-///         plugin.server_name,
-///         plugin.version,
-///         plugin.tool_count,
-///         plugin.generated_at.format("%Y-%m-%d")
+///         skill.server_name,
+///         skill.version,
+///         skill.tool_count,
+///         skill.generated_at.format("%Y-%m-%d")
 ///     );
 /// }
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Debug, Clone)]
-pub struct PluginInfo {
+pub struct SkillInfo {
     /// Server name (identifier).
     pub server_name: String,
 
     /// Server version string.
     pub version: String,
 
-    /// When the plugin was generated.
+    /// When the skill was generated.
     pub generated_at: DateTime<Utc>,
 
-    /// Number of tools in the plugin.
+    /// Number of tools in the skill.
     pub tool_count: usize,
 }
 
@@ -247,10 +247,10 @@ pub struct PluginInfo {
 /// Current metadata format version.
 pub const FORMAT_VERSION: &str = "1.0";
 
-/// Name of the metadata file in each plugin directory.
-pub const METADATA_FILE: &str = "plugin.json";
+/// Name of the metadata file in each skill directory.
+pub const METADATA_FILE: &str = "skill.json";
 
-/// Name of the WASM module file in each plugin directory.
+/// Name of the WASM module file in each skill directory.
 pub const WASM_FILE: &str = "module.wasm";
 
 /// Name of the directory containing generated TypeScript files.
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_plugin_metadata_serialization() {
-        let metadata = PluginMetadata {
+        let metadata = SkillMetadata {
             format_version: FORMAT_VERSION.to_string(),
             server: ServerInfo {
                 name: "test-server".to_string(),
@@ -283,7 +283,7 @@ mod tests {
 
         // Should serialize and deserialize correctly
         let json = serde_json::to_string(&metadata).unwrap();
-        let deserialized: PluginMetadata = serde_json::from_str(&json).unwrap();
+        let deserialized: SkillMetadata = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.format_version, FORMAT_VERSION);
         assert_eq!(deserialized.server.name, "test-server");

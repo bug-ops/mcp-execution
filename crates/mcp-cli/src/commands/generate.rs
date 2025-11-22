@@ -9,7 +9,7 @@ use mcp_codegen::CodeGenerator;
 use mcp_core::ServerId;
 use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
 use mcp_introspector::Introspector;
-use mcp_plugin_store::{PluginStore, ServerInfo, ToolInfo};
+use mcp_skill_store::{ServerInfo, SkillStore, ToolInfo};
 use mcp_vfs::VfsBuilder;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -29,8 +29,8 @@ struct GenerationResult {
     files_created: usize,
     /// Total lines of code generated
     total_lines: usize,
-    /// Plugin saved location (if --save-plugin was used)
-    plugin_saved: Option<String>,
+    /// Skill saved location (if --save-skill was used)
+    skill_saved: Option<String>,
 }
 
 /// Runs the generate command.
@@ -47,8 +47,8 @@ struct GenerationResult {
 /// * `output` - Optional output directory (defaults to "./generated")
 /// * `feature` - Code generation feature mode ("wasm" or "skills")
 /// * `force` - Overwrite existing output directory without prompting
-/// * `save_plugin` - Save generated code as a plugin
-/// * `plugin_dir` - Plugin directory for save operations
+/// * `save_skill` - Save generated code as a skill
+/// * `skill_dir` - Plugin directory for save operations
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -59,7 +59,7 @@ struct GenerationResult {
 /// - Server introspection fails
 /// - Code generation fails
 /// - File system operations fail
-/// - Plugin save fails (if --save-plugin is used)
+/// - Skill save fails (if --save-skill is used)
 ///
 /// # Examples
 ///
@@ -75,7 +75,7 @@ struct GenerationResult {
 ///     "wasm".to_string(),
 ///     false,
 ///     false,
-///     PathBuf::from("./plugins"),
+///     PathBuf::from("./skills"),
 ///     OutputFormat::Pretty,
 /// ).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);
@@ -87,8 +87,8 @@ pub async fn run(
     output: Option<PathBuf>,
     feature: String,
     force: bool,
-    save_plugin: bool,
-    plugin_dir: PathBuf,
+    save_skill: bool,
+    skill_dir: PathBuf,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Validate inputs
@@ -198,16 +198,16 @@ pub async fn run(
         info!("Created file: {file_path}");
     }
 
-    // Step 4: Save plugin if requested
-    let plugin_saved = if save_plugin {
-        info!("Saving plugin to: {}", plugin_dir.display());
+    // Step 4: Save skill if requested
+    let skill_saved = if save_skill {
+        info!("Saving skill to: {}", skill_dir.display());
 
         // For MVP, we use mock WASM since we don't have TypeScript compilation
         // In production, this would compile the generated TypeScript to WASM
         let mock_wasm = create_mock_wasm();
 
-        // Create plugin store
-        let store = PluginStore::new(&plugin_dir).context("failed to initialize plugin store")?;
+        // Create skill store
+        let store = SkillStore::new(&skill_dir).context("failed to initialize skill store")?;
 
         // Build VFS from generated code
         let mut vfs_builder = VfsBuilder::new();
@@ -222,7 +222,7 @@ pub async fn run(
 
         // Extract server info from introspection
         // Note: Using "2024-11-05" as default protocol version for MVP
-        let plugin_server_info = ServerInfo {
+        let skill_server_info = ServerInfo {
             name: server.clone(),
             version: server_info.version.clone(),
             protocol_version: "2024-11-05".to_string(),
@@ -238,15 +238,15 @@ pub async fn run(
             })
             .collect();
 
-        // Save plugin
+        // Save skill
         store
-            .save_plugin(&server, &vfs, &mock_wasm, plugin_server_info, tool_info)
-            .with_context(|| format!("failed to save plugin for server '{server}'"))?;
+            .save_skill(&server, &vfs, &mock_wasm, skill_server_info, tool_info)
+            .with_context(|| format!("failed to save skill for server '{server}'"))?;
 
-        let plugin_path = store.plugin_path(&server);
-        info!("Plugin saved to: {}", plugin_path.display());
+        let skill_path = store.skill_path(&server);
+        info!("Skill saved to: {}", skill_path.display());
 
-        Some(plugin_path.display().to_string())
+        Some(skill_path.display().to_string())
     } else {
         None
     };
@@ -258,7 +258,7 @@ pub async fn run(
         feature_mode: feature.clone(),
         files_created: generated_code.file_count(),
         total_lines,
-        plugin_saved: plugin_saved.clone(),
+        skill_saved: skill_saved.clone(),
     };
 
     // Format and display result
@@ -270,8 +270,8 @@ pub async fn run(
         result.files_created, result.total_lines, result.output_dir
     );
 
-    if let Some(plugin_path) = plugin_saved {
-        info!("Plugin saved to: {}", plugin_path);
+    if let Some(skill_path) = skill_saved {
+        info!("Skill saved to: {}", skill_path);
     }
 
     Ok(ExitCode::SUCCESS)
@@ -301,7 +301,7 @@ mod tests {
             feature_mode: "wasm".to_string(),
             files_created: 5,
             total_lines: 250,
-            plugin_saved: None,
+            skill_saved: None,
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -340,7 +340,7 @@ mod tests {
             feature_mode: "wasm".to_string(),
             files_created: 10,
             total_lines: 500,
-            plugin_saved: Some("./plugins/test".to_string()),
+            skill_saved: Some("./skills/test".to_string()),
         };
 
         assert_eq!(result.server, "test");
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(result.feature_mode, "wasm");
         assert_eq!(result.files_created, 10);
         assert_eq!(result.total_lines, 500);
-        assert_eq!(result.plugin_saved, Some("./plugins/test".to_string()));
+        assert_eq!(result.skill_saved, Some("./skills/test".to_string()));
     }
 
     #[tokio::test]
@@ -439,7 +439,7 @@ mod tests {
             feature_mode: "wasm".to_string(),
             files_created: 8,
             total_lines: 400,
-            plugin_saved: None,
+            skill_saved: None,
         };
 
         // Test that all fields are accessible

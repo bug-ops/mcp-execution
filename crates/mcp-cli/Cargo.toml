@@ -30,7 +30,7 @@ mcp-bridge.workspace = true
 mcp-codegen.workspace = true
 mcp-core.workspace = true
 mcp-introspector.workspace = true
-mcp-plugin-store.workspace = true
+mcp-skill-store.workspace = true
 mcp-vfs.workspace = true
 mcp-wasm-runtime.workspace = true
 serde = { workspace = true, features = ["derive"] }

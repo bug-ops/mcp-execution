@@ -1,9 +1,9 @@
-# ADR-006: Plugin Persistence Design
+# ADR-006: Skill Persistence Design
 
 **Date**: 2025-11-21
 **Status**: Accepted (Implemented in Phase 8.1)
 **Deciders**: MCP Execution Team
-**Related**: Phase 8.1 Plugin Persistence Implementation
+**Related**: Phase 8.1 Skill Persistence Implementation
 
 ## Context
 
@@ -22,7 +22,7 @@ For frequently-used servers, this overhead is unnecessary:
 
 **Requirements**:
 1. Save generated code and WASM modules to disk
-2. Load plugins faster than generating from scratch
+2. Load skills faster than generating from scratch
 3. Verify integrity (prevent tampering)
 4. Support multiple servers
 5. Handle updates (server adds/removes tools)
@@ -31,14 +31,14 @@ For frequently-used servers, this overhead is unnecessary:
 
 ## Decision
 
-We will implement **disk-based plugin persistence** with the following design:
+We will implement **disk-based skill persistence** with the following design:
 
 ### Storage Structure
 
 ```
-plugins/
+skills/
 └── <server-name>/          # e.g., "vkteams-bot"
-    ├── metadata.json       # PluginMetadata (server info, timestamps, version)
+    ├── metadata.json       # SkillMetadata (server info, timestamps, version)
     ├── vfs.json            # Complete VFS structure (all generated code)
     ├── module.wasm         # Compiled WASM module
     └── checksum.blake3     # Blake3 checksum of all files
@@ -50,40 +50,40 @@ plugins/
 - **Separate WASM file**: Binary data separate from text
 - **Blake3 checksum**: Fast (10x faster than SHA256), cryptographically secure
 
-### Component: mcp-plugin-store
+### Component: mcp-skill-store
 
-**New crate** `mcp-plugin-store` with the following API:
+**New crate** `mcp-skill-store` with the following API:
 
 ```rust
-pub struct PluginStore {
-    base_dir: PathBuf,  // e.g., "./plugins" or "~/.mcp/plugins"
+pub struct SkillStore {
+    base_dir: PathBuf,  // e.g., "./skills" or "~/.mcp/skills"
 }
 
-impl PluginStore {
+impl SkillStore {
     pub fn new(base_dir: PathBuf) -> Result<Self>;
 
-    // Save plugin to disk
+    // Save skill to disk
     pub async fn save(
         &self,
         server_name: &str,
-        metadata: PluginMetadata,
+        metadata: SkillMetadata,
         vfs: &VirtualFilesystem,
         wasm_module: &[u8],
     ) -> Result<()>;
 
-    // Load plugin from disk
-    pub async fn load(&self, server_name: &str) -> Result<Plugin>;
+    // Load skill from disk
+    pub async fn load(&self, server_name: &str) -> Result<Skill>;
 
-    // List all saved plugins
-    pub async fn list(&self) -> Result<Vec<PluginInfo>>;
+    // List all saved skills
+    pub async fn list(&self) -> Result<Vec<SkillInfo>>;
 
-    // Get plugin metadata
-    pub async fn info(&self, server_name: &str) -> Result<PluginMetadata>;
+    // Get skill metadata
+    pub async fn info(&self, server_name: &str) -> Result<SkillMetadata>;
 
-    // Remove plugin from disk
+    // Remove skill from disk
     pub async fn remove(&self, server_name: &str) -> Result<()>;
 
-    // Verify plugin integrity
+    // Verify skill integrity
     pub async fn verify(&self, server_name: &str) -> Result<bool>;
 }
 ```
@@ -118,7 +118,7 @@ let valid = expected.ct_eq(&actual).into();
 // Prevent directory traversal
 fn validate_server_name(name: &str) -> Result<()> {
     if name.contains("..") || name.contains('/') || name.contains('\\') {
-        return Err(Error::InvalidPluginName);
+        return Err(Error::InvalidSkillName);
     }
     Ok(())
 }
@@ -140,21 +140,21 @@ fs::rename(&temp_path, &path)?;  // Atomic on POSIX
 ### CLI Integration
 
 ```bash
-# Generate and save plugin
-$ mcp-cli generate vkteams-bot --save-plugin --plugin-dir ./plugins
+# Generate and save skill
+$ mcp-cli generate vkteams-bot --save-skill --skill-dir ./skills
 
-# List saved plugins
-$ mcp-cli plugin list
+# List saved skills
+$ mcp-cli skill list
 vkteams-bot  saved 2025-11-21  12 tools  1.2MB
 
-# Load and use plugin (skip generation)
-$ mcp-cli plugin load vkteams-bot
+# Load and use skill (skip generation)
+$ mcp-cli skill load vkteams-bot
 
-# Get plugin info
-$ mcp-cli plugin info vkteams-bot
+# Get skill info
+$ mcp-cli skill info vkteams-bot
 
-# Remove plugin
-$ mcp-cli plugin remove vkteams-bot
+# Remove skill
+$ mcp-cli skill remove vkteams-bot
 ```
 
 ### Performance Benefits
@@ -169,12 +169,12 @@ Total: 67ms
 
 **After** (with persistence):
 ```
-Plugin Load: 1-3ms
+Skill Load: 1-3ms
 Integrity Check: <1ms
 Total: ~2-4ms
 ```
 
-**Speedup**: ~16-33x faster for cached plugins
+**Speedup**: ~16-33x faster for cached skills
 
 ## Alternatives Considered
 
@@ -207,9 +207,9 @@ Total: ~2-4ms
 
 **Decision**: Rejected - too complex for simple use case
 
-### Alternative 3: Single File with All Plugins
+### Alternative 3: Single File with All Skills
 
-**Example**: `plugins.tar` or `plugins.zip`
+**Example**: `skills.tar` or `skills.zip`
 
 **Pros**:
 - Single file to manage
@@ -218,12 +218,12 @@ Total: ~2-4ms
 **Cons**:
 - ❌ Must rewrite entire file for updates
 - ❌ Larger blast radius for corruption
-- ❌ Harder to remove individual plugins
+- ❌ Harder to remove individual skills
 - ❌ Concurrent access issues
 
-**Decision**: Rejected - directory-per-plugin is simpler
+**Decision**: Rejected - directory-per-skill is simpler
 
-### Alternative 4: Git Repository for Plugins
+### Alternative 4: Git Repository for Skills
 
 **Pros**:
 - Version history
@@ -256,7 +256,7 @@ Total: ~2-4ms
 
 ### Positive
 
-✅ **Faster plugin loading**: 16-33x faster than regeneration
+✅ **Faster skill loading**: 16-33x faster than regeneration
 ✅ **Persistent across sessions**: No re-generation needed
 ✅ **Simple file-based storage**: Easy to debug, backup, share
 ✅ **Strong integrity guarantees**: Blake3 checksums prevent tampering
@@ -267,32 +267,32 @@ Total: ~2-4ms
 
 ### Negative
 
-⚠️ **Disk space usage**: ~1-5MB per plugin (acceptable tradeoff)
-⚠️ **Stale plugins**: User must manually update if server changes (documented)
+⚠️ **Disk space usage**: ~1-5MB per skill (acceptable tradeoff)
+⚠️ **Stale skills**: User must manually update if server changes (documented)
 ⚠️ **File system dependency**: Requires writable directory (most systems OK)
 
 ### Neutral
 
-- Adds new crate `mcp-plugin-store` (~800 LOC)
+- Adds new crate `mcp-skill-store` (~800 LOC)
 - Adds 70 tests (38 unit + 32 integration)
-- Requires user to manage plugin directory
+- Requires user to manage skill directory
 
 ## Implementation Notes
 
 ### Phase 8.1 Deliverables
 
 **Completed**:
-- [x] `mcp-plugin-store` crate with full API
+- [x] `mcp-skill-store` crate with full API
 - [x] Blake3 checksum generation and verification
 - [x] Constant-time comparison for security
 - [x] Path validation and sanitization
 - [x] Atomic file operations
-- [x] CLI integration (`plugin` subcommand)
+- [x] CLI integration (`skill` subcommand)
 - [x] 38 unit tests (>90% coverage)
 - [x] 32 integration tests (E2E workflows)
 - [x] Security audit (5/5 stars, zero vulnerabilities)
-- [x] Documentation (`PHASE-8-PLUGIN-PERSISTENCE-GUIDE.md`)
-- [x] E2E example (`plugin_workflow.rs`)
+- [x] Documentation (`PHASE-8-SKILL-PERSISTENCE-GUIDE.md`)
+- [x] E2E example (`skill_workflow.rs`)
 
 ### Testing Strategy
 
@@ -305,7 +305,7 @@ Total: ~2-4ms
 
 **Integration Tests** (32 tests):
 - Full save/load cycle
-- Multiple plugins
+- Multiple skills
 - Concurrent access
 - Corruption detection
 - Platform-specific edge cases
@@ -320,8 +320,8 @@ Total: ~2-4ms
 
 **Benchmarks** (on M1 MacBook Pro):
 ```
-Plugin Save:     2.3ms ± 0.5ms
-Plugin Load:     1.8ms ± 0.3ms
+Skill Save:     2.3ms ± 0.5ms
+Skill Load:     1.8ms ± 0.3ms
 Checksum Calc:   0.6ms ± 0.1ms
 Integrity Check: 0.9ms ± 0.2ms
 ```
@@ -345,28 +345,28 @@ Integrity Check: 0.9ms ± 0.2ms
 
 ### Potential Enhancements (Not in Phase 8.1)
 
-1. **Compression**: gzip/zstd for smaller plugin files
+1. **Compression**: gzip/zstd for smaller skill files
 2. **Encryption**: Encrypt WASM modules with user key
-3. **Signatures**: Digital signatures for plugin authenticity
-4. **Remote storage**: S3/HTTP backend for shared plugins
-5. **Version management**: Keep multiple versions of same plugin
+3. **Signatures**: Digital signatures for skill authenticity
+4. **Remote storage**: S3/HTTP backend for shared skills
+5. **Version management**: Keep multiple versions of same skill
 6. **Auto-update**: Detect server changes and regenerate
-7. **Plugin sharing**: Export/import plugins between machines
+7. **Skill sharing**: Export/import skills between machines
 
 **Decision**: Deferred until user demand exists
 
 ## References
 
 ### Internal Documents
-- `.local/PHASE-8-PLUGIN-PERSISTENCE-GUIDE.md` - User guide
-- `.local/plugin-persistence-design.md` - Detailed design
-- `.local/SECURITY-AUDIT-PLUGIN-STORE.md` - Security audit
-- `.local/PERFORMANCE-REVIEW-PLUGIN-STORE.md` - Performance analysis
+- `.local/PHASE-8-SKILL-PERSISTENCE-GUIDE.md` - User guide
+- `.local/skill-persistence-design.md` - Detailed design
+- `.local/SECURITY-AUDIT-SKILL-STORE.md` - Security audit
+- `.local/PERFORMANCE-REVIEW-SKILL-STORE.md` - Performance analysis
 
 ### Code
-- `crates/mcp-plugin-store/` - Implementation
-- `crates/mcp-cli/src/commands/plugin.rs` - CLI integration
-- `crates/mcp-examples/examples/plugin_workflow.rs` - E2E example
+- `crates/mcp-skill-store/` - Implementation
+- `crates/mcp-cli/src/commands/skill.rs` - CLI integration
+- `crates/mcp-examples/examples/skill_workflow.rs` - E2E example
 
 ### External References
 - [Blake3](https://github.com/BLAKE3-team/BLAKE3) - Fast cryptographic hash

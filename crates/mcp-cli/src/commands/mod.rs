@@ -10,6 +10,6 @@ pub mod debug;
 pub mod execute;
 pub mod generate;
 pub mod introspect;
-pub mod plugin;
 pub mod server;
+pub mod skill;
 pub mod stats;

@@ -108,13 +108,13 @@ pub enum Commands {
         #[arg(short = 'F', long)]
         force: bool,
 
-        /// Save generated code as a plugin
+        /// Save generated code as a skill
         #[arg(long)]
-        save_plugin: bool,
+        save_skill: bool,
 
-        /// Plugin directory for save/load operations
-        #[arg(long, default_value = "./plugins")]
-        plugin_dir: PathBuf,
+        /// Skill directory for save/load operations
+        #[arg(long, default_value = "./skills")]
+        skill_dir: PathBuf,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -173,13 +173,13 @@ pub enum Commands {
         action: ConfigAction,
     },
 
-    /// Manage saved plugins.
+    /// Manage saved skills.
     ///
-    /// Save, load, list, and manage plugins stored on disk.
-    Plugin {
-        /// Plugin management action
+    /// Save, load, list, and manage skills stored on disk.
+    Skill {
+        /// Skill management action
         #[command(subcommand)]
-        action: commands::plugin::PluginAction,
+        action: commands::skill::SkillAction,
     },
 
     /// Generate shell completions.
@@ -253,16 +253,16 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             output,
             feature,
             force,
-            save_plugin,
-            plugin_dir,
+            save_skill,
+            skill_dir,
         } => {
             commands::generate::run(
                 server,
                 output,
                 feature,
                 force,
-                save_plugin,
-                plugin_dir,
+                save_skill,
+                skill_dir,
                 output_format,
             )
             .await
@@ -277,7 +277,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         Commands::Stats { category } => commands::stats::run(category, output_format).await,
         Commands::Debug { action } => commands::debug::run(action, output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
-        Commands::Plugin { action } => commands::plugin::run(action, output_format).await,
+        Commands::Skill { action } => commands::skill::run(action, output_format).await,
         Commands::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
