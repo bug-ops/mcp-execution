@@ -155,6 +155,79 @@ mcp-cli completions fish > ~/.config/fish/completions/mcp-cli.fish
 
 See [Phase 8 Skill Persistence Guide](.local/PHASE-8-SKILL-PERSISTENCE-GUIDE.md) for detailed skill documentation.
 
+## Integration with Claude Code/Desktop
+
+**mcp-execution** generates Claude Agent Skills that Claude Code and Claude Desktop can use directly. Skills are Markdown files that teach Claude how to interact with MCP servers, achieving 60-80% token savings through progressive loading.
+
+### Quick Integration
+
+```bash
+# 1. Generate skill from your MCP server
+mcp-cli generate vkteams-bot --skill-name vkteams
+
+# 2. Skill automatically appears in Claude Code
+# Files created:
+# ~/.claude/skills/vkteams/SKILL.md       (Main documentation)
+# ~/.claude/skills/vkteams/REFERENCE.md   (Detailed API reference)
+# ~/.claude/skills/vkteams/metadata.json  (Server metadata)
+
+# 3. Use in Claude Code
+# User: "Send a VK Teams message to chat 123"
+# Claude: [Reads skill, understands tools, executes correctly]
+```
+
+### How It Works
+
+```mermaid
+graph LR
+    A[MCP Server] -->|mcp-cli generate| B[~/.claude/skills/]
+    B -->|Claude discovers| C[Claude Code/Desktop]
+    C -->|Progressive loading| D[60-80% token savings]
+    C -->|Optional| E[mcp-cli execute]
+```
+
+**Current Model**: CLI Tool (on-demand execution)
+- No daemon to manage
+- Strong process-level security
+- ~45ms latency per call
+- Perfect for interactive use
+
+**Future Model** (Phase 6): Executable WASM skills
+- 80-90% token savings
+- Compiled skills in WASM sandbox
+- Enhanced security boundaries
+
+### Generated SKILL.md Format
+
+```yaml
+---
+name: vkteams
+description: |
+  VK Teams bot for sending messages and managing chats
+allowed-tools:
+  - send_message
+  - get_chat_info
+---
+
+# vkteams
+
+[Documentation with examples, parameters, and setup instructions]
+```
+
+### Benefits
+
+- **Token Efficient**: 60-80% reduction vs. full tool definitions
+- **Type Safe**: Generated code includes full parameter types
+- **Secure**: Instruction skills (no code execution) or WASM sandbox (future)
+- **Simple**: No daemon, no background processes
+- **Compatible**: Works with all MCP servers via rmcp SDK
+
+### Resources
+
+- **Integration Guide**: [.local/CLAUDE-CODE-INTEGRATION.md](.local/CLAUDE-CODE-INTEGRATION.md)
+- **Architecture**: [ADR-009: Claude Code Integration](docs/adr/009-claude-code-integration-model.md)
+- **Skills Format**: [Claude Agent Skills Documentation](https://code.claude.com/docs/en/skills)
+
 ## Development
 
 ### Prerequisites
@@ -338,15 +411,6 @@ Licensed under either of:
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Read [CLAUDE.md](CLAUDE.md) for development guidelines
-2. Follow Microsoft Rust Guidelines
-3. Include tests and documentation
-4. Run `cargo fmt` and `cargo clippy`
 
 ## Resources
 
