@@ -172,7 +172,7 @@ mcp-cli generate github --skill-name github
 # ~/.claude/skills/github/metadata.json  (Server metadata)
 
 # 3. Use in Claude Code
-# User: "Send a VK Teams message to chat 123"
+# User: "Create a GitHub issue in my repository"
 # Claude: [Reads skill, understands tools, executes correctly]
 ```
 
@@ -203,10 +203,11 @@ graph LR
 ---
 name: github
 description: |
-  VK Teams bot for sending messages and managing chats
+  GitHub MCP server for repository management and issue tracking
 allowed-tools:
-  - send_message
-  - get_chat_info
+  - create_issue
+  - list_repositories
+  - get_pull_request
 ---
 
 # github
