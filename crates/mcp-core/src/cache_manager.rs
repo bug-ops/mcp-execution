@@ -872,18 +872,12 @@ mod tests {
         // Path with forward slash
         let result = cache.vfs_path("path/with/slash");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("path separators"));
+        assert!(result.unwrap_err().to_string().contains("path separators"));
 
         // Path with backslash
         let result = cache.metadata_path("path\\with\\backslash");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("path separators"));
+        assert!(result.unwrap_err().to_string().contains("path separators"));
     }
 
     #[test]
