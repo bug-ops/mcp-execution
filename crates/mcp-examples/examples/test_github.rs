@@ -1,4 +1,4 @@
-//! Example: Testing MCP integration with vkteams-bot server.
+//! Example: Testing MCP integration with github server.
 //!
 //! This example demonstrates Phase 2 functionality:
 //! - Server discovery using mcp-introspector
@@ -7,14 +7,14 @@
 //!
 //! # Requirements
 //!
-//! This example requires the vkteams-bot MCP server to be installed and
-//! accessible via the command `vkteams-bot-server`. If the server is not
+//! This example requires the github MCP server to be installed and
+//! accessible via the command `github-server`. If the server is not
 //! available, the example will gracefully report the failure.
 //!
 //! # Usage
 //!
 //! ```bash
-//! cargo run --example test_vkteams
+//! cargo run --example test_github
 //! ```
 
 use mcp_bridge::Bridge;
@@ -38,8 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("━━━ Step 1: Server Discovery ━━━");
     let mut introspector = Introspector::new();
 
-    let server_id = ServerId::new("vkteams-bot");
-    let server_command = "vkteams-bot-server";
+    let server_id = ServerId::new("github");
+    let server_command = "github-server";
 
     println!("→ Attempting to discover server: {server_id}");
     println!("  Command: {server_command}");
@@ -138,12 +138,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => {
             println!("✗ Server discovery failed: {e}");
             println!();
-            println!("This is expected if vkteams-bot server is not installed.");
+            println!("This is expected if github server is not installed.");
             println!();
-            println!("To install vkteams-bot:");
-            println!("  1. Clone: git clone <vkteams-bot-repo>");
+            println!("To install github:");
+            println!("  1. Clone: git clone <github-repo>");
             println!("  2. Follow installation instructions");
-            println!("  3. Ensure 'vkteams-bot-server' is in PATH");
+            println!("  3. Ensure 'github-server' is in PATH");
             println!();
             println!("Alternative: Test with any other MCP server");
             println!("by modifying server_command in this example.");

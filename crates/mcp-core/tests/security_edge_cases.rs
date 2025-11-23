@@ -162,7 +162,7 @@ fn test_cache_dir_long_path() {
 #[test]
 fn test_cache_dir_nested_valid() {
     // Deeply nested but valid path
-    let nested = "mcp/cache/v1/servers/vkteams/sessions";
+    let nested = "mcp/cache/v1/servers/github/sessions";
     let result = CacheDir::new(nested);
     assert!(result.is_ok(), "Nested paths should be accepted");
 }

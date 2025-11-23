@@ -16,9 +16,9 @@
 //! use mcp_codegen::skills::claude::{SkillData, ToolData, ParameterData};
 //!
 //! let skill = SkillData {
-//!     skill_name: "vkteams-bot".to_string(),
+//!     skill_name: "github".to_string(),
 //!     skill_description: "Interact with VK Teams messenger".to_string(),
-//!     server_name: "vkteams-bot".to_string(),
+//!     server_name: "github".to_string(),
 //!     server_version: "1.0.0".to_string(),
 //!     server_description: "VK Teams MCP server".to_string(),
 //!     protocol_version: "1.0".to_string(),

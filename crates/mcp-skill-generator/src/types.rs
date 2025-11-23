@@ -15,8 +15,8 @@
 //! use mcp_core::ServerId;
 //!
 //! // Create validated skill name
-//! let name = SkillName::new("vkteams-bot").unwrap();
-//! assert_eq!(name.as_str(), "vkteams-bot");
+//! let name = SkillName::new("github").unwrap();
+//! assert_eq!(name.as_str(), "github");
 //!
 //! // Invalid names fail validation
 //! assert!(SkillName::new("123invalid").is_err());
@@ -150,8 +150,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// use mcp_skill_generator::SkillName;
 ///
 /// // Valid names
-/// let name = SkillName::new("vkteams-bot").unwrap();
-/// assert_eq!(name.as_str(), "vkteams-bot");
+/// let name = SkillName::new("github").unwrap();
+/// assert_eq!(name.as_str(), "github");
 ///
 /// let name2 = SkillName::new("my_skill_123").unwrap();
 /// assert_eq!(name2.as_str(), "my_skill_123");
@@ -344,13 +344,13 @@ pub struct GeneratedSkill {
 /// use chrono::Utc;
 ///
 /// let metadata = SkillMetadata {
-///     server_id: ServerId::new("vkteams-bot"),
+///     server_id: ServerId::new("github"),
 ///     tool_count: 3,
 ///     generated_at: Utc::now(),
 ///     generator_version: "0.1.0".to_string(),
 /// };
 ///
-/// assert_eq!(metadata.server_id.as_str(), "vkteams-bot");
+/// assert_eq!(metadata.server_id.as_str(), "github");
 /// assert_eq!(metadata.tool_count, 3);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -861,7 +861,7 @@ mod tests {
 
     #[test]
     fn test_skill_name_valid() {
-        assert!(SkillName::new("vkteams-bot").is_ok());
+        assert!(SkillName::new("github").is_ok());
         assert!(SkillName::new("my_skill").is_ok());
         assert!(SkillName::new("skill123").is_ok());
         assert!(SkillName::new("a").is_ok());

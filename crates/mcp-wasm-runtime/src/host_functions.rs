@@ -143,7 +143,7 @@ impl HostContext {
     /// let context = HostContext::new(Arc::new(bridge));
     ///
     /// let result = context.call_tool(
-    ///     &ServerId::new("vkteams-bot"),
+    ///     &ServerId::new("github"),
     ///     &ToolName::new("send_message"),
     ///     json!({"text": "Hello"}),
     /// ).await?;

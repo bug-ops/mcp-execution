@@ -22,11 +22,11 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Introspect MCP server
 //! let mut introspector = Introspector::new();
-//! let server_id = ServerId::new("vkteams-bot");
-//! let server_info = introspector.discover_server(server_id, "vkteams-bot-server").await?;
+//! let server_id = ServerId::new("github");
+//! let server_info = introspector.discover_server(server_id, "github-server").await?;
 //!
 //! // 2. Create skill metadata
-//! let name = SkillName::new("vkteams")?;
+//! let name = SkillName::new("github")?;
 //! let desc = SkillDescription::new("VK Teams bot integration")?;
 //!
 //! // 3. Convert to SkillData

@@ -35,9 +35,9 @@ pub enum MockServerError {
 /// ```
 /// use mcp_examples::mock_server::MockMcpServer;
 ///
-/// let server = MockMcpServer::new_vkteams_bot();
+/// let server = MockMcpServer::new_github();
 /// let info = server.server_info();
-/// assert_eq!(info.name, "vkteams-bot");
+/// assert_eq!(info.name, "github");
 /// assert!(!info.tools.is_empty());
 /// ```
 #[derive(Debug, Clone)]
@@ -78,9 +78,9 @@ impl MockMcpServer {
         }
     }
 
-    /// Creates a mock `VKTeams` Bot server with realistic tools.
+    /// Creates a mock `GitHub` Bot server with realistic tools.
     ///
-    /// This server simulates the `VKTeams` Bot MCP server with the following tools:
+    /// This server simulates the `GitHub` Bot MCP server with the following tools:
     /// - `send_message`: Send a message to a chat
     /// - `get_message`: Retrieve a message by ID
     /// - `get_chat`: Get chat information
@@ -91,16 +91,16 @@ impl MockMcpServer {
     /// ```
     /// use mcp_examples::mock_server::MockMcpServer;
     ///
-    /// let server = MockMcpServer::new_vkteams_bot();
-    /// assert_eq!(server.server_info().name, "vkteams-bot");
+    /// let server = MockMcpServer::new_github();
+    /// assert_eq!(server.server_info().name, "github");
     /// assert_eq!(server.server_info().tools.len(), 4);
     /// ```
     #[must_use]
-    pub fn new_vkteams_bot() -> Self {
+    pub fn new_github() -> Self {
         let tools = vec![
             ToolInfo {
                 name: ToolName::new("send_message"),
-                description: "Send a message to a VKTeams chat".to_string(),
+                description: "Send a message to a GitHub chat".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -197,8 +197,8 @@ impl MockMcpServer {
         ];
 
         let info = ServerInfo {
-            id: ServerId::new("vkteams-bot"),
-            name: "vkteams-bot".to_string(),
+            id: ServerId::new("github"),
+            name: "github".to_string(),
             version: "1.0.0".to_string(),
             capabilities: ServerCapabilities {
                 supports_tools: true,
@@ -222,7 +222,7 @@ impl MockMcpServer {
         server.set_response(
             "get_message",
             json!({
-                "text": "Hello from VKTeams!",
+                "text": "Hello from GitHub!",
                 "sender": "user_789",
                 "timestamp": 1699900000
             }),
@@ -256,7 +256,7 @@ impl MockMcpServer {
     /// ```
     /// use mcp_examples::mock_server::MockMcpServer;
     ///
-    /// let server = MockMcpServer::new_vkteams_bot();
+    /// let server = MockMcpServer::new_github();
     /// let info = server.server_info();
     /// assert!(info.capabilities.supports_tools);
     /// ```
@@ -276,7 +276,7 @@ impl MockMcpServer {
     /// use mcp_examples::mock_server::MockMcpServer;
     /// use serde_json::json;
     ///
-    /// let mut server = MockMcpServer::new_vkteams_bot();
+    /// let mut server = MockMcpServer::new_github();
     /// server.set_response("send_message", json!({"message_id": "test_123"}));
     /// ```
     pub fn set_response(&mut self, tool_name: &str, response: Value) {
@@ -300,7 +300,7 @@ impl MockMcpServer {
     /// use serde_json::json;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let server = MockMcpServer::new_vkteams_bot();
+    /// let server = MockMcpServer::new_github();
     /// let result = server.call_tool(
     ///     "send_message",
     ///     json!({"chat_id": "123", "text": "Hello"})
@@ -349,7 +349,7 @@ impl MockMcpServer {
     /// ```
     /// use mcp_examples::mock_server::MockMcpServer;
     ///
-    /// let server = MockMcpServer::new_vkteams_bot();
+    /// let server = MockMcpServer::new_github();
     /// let tools = server.tool_names();
     /// assert!(tools.contains(&"send_message".to_string()));
     /// ```
@@ -368,11 +368,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_vkteams_bot() {
-        let server = MockMcpServer::new_vkteams_bot();
+    fn test_new_github() {
+        let server = MockMcpServer::new_github();
         let info = server.server_info();
 
-        assert_eq!(info.name, "vkteams-bot");
+        assert_eq!(info.name, "github");
         assert_eq!(info.version, "1.0.0");
         assert!(info.capabilities.supports_tools);
         assert_eq!(info.tools.len(), 4);
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_tool_names() {
-        let server = MockMcpServer::new_vkteams_bot();
+        let server = MockMcpServer::new_github();
         let tools = server.tool_names();
 
         assert_eq!(tools.len(), 4);
@@ -392,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_tool_success() {
-        let server = MockMcpServer::new_vkteams_bot();
+        let server = MockMcpServer::new_github();
         let result = server
             .call_tool("send_message", json!({"chat_id": "123", "text": "Hello"}))
             .await
@@ -403,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_tool_not_found() {
-        let server = MockMcpServer::new_vkteams_bot();
+        let server = MockMcpServer::new_github();
         let result = server.call_tool("nonexistent_tool", json!({})).await;
 
         assert!(matches!(result, Err(MockServerError::ToolNotFound(_))));
@@ -411,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_tool_missing_params() {
-        let server = MockMcpServer::new_vkteams_bot();
+        let server = MockMcpServer::new_github();
         let result = server
             .call_tool("send_message", json!({"chat_id": "123"}))
             .await;
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_set_response() {
-        let mut server = MockMcpServer::new_vkteams_bot();
+        let mut server = MockMcpServer::new_github();
         let custom_response = json!({"custom": "response"});
 
         server.set_response("send_message", custom_response.clone());

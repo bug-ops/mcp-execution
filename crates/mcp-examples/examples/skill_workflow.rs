@@ -29,9 +29,9 @@ async fn main() -> Result<()> {
     let skill_dir = temp_dir.path().to_path_buf();
     println!("📁 Skill directory: {}", skill_dir.display());
 
-    // 2. Create mock server info (simulating real server like vkteams-bot)
+    // 2. Create mock server info (simulating real server like github)
     println!("\n🔍 Step 1: Creating skill data...");
-    let server_name = "vkteams-bot";
+    let server_name = "github";
     let server_info = ServerInfo {
         name: server_name.to_string(),
         version: "1.0.0".to_string(),

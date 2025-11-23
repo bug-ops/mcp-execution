@@ -25,8 +25,8 @@
 //! assert_eq!(code.as_i32(), 0);
 //!
 //! // Validated server connection strings
-//! let conn = ServerConnectionString::new("vkteams-bot").unwrap();
-//! assert_eq!(conn.as_str(), "vkteams-bot");
+//! let conn = ServerConnectionString::new("github").unwrap();
+//! assert_eq!(conn.as_str(), "github");
 //! ```
 
 use std::fmt;
@@ -219,8 +219,8 @@ impl fmt::Display for ExitCode {
 /// ```
 /// use mcp_core::cli::ServerConnectionString;
 ///
-/// let conn = ServerConnectionString::new("vkteams-bot").unwrap();
-/// assert_eq!(conn.as_str(), "vkteams-bot");
+/// let conn = ServerConnectionString::new("github").unwrap();
+/// assert_eq!(conn.as_str(), "github");
 ///
 /// // Empty strings are rejected
 /// assert!(ServerConnectionString::new("").is_err());
@@ -565,8 +565,8 @@ mod tests {
     // ServerConnectionString tests
     #[test]
     fn test_server_connection_string_valid() {
-        let conn = ServerConnectionString::new("vkteams-bot").unwrap();
-        assert_eq!(conn.as_str(), "vkteams-bot");
+        let conn = ServerConnectionString::new("github").unwrap();
+        assert_eq!(conn.as_str(), "github");
 
         let conn = ServerConnectionString::new("my-server-123").unwrap();
         assert_eq!(conn.as_str(), "my-server-123");
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn test_server_connection_string_valid_chars() {
         // These should still be valid
-        assert!(ServerConnectionString::new("vkteams-bot").is_ok());
+        assert!(ServerConnectionString::new("github").is_ok());
         assert!(ServerConnectionString::new("my_server").is_ok());
         assert!(ServerConnectionString::new("server-123").is_ok());
         assert!(ServerConnectionString::new("localhost:8080").is_ok());

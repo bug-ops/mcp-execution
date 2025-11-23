@@ -19,7 +19,7 @@ fn main() {
     println!("╚═══════════════════════════════════════════════════╝\n");
 
     // Create mock server for analysis
-    let mock_server = MockMcpServer::new_vkteams_bot();
+    let mock_server = MockMcpServer::new_github();
     let server_info = mock_server.server_info();
 
     println!("Server Configuration:");

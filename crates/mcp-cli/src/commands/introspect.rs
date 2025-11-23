@@ -21,8 +21,8 @@ use tracing::info;
 ///
 /// let result = IntrospectionResult {
 ///     server: ServerMetadata {
-///         id: "vkteams-bot".to_string(),
-///         name: "vkteams-bot".to_string(),
+///         id: "github".to_string(),
+///         name: "github".to_string(),
 ///         version: "1.0.0".to_string(),
 ///         supports_tools: true,
 ///         supports_resources: false,
@@ -31,7 +31,7 @@ use tracing::info;
 ///     tools: vec![],
 /// };
 ///
-/// assert_eq!(result.server.name, "vkteams-bot");
+/// assert_eq!(result.server.name, "github");
 /// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct IntrospectionResult {
@@ -114,7 +114,7 @@ pub struct ToolMetadata {
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let exit_code = introspect::run(
-///     "vkteams-bot".to_string(),
+///     "github".to_string(),
 ///     false,
 ///     OutputFormat::Json
 /// ).await?;

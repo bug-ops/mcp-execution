@@ -32,6 +32,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod cache_manager;
 mod command;
 mod config;
 mod error;
@@ -57,3 +58,6 @@ pub use traits::{CacheProvider, CodeExecutor, StateStorage};
 
 // Re-export command validation
 pub use command::validate_command;
+
+// Re-export cache management
+pub use cache_manager::{BuildMetadata, CacheManager, CacheStats};

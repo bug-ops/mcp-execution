@@ -12,10 +12,10 @@ use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use mcp_vfs::VfsBuilder;
 use serde_json::json;
 
-/// Creates a realistic test server info for vkteams-bot.
-fn create_vkteams_server_info() -> ServerInfo {
+/// Creates a realistic test server info for github.
+fn create_github_server_info() -> ServerInfo {
     ServerInfo {
-        id: ServerId::new("vkteams-bot"),
+        id: ServerId::new("github"),
         name: "VK Teams Bot".to_string(),
         version: "2.1.0".to_string(),
         tools: vec![
@@ -154,9 +154,9 @@ fn create_complex_server_info() -> ServerInfo {
 }
 
 #[test]
-fn test_complete_generation_workflow_vkteams() {
+fn test_complete_generation_workflow_github() {
     // Step 1: Create server info
-    let server_info = create_vkteams_server_info();
+    let server_info = create_github_server_info();
 
     // Step 2: Generate code
     let generator = CodeGenerator::new().expect("Generator should initialize");
@@ -180,21 +180,21 @@ fn test_complete_generation_workflow_vkteams() {
     assert!(paths.contains(&&"tools/getChat.ts".to_string()));
 
     // Step 4: Load into VFS
-    let vfs = VfsBuilder::from_generated_code(generated, "/mcp-tools/servers/vkteams-bot")
+    let vfs = VfsBuilder::from_generated_code(generated, "/mcp-tools/servers/github")
         .build()
         .expect("VFS build should succeed");
 
     // Step 5: Verify files exist in VFS
-    assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/manifest.json"));
-    assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/types.ts"));
-    assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/index.ts"));
-    assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/tools/sendMessage.ts"));
-    assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/tools/getUser.ts"));
-    assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/tools/getChat.ts"));
+    assert!(vfs.exists("/mcp-tools/servers/github/manifest.json"));
+    assert!(vfs.exists("/mcp-tools/servers/github/types.ts"));
+    assert!(vfs.exists("/mcp-tools/servers/github/index.ts"));
+    assert!(vfs.exists("/mcp-tools/servers/github/tools/sendMessage.ts"));
+    assert!(vfs.exists("/mcp-tools/servers/github/tools/getUser.ts"));
+    assert!(vfs.exists("/mcp-tools/servers/github/tools/getChat.ts"));
 
     // Step 6: Verify manifest content
     let manifest_content = vfs
-        .read_file("/mcp-tools/servers/vkteams-bot/manifest.json")
+        .read_file("/mcp-tools/servers/github/manifest.json")
         .expect("Should read manifest");
     let manifest: serde_json::Value =
         serde_json::from_str(manifest_content).expect("Manifest should be valid JSON");
@@ -205,7 +205,7 @@ fn test_complete_generation_workflow_vkteams() {
 
     // Step 7: Verify types.ts content
     let types_content = vfs
-        .read_file("/mcp-tools/servers/vkteams-bot/types.ts")
+        .read_file("/mcp-tools/servers/github/types.ts")
         .expect("Should read types");
     assert!(types_content.contains("export interface ToolResult"));
     assert!(types_content.contains("'send_message'"));
@@ -214,7 +214,7 @@ fn test_complete_generation_workflow_vkteams() {
 
     // Step 8: Verify tool file content
     let send_message_content = vfs
-        .read_file("/mcp-tools/servers/vkteams-bot/tools/sendMessage.ts")
+        .read_file("/mcp-tools/servers/github/tools/sendMessage.ts")
         .expect("Should read sendMessage");
     assert!(send_message_content.contains("export async function sendMessage"));
     assert!(send_message_content.contains("chat_id: string"));
@@ -277,7 +277,7 @@ fn test_complex_schema_generation() {
 #[test]
 fn test_multiple_servers_in_vfs() {
     // Generate code for multiple servers
-    let server1 = create_vkteams_server_info();
+    let server1 = create_github_server_info();
     let server2 = create_empty_server_info();
 
     let generator = CodeGenerator::new().unwrap();
@@ -285,7 +285,7 @@ fn test_multiple_servers_in_vfs() {
     let code2 = generator.generate(&server2).unwrap();
 
     // Build VFS with both servers - need to create two separate builders
-    let mut builder = VfsBuilder::from_generated_code(code1, "/mcp-tools/servers/vkteams-bot");
+    let mut builder = VfsBuilder::from_generated_code(code1, "/mcp-tools/servers/github");
 
     // Manually add files from code2
     for file in code2.files {
@@ -296,7 +296,7 @@ fn test_multiple_servers_in_vfs() {
     let vfs = builder.build().unwrap();
 
     // Verify both servers exist
-    assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/manifest.json"));
+    assert!(vfs.exists("/mcp-tools/servers/github/manifest.json"));
     assert!(vfs.exists("/mcp-tools/servers/empty/manifest.json"));
 
     // Verify total file count
@@ -305,7 +305,7 @@ fn test_multiple_servers_in_vfs() {
 
 #[test]
 fn test_generated_typescript_is_syntactically_valid() {
-    let server_info = create_vkteams_server_info();
+    let server_info = create_github_server_info();
     let generator = CodeGenerator::new().unwrap();
     let generated = generator.generate(&server_info).unwrap();
 
@@ -352,7 +352,7 @@ fn test_generated_typescript_is_syntactically_valid() {
 
 #[test]
 fn test_index_exports_all_tools() {
-    let server_info = create_vkteams_server_info();
+    let server_info = create_github_server_info();
     let generator = CodeGenerator::new().unwrap();
     let generated = generator.generate(&server_info).unwrap();
 
@@ -377,7 +377,7 @@ fn test_index_exports_all_tools() {
 
 #[test]
 fn test_manifest_contains_all_metadata() {
-    let server_info = create_vkteams_server_info();
+    let server_info = create_github_server_info();
     let generator = CodeGenerator::new().unwrap();
     let generated = generator.generate(&server_info).unwrap();
 
@@ -410,17 +410,17 @@ fn test_manifest_contains_all_metadata() {
 
 #[test]
 fn test_vfs_directory_listing() {
-    let server_info = create_vkteams_server_info();
+    let server_info = create_github_server_info();
     let generator = CodeGenerator::new().unwrap();
     let generated = generator.generate(&server_info).unwrap();
 
-    let vfs = VfsBuilder::from_generated_code(generated, "/mcp-tools/servers/vkteams-bot")
+    let vfs = VfsBuilder::from_generated_code(generated, "/mcp-tools/servers/github")
         .build()
         .unwrap();
 
     // List tools directory
     let tools_entries = vfs
-        .list_dir("/mcp-tools/servers/vkteams-bot/tools")
+        .list_dir("/mcp-tools/servers/github/tools")
         .expect("Should list tools directory");
 
     assert_eq!(tools_entries.len(), 3, "Should have 3 tool files");

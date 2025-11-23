@@ -106,7 +106,7 @@ pub fn connect_server(server_id: u64) -> Result<Connection> { ... }
 // ✅ GOOD: Use rmcp client
 use rmcp::client::TokioChildProcess;
 
-let transport = TokioChildProcess::new("vkteams-bot")?;
+let transport = TokioChildProcess::new("github")?;
 let client = rmcp::client::Client::new(transport);
 
 // ❌ BAD: Custom MCP protocol implementation

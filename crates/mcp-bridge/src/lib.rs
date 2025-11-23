@@ -26,8 +26,8 @@
 //! let bridge = Bridge::new(1000);
 //!
 //! // Connect to server
-//! let server_id = ServerId::new("vkteams-bot");
-//! bridge.connect(server_id.clone(), "vkteams-bot-server").await?;
+//! let server_id = ServerId::new("github");
+//! bridge.connect(server_id.clone(), "github-server").await?;
 //!
 //! // Call tool
 //! let params = json!({"chat_id": "123", "text": "Hello"});
@@ -205,7 +205,7 @@ impl Bridge {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
-    /// bridge.connect(ServerId::new("vkteams-bot"), "vkteams-bot-server").await?;
+    /// bridge.connect(ServerId::new("github"), "github-server").await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -295,9 +295,9 @@ impl Bridge {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
-    /// let server_id = ServerId::new("vkteams-bot");
+    /// let server_id = ServerId::new("github");
     ///
-    /// bridge.connect(server_id.clone(), "vkteams-bot-server").await?;
+    /// bridge.connect(server_id.clone(), "github-server").await?;
     ///
     /// let params = json!({"chat_id": "123", "text": "Hello"});
     /// let result = bridge.call_tool(

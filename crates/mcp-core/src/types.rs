@@ -32,7 +32,7 @@
 //! assert_eq!(limit.bytes(), 256 * 1024 * 1024);
 //!
 //! // Validated Anthropic skill types
-//! let name = SkillName::new("vkteams-bot").unwrap();
+//! let name = SkillName::new("github").unwrap();
 //! let desc = SkillDescription::new("Sends messages to VK Teams. Use when...").unwrap();
 //! ```
 
@@ -503,14 +503,14 @@ impl CacheKey {
     /// use mcp_core::CacheKey;
     ///
     /// let key = CacheKey::from_parts(
-    ///     "vkteams-bot",
+    ///     "github",
     ///     "send_message",
     ///     r#"{"chat_id": "123", "text": "hello"}"#
     /// );
     ///
     /// // Same inputs always produce the same hash
     /// let key2 = CacheKey::from_parts(
-    ///     "vkteams-bot",
+    ///     "github",
     ///     "send_message",
     ///     r#"{"chat_id": "123", "text": "hello"}"#
     /// );
@@ -768,7 +768,7 @@ impl TryFrom<&str> for SkillDescription {
 /// use mcp_core::SkillName;
 ///
 /// // Valid names
-/// assert!(SkillName::new("vkteams-bot").is_ok());
+/// assert!(SkillName::new("github").is_ok());
 /// assert!(SkillName::new("my_skill_123").is_ok());
 /// assert!(SkillName::new("a").is_ok());
 ///
@@ -824,7 +824,7 @@ impl SkillName {
     /// use mcp_core::SkillName;
     ///
     /// // Valid names
-    /// let name1 = SkillName::new("vkteams-bot").unwrap();
+    /// let name1 = SkillName::new("github").unwrap();
     /// let name2 = SkillName::new("my_skill_123").unwrap();
     ///
     /// // Invalid: reserved word
@@ -1390,7 +1390,7 @@ mod tests {
 
     #[test]
     fn test_skill_name_valid_lowercase() {
-        assert!(SkillName::new("vkteams-bot").is_ok());
+        assert!(SkillName::new("github").is_ok());
         assert!(SkillName::new("my_skill").is_ok());
         assert!(SkillName::new("skill123").is_ok());
     }

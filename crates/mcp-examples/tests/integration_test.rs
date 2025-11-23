@@ -17,10 +17,10 @@ use std::sync::Arc;
 
 #[test]
 fn test_mock_server_creation() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let info = server.server_info();
 
-    assert_eq!(info.name, "vkteams-bot");
+    assert_eq!(info.name, "github");
     assert_eq!(info.version, "1.0.0");
     assert!(info.capabilities.supports_tools);
     assert_eq!(info.tools.len(), 4);
@@ -28,7 +28,7 @@ fn test_mock_server_creation() {
 
 #[test]
 fn test_mock_server_tool_names() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let tool_names = server.tool_names();
 
     assert!(tool_names.contains(&"send_message".to_string()));
@@ -39,7 +39,7 @@ fn test_mock_server_tool_names() {
 
 #[tokio::test]
 async fn test_mock_server_tool_call() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
 
     let result = server
         .call_tool(
@@ -55,7 +55,7 @@ async fn test_mock_server_tool_call() {
 
 #[tokio::test]
 async fn test_mock_server_invalid_tool() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
 
     let result = server.call_tool("nonexistent", serde_json::json!({})).await;
 
@@ -64,7 +64,7 @@ async fn test_mock_server_invalid_tool() {
 
 #[tokio::test]
 async fn test_mock_server_missing_params() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
 
     // send_message requires both chat_id and text
     let result = server
@@ -80,7 +80,7 @@ async fn test_mock_server_missing_params() {
 
 #[test]
 fn test_introspection_to_codegen() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let generator = CodeGenerator::new().unwrap();
@@ -96,7 +96,7 @@ fn test_introspection_to_codegen() {
 
 #[test]
 fn test_codegen_generates_expected_files() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let generator = CodeGenerator::new().unwrap();
@@ -126,7 +126,7 @@ fn test_codegen_generates_expected_files() {
 
 #[test]
 fn test_codegen_to_vfs() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let generator = CodeGenerator::new().unwrap();
@@ -144,7 +144,7 @@ fn test_codegen_to_vfs() {
 
 #[test]
 fn test_vfs_file_reading() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let generator = CodeGenerator::new().unwrap();
@@ -170,7 +170,7 @@ fn test_vfs_file_reading() {
 
 #[test]
 fn test_vfs_directory_listing() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let generator = CodeGenerator::new().unwrap();
@@ -231,7 +231,7 @@ async fn test_runtime_execution_simple() {
 
 #[test]
 fn test_token_analysis_calculation() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let analysis = TokenAnalysis::analyze(server_info, 10);
@@ -245,7 +245,7 @@ fn test_token_analysis_calculation() {
 
 #[test]
 fn test_token_analysis_scaling() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let analysis_few = TokenAnalysis::analyze(server_info, 5);
@@ -257,7 +257,7 @@ fn test_token_analysis_scaling() {
 
 #[test]
 fn test_token_analysis_target_achievement() {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     // With enough calls, should achieve 80%+ savings (max is ~83%)
@@ -274,7 +274,7 @@ fn test_token_analysis_target_achievement() {
 #[tokio::test]
 async fn test_e2e_full_workflow() {
     // 1. Server introspection (mock)
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info().clone();
     assert!(!server_info.tools.is_empty());
 
@@ -311,7 +311,7 @@ async fn test_e2e_full_workflow() {
 async fn test_e2e_error_propagation() {
     // Test that errors propagate correctly through the pipeline
 
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info().clone();
 
     let generator = CodeGenerator::new().unwrap();
@@ -330,7 +330,7 @@ async fn test_e2e_error_propagation() {
 async fn test_e2e_multiple_servers() {
     // Test handling multiple servers in VFS
 
-    let server1 = MockMcpServer::new_vkteams_bot();
+    let server1 = MockMcpServer::new_github();
     let info1 = server1.server_info().clone();
 
     let generator = CodeGenerator::new().unwrap();
@@ -355,7 +355,7 @@ async fn test_e2e_multiple_servers() {
 fn test_codegen_performance() {
     use std::time::Instant;
 
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let generator = CodeGenerator::new().unwrap();
@@ -376,7 +376,7 @@ fn test_codegen_performance() {
 fn test_vfs_build_performance() {
     use std::time::Instant;
 
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
 
     let generator = CodeGenerator::new().unwrap();

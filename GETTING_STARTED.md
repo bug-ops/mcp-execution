@@ -288,7 +288,7 @@ use mcp_core::ServerId;
 let mut introspector = Introspector::new();
 
 // Discover server (stdio transport)
-let server_id = ServerId::new("vkteams-bot");
+let server_id = ServerId::new("github");
 let server_command = vec!["node".to_string(), "server.js".to_string()];
 
 let server_info = introspector
@@ -317,7 +317,7 @@ let generated = generator.generate(&server_info)?;
 
 // Write to disk
 for file in &generated.files {
-    let path = format!("/mcp-tools/servers/vkteams-bot/{}", file.relative_path);
+    let path = format!("/mcp-tools/servers/github/{}", file.relative_path);
     fs::create_dir_all(std::path::Path::new(&path).parent().unwrap())?;
     fs::write(&path, &file.content)?;
     println!("✓ Generated: {}", path);
@@ -327,7 +327,7 @@ for file in &generated.files {
 **Generated structure:**
 
 ```text
-/mcp-tools/servers/vkteams-bot/
+/mcp-tools/servers/github/
 ├── manifest.json       # Server metadata
 ├── types.ts            # Shared types
 ├── tools/
@@ -345,7 +345,7 @@ let bridge = Bridge::new(1000);
 
 // Connect to server
 bridge.connect_server(
-    &ServerId::new("vkteams-bot"),
+    &ServerId::new("github"),
     server_command
 ).await?;
 
@@ -355,7 +355,7 @@ use mcp_wasm_runtime::HostContext;
 let context = HostContext::new(Arc::new(bridge));
 
 let result = context.call_tool(
-    &ServerId::new("vkteams-bot"),
+    &ServerId::new("github"),
     &ToolName::new("send_message"),
     serde_json::json!({
         "chat_id": "123",
@@ -437,16 +437,16 @@ Generate code and save as a reusable plugin:
 
 ```bash
 # Generate and save
-mcp-cli generate vkteams-bot --save-plugin
+mcp-cli generate github --save-plugin
 
 # Custom plugin directory
-mcp-cli generate vkteams-bot --save-plugin --plugin-dir ~/.mcp-plugins
+mcp-cli generate github --save-plugin --plugin-dir ~/.mcp-plugins
 ```
 
 This creates a plugin directory structure:
 
 ```text
-./plugins/vkteams-bot/
+./plugins/github/
 ├── plugin.json       # Metadata with checksums
 ├── module.wasm       # WASM module
 └── generated/        # TypeScript files
@@ -461,13 +461,13 @@ Load a plugin without regenerating:
 
 ```bash
 # Load from default directory (./plugins)
-mcp-cli plugin load vkteams-bot
+mcp-cli plugin load github
 
 # Load from custom directory
-mcp-cli plugin load vkteams-bot --plugin-dir ~/.mcp-plugins
+mcp-cli plugin load github --plugin-dir ~/.mcp-plugins
 
 # JSON output
-mcp-cli plugin load vkteams-bot -o json
+mcp-cli plugin load github -o json
 ```
 
 ### List Available Plugins
@@ -486,7 +486,7 @@ Output:
 
 ```text
 Available plugins (2):
-  • vkteams-bot (v1.0.0)
+  • github (v1.0.0)
     Tools: 10 | Files: 15 | Generated: 2025-11-21
   • github (v2.0.0)
     Tools: 8 | Files: 12 | Generated: 2025-11-20
@@ -498,10 +498,10 @@ Get detailed information about a plugin:
 
 ```bash
 # Show info
-mcp-cli plugin info vkteams-bot
+mcp-cli plugin info github
 
 # Pretty JSON output
-mcp-cli plugin info vkteams-bot -o pretty
+mcp-cli plugin info github -o pretty
 ```
 
 ### Remove Plugin
@@ -510,10 +510,10 @@ Delete a saved plugin:
 
 ```bash
 # Remove with confirmation
-mcp-cli plugin remove vkteams-bot
+mcp-cli plugin remove github
 
 # Skip confirmation
-mcp-cli plugin remove vkteams-bot -y
+mcp-cli plugin remove github -y
 ```
 
 ### Security Features
@@ -537,7 +537,7 @@ use mcp_plugin_store::PluginStore;
 let store = PluginStore::new("./plugins")?;
 
 // Load plugin
-let plugin = store.load_plugin("vkteams-bot")?;
+let plugin = store.load_plugin("github")?;
 
 println!("WASM size: {} bytes", plugin.wasm_module.len());
 println!("VFS files: {}", plugin.vfs.file_count());
@@ -621,9 +621,9 @@ Connect to multiple MCP servers:
 ```rust
 let bridge = Bridge::new(1000);
 
-// Server 1: vkteams-bot
+// Server 1: github
 bridge.connect_server(
-    &ServerId::new("vkteams-bot"),
+    &ServerId::new("github"),
     vec!["node".into(), "vk-server.js".into()]
 ).await?;
 
@@ -635,7 +635,7 @@ bridge.connect_server(
 
 // Call tools from different servers
 let vk_result = context.call_tool(
-    &ServerId::new("vkteams-bot"),
+    &ServerId::new("github"),
     &ToolName::new("send_message"),
     json!({"chat_id": "123", "text": "Hi"})
 ).await?;

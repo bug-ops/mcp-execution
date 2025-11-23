@@ -29,10 +29,10 @@
 //!
 //! ```bash
 //! # Introspect a server
-//! mcp-cli introspect vkteams-bot
+//! mcp-cli introspect github
 //!
 //! # Generate code
-//! mcp-cli generate vkteams-bot --output ./generated
+//! mcp-cli generate github --output ./generated
 //!
 //! # Execute WASM module
 //! mcp-cli execute module.wasm --entry main
@@ -83,7 +83,7 @@ pub enum Commands {
     Introspect {
         /// Server connection string or command
         ///
-        /// Can be a server name like "vkteams-bot" or a full command
+        /// Can be a server name like "github" or a full command
         /// like "node server.js"
         server: String,
 
@@ -184,6 +184,17 @@ pub enum Commands {
         /// Skill management action
         #[command(subcommand)]
         action: commands::skill::SkillAction,
+    },
+
+    /// Manage internal cache.
+    ///
+    /// View, clear, and verify the internal cache directory (~/.mcp-execution/cache/).
+    /// The cache stores WASM modules, VFS files, and build metadata that can be
+    /// safely deleted and regenerated.
+    Cache {
+        /// Cache management action
+        #[command(subcommand)]
+        action: commands::cache::CacheCommand,
     },
 
     /// Generate shell completions.
@@ -291,6 +302,10 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         Commands::Debug { action } => commands::debug::run(action, output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
         Commands::Skill { action } => commands::skill::run(action, output_format).await,
+        Commands::Cache { action } => {
+            commands::cache::handle(action)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Commands::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
@@ -305,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_cli_parsing_introspect() {
-        let cli = Cli::parse_from(["mcp-cli", "introspect", "vkteams-bot"]);
+        let cli = Cli::parse_from(["mcp-cli", "introspect", "github"]);
         assert!(matches!(cli.command, Commands::Introspect { .. }));
     }
 

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 /// Benchmarks code generation from server info.
 fn bench_code_generation(c: &mut Criterion) {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
     let generator = CodeGenerator::new().unwrap();
 
@@ -26,7 +26,7 @@ fn bench_code_generation(c: &mut Criterion) {
 
 /// Benchmarks VFS building from generated code.
 fn bench_vfs_build(c: &mut Criterion) {
-    let server = MockMcpServer::new_vkteams_bot();
+    let server = MockMcpServer::new_github();
     let server_info = server.server_info();
     let generator = CodeGenerator::new().unwrap();
     let generated = generator.generate(server_info).unwrap();
@@ -81,7 +81,7 @@ fn bench_e2e_workflow(c: &mut Criterion) {
     c.bench_function("e2e_workflow", |b| {
         b.to_async(&rt).iter(|| async {
             // Full workflow
-            let server = MockMcpServer::new_vkteams_bot();
+            let server = MockMcpServer::new_github();
             let server_info = server.server_info();
 
             let generator = CodeGenerator::new().unwrap();
