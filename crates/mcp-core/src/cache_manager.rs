@@ -498,12 +498,6 @@ impl CacheManager {
     }
 }
 
-impl Default for CacheManager {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default CacheManager")
-    }
-}
-
 /// Statistics about cache usage.
 ///
 /// Contains information about the number of cached files and total storage size.
