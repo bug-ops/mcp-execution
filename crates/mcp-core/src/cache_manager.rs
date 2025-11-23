@@ -424,9 +424,11 @@ impl CacheManager {
     ///
     /// ```
     /// use mcp_core::CacheManager;
+    /// use tempfile::TempDir;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let cache = CacheManager::new()?;
+    /// let temp_dir = TempDir::new()?;
+    /// let cache = CacheManager::with_directory(temp_dir.path())?;
     /// cache.clear_all()?;
     /// assert!(cache.wasm_dir().exists());
     /// # Ok(())

@@ -219,7 +219,10 @@ impl SkillStore {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_directories(base_dir: impl AsRef<Path>, cache_dir: impl AsRef<Path>) -> Result<Self> {
+    pub fn with_directories(
+        base_dir: impl AsRef<Path>,
+        cache_dir: impl AsRef<Path>,
+    ) -> Result<Self> {
         let base_dir = base_dir.as_ref().to_path_buf();
 
         // Create directory if it doesn't exist
@@ -229,8 +232,10 @@ impl SkillStore {
         }
 
         // Initialize cache manager with custom directory
-        let cache = CacheManager::with_directory(cache_dir).map_err(|e| SkillStoreError::InvalidMetadata {
-            reason: format!("Failed to initialize cache manager: {e}"),
+        let cache = CacheManager::with_directory(cache_dir).map_err(|e| {
+            SkillStoreError::InvalidMetadata {
+                reason: format!("Failed to initialize cache manager: {e}"),
+            }
         })?;
 
         Ok(Self {
@@ -1030,16 +1035,22 @@ impl SkillStore {
         tracing::info!("Caching WASM/VFS for skill: {}", name);
 
         // Write WASM module to cache
-        let wasm_path = self.cache.wasm_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
-            reason: format!("Failed to get WASM cache path: {e}"),
-        })?;
+        let wasm_path =
+            self.cache
+                .wasm_path(name)
+                .map_err(|e| SkillStoreError::InvalidMetadata {
+                    reason: format!("Failed to get WASM cache path: {e}"),
+                })?;
         fs::write(&wasm_path, wasm_module)?;
         tracing::debug!("Cached WASM module: {} bytes", wasm_module.len());
 
         // Write VFS files to cache
-        let vfs_dir = self.cache.vfs_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
-            reason: format!("Failed to get VFS cache path: {e}"),
-        })?;
+        let vfs_dir = self
+            .cache
+            .vfs_path(name)
+            .map_err(|e| SkillStoreError::InvalidMetadata {
+                reason: format!("Failed to get VFS cache path: {e}"),
+            })?;
         fs::create_dir_all(&vfs_dir)?;
 
         for vfs_path in vfs.all_paths() {
@@ -1064,7 +1075,9 @@ impl SkillStore {
         let wasm_checksum = calculate_checksum(wasm_module);
         let mut vfs_checksums = HashMap::new();
         for vfs_path in vfs.all_paths() {
-            let content = vfs.read_file(vfs_path.as_str()).map_err(SkillStoreError::Vfs)?;
+            let content = vfs
+                .read_file(vfs_path.as_str())
+                .map_err(SkillStoreError::Vfs)?;
             let relative_path = vfs_path.as_str().trim_start_matches('/');
             let checksum = calculate_checksum(content.as_bytes());
             vfs_checksums.insert(relative_path.to_string(), checksum);
@@ -1078,9 +1091,12 @@ impl SkillStore {
             vfs_checksums,
         };
 
-        let metadata_path = self.cache.metadata_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
-            reason: format!("Failed to get metadata cache path: {e}"),
-        })?;
+        let metadata_path =
+            self.cache
+                .metadata_path(name)
+                .map_err(|e| SkillStoreError::InvalidMetadata {
+                    reason: format!("Failed to get metadata cache path: {e}"),
+                })?;
         let metadata_json = serde_json::to_string_pretty(&metadata)?;
         fs::write(&metadata_path, metadata_json)?;
         tracing::debug!("Cached build metadata");
@@ -1292,9 +1308,12 @@ impl SkillStore {
         tracing::info!("Loading cached WASM/VFS for skill: {}", name);
 
         // Read WASM module from cache
-        let wasm_path = self.cache.wasm_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
-            reason: format!("Failed to get WASM cache path: {e}"),
-        })?;
+        let wasm_path =
+            self.cache
+                .wasm_path(name)
+                .map_err(|e| SkillStoreError::InvalidMetadata {
+                    reason: format!("Failed to get WASM cache path: {e}"),
+                })?;
         if !wasm_path.exists() {
             return Err(SkillStoreError::MissingFile {
                 server_name: name.to_string(),
@@ -1305,9 +1324,12 @@ impl SkillStore {
         tracing::debug!("Loaded cached WASM module: {} bytes", wasm_module.len());
 
         // Read VFS files from cache
-        let vfs_dir = self.cache.vfs_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
-            reason: format!("Failed to get VFS cache path: {e}"),
-        })?;
+        let vfs_dir = self
+            .cache
+            .vfs_path(name)
+            .map_err(|e| SkillStoreError::InvalidMetadata {
+                reason: format!("Failed to get VFS cache path: {e}"),
+            })?;
         if !vfs_dir.exists() {
             return Err(SkillStoreError::MissingFile {
                 server_name: name.to_string(),
@@ -1326,11 +1348,15 @@ impl SkillStore {
             }
 
             let file_path = entry.path();
-            let relative_path = file_path.strip_prefix(&vfs_dir).map_err(|_| {
-                SkillStoreError::InvalidMetadata {
-                    reason: format!("Failed to strip prefix from path: {}", file_path.display()),
-                }
-            })?;
+            let relative_path =
+                file_path
+                    .strip_prefix(&vfs_dir)
+                    .map_err(|_| SkillStoreError::InvalidMetadata {
+                        reason: format!(
+                            "Failed to strip prefix from path: {}",
+                            file_path.display()
+                        ),
+                    })?;
 
             // Normalize path separators
             let normalized_path = relative_path.to_string_lossy().replace('\\', "/");
