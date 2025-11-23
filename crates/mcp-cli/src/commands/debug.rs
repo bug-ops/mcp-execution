@@ -210,10 +210,9 @@ async fn inspect_connections(output_format: OutputFormat) -> Result<ExitCode> {
     let success_rate_percent = stats.connection_success_rate().map(|rate| rate * 100.0);
 
     // Try to find Claude Desktop config
-    let (config_path, config_exists) = find_config_path().map_or(
-        (None, false),
-        |path| (Some(path.display().to_string()), path.exists()),
-    );
+    let (config_path, config_exists) = find_config_path().map_or((None, false), |path| {
+        (Some(path.display().to_string()), path.exists())
+    });
 
     let inspection = ConnectionInspection {
         active_connections: active,
