@@ -9,18 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
-blake3.workspace = true
 lru.workspace = true
 mcp-core.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-child-process"] }
-serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "process"] }
 tracing.workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
-mockall.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros"] }

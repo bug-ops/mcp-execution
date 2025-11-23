@@ -15,7 +15,6 @@ dirs.workspace = true
 mcp-codegen = { workspace = true, features = ["skills"] }
 mcp-core.workspace = true
 mcp-vfs.workspace = true
-secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
@@ -25,7 +24,6 @@ walkdir.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros"] }
 
 [[bench]]
 name = "large_vfs"
