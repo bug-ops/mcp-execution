@@ -128,21 +128,32 @@ impl CacheManager {
     /// ```
     pub fn with_directory(path: impl AsRef<Path>) -> Result<Self> {
         let cache_root = path.as_ref().to_path_buf();
+        let manager = Self { cache_root };
+        manager.ensure_cache_structure()?;
+        Ok(manager)
+    }
 
-        // Create subdirectories
-        fs::create_dir_all(cache_root.join("wasm")).map_err(|e| Error::CacheError {
+    /// Ensures the cache directory structure exists (wasm, vfs, metadata).
+    ///
+    /// Creates the three subdirectories if they don't exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any directory cannot be created.
+    fn ensure_cache_structure(&self) -> Result<()> {
+        fs::create_dir_all(self.cache_root.join("wasm")).map_err(|e| Error::CacheError {
             message: format!("Failed to create wasm directory: {e}"),
         })?;
 
-        fs::create_dir_all(cache_root.join("vfs")).map_err(|e| Error::CacheError {
+        fs::create_dir_all(self.cache_root.join("vfs")).map_err(|e| Error::CacheError {
             message: format!("Failed to create vfs directory: {e}"),
         })?;
 
-        fs::create_dir_all(cache_root.join("metadata")).map_err(|e| Error::CacheError {
+        fs::create_dir_all(self.cache_root.join("metadata")).map_err(|e| Error::CacheError {
             message: format!("Failed to create metadata directory: {e}"),
         })?;
 
-        Ok(Self { cache_root })
+        Ok(())
     }
 
     /// Returns the root cache directory path.
@@ -237,6 +248,7 @@ impl CacheManager {
     /// ```
     #[must_use]
     pub fn wasm_path(&self, skill_name: &str) -> PathBuf {
+        Self::validate_skill_name(skill_name);
         self.wasm_dir().join(format!("{skill_name}.wasm"))
     }
 
@@ -256,6 +268,7 @@ impl CacheManager {
     /// ```
     #[must_use]
     pub fn vfs_path(&self, skill_name: &str) -> PathBuf {
+        Self::validate_skill_name(skill_name);
         self.vfs_dir().join(skill_name)
     }
 
@@ -383,15 +396,7 @@ impl CacheManager {
         }
 
         // Recreate directory structure
-        fs::create_dir_all(self.cache_root.join("wasm")).map_err(|e| Error::CacheError {
-            message: format!("Failed to create wasm directory: {e}"),
-        })?;
-        fs::create_dir_all(self.cache_root.join("vfs")).map_err(|e| Error::CacheError {
-            message: format!("Failed to create vfs directory: {e}"),
-        })?;
-        fs::create_dir_all(self.cache_root.join("metadata")).map_err(|e| Error::CacheError {
-            message: format!("Failed to create metadata directory: {e}"),
-        })?;
+        self.ensure_cache_structure()?;
 
         tracing::info!("Cleared all cache data from: {}", self.cache_root.display());
         Ok(())
