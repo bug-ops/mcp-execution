@@ -304,7 +304,7 @@ impl CacheManager {
             || name.contains("..")
             || name.contains('\0')
         {
-            panic!("Invalid skill name for cache path: {:?}", name);
+            panic!("Invalid skill name for cache path: {name:?}");
         }
     }
     /// Checks if WASM module exists in cache for a skill.

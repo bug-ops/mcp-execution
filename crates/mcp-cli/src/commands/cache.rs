@@ -69,6 +69,7 @@ fn show_cache_info() -> Result<()> {
     println!();
 
     // Format size nicely
+    #[allow(clippy::cast_precision_loss)]
     let size_str = if stats.total_size_bytes < 1024 {
         format!("{} bytes", stats.total_size_bytes)
     } else if stats.total_size_bytes < 1024 * 1024 {
@@ -102,15 +103,17 @@ fn clear_cache(skill: Option<String>, yes: bool) -> Result<()> {
 
     // Confirmation prompt
     if !yes {
-        let prompt = if let Some(ref skill_name) = skill {
-            format!(
-                "Clear cache for skill '{}'? This will remove WASM, VFS, and metadata.",
-                skill_name
-            )
-        } else {
-            "Clear ALL cache data? This will remove all WASM modules, VFS caches, and metadata."
-                .to_string()
-        };
+        let prompt = skill.as_ref().map_or_else(
+            || {
+                "Clear ALL cache data? This will remove all WASM modules, VFS caches, and metadata."
+                    .to_string()
+            },
+            |skill_name| {
+                format!(
+                    "Clear cache for skill '{skill_name}'? This will remove WASM, VFS, and metadata."
+                )
+            },
+        );
 
         let confirmed = Confirm::new()
             .with_prompt(prompt)
@@ -125,21 +128,18 @@ fn clear_cache(skill: Option<String>, yes: bool) -> Result<()> {
     }
 
     // Perform the clear operation
-    match skill {
-        Some(skill_name) => {
-            cache
-                .clear_skill(&skill_name)
-                .context("Failed to clear skill cache")?;
-            println!(
-                "{} Cleared cache for skill: {}",
-                "✓".green().bold(),
-                skill_name.cyan()
-            );
-        }
-        None => {
-            cache.clear_all().context("Failed to clear all cache")?;
-            println!("{} Cleared all cache data", "✓".green().bold());
-        }
+    if let Some(skill_name) = skill {
+        cache
+            .clear_skill(&skill_name)
+            .context("Failed to clear skill cache")?;
+        println!(
+            "{} Cleared cache for skill: {}",
+            "✓".green().bold(),
+            skill_name.cyan()
+        );
+    } else {
+        cache.clear_all().context("Failed to clear all cache")?;
+        println!("{} Cleared all cache data", "✓".green().bold());
     }
 
     Ok(())
@@ -197,11 +197,16 @@ mod tests {
     #[test]
     fn test_cache_command_variants() {
         // Just ensure the enum variants compile
-        let _info = CacheCommand::Info;
-        let _clear = CacheCommand::Clear {
+        let info = CacheCommand::Info;
+        let clear = CacheCommand::Clear {
             skill: None,
             yes: false,
         };
-        let _verify = CacheCommand::Verify;
+        let verify = CacheCommand::Verify;
+
+        // Use the variables to avoid warnings
+        drop(info);
+        drop(clear);
+        drop(verify);
     }
 }
