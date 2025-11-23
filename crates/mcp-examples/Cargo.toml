@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-blake3.workspace = true
 mcp-bridge.workspace = true
 mcp-codegen.workspace = true
 mcp-core.workspace = true
@@ -19,7 +18,6 @@ mcp-introspector.workspace = true
 mcp-skill-store.workspace = true
 mcp-vfs.workspace = true
 mcp-wasm-runtime.workspace = true
-serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

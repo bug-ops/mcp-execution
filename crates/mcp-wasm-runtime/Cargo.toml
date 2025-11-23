@@ -10,19 +10,14 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 blake3.workspace = true
 lru.workspace = true
 mcp-bridge.workspace = true
 mcp-core.workspace = true
-serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-tempfile.workspace = true
-thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
 tracing.workspace = true
 wasmtime.workspace = true
-wasmtime-wasi.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
