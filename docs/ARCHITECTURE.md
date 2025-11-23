@@ -3,10 +3,10 @@
 ## Project Status
 
 **Phase**: Phases 1-5, 7.1, 8.1 Complete (Production Ready)
-**Date**: 2025-11-21
+**Date**: 2025-11-23
 **Rust Edition**: 2024
 **MSRV**: 1.88
-**Version**: 0.1.0 (pre-release)
+**Version**: 0.2.0 (pre-release)
 **Status**: 🟢 Core Production Ready, CLI In Progress
 
 ## Executive Summary
@@ -15,20 +15,21 @@ MCP Code Execution is a **production-ready framework** for secure WebAssembly-ba
 
 **Key Achievements**:
 
-- ✅ 397+ tests passing (100% pass rate)
+- ✅ 861 tests passing (100% pass rate)
 - ✅ Performance exceeds targets by 5-6,578x
 - ✅ Security rating: 5/5 stars
 - ✅ Zero critical vulnerabilities
-- ✅ Plugin persistence system operational
+- ✅ Skill persistence system operational
+- ✅ Claude Agent Skills format support
 
 ## Design Principles
 
 1. **Multi-Crate Workspace** - 10 specialized crates for fast compilation and clear boundaries
-2. **Strong Typing** - Domain-specific types (`ServerId`, `ToolName`, `PluginId`) prevent errors
+2. **Strong Typing** - Domain-specific types (`ServerId`, `ToolName`, `SkillId`) prevent errors
 3. **Microsoft Rust Guidelines** - Comprehensive error handling, `Send + Sync` types, full documentation
 4. **Security First** - Wasmtime sandbox with memory/CPU limits, validated host functions
 5. **Official SDK** - Uses `rmcp` (official Rust MCP SDK) for protocol compliance
-6. **Production Ready** - Tokio async runtime, connection pooling, LRU caching, plugin persistence
+6. **Production Ready** - Tokio async runtime, connection pooling, LRU caching, skill persistence
 
 ## Workspace Structure
 
@@ -47,7 +48,7 @@ mcp-execution/
 │   ├── mcp-wasm-runtime/     # WASM sandbox execution
 │   ├── mcp-vfs/              # Virtual filesystem
 │   ├── mcp-skill-generator/  # IDE skill generation
-│   ├── mcp-plugin-store/     # Plugin persistence (NEW in Phase 8.1)
+│   ├── mcp-skill-store/     # Skill persistence (NEW in Phase 8.1)
 │   ├── mcp-examples/         # Examples and integration tests
 │   └── mcp-cli/              # CLI application
 ├── examples/                 (E2E workflows, tutorials)
@@ -61,43 +62,37 @@ mcp-execution/
 
 ## Dependency Graph
 
-```text
-mcp-cli (bin) - CLI application
-  ├─> mcp-wasm-runtime      # WASM execution
-  ├─> mcp-codegen           # Code generation
-  ├─> mcp-introspector      # Server introspection
-  ├─> mcp-bridge            # MCP proxy
-  ├─> mcp-vfs               # Virtual filesystem
-  ├─> mcp-plugin-store      # Plugin persistence (NEW)
-  └─> mcp-core              # Foundation
+```mermaid
+graph TD
+    CLI[mcp-cli<br/>CLI application] --> WASM[mcp-wasm-runtime<br/>WASM execution]
+    CLI --> CODEGEN[mcp-codegen<br/>Code generation]
+    CLI --> INTRO[mcp-introspector<br/>Server introspection]
+    CLI --> BRIDGE[mcp-bridge<br/>MCP proxy]
+    CLI --> VFS[mcp-vfs<br/>Virtual filesystem]
+    CLI --> STORE[mcp-skill-store<br/>Skill persistence]
+    CLI --> CORE[mcp-core<br/>Foundation]
 
-mcp-plugin-store (NEW)
-  ├─> mcp-vfs               # VFS for plugin content
-  └─> mcp-core              # Core types
+    STORE --> VFS
+    STORE --> CORE
 
-mcp-wasm-runtime
-  ├─> mcp-bridge            # MCP calls from WASM
-  ├─> mcp-vfs               # File access
-  └─> mcp-core              # Core types
+    WASM --> BRIDGE
+    WASM --> VFS
+    WASM --> CORE
 
-mcp-bridge
-  ├─> rmcp                  # Official MCP SDK
-  └─> mcp-core              # Core types
+    BRIDGE --> RMCP[rmcp<br/>Official MCP SDK]
+    BRIDGE --> CORE
 
-mcp-introspector
-  ├─> rmcp                  # MCP protocol
-  └─> mcp-core              # Core types
+    INTRO --> RMCP
+    INTRO --> CORE
 
-mcp-codegen
-  └─> mcp-core              # Core types
+    CODEGEN --> CORE
+    VFS --> CORE
 
-mcp-vfs
-  └─> mcp-core              # Core types
+    SKILLGEN[mcp-skill-generator<br/>IDE integration] --> CORE
 
-mcp-skill-generator
-  └─> mcp-core              # Core types
-
-All crates → mcp-core (foundation)
+    style CORE fill:#e1f5ff
+    style STORE fill:#ffe1e1
+    style RMCP fill:#e1ffe1
 ```
 
 **Dependency Discipline**: Zero circular dependencies. Clean hierarchy ensures fast incremental compilation (<3s).
@@ -114,8 +109,8 @@ All crates → mcp-core (foundation)
 - `ToolName` - Tool identifier (not `String`)
 - `SessionId` - Execution session ID
 - `MemoryLimit` - Memory limit with constants
-- `PluginId` - Plugin identifier (NEW)
-- `PluginMetadata` - Plugin metadata (NEW)
+- `SkillId` - Skill identifier (NEW)
+- `SkillMetadata` - Skill metadata (NEW)
 
 **Error Hierarchy**:
 
@@ -124,7 +119,7 @@ All crates → mcp-core (foundation)
 - `ExecutionError` - WASM execution failures
 - `SecurityError` - Security violations
 - `ResourceError` - Resource exhaustion
-- `PluginError` - Plugin operations (NEW)
+- `SkillError` - Skill operations (NEW)
 
 **Core Traits**:
 
@@ -132,7 +127,7 @@ All crates → mcp-core (foundation)
 - `MCPBridge` - Proxy MCP calls
 - `CacheProvider` - Result caching
 - `StateStorage` - Persistent state
-- `PluginStore` - Plugin persistence (NEW)
+- `SkillStore` - Skill persistence (NEW)
 
 **Status**: ✅ Complete (Phase 1)
 
@@ -259,16 +254,18 @@ All crates → mcp-core (foundation)
 
 **Status**: ✅ Complete (Phase 3)
 
-### 8. mcp-plugin-store - Plugin Persistence (NEW)
+### 8. mcp-skill-store - Skill Persistence (NEW)
 
-**Purpose**: Save and load pre-generated MCP tool plugins to disk.
+**Purpose**: Save and load pre-generated MCP tool skills to disk with Claude Agent Skills format support.
 
 **Storage Format**:
 
 ```text
-plugins/
+.claude/skills/
 └── vkteams-bot/
-    ├── metadata.json      # PluginMetadata (server info, timestamps)
+    ├── SKILL.md           # Claude Agent Skills format (main documentation)
+    ├── REFERENCE.md       # Detailed API reference
+    ├── metadata.json      # SkillMetadata (server info, timestamps)
     ├── vfs.json           # VFS structure (all generated code)
     ├── module.wasm        # Compiled WASM module
     └── checksum.blake3    # Integrity verification
@@ -281,30 +278,31 @@ plugins/
 - Atomic file operations (crash safety)
 - Path validation and sanitization (directory traversal prevention)
 - Secure permissions (0o600 for sensitive files)
+- Input validation preventing XSS, path traversal, template injection
 
 **Performance**:
 
-- Save: ~2-5ms for typical plugin
+- Save: ~2-5ms for typical skill
 - Load: ~1-3ms with integrity check
 - Checksum: <1ms (Blake3)
 
 **CLI Integration**:
 
 ```bash
-# Save plugin during generation
-mcp-cli generate vkteams-bot --save-plugin
+# Generate skill from MCP server
+mcp-cli generate vkteams-bot
 
-# List saved plugins
-mcp-cli plugin list
+# List saved skills
+mcp-cli skill list
 
-# Load and execute plugin
-mcp-cli plugin load vkteams-bot
+# Load and execute skill
+mcp-cli skill load vkteams-bot
 
-# Get plugin info
-mcp-cli plugin info vkteams-bot
+# Get skill info
+mcp-cli skill info vkteams-bot
 
-# Remove plugin
-mcp-cli plugin remove vkteams-bot
+# Remove skill
+mcp-cli skill remove vkteams-bot
 ```
 
 **Status**: ✅ Complete (Phase 8.1) - 38 unit tests, 32 integration tests, 5/5 security rating
@@ -318,7 +316,7 @@ mcp-cli plugin remove vkteams-bot
 - `e2e_workflow.rs` - Complete introspect → generate → execute flow
 - `token_analysis.rs` - Token savings calculation
 - `performance_test.rs` - Benchmark all components
-- `plugin_workflow.rs` - Plugin save/load/execute cycle (NEW)
+- `skill_workflow.rs` - Skill save/load/execute cycle (NEW)
 
 **Integration Tests**: 21 tests covering E2E scenarios
 
@@ -334,14 +332,14 @@ mcp-cli plugin remove vkteams-bot
 # Server introspection
 mcp-cli introspect <server>
 
-# Code generation
-mcp-cli generate <server> [--output <dir>] [--feature <mode>] [--save-plugin]
+# Code generation with Claude Agent Skills format
+mcp-cli generate <server> [--output <dir>] [--feature <mode>]
 
 # WASM execution
 mcp-cli execute <module> [--entry <name>]
 
-# Plugin management (NEW)
-mcp-cli plugin list|load|info|remove <name>
+# Skill management (NEW)
+mcp-cli skill list|load|info|remove <name>
 
 # Server management
 mcp-cli server list|info|validate
@@ -389,40 +387,43 @@ mcp-cli completions <shell>
 
 ### Isolation Boundaries
 
-```text
-┌────────────────────────────────────────────────┐
-│ Host Process (Trusted)                         │
-│                                                │
-│  ┌──────────────────────────────────────────┐  │
-│  │ WASM Sandbox (Untrusted)                 │  │
-│  │                                          │  │
-│  │  Memory: 256MB hard limit                │  │
-│  │  CPU: Fuel-based (30s default timeout)   │  │
-│  │  FS: /mcp-tools (read-only)              │  │
-│  │      /workspace (read-write, validated)  │  │
-│  │  Network: None (only via bridge)         │  │
-│  │  State: Session-isolated                 │  │
-│  └──────────────────────────────────────────┘  │
-│          ▲                                     │
-│          │ Host Function Interface             │
-│          │ (validated, rate-limited)           │
-│          ▼                                     │
-│  ┌──────────────────────────────────────────┐  │
-│  │ MCP Bridge (Security Gateway)            │  │
-│  │  - Server whitelist                      │  │
-│  │  - Rate limiting per tool                │  │
-│  │  - Parameter size limits                 │  │
-│  │  - Response validation                   │  │
-│  └──────────────────────────────────────────┘  │
-│          ▲                                     │
-│          │ rmcp (Official SDK)                 │
-│          ▼                                     │
-│  ┌──────────────────────────────────────────┐  │
-│  │ MCP Servers (External)                   │  │
-│  │  - stdio transport                       │  │
-│  │  - HTTP/SSE transport                    │  │
-│  └──────────────────────────────────────────┘  │
-└────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph HOST["Host Process (Trusted)"]
+        subgraph SANDBOX["WASM Sandbox (Untrusted)"]
+            MEM["Memory: 256MB limit"]
+            CPU["CPU: Fuel-based (30s timeout)"]
+            FS["FS: /mcp-tools (read-only)<br/>/workspace (validated)"]
+            NET["Network: None"]
+            STATE["State: Session-isolated"]
+        end
+
+        HFI["Host Function Interface<br/>(validated, rate-limited)"]
+
+        subgraph BRIDGE["MCP Bridge (Security Gateway)"]
+            WL["Server whitelist"]
+            RL["Rate limiting per tool"]
+            SIZE["Parameter size limits"]
+            VAL["Response validation"]
+        end
+
+        RMCP["rmcp<br/>(Official SDK)"]
+
+        subgraph SERVERS["MCP Servers (External)"]
+            STDIO["stdio transport"]
+            HTTP["HTTP/SSE transport"]
+        end
+    end
+
+    SANDBOX <-->|callTool, readFile<br/>setState, getState| HFI
+    HFI <--> BRIDGE
+    BRIDGE <-->|MCP Protocol| RMCP
+    RMCP <--> SERVERS
+
+    style SANDBOX fill:#ffe1e1
+    style BRIDGE fill:#e1ffe1
+    style SERVERS fill:#ffffcc
+    style HOST fill:#e1f5ff
 ```
 
 ### Validation Layers
@@ -433,8 +434,8 @@ mcp-cli completions <shell>
 4. **Parameter Size Limits** - DoS prevention (configurable)
 5. **Rate Limiting** - Per-tool call limits (configurable)
 6. **Session Isolation** - State key prefixing prevents cross-talk
-7. **Plugin Integrity** - Blake3 checksums verify plugin authenticity (NEW)
-8. **Atomic Operations** - Prevent partial/corrupted plugin saves (NEW)
+7. **Skill Integrity** - Blake3 checksums verify skill authenticity (NEW)
+8. **Atomic Operations** - Prevent partial/corrupted skill saves (NEW)
 
 **Security Rating**: 5/5 stars (zero critical, zero high, zero medium vulnerabilities)
 
@@ -450,8 +451,8 @@ mcp-cli completions <shell>
 | **Execution Overhead** | <50ms | ~3ms | **16.7x faster** ✅ |
 | **E2E Latency** | <50ms | ~10ms | **5x faster** ✅ |
 | **Module Caching** | <10ms | <1ms | **10x faster** ✅ |
-| **Plugin Save** | - | ~2-5ms | N/A (NEW) |
-| **Plugin Load** | - | ~1-3ms | N/A (NEW) |
+| **Skill Save** | - | ~2-5ms | N/A (NEW) |
+| **Skill Load** | - | ~1-3ms | N/A (NEW) |
 | **Token Savings** | ≥90% | ~80-83% | Asymptotic limit ⚠️ |
 
 **Notes**:
@@ -472,9 +473,9 @@ mcp-cli completions <shell>
 | **Phase 4** | WASM Runtime | ✅ 100% | 57 | ⭐⭐⭐⭐⭐ | ad09374 |
 | **Phase 5** | Integration & Testing | ✅ 100% | 61 | ⭐⭐⭐⭐⭐ | 367a3a6 |
 | **Phase 7.1** | CLI Foundation | ✅ 100% | 268 | ⭐⭐⭐⭐⭐ | d755679 |
-| **Phase 8.1** | Plugin Persistence | ✅ 100% | 70 | ⭐⭐⭐⭐⭐ | f36de9d+ |
+| **Phase 8.1** | Skill Persistence | ✅ 100% | 70 | ⭐⭐⭐⭐⭐ | f36de9d+ |
 
-**Total**: 397+ tests passing (100% pass rate)
+**Total**: 861 tests passing (100% pass rate)
 
 ### Deferred Phases
 
@@ -490,7 +491,7 @@ mcp-cli completions <shell>
 3. **ADR-003**: Strong Types Over Primitives - Compiler-enforced correctness
 4. **ADR-004**: Use rmcp Official SDK - Protocol compliance, maintained
 5. **ADR-005**: IDE Skill Generation - Seamless IDE integration
-6. **ADR-006**: Plugin Persistence Design - Disk storage, integrity verification (NEW)
+6. **ADR-006**: Skill Persistence Design - Disk storage, integrity verification (NEW)
 
 All ADRs are in `docs/adr/` with full rationale and alternatives considered.
 
@@ -505,8 +506,8 @@ pub enum Error {
     #[error("server {0} connection failed")]
     Connection(ServerId),
 
-    #[error("plugin {0} not found")]
-    PluginNotFound(PluginId),  // NEW
+    #[error("skill {0} not found")]
+    SkillNotFound(SkillId),  // NEW
 }
 
 // CLI - use anyhow
@@ -573,25 +574,37 @@ pub fn connect(server: ServerId) -> Result<()> {
 
 ### Test Pyramid
 
-```text
-          Integration Tests (61)
-        /                      \
-   Unit Tests (282)     Doc Tests (54)
-  /                                    \
-Benchmarks (7)                    E2E Examples (4)
+```mermaid
+graph TB
+    E2E["E2E Examples (4)<br/>Real-world scenarios"]
+    INT["Integration Tests (61)<br/>Cross-crate workflows"]
+    UNIT["Unit Tests (~750)<br/>Component testing"]
+    DOC["Doc Tests (46)<br/>Documentation validation"]
+    BENCH["Benchmarks (7)<br/>Performance validation"]
+
+    E2E --> INT
+    INT --> UNIT
+    INT --> DOC
+    UNIT --> BENCH
+
+    style E2E fill:#ffe1e1
+    style INT fill:#ffffcc
+    style UNIT fill:#e1f5ff
+    style DOC fill:#e1ffe1
+    style BENCH fill:#f0e1ff
 ```
 
-**Total**: 397+ tests covering all components
+**Total**: 861 tests covering all components
 
 ### Test Categories
 
-1. **Unit Tests** - Component-level testing (282 tests)
+1. **Unit Tests** - Component-level testing (~750 tests)
 2. **Integration Tests** - Cross-crate workflows (61 tests)
-3. **Doc Tests** - Documentation examples (54 tests)
-4. **Benchmarks** - Performance validation (criterion)
+3. **Doc Tests** - Documentation examples (46 tests)
+4. **Benchmarks** - Performance validation (7 benchmarks)
 5. **E2E Examples** - Real-world scenarios (4 examples)
 
-**Coverage**: >85% for critical paths, 100% for security-sensitive code
+**Coverage**: 90.12% overall, 100% for security-sensitive code
 
 ### Running Tests
 
@@ -600,7 +613,7 @@ Benchmarks (7)                    E2E Examples (4)
 cargo nextest run --workspace
 
 # Specific crate
-cargo nextest run --package mcp-plugin-store
+cargo nextest run --package mcp-skill-store
 
 # Integration tests
 cargo test --test '*'
@@ -633,13 +646,14 @@ cargo test --doc --workspace
 
 See `.local/ROADMAP-2025-11.md` for detailed planning.
 
-**Immediate Priorities** (v0.1.0):
+**Immediate Priorities** (v0.3.0):
 
-1. Phase 7.2 - CLI Command Implementation (or merge plugin work first)
+1. Phase 7.2 - CLI Command Implementation
 2. Phase 8.2 - Binary Distribution Setup
 3. Phase 8.3 - crates.io Publishing
 
-**Target Release**: v0.1.0 by 2025-12-13
+**Current Release**: v0.2.0 (2025-11-23) - Claude Agent Skills Support
+**Target Next Release**: v0.3.0 by 2025-12-13
 
 ## References
 
@@ -650,7 +664,7 @@ See `.local/ROADMAP-2025-11.md` for detailed planning.
 - `GETTING_STARTED.md` - Setup guide
 - `.local/PROJECT-STATUS-SUMMARY.md` - Current status
 - `.local/ROADMAP-2025-11.md` - Detailed roadmap
-- `.local/PHASE-8-PLUGIN-PERSISTENCE-GUIDE.md` - Plugin system guide
+- `.local/PHASE-8-SKILL-PERSISTENCE-GUIDE.md` - Skill system guide
 
 ### External Resources
 
@@ -664,7 +678,7 @@ See `.local/ROADMAP-2025-11.md` for detailed planning.
 
 MCP Code Execution is a **production-ready, high-performance framework** for secure execution of MCP tools in WebAssembly sandboxes. The architecture emphasizes security, type safety, and performance, with all core components complete and tested.
 
-**Current State**: Ready for production deployment of core functionality. CLI needs command implementation before v0.1.0 release.
+**Current State**: Ready for production deployment of core functionality with Claude Agent Skills format support.
 
-**Last Updated**: 2025-11-21
-**Architecture Version**: 2.0 (reflects Phase 8.1 completion)
+**Last Updated**: 2025-11-23
+**Architecture Version**: 3.0 (reflects v0.2.0 release with Claude Skills and breaking changes)
