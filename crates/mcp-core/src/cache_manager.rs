@@ -367,7 +367,15 @@ impl CacheManager {
         }
 
         // Recreate directory structure
-        Self::with_directory(&self.cache_root)?;
+        fs::create_dir_all(self.cache_root.join("wasm")).map_err(|e| Error::CacheError {
+            message: format!("Failed to create wasm directory: {e}"),
+        })?;
+        fs::create_dir_all(self.cache_root.join("vfs")).map_err(|e| Error::CacheError {
+            message: format!("Failed to create vfs directory: {e}"),
+        })?;
+        fs::create_dir_all(self.cache_root.join("metadata")).map_err(|e| Error::CacheError {
+            message: format!("Failed to create metadata directory: {e}"),
+        })?;
 
         tracing::info!("Cleared all cache data from: {}", self.cache_root.display());
         Ok(())
