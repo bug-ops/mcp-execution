@@ -68,6 +68,7 @@ walkdir = "2.5"
 wasmtime = "39.0"
 wasmtime-wasi = "39.0"
 wat = "1.241"
+which = "8.0"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
