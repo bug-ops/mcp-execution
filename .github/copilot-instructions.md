@@ -130,6 +130,49 @@ let client = rmcp::client::Client::new(transport);
 - **Functions & variables**: `snake_case`
 - **Constants**: `SCREAMING_SNAKE_CASE`
 
+### 5. Version Control & File Management
+
+**CRITICAL**: Working and intermediate files must NEVER be committed to the repository.
+
+**Working/Intermediate Files Location**:
+- All temporary, draft, and working documents belong in `.local/` directory
+- `.local/` is excluded from version control (in `.gitignore`)
+- Use `.local/` for implementation plans, status reports, research notes, etc.
+
+**What to commit**:
+- ✅ Source code (`src/`, `tests/`, `benches/`)
+- ✅ Configuration files (`Cargo.toml`, `.github/`, `deny.toml`)
+- ✅ Documentation (`README.md`, `docs/`, ADRs)
+- ✅ Project metadata (`LICENSE`, `CHANGELOG.md`)
+
+**What NOT to commit**:
+- ❌ Working documents and drafts (→ use `.local/`)
+- ❌ Build artifacts (`target/`, `*.wasm`)
+- ❌ IDE files (`.vscode/`, `.idea/`)
+- ❌ Temporary files (`*.tmp`, `*.swp`, `*.bak`)
+- ❌ Sensitive data (`.env`, credentials)
+- ❌ Generated reports and analysis outputs (→ use `.local/`)
+
+**Example**:
+```bash
+# ✅ GOOD: Working documents in .local/
+.local/
+├── implementation-plan.md
+├── performance-analysis.md
+├── security-audit-results.md
+└── meeting-notes.md
+
+# ❌ BAD: Don't commit these to root or docs/
+implementation-plan.md          # → Move to .local/
+docs/working-draft.md          # → Move to .local/
+performance-notes.txt          # → Move to .local/
+```
+
+**When suggesting file creation**:
+- If creating a working document, status update, or temporary analysis: suggest `.local/` directory
+- If creating permanent documentation or code: suggest appropriate source directory
+- Always check if `.local/` exists and use it for non-permanent files
+
 ---
 
 ## Code Generation Guidelines
