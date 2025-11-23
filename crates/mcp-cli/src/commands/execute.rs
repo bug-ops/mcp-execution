@@ -341,8 +341,11 @@ pub async fn run(
 
     info!("Loaded {} bytes from module", wasm_bytes.len());
 
-    // Execute module (Note: Runtime currently doesn't support Val args, uses empty slice)
-    // This is a limitation of the current Runtime API
+    // HACK(runtime-api): Runtime.execute() currently doesn't accept Val arguments.
+    // The API signature is: execute(&self, wasm_bytes: &[u8], entry_point: &str, args: &[])
+    // TODO(future): Extend Runtime API to support: execute(..., args: &[Val])
+    // This would require updating the mcp-wasm-runtime crate's execute() method
+    // to accept and properly pass wasmtime::Val arguments to the WASM function.
     if !parsed_args.is_empty() {
         warn!(
             "Function arguments parsed but Runtime API currently doesn't support passing them. \

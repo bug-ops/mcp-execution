@@ -1,10 +1,14 @@
 //! MCP Code Execution CLI.
 #![allow(clippy::format_push_string)]
-#![allow(clippy::unused_async)] // MVP: Many functions are async stubs
-#![allow(clippy::cast_possible_truncation)] // u128->u64 for millis is safe
-#![allow(clippy::missing_errors_doc)] // MVP: Will add comprehensive docs in Phase 7.3
+// NOTE(mvp): Many async functions are stubs prepared for future expansion.
+// These will be implemented as features are added beyond Phase 8.
+#![allow(clippy::unused_async)]
+#![allow(clippy::cast_possible_truncation)]
+// u128->u64 for millis is safe in practice
+// TODO(phase-7.3): Add comprehensive error documentation to all public CLI functions
+#![allow(clippy::missing_errors_doc)]
 #![allow(clippy::needless_collect)]
-#![allow(clippy::unnecessary_wraps)] // API design requires Result for consistency
+#![allow(clippy::unnecessary_wraps)] // API design requires Result for consistency across commands
 #![allow(clippy::unnecessary_literal_unwrap)]
 //!
 //! Command-line interface for executing code in MCP sandbox,

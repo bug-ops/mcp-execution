@@ -106,8 +106,14 @@
 //!
 //! Blake3 checksums are used for integrity verification but not for security
 //! against adversarial attacks. This crate assumes skills are from trusted
-//! sources. For untrusted skills, additional cryptographic signatures would
-//! be required (not implemented in MVP).
+//! sources.
+//!
+//! TODO(security): For untrusted skills from external sources, implement cryptographic
+//! signature verification using ed25519 or similar. This would require:
+//! - Public key infrastructure for skill publishers
+//! - Signature generation during skill packaging
+//! - Signature verification before loading skills
+//! - Key revocation mechanism for compromised publishers
 //!
 //! # Performance
 //!
