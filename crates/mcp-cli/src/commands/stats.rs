@@ -103,16 +103,11 @@ async fn show_skill_stats(output_format: OutputFormat) -> Result<ExitCode> {
 ///
 /// # Examples
 ///
-/// ```no_run
-/// # use mcp_cli::commands::stats::collect_all_stats;
-/// # #[tokio::main]
-/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// ```ignore
 /// let stats = collect_all_stats().await?;
 /// println!("Bridge calls: {}", stats.bridge().total_tool_calls);
 /// println!("Runtime executions: {}", stats.runtime().total_executions);
 /// println!("Skills stored: {}", stats.skills().total_skills);
-/// # Ok(())
-/// # }
 /// ```
 async fn collect_all_stats() -> Result<SystemStats> {
     // Create Bridge instance (lightweight, just creates empty cache)
