@@ -484,7 +484,7 @@ impl CacheManager {
         // Count WASM files
         if let Ok(entries) = fs::read_dir(self.wasm_dir()) {
             for entry in entries.flatten() {
-                if entry.path().extension().map_or(false, |ext| ext == "wasm") {
+                if entry.path().extension().is_some_and(|ext| ext == "wasm") {
                     total_wasm_files += 1;
                     if let Ok(metadata) = entry.metadata() {
                         total_size_bytes = total_size_bytes.saturating_add(metadata.len());
@@ -509,7 +509,7 @@ impl CacheManager {
         // Count metadata files
         if let Ok(entries) = fs::read_dir(self.metadata_dir()) {
             for entry in entries.flatten() {
-                if entry.path().extension().map_or(false, |ext| ext == "json") {
+                if entry.path().extension().is_some_and(|ext| ext == "json") {
                     total_metadata_files += 1;
                     if let Ok(metadata) = entry.metadata() {
                         total_size_bytes = total_size_bytes.saturating_add(metadata.len());

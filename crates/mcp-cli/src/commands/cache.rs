@@ -49,11 +49,7 @@ fn show_cache_info() -> Result<()> {
 
     println!("{}", "Cache Information".bold().cyan());
     println!("{}", "─".repeat(50));
-    println!(
-        "  {} {}",
-        "Location:".bold(),
-        cache.cache_root().display()
-    );
+    println!("  {} {}", "Location:".bold(), cache.cache_root().display());
     println!();
     println!(
         "  {} {}",
@@ -78,7 +74,10 @@ fn show_cache_info() -> Result<()> {
     } else if stats.total_size_bytes < 1024 * 1024 {
         format!("{:.2} KB", stats.total_size_bytes as f64 / 1024.0)
     } else if stats.total_size_bytes < 1024 * 1024 * 1024 {
-        format!("{:.2} MB", stats.total_size_bytes as f64 / (1024.0 * 1024.0))
+        format!(
+            "{:.2} MB",
+            stats.total_size_bytes as f64 / (1024.0 * 1024.0)
+        )
     } else {
         format!(
             "{:.2} GB",
@@ -88,9 +87,7 @@ fn show_cache_info() -> Result<()> {
 
     println!("  {} {}", "Total size:".bold(), size_str.green());
 
-    if stats.total_wasm_files == 0
-        && stats.total_vfs_files == 0
-        && stats.total_metadata_files == 0
+    if stats.total_wasm_files == 0 && stats.total_vfs_files == 0 && stats.total_metadata_files == 0
     {
         println!();
         println!("{}", "  Cache is empty".dimmed());
@@ -174,10 +171,7 @@ fn verify_cache() -> Result<()> {
     // This is a simplified check - full implementation would do more
 
     if issues.is_empty() {
-        println!(
-            "{} Cache verification complete",
-            "✓".green().bold()
-        );
+        println!("{} Cache verification complete", "✓".green().bold());
         println!("  {} skills cached", stats.total_wasm_files);
         println!("  No issues found");
     } else {
