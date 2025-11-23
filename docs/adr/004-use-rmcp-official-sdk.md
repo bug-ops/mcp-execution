@@ -88,7 +88,7 @@ use rmcp::client::TokioChildProcess;
 use rmcp::ServiceExt;
 
 // Connect to MCP server via stdio
-let transport = TokioChildProcess::new("vkteams-bot-server")?;
+let transport = TokioChildProcess::new("github-server")?;
 let mut client = rmcp::client::Client::new(transport);
 
 // Discover tools
@@ -127,7 +127,7 @@ let result = client.call_tool("send_message", params).await?;
 - 🔄 **Week 1**: Update mcp-bridge to use rmcp client API
 - 🔄 **Week 1**: Update mcp-introspector to use rmcp for discovery
 - 🔄 **Week 2**: Update mcp-codegen to use rmcp types
-- 🔄 **Week 2**: Integration testing with vkteams-bot server
+- 🔄 **Week 2**: Integration testing with github server
 
 ## References
 

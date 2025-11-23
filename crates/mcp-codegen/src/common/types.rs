@@ -141,13 +141,13 @@ pub struct GeneratedFile {
 /// use std::collections::HashMap;
 ///
 /// let context = TemplateContext {
-///     server_name: "vkteams-bot".to_string(),
+///     server_name: "github".to_string(),
 ///     server_version: "1.0.0".to_string(),
 ///     tools: vec![],
 ///     metadata: HashMap::new(),
 /// };
 ///
-/// assert_eq!(context.server_name, "vkteams-bot");
+/// assert_eq!(context.server_name, "github");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateContext {

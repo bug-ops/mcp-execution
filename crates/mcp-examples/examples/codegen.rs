@@ -9,7 +9,7 @@
 //!   cargo run --example codegen -- <server-path>
 //!
 //! Example:
-//!   cargo run --example codegen -- /usr/local/bin/vkteams-bot-server
+//!   cargo run --example codegen -- /usr/local/bin/github-server
 
 use anyhow::{Context, Result};
 use mcp_codegen::CodeGenerator;
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
     if args.len() < 2 {
         eprintln!("Usage: {} <server-command>", args[0]);
         eprintln!("\nExample:");
-        eprintln!("  {} /usr/local/bin/vkteams-bot-server", args[0]);
+        eprintln!("  {} /usr/local/bin/github-server", args[0]);
         std::process::exit(1);
     }
 

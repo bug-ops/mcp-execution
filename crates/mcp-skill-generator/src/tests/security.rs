@@ -185,7 +185,7 @@ fn test_whitespace_preserved_in_sanitization() {
 #[test]
 fn test_safe_skill_name_accepted() {
     // Valid lowercase with hyphens and underscores
-    assert!(SkillName::new("vkteams-bot").is_ok());
+    assert!(SkillName::new("github").is_ok());
     assert!(SkillName::new("my_skill_name").is_ok());
     assert!(SkillName::new("skill123").is_ok());
     assert!(SkillName::new("a").is_ok());

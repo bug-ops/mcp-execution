@@ -93,8 +93,8 @@ impl SkillConverter {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let server_info = ServerInfo {
-    ///     id: ServerId::new("vkteams-bot"),
-    ///     name: "vkteams-bot".to_string(),
+    ///     id: ServerId::new("github"),
+    ///     name: "github".to_string(),
     ///     version: "1.0.0".to_string(),
     ///     tools: vec![],
     ///     capabilities: ServerCapabilities {
@@ -104,11 +104,11 @@ impl SkillConverter {
     ///     },
     /// };
     ///
-    /// let name = SkillName::new("vkteams")?;
+    /// let name = SkillName::new("github")?;
     /// let desc = SkillDescription::new("VK Teams bot integration")?;
     ///
     /// let skill_data = SkillConverter::convert(&server_info, &name, &desc)?;
-    /// assert_eq!(skill_data.skill_name, "vkteams");
+    /// assert_eq!(skill_data.skill_name, "github");
     /// # Ok(())
     /// # }
     /// ```

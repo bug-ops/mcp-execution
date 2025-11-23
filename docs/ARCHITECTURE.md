@@ -145,7 +145,7 @@ graph TD
 - Type inference for code generation
 - Connection pooling and retry logic
 
-**Integration**: Tested with real MCP servers (vkteams-bot)
+**Integration**: Tested with real MCP servers (github)
 
 **Status**: ✅ Complete (Phase 2) - 85 tests passing
 
@@ -224,7 +224,7 @@ graph TD
 ```text
 /mcp-tools/
 ├── servers/
-│   ├── vkteams-bot/
+│   ├── github/
 │   │   ├── manifest.json
 │   │   ├── send_message.ts
 │   │   └── get_message.ts
@@ -232,7 +232,7 @@ graph TD
 │       ├── manifest.json
 │       └── create_issue.ts
 └── skills/
-    └── vkteams_send_message.skill/
+    └── github_send_message.skill/
 ```
 
 **Features**:
@@ -262,7 +262,7 @@ graph TD
 
 ```text
 .claude/skills/
-└── vkteams-bot/
+└── github/
     ├── SKILL.md           # Claude Agent Skills format (main documentation)
     ├── REFERENCE.md       # Detailed API reference
     ├── metadata.json      # SkillMetadata (server info, timestamps)
@@ -290,19 +290,19 @@ graph TD
 
 ```bash
 # Generate skill from MCP server
-mcp-cli generate vkteams-bot
+mcp-cli generate github
 
 # List saved skills
 mcp-cli skill list
 
 # Load and execute skill
-mcp-cli skill load vkteams-bot
+mcp-cli skill load github
 
 # Get skill info
-mcp-cli skill info vkteams-bot
+mcp-cli skill info github
 
 # Remove skill
-mcp-cli skill remove vkteams-bot
+mcp-cli skill remove github
 ```
 
 **Status**: ✅ Complete (Phase 8.1) - 38 unit tests, 32 integration tests, 5/5 security rating
@@ -379,9 +379,9 @@ sequenceDiagram
     participant MCP as MCP Server
 
     User->>Claude: "Send VK Teams message"
-    Claude->>Claude: Read ~/.claude/skills/vkteams/SKILL.md
+    Claude->>Claude: Read ~/.claude/skills/github/SKILL.md
     Note over Claude: Understands available tools<br/>from YAML frontmatter
-    Claude->>CLI: Optional: mcp-cli execute vkteams.wasm
+    Claude->>CLI: Optional: mcp-cli execute github.wasm
     CLI->>Bridge: Create new Bridge instance
     Bridge->>MCP: Connect via rmcp
     CLI->>CLI: Load WASM in Wasmtime sandbox
@@ -435,18 +435,18 @@ Generated skills follow Claude Agent Skills format:
 **Generation**:
 ```bash
 # Generate Claude Agent Skills from MCP server
-mcp-cli generate vkteams-bot --skill-name vkteams
+mcp-cli generate github --skill-name github
 
 # Output:
-# ~/.claude/skills/vkteams/SKILL.md
-# ~/.claude/skills/vkteams/REFERENCE.md
-# ~/.claude/skills/vkteams/metadata.json
+# ~/.claude/skills/github/SKILL.md
+# ~/.claude/skills/github/REFERENCE.md
+# ~/.claude/skills/github/metadata.json
 ```
 
 **SKILL.md Format**:
 ```yaml
 ---
-name: vkteams
+name: github
 description: |
   VK Teams bot for sending messages and managing chats
 allowed-tools:
@@ -454,13 +454,13 @@ allowed-tools:
   - get_chat_info
 ---
 
-# vkteams
+# github
 
 VK Teams bot for sending messages and managing chats
 
 ## When to Use This Skill
 
-Use this skill when you need to interact with the vkteams-bot MCP server.
+Use this skill when you need to interact with the github MCP server.
 
 Available capabilities:
 - **send_message**: Send a text message to a VK Teams chat
@@ -486,7 +486,7 @@ Send a text message to a VK Teams chat
 
 ## Setup
 
-1. Ensure the vkteams-bot MCP server is configured
+1. Ensure the github MCP server is configured
 2. The server must be running and accessible
 3. Verify server capabilities include the required tools
 ```
@@ -535,10 +535,10 @@ When TypeScript → WASM compilation is implemented:
 
 ```bash
 # Compile skill to executable WASM
-mcp-cli compile vkteams-bot --output vkteams.wasm
+mcp-cli compile github --output github.wasm
 
 # Claude Code can then invoke:
-mcp-cli execute vkteams.wasm --tool send_message --params '{"chat_id":"123","text":"Hello"}'
+mcp-cli execute github.wasm --tool send_message --params '{"chat_id":"123","text":"Hello"}'
 ```
 
 **Benefits**:
@@ -563,7 +563,7 @@ graph TB
 
     subgraph "MCP Ecosystem"
         Bridge[mcp-bridge<br/>Validation layer]
-        Server[MCP Server<br/>vkteams-bot]
+        Server[MCP Server<br/>github]
     end
 
     Claude -->|Invokes| CLI
@@ -811,7 +811,7 @@ impl Sync for ServerId {}
 /// # Examples
 ///
 /// ```
-/// let id = ServerId::new("vkteams-bot")?;
+/// let id = ServerId::new("github")?;
 /// ```
 ///
 /// # Errors

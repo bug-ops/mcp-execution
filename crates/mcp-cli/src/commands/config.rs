@@ -29,7 +29,7 @@ use tracing::{debug, info};
 ///
 /// [security]
 /// policy = "default"
-/// allowed_servers = ["vkteams-bot", "github"]
+/// allowed_servers = ["github", "github"]
 /// max_calls_per_second = 10
 ///
 /// [runtime]

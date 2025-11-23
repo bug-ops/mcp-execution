@@ -49,8 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("━━━ Phase 1: Server Introspection ━━━\n");
     metrics.start_introspection();
 
-    println!("→ Creating mock VKTeams Bot server...");
-    let mock_server = MockMcpServer::new_vkteams_bot();
+    println!("→ Creating mock GitHub Bot server...");
+    let mock_server = MockMcpServer::new_github();
     let server_info = mock_server.server_info().clone();
 
     println!("✓ Mock server created");
@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     metrics.start_vfs_load();
 
     println!("→ Loading generated code into VFS...");
-    let vfs_root = "/mcp-tools/servers/vkteams-bot";
+    let vfs_root = "/mcp-tools/servers/github";
     let vfs = VfsBuilder::from_generated_code(generated, vfs_root).build()?;
 
     println!("✓ VFS loaded");

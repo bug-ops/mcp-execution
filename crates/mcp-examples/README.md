@@ -67,15 +67,15 @@ cargo run --example performance_test --release
 
 ### Existing Examples
 
-#### VKTeams Integration Test
+#### GitHub Integration Test
 
 Tests real MCP server integration:
 
 ```bash
-cargo run --example test_vkteams
+cargo run --example test_github
 ```
 
-Requires `vkteams-bot-server` to be installed and in PATH.
+Requires `github-server` to be installed and in PATH.
 
 #### Code Generation Demo
 
@@ -87,7 +87,7 @@ cargo run --example codegen -- <server-command>
 
 Example:
 ```bash
-cargo run --example codegen -- /usr/local/bin/vkteams-bot-server
+cargo run --example codegen -- /usr/local/bin/github-server
 ```
 
 ## Integration Tests
@@ -201,8 +201,8 @@ The `mcp-examples` crate also provides utilities for testing:
 ```rust
 use mcp_examples::mock_server::MockMcpServer;
 
-// Create mock VKTeams Bot server
-let server = MockMcpServer::new_vkteams_bot();
+// Create mock GitHub Bot server
+let server = MockMcpServer::new_github();
 
 // Get server info
 let info = server.server_info();
@@ -214,7 +214,7 @@ let result = server.call_tool(
 ).await?;
 
 // Configure custom responses
-let mut server = MockMcpServer::new_vkteams_bot();
+let mut server = MockMcpServer::new_github();
 server.set_response("send_message", json!({"message_id": "custom"}));
 ```
 
@@ -387,7 +387,7 @@ criterion_group!(benches, ..., bench_my_feature);
 
 ### Example Fails with "Server not found"
 
-The `test_vkteams` example requires the actual MCP server. For testing without external dependencies, use `e2e_workflow` which uses the mock server.
+The `test_github` example requires the actual MCP server. For testing without external dependencies, use `e2e_workflow` which uses the mock server.
 
 ### Performance Tests Fail
 

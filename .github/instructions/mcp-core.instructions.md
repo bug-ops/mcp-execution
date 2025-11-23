@@ -284,8 +284,8 @@ pub enum OutputFormat {
 /// ```
 /// use mcp_core::ServerId;
 ///
-/// let id = ServerId::new("vkteams-bot");
-/// assert_eq!(id.as_str(), "vkteams-bot");
+/// let id = ServerId::new("github");
+/// assert_eq!(id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ServerId(String);

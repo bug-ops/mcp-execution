@@ -265,10 +265,10 @@ Consider implementing daemon mode if:
 
 **Expected Claude Code workflow**:
 1. User: "Send a VK Teams message to chat 123"
-2. Claude reads `~/.claude/skills/vkteams/SKILL.md`
+2. Claude reads `~/.claude/skills/github/SKILL.md`
 3. Claude understands `send_message` tool is available
 4. Claude follows instructions in SKILL.md
-5. (Optional) Claude invokes: `mcp-cli execute vkteams.wasm` (future)
+5. (Optional) Claude invokes: `mcp-cli execute github.wasm` (future)
 6. User sees result in <1 second
 
 **Latency acceptable**: ✅ Yes (<100ms perceived as instant)
@@ -281,7 +281,7 @@ Consider implementing daemon mode if:
 cargo install --path crates/mcp-cli
 
 # Generate skills for MCP servers
-mcp-cli generate vkteams-bot --skill-name vkteams
+mcp-cli generate github --skill-name github
 mcp-cli generate github --skill-name github
 
 # Skills automatically available in Claude Code

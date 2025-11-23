@@ -81,7 +81,7 @@ pub struct SkillMetadata {
 /// use mcp_skill_store::ServerInfo;
 ///
 /// let info = ServerInfo {
-///     name: "vkteams-bot".to_string(),
+///     name: "github".to_string(),
 ///     version: "0.1.0".to_string(),
 ///     protocol_version: "2024-11-05".to_string(),
 /// };

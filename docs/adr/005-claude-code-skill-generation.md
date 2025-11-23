@@ -249,7 +249,7 @@ Templates use Handlebars with custom helpers:
 **Mitigation**: Version templates, document format assumptions, provide migration guide
 
 **Risk**: Generated skills have errors
-**Mitigation**: Comprehensive validation, extensive testing with fixtures, real-world testing with vkteams-bot
+**Mitigation**: Comprehensive validation, extensive testing with fixtures, real-world testing with github
 
 **Risk**: Performance issues with large servers
 **Mitigation**: Set limits (max 100 tools), implement timeouts, profile and optimize
@@ -367,7 +367,7 @@ Templates use Handlebars with custom helpers:
 - Lowercase letters, numbers, hyphens only
 - Max 64 characters
 - Must start with letter
-- Example: `vkteams-bot`, `github-api`, `slack-integration`
+- Example: `github`, `github-api`, `slack-integration`
 
 ### SKILL.md Format
 

@@ -51,9 +51,9 @@
 //!
 //! // Create skill context
 //! let context = SkillContext {
-//!     name: "vkteams-bot".to_string(),
+//!     name: "github".to_string(),
 //!     description: "Interact with VK Teams messenger".to_string(),
-//!     server_id: ServerId::new("vkteams-bot-server"),
+//!     server_id: ServerId::new("github-server"),
 //!     tool_count: 3,
 //!     tools: vec![],
 //!     generator_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -87,8 +87,8 @@
 //! use mcp_skill_generator::SkillName;
 //!
 //! // Valid names
-//! let name = SkillName::new("vkteams-bot").unwrap();
-//! assert_eq!(name.as_str(), "vkteams-bot");
+//! let name = SkillName::new("github").unwrap();
+//! assert_eq!(name.as_str(), "github");
 //!
 //! // Invalid names fail validation
 //! assert!(SkillName::new("123invalid").is_err());

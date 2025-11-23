@@ -32,8 +32,8 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [[example]]
-name = "test_vkteams"
-path = "examples/test_vkteams.rs"
+name = "test_github"
+path = "examples/test_github.rs"
 
 [[example]]
 name = "codegen"

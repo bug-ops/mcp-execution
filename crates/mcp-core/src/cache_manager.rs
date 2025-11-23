@@ -18,11 +18,11 @@
 //! let cache = CacheManager::new()?;
 //!
 //! // Get paths for a specific skill
-//! let wasm_path = cache.wasm_path("vkteams-bot")?;
-//! let vfs_path = cache.vfs_path("vkteams-bot")?;
+//! let wasm_path = cache.wasm_path("github")?;
+//! let vfs_path = cache.vfs_path("github")?;
 //!
 //! // Check if skill is cached
-//! if cache.has_wasm("vkteams-bot")? {
+//! if cache.has_wasm("github")? {
 //!     println!("WASM module is cached");
 //! }
 //! # Ok(())
@@ -246,8 +246,8 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// let wasm_path = cache.wasm_path("vkteams-bot")?;
-    /// assert!(wasm_path.ends_with("vkteams-bot.wasm"));
+    /// let wasm_path = cache.wasm_path("github")?;
+    /// assert!(wasm_path.ends_with("github.wasm"));
     /// # Ok(())
     /// # }
     /// ```
@@ -270,8 +270,8 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// let vfs_path = cache.vfs_path("vkteams-bot")?;
-    /// assert!(vfs_path.ends_with("vkteams-bot"));
+    /// let vfs_path = cache.vfs_path("github")?;
+    /// assert!(vfs_path.ends_with("github"));
     /// # Ok(())
     /// # }
     /// ```
@@ -294,8 +294,8 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// let metadata_path = cache.metadata_path("vkteams-bot")?;
-    /// assert!(metadata_path.ends_with("vkteams-bot.json"));
+    /// let metadata_path = cache.metadata_path("github")?;
+    /// assert!(metadata_path.ends_with("github.json"));
     /// # Ok(())
     /// # }
     /// ```
@@ -355,7 +355,7 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// if !cache.has_wasm("vkteams-bot")? {
+    /// if !cache.has_wasm("github")? {
     ///     println!("WASM not cached");
     /// }
     /// # Ok(())
@@ -378,7 +378,7 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// if !cache.has_vfs("vkteams-bot")? {
+    /// if !cache.has_vfs("github")? {
     ///     println!("VFS not cached");
     /// }
     /// # Ok(())
@@ -401,7 +401,7 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// if !cache.has_metadata("vkteams-bot")? {
+    /// if !cache.has_metadata("github")? {
     ///     println!("Metadata not cached");
     /// }
     /// # Ok(())
@@ -463,8 +463,8 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// cache.clear_skill("vkteams-bot")?;
-    /// assert!(!cache.has_wasm("vkteams-bot")?);
+    /// cache.clear_skill("github")?;
+    /// assert!(!cache.has_wasm("github")?);
     /// # Ok(())
     /// # }
     /// ```
@@ -617,7 +617,7 @@ pub struct CacheStats {
 /// use std::collections::HashMap;
 ///
 /// let metadata = BuildMetadata {
-///     skill_name: "vkteams-bot".to_string(),
+///     skill_name: "github".to_string(),
 ///     built_at: chrono::Utc::now(),
 ///     generator_version: "0.2.0".to_string(),
 ///     wasm_checksum: "blake3:abc123...".to_string(),
@@ -897,7 +897,7 @@ mod tests {
         // These should all be valid
         assert!(cache.wasm_path("valid-skill").is_ok());
         assert!(cache.wasm_path("skill_123").is_ok());
-        assert!(cache.wasm_path("vkteams-bot").is_ok());
+        assert!(cache.wasm_path("github").is_ok());
         assert!(cache.wasm_path("my.skill.name").is_ok());
         assert!(cache.wasm_path("UPPERCASE").is_ok());
     }

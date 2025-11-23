@@ -67,9 +67,9 @@ struct GenerationResult {
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
 /// let result = generate::run(
-///     "vkteams-bot".to_string(),
+///     "github".to_string(),
 ///     None,
-///     Some("vkteams".to_string()),
+///     Some("github".to_string()),
 ///     Some("VK Teams bot integration".to_string()),
 ///     OutputFormat::Pretty,
 /// ).await?;
@@ -274,7 +274,7 @@ mod tests {
     fn test_server_connection_string_validation() {
         // Valid connection strings
         assert!(ServerConnectionString::new("test-server").is_ok());
-        assert!(ServerConnectionString::new("vkteams-bot").is_ok());
+        assert!(ServerConnectionString::new("github").is_ok());
         assert!(ServerConnectionString::new("/path/to/server").is_ok());
 
         // Invalid connection strings
@@ -286,9 +286,9 @@ mod tests {
     #[test]
     fn test_skill_name_default_generation() {
         // Test suffix removal
-        let server1 = "vkteams-bot";
+        let server1 = "github";
         let default1 = server1.trim_end_matches("-bot").to_lowercase();
-        assert_eq!(default1, "vkteams");
+        assert_eq!(default1, "github");
 
         let server2 = "my-server";
         let default2 = server2.trim_end_matches("-server").to_lowercase();
@@ -329,11 +329,11 @@ mod tests {
 
     #[test]
     fn test_default_description_format() {
-        let server_name = "vkteams-bot";
+        let server_name = "github";
         let tool_count = 5;
         let desc = format!("Interact with {server_name} MCP server ({tool_count} tools available)");
 
-        assert!(desc.contains("vkteams-bot"));
+        assert!(desc.contains("github"));
         assert!(desc.contains("5 tools"));
     }
 }

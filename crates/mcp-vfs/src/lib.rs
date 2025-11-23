@@ -51,12 +51,12 @@
 //!     content: "export function sendMessage() {}".to_string(),
 //! });
 //!
-//! let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/vkteams-bot")
+//! let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/github")
 //!     .build()
 //!     .unwrap();
 //!
-//! assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/manifest.json"));
-//! assert!(vfs.exists("/mcp-tools/servers/vkteams-bot/tools/sendMessage.ts"));
+//! assert!(vfs.exists("/mcp-tools/servers/github/manifest.json"));
+//! assert!(vfs.exists("/mcp-tools/servers/github/tools/sendMessage.ts"));
 //! ```
 //!
 //! ## Directory operations

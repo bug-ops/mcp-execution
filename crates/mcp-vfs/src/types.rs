@@ -8,10 +8,10 @@
 //! ```
 //! use mcp_vfs::{VfsPath, VfsFile};
 //!
-//! let path = VfsPath::new("/mcp-tools/servers/vkteams-bot/manifest.json").unwrap();
+//! let path = VfsPath::new("/mcp-tools/servers/github/manifest.json").unwrap();
 //! let file = VfsFile::new("{}");
 //!
-//! assert_eq!(path.as_str(), "/mcp-tools/servers/vkteams-bot/manifest.json");
+//! assert_eq!(path.as_str(), "/mcp-tools/servers/github/manifest.json");
 //! assert_eq!(file.content(), "{}");
 //! ```
 

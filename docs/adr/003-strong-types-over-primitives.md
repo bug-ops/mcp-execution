@@ -85,7 +85,7 @@ impl ServerId {
     /// # Examples
     ///
     /// ```
-    /// let id = ServerId::new("vkteams-bot");
+    /// let id = ServerId::new("github");
     /// ```
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())

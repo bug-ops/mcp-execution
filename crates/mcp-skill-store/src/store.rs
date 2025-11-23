@@ -718,7 +718,7 @@ impl SkillStore {
     /// let cache = store.cache();
     ///
     /// // Check if WASM is cached
-    /// if cache.has_wasm("vkteams")? {
+    /// if cache.has_wasm("github")? {
     ///     println!("WASM module is cached");
     /// }
     /// # Ok(())
@@ -874,11 +874,11 @@ impl SkillStore {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let store = SkillStore::new_claude()?;
-    /// let name = SkillName::new("vkteams")?;
+    /// let name = SkillName::new("github")?;
     /// let skill_data = SkillData::new(
-    ///     "vkteams".to_string(),
+    ///     "github".to_string(),
     ///     "VK Teams bot".to_string(),
-    ///     "vkteams-bot".to_string(),
+    ///     "github".to_string(),
     ///     "1.0.0".to_string(),
     ///     "VK Teams server".to_string(),
     ///     "1.0".to_string(),
@@ -1017,7 +1017,7 @@ impl SkillStore {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let store = SkillStore::new_claude()?;
-    /// let name = SkillName::new("vkteams")?;
+    /// let name = SkillName::new("github")?;
     /// let vfs = VfsBuilder::new().add_file("/index.ts", "export {};").build()?;
     /// let wasm = vec![0x00, 0x61, 0x73, 0x6D];
     ///
@@ -1125,7 +1125,7 @@ impl SkillStore {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let store = SkillStore::new_claude()?;
-    /// let name = SkillName::new("vkteams")?;
+    /// let name = SkillName::new("github")?;
     /// let skill = store.load_claude_skill(&name)?;
     ///
     /// println!("Loaded skill: {}", skill.name);
@@ -1294,7 +1294,7 @@ impl SkillStore {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let store = SkillStore::new_claude()?;
-    /// let name = SkillName::new("vkteams")?;
+    /// let name = SkillName::new("github")?;
     ///
     /// // Load from cache
     /// let (vfs, wasm) = store.load_skill_cache(&name)?;

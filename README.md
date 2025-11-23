@@ -116,10 +116,10 @@ The `mcp-cli` tool provides commands for generating, managing, and executing MCP
 
 ```bash
 # Generate TypeScript code and save as reusable skill
-mcp-cli generate vkteams-bot --save-skill
+mcp-cli generate github --save-skill
 
 # Custom skill directory
-mcp-cli generate vkteams-bot --save-skill --skill-dir ~/.mcp-skills
+mcp-cli generate github --save-skill --skill-dir ~/.mcp-skills
 ```
 
 #### Load and Manage Skills
@@ -129,13 +129,13 @@ mcp-cli generate vkteams-bot --save-skill --skill-dir ~/.mcp-skills
 mcp-cli skill list
 
 # Load a skill
-mcp-cli skill load vkteams-bot -o pretty
+mcp-cli skill load github -o pretty
 
 # Show skill details
-mcp-cli skill info vkteams-bot
+mcp-cli skill info github
 
 # Remove a skill
-mcp-cli skill remove vkteams-bot -y
+mcp-cli skill remove github -y
 ```
 
 Skill persistence features:
@@ -163,13 +163,13 @@ See [Phase 8 Skill Persistence Guide](.local/PHASE-8-SKILL-PERSISTENCE-GUIDE.md)
 
 ```bash
 # 1. Generate skill from your MCP server
-mcp-cli generate vkteams-bot --skill-name vkteams
+mcp-cli generate github --skill-name github
 
 # 2. Skill automatically appears in Claude Code
 # Files created:
-# ~/.claude/skills/vkteams/SKILL.md       (Main documentation)
-# ~/.claude/skills/vkteams/REFERENCE.md   (Detailed API reference)
-# ~/.claude/skills/vkteams/metadata.json  (Server metadata)
+# ~/.claude/skills/github/SKILL.md       (Main documentation)
+# ~/.claude/skills/github/REFERENCE.md   (Detailed API reference)
+# ~/.claude/skills/github/metadata.json  (Server metadata)
 
 # 3. Use in Claude Code
 # User: "Send a VK Teams message to chat 123"
@@ -201,7 +201,7 @@ graph LR
 
 ```yaml
 ---
-name: vkteams
+name: github
 description: |
   VK Teams bot for sending messages and managing chats
 allowed-tools:
@@ -209,7 +209,7 @@ allowed-tools:
   - get_chat_info
 ---
 
-# vkteams
+# github
 
 [Documentation with examples, parameters, and setup instructions]
 ```

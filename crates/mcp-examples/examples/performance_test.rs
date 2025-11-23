@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Setting up test environment...\n");
 
-    let mock_server = MockMcpServer::new_vkteams_bot();
+    let mock_server = MockMcpServer::new_github();
     let server_info = mock_server.server_info().clone();
 
     println!("Test Configuration:");
@@ -214,7 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Full workflow
     metrics.start_introspection();
-    let _server = MockMcpServer::new_vkteams_bot();
+    let _server = MockMcpServer::new_github();
     metrics.end_introspection();
 
     metrics.start_code_generation();

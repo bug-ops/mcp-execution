@@ -37,7 +37,7 @@ We will implement **disk-based skill persistence** with the following design:
 
 ```
 skills/
-└── <server-name>/          # e.g., "vkteams-bot"
+└── <server-name>/          # e.g., "github"
     ├── metadata.json       # SkillMetadata (server info, timestamps, version)
     ├── vfs.json            # Complete VFS structure (all generated code)
     ├── module.wasm         # Compiled WASM module
@@ -141,20 +141,20 @@ fs::rename(&temp_path, &path)?;  // Atomic on POSIX
 
 ```bash
 # Generate and save skill
-$ mcp-cli generate vkteams-bot --save-skill --skill-dir ./skills
+$ mcp-cli generate github --save-skill --skill-dir ./skills
 
 # List saved skills
 $ mcp-cli skill list
-vkteams-bot  saved 2025-11-21  12 tools  1.2MB
+github  saved 2025-11-21  12 tools  1.2MB
 
 # Load and use skill (skip generation)
-$ mcp-cli skill load vkteams-bot
+$ mcp-cli skill load github
 
 # Get skill info
-$ mcp-cli skill info vkteams-bot
+$ mcp-cli skill info github
 
 # Remove skill
-$ mcp-cli skill remove vkteams-bot
+$ mcp-cli skill remove github
 ```
 
 ### Performance Benefits

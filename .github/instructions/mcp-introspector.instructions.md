@@ -182,9 +182,9 @@ impl Introspector {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
     ///
-    /// let server_id = ServerId::new("vkteams-bot");
+    /// let server_id = ServerId::new("github");
     /// let info = introspector
-    ///     .discover_server(server_id, "vkteams-bot-server")
+    ///     .discover_server(server_id, "github-server")
     ///     .await?;
     ///
     /// println!("Found {} tools", info.tools.len());
