@@ -38,6 +38,7 @@ mod error;
 mod types;
 
 pub mod cli;
+pub mod stats;
 pub mod traits;
 
 // Re-export error types
