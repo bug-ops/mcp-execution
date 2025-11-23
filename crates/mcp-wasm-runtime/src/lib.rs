@@ -1,4 +1,5 @@
-// Temporary allow for Phase 7.1 - will be cleaned up in follow-up
+// TODO(phase-7.3): Review and reduce clippy allows added during Phase 7.1 rapid development.
+// Each suppressed lint should either be fixed in code or documented as intentional.
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::cast_precision_loss)]

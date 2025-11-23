@@ -259,12 +259,26 @@ impl Compiler {
 
     /// Compiles TypeScript using AssemblyScript.
     ///
-    /// TODO: Implement actual AssemblyScript compilation.
-    /// For now, returns a placeholder WASM module.
+    /// # Implementation Status
+    ///
+    /// TODO(phase-6): Implement actual AssemblyScript compilation pipeline.
+    /// NOTE: Phase 6 optimization is DEFERRED per ADR and CLAUDE.md. Current performance
+    /// already exceeds targets by 526-6,578x. Implementation should wait for production
+    /// data indicating specific needs.
+    ///
+    /// For now, returns an error as this backend is not implemented.
+    ///
+    /// # Future Implementation
+    ///
+    /// This would involve:
+    /// - Calling AssemblyScript CLI (`asc`) or using Node.js bindings
+    /// - Setting up proper TypeScript → WASM compilation pipeline
+    /// - Handling compilation errors and warnings
+    /// - Integrating with module cache system
     #[cfg(feature = "assemblyscript")]
     fn compile_assemblyscript(&self, _code: &str) -> Result<Vec<u8>> {
-        // TODO: Integrate AssemblyScript compiler
-        // This would involve calling the AssemblyScript CLI or using bindings
+        // TODO(phase-6): Integrate AssemblyScript compiler
+        // See: https://www.assemblyscript.org/compiler.html
         Err(Error::ExecutionError {
             message: "AssemblyScript compilation not yet implemented".into(),
             source: None,
@@ -281,12 +295,26 @@ impl Compiler {
 
     /// Compiles JavaScript using QuickJS embedded in WASM.
     ///
-    /// TODO: Implement QuickJS integration.
-    /// For now, returns a placeholder WASM module.
+    /// # Implementation Status
+    ///
+    /// TODO(phase-6): Implement QuickJS WASM integration.
+    /// NOTE: Phase 6 optimization is DEFERRED per ADR and CLAUDE.md. Current performance
+    /// already exceeds targets by 526-6,578x. Implementation should wait for production
+    /// data indicating specific needs.
+    ///
+    /// For now, returns an error as this backend is not implemented.
+    ///
+    /// # Future Implementation
+    ///
+    /// This would involve:
+    /// - Embedding precompiled QuickJS WASM module
+    /// - Wrapping JavaScript code for execution in QuickJS
+    /// - Setting up JS ↔ WASM interop layer
+    /// - Handling runtime errors and exceptions
     #[cfg(feature = "quickjs")]
     fn compile_quickjs(&self, _code: &str) -> Result<Vec<u8>> {
-        // TODO: Integrate QuickJS WASM
-        // This would involve embedding QuickJS and wrapping JS code
+        // TODO(phase-6): Integrate QuickJS WASM
+        // See: https://github.com/justjake/quickjs-emscripten
         Err(Error::ExecutionError {
             message: "QuickJS compilation not yet implemented".into(),
             source: None,

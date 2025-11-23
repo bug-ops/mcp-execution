@@ -1,4 +1,5 @@
-// Temporary allow for Phase 7.1 - will be cleaned up in follow-up
+// TODO(phase-7.3): Review and reduce clippy allows added during Phase 7.1 rapid development.
+// Each suppressed lint should either be fixed in code or documented as intentional.
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::option_if_let_else)]

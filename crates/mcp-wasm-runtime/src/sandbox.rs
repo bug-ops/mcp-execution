@@ -34,7 +34,10 @@ use wasmtime::*;
 
 /// Store data combining host context and resource limiter.
 struct StoreData {
-    #[allow(dead_code)] // Will be used for host function linking in Phase 5
+    // NOTE(architecture): host_context is currently unused but kept for future host function expansion.
+    // Phase 5 completed basic host functions (host_add, host_log). Additional host functions
+    // can be added by extending HostContext and linking them in Sandbox::new().
+    #[allow(dead_code)]
     host_context: HostContext,
     limiter: MemoryLimiter,
 }
