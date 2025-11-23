@@ -12,7 +12,7 @@ use crate::types::{
 };
 use chrono::Utc;
 use mcp_codegen::skills::claude::SkillData;
-use mcp_core::{SkillName, stats::SkillStats};
+use mcp_core::{CacheManager, SkillName, stats::SkillStats};
 use mcp_vfs::{Vfs, VfsBuilder};
 use std::collections::HashMap;
 use std::fs;
@@ -73,23 +73,37 @@ impl Drop for SkillDirGuard {
 
 /// Skill storage manager.
 ///
-/// Manages a directory of saved skills, providing operations to save, load,
-/// list, and remove skills. Each skill is stored in its own subdirectory
-/// named after the server.
+/// Manages public skills in `~/.claude/skills/` and internal cache in
+/// `~/.mcp-execution/cache/`. Provides operations to save, load, list, and
+/// remove skills with automatic cache management.
 ///
 /// # Directory Structure
 ///
+/// **Public Skills** (user-facing, version-controlled):
 /// ```text
-/// base_dir/
+/// ~/.claude/skills/
 /// ├── server1/
-/// │   ├── skill.json
-/// │   ├── generated/
-/// │   │   └── ...
-/// │   └── module.wasm
+/// │   ├── SKILL.md
+/// │   ├── REFERENCE.md
+/// │   └── .metadata.json
 /// └── server2/
-///     ├── skill.json
-///     ├── generated/
-///     └── module.wasm
+///     ├── SKILL.md
+///     ├── REFERENCE.md
+///     └── .metadata.json
+/// ```
+///
+/// **Internal Cache** (system-managed, regenerable):
+/// ```text
+/// ~/.mcp-execution/cache/
+/// ├── wasm/
+/// │   ├── server1.wasm
+/// │   └── server2.wasm
+/// ├── vfs/
+/// │   ├── server1/
+/// │   └── server2/
+/// └── metadata/
+///     ├── server1.json
+///     └── server2.json
 /// ```
 ///
 /// # Thread Safety
@@ -108,7 +122,7 @@ impl Drop for SkillDirGuard {
 /// // Create store
 /// let store = SkillStore::new("./skills")?;
 ///
-/// // Save a skill
+/// // Save a skill (public metadata only)
 /// let vfs = VfsBuilder::new()
 ///     .add_file("/index.ts", "export * from './tools';")
 ///     .build()?;
@@ -121,7 +135,7 @@ impl Drop for SkillDirGuard {
 ///
 /// store.save_skill("my-server", &vfs, &wasm, server_info, vec![])?;
 ///
-/// // Load it back
+/// // Load it back (from public skills + cache)
 /// let plugin = store.load_skill("my-server")?;
 /// assert_eq!(plugin.metadata.server.name, "my-server");
 /// # Ok(())
@@ -129,7 +143,10 @@ impl Drop for SkillDirGuard {
 /// ```
 #[derive(Debug, Clone)]
 pub struct SkillStore {
+    /// Public skills directory (~/.claude/skills)
     base_dir: PathBuf,
+    /// Internal cache manager (~/.mcp-execution/cache)
+    cache: CacheManager,
     /// Generation success counter (thread-safe)
     generation_successes: Arc<AtomicU32>,
     /// Generation failure counter (thread-safe)
@@ -139,11 +156,14 @@ pub struct SkillStore {
 impl SkillStore {
     /// Creates a new skill store at the given directory.
     ///
-    /// Creates the base directory if it doesn't exist.
+    /// Creates the base directory if it doesn't exist. Initializes the cache
+    /// manager with the default cache directory.
     ///
     /// # Errors
     ///
-    /// Returns an error if the directory cannot be created or is not writable.
+    /// Returns an error if:
+    /// - The directory cannot be created or is not writable
+    /// - Cache directory cannot be initialized
     ///
     /// # Examples
     ///
@@ -164,14 +184,68 @@ impl SkillStore {
             tracing::debug!("Created skill store directory: {}", base_dir.display());
         }
 
+        // Initialize cache manager with default directory
+        let cache = CacheManager::new().map_err(|e| SkillStoreError::InvalidMetadata {
+            reason: format!("Failed to initialize cache manager: {e}"),
+        })?;
+
         Ok(Self {
             base_dir,
+            cache,
             generation_successes: Arc::new(AtomicU32::new(0)),
             generation_failures: Arc::new(AtomicU32::new(0)),
         })
     }
 
-    /// Saves a skill to disk.
+    /// Creates a skill store with custom base directory and cache directory.
+    ///
+    /// Useful for testing when you want to control both the skills directory
+    /// and the cache directory locations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if directories cannot be created or accessed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use tempfile::TempDir;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let skills_dir = TempDir::new()?;
+    /// let cache_dir = TempDir::new()?;
+    /// let store = SkillStore::with_directories(skills_dir.path(), cache_dir.path())?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_directories(base_dir: impl AsRef<Path>, cache_dir: impl AsRef<Path>) -> Result<Self> {
+        let base_dir = base_dir.as_ref().to_path_buf();
+
+        // Create directory if it doesn't exist
+        if !base_dir.exists() {
+            fs::create_dir_all(&base_dir)?;
+            tracing::debug!("Created skill store directory: {}", base_dir.display());
+        }
+
+        // Initialize cache manager with custom directory
+        let cache = CacheManager::with_directory(cache_dir).map_err(|e| SkillStoreError::InvalidMetadata {
+            reason: format!("Failed to initialize cache manager: {e}"),
+        })?;
+
+        Ok(Self {
+            base_dir,
+            cache,
+            generation_successes: Arc::new(AtomicU32::new(0)),
+            generation_failures: Arc::new(AtomicU32::new(0)),
+        })
+    }
+
+    /// Saves a skill to disk (legacy format).
+    ///
+    /// **Legacy API**: This method maintains the old directory structure with WASM
+    /// and VFS files in the skills directory. For new code, prefer the Claude format
+    /// (`save_claude_skill`) which uses cache separation.
     ///
     /// Writes the skill files to a new subdirectory named after the server.
     /// Calculates checksums for all files and stores them in metadata.
@@ -625,6 +699,31 @@ impl SkillStore {
         self.base_dir.join(server_name)
     }
 
+    /// Returns a reference to the internal cache manager.
+    ///
+    /// Provides access to cache operations for advanced use cases.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new("./skills")?;
+    /// let cache = store.cache();
+    ///
+    /// // Check if WASM is cached
+    /// if cache.has_wasm("vkteams")? {
+    ///     println!("WASM module is cached");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn cache(&self) -> &CacheManager {
+        &self.cache
+    }
+
     /// Reads and parses skill metadata from disk.
     fn read_metadata(metadata_path: &Path) -> Result<SkillMetadata> {
         let content = fs::read_to_string(metadata_path)?;
@@ -728,12 +827,20 @@ impl SkillStore {
         Ok(home_dir)
     }
 
-    /// Saves skill in Claude format.
+    /// Saves skill in Claude format (public markdown files only).
     ///
     /// Creates `.claude/skills/skill-name/` directory with:
     /// - SKILL.md (rendered skill file)
     /// - REFERENCE.md (rendered reference documentation)
     /// - .metadata.json (internal metadata with checksums)
+    ///
+    /// This method saves only the public-facing documentation. To cache WASM/VFS
+    /// artifacts, use [`save_skill_cache`](Self::save_skill_cache) separately.
+    ///
+    /// # Directory Separation
+    ///
+    /// - **Public**: `~/.claude/skills/{skill_name}/` (version-controlled)
+    /// - **Cache**: `~/.mcp-execution/cache/` (system-managed)
     ///
     /// # Atomicity
     ///
@@ -871,6 +978,114 @@ impl SkillStore {
         // Atomic rename
         fs::rename(&temp_path, path)?;
 
+        Ok(())
+    }
+
+    /// Saves WASM module and VFS files to cache.
+    ///
+    /// This method writes internal build artifacts to the cache directory:
+    /// - WASM module → `~/.mcp-execution/cache/wasm/{skill_name}.wasm`
+    /// - VFS files → `~/.mcp-execution/cache/vfs/{skill_name}/`
+    /// - Build metadata → `~/.mcp-execution/cache/metadata/{skill_name}.json`
+    ///
+    /// The cache is system-managed and can be safely deleted and regenerated.
+    ///
+    /// # Arguments
+    ///
+    /// * `skill_name` - Skill name (used as cache key)
+    /// * `vfs` - Virtual filesystem with generated TypeScript code
+    /// * `wasm_module` - Compiled WASM module bytes
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Skill name is invalid
+    /// - Cache write fails
+    /// - VFS extraction fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use mcp_core::SkillName;
+    /// use mcp_vfs::VfsBuilder;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    /// let name = SkillName::new("vkteams")?;
+    /// let vfs = VfsBuilder::new().add_file("/index.ts", "export {};").build()?;
+    /// let wasm = vec![0x00, 0x61, 0x73, 0x6D];
+    ///
+    /// store.save_skill_cache(&name, &vfs, &wasm)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn save_skill_cache(
+        &self,
+        skill_name: &SkillName,
+        vfs: &Vfs,
+        wasm_module: &[u8],
+    ) -> Result<()> {
+        let name = skill_name.as_str();
+        tracing::info!("Caching WASM/VFS for skill: {}", name);
+
+        // Write WASM module to cache
+        let wasm_path = self.cache.wasm_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
+            reason: format!("Failed to get WASM cache path: {e}"),
+        })?;
+        fs::write(&wasm_path, wasm_module)?;
+        tracing::debug!("Cached WASM module: {} bytes", wasm_module.len());
+
+        // Write VFS files to cache
+        let vfs_dir = self.cache.vfs_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
+            reason: format!("Failed to get VFS cache path: {e}"),
+        })?;
+        fs::create_dir_all(&vfs_dir)?;
+
+        for vfs_path in vfs.all_paths() {
+            let content = vfs
+                .read_file(vfs_path.as_str())
+                .map_err(SkillStoreError::Vfs)?;
+
+            // Convert VFS path (absolute, starting with /) to relative path
+            let relative_path = vfs_path.as_str().trim_start_matches('/');
+            let file_path = vfs_dir.join(relative_path);
+
+            // Create parent directories if needed
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            fs::write(&file_path, content)?;
+            tracing::debug!("Cached VFS file: {}", relative_path);
+        }
+
+        // Write build metadata
+        let wasm_checksum = calculate_checksum(wasm_module);
+        let mut vfs_checksums = HashMap::new();
+        for vfs_path in vfs.all_paths() {
+            let content = vfs.read_file(vfs_path.as_str()).map_err(SkillStoreError::Vfs)?;
+            let relative_path = vfs_path.as_str().trim_start_matches('/');
+            let checksum = calculate_checksum(content.as_bytes());
+            vfs_checksums.insert(relative_path.to_string(), checksum);
+        }
+
+        let metadata = mcp_core::BuildMetadata {
+            skill_name: name.to_string(),
+            built_at: Utc::now(),
+            generator_version: env!("CARGO_PKG_VERSION").to_string(),
+            wasm_checksum,
+            vfs_checksums,
+        };
+
+        let metadata_path = self.cache.metadata_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
+            reason: format!("Failed to get metadata cache path: {e}"),
+        })?;
+        let metadata_json = serde_json::to_string_pretty(&metadata)?;
+        fs::write(&metadata_path, metadata_json)?;
+        tracing::debug!("Cached build metadata");
+
+        tracing::info!("Successfully cached WASM/VFS for skill: {}", name);
         Ok(())
     }
 
@@ -1041,9 +1256,109 @@ impl SkillStore {
         Ok(skills)
     }
 
+    /// Loads WASM module and VFS from cache.
+    ///
+    /// Reads cached build artifacts from `~/.mcp-execution/cache/`:
+    /// - WASM module from `wasm/{skill_name}.wasm`
+    /// - VFS files from `vfs/{skill_name}/`
+    /// - Build metadata from `metadata/{skill_name}.json`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Cache files don't exist
+    /// - Checksum verification fails
+    /// - VFS building fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use mcp_core::SkillName;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    /// let name = SkillName::new("vkteams")?;
+    ///
+    /// // Load from cache
+    /// let (vfs, wasm) = store.load_skill_cache(&name)?;
+    /// println!("Loaded {} VFS files", vfs.file_count());
+    /// println!("WASM module: {} bytes", wasm.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn load_skill_cache(&self, skill_name: &SkillName) -> Result<(Vfs, Vec<u8>)> {
+        let name = skill_name.as_str();
+        tracing::info!("Loading cached WASM/VFS for skill: {}", name);
+
+        // Read WASM module from cache
+        let wasm_path = self.cache.wasm_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
+            reason: format!("Failed to get WASM cache path: {e}"),
+        })?;
+        if !wasm_path.exists() {
+            return Err(SkillStoreError::MissingFile {
+                server_name: name.to_string(),
+                path: PathBuf::from(format!("cache/wasm/{name}.wasm")),
+            });
+        }
+        let wasm_module = fs::read(&wasm_path)?;
+        tracing::debug!("Loaded cached WASM module: {} bytes", wasm_module.len());
+
+        // Read VFS files from cache
+        let vfs_dir = self.cache.vfs_path(name).map_err(|e| SkillStoreError::InvalidMetadata {
+            reason: format!("Failed to get VFS cache path: {e}"),
+        })?;
+        if !vfs_dir.exists() {
+            return Err(SkillStoreError::MissingFile {
+                server_name: name.to_string(),
+                path: PathBuf::from(format!("cache/vfs/{name}/")),
+            });
+        }
+
+        // Build VFS from cached files
+        let mut vfs_builder = VfsBuilder::new();
+        for entry in WalkDir::new(&vfs_dir)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let file_path = entry.path();
+            let relative_path = file_path.strip_prefix(&vfs_dir).map_err(|_| {
+                SkillStoreError::InvalidMetadata {
+                    reason: format!("Failed to strip prefix from path: {}", file_path.display()),
+                }
+            })?;
+
+            // Normalize path separators
+            let normalized_path = relative_path.to_string_lossy().replace('\\', "/");
+
+            // Read file content
+            let content = fs::read_to_string(file_path)?;
+
+            // Add to VFS with absolute path (prepend /)
+            let vfs_path = format!("/{normalized_path}");
+            vfs_builder = vfs_builder.add_file(&vfs_path, content);
+            tracing::debug!("Loaded cached VFS file: {}", vfs_path);
+        }
+
+        let vfs = vfs_builder.build()?;
+
+        tracing::info!(
+            "Successfully loaded cached WASM/VFS for skill: {} ({} files)",
+            name,
+            vfs.file_count()
+        );
+
+        Ok((vfs, wasm_module))
+    }
+
     /// Removes an Claude skill.
     ///
-    /// Deletes the entire .claude/skills/skill-name/ directory.
+    /// Deletes the entire .claude/skills/skill-name/ directory and clears
+    /// associated cache files.
     ///
     /// # Errors
     ///
@@ -1071,8 +1386,13 @@ impl SkillStore {
             });
         }
 
+        // Remove public skill directory
         fs::remove_dir_all(&skill_dir)?;
         tracing::info!("Removed Claude skill: {}", skill_name.as_str());
+
+        // Clear cache (ignore errors if cache doesn't exist)
+        let _ = self.cache.clear_skill(skill_name.as_str());
+
         Ok(())
     }
 
