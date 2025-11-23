@@ -2,6 +2,12 @@
 name: {{skill_name}}
 description: |
   {{skill_description}}
+{{#if tools}}
+allowed-tools:
+{{#each tools}}
+  - {{name}}
+{{/each}}
+{{/if}}
 ---
 
 # {{skill_name}}
@@ -41,6 +47,24 @@ const result = await mcpClient.callTool("{{name}}", {
   {{name}}: {{example_value}},
   {{/each}}
 });
+```
+
+{{/each}}
+
+## Examples
+
+{{#each tools}}
+### Example {{@index}}: {{name}}
+
+```typescript
+// {{description}}
+const result = await mcpClient.callTool("{{name}}", {
+{{#each parameters}}
+  {{name}}: {{example_value}}, // {{description}}
+{{/each}}
+});
+
+console.log(result);
 ```
 
 {{/each}}
