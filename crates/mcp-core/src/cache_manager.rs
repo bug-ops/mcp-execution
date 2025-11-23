@@ -18,11 +18,11 @@
 //! let cache = CacheManager::new()?;
 //!
 //! // Get paths for a specific skill
-//! let wasm_path = cache.wasm_path("vkteams-bot");
-//! let vfs_path = cache.vfs_path("vkteams-bot");
+//! let wasm_path = cache.wasm_path("vkteams-bot")?;
+//! let vfs_path = cache.vfs_path("vkteams-bot")?;
 //!
 //! // Check if skill is cached
-//! if cache.has_wasm("vkteams-bot") {
+//! if cache.has_wasm("vkteams-bot")? {
 //!     println!("WASM module is cached");
 //! }
 //! # Ok(())
@@ -234,6 +234,11 @@ impl CacheManager {
 
     /// Gets path to WASM module for a skill.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the skill name is invalid (contains path separators,
+    /// "..", null bytes, or is empty).
+    ///
     /// # Examples
     ///
     /// ```
@@ -241,19 +246,23 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// let wasm_path = cache.wasm_path("vkteams-bot");
+    /// let wasm_path = cache.wasm_path("vkteams-bot")?;
     /// assert!(wasm_path.ends_with("vkteams-bot.wasm"));
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub fn wasm_path(&self, skill_name: &str) -> PathBuf {
-        Self::validate_skill_name(skill_name);
-        self.wasm_dir().join(format!("{skill_name}.wasm"))
+    pub fn wasm_path(&self, skill_name: &str) -> Result<PathBuf> {
+        Self::validate_skill_name(skill_name)?;
+        Ok(self.wasm_dir().join(format!("{skill_name}.wasm")))
     }
 
     /// Gets path to VFS directory for a skill.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the skill name is invalid (contains path separators,
+    /// "..", null bytes, or is empty).
+    ///
     /// # Examples
     ///
     /// ```
@@ -261,19 +270,23 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// let vfs_path = cache.vfs_path("vkteams-bot");
+    /// let vfs_path = cache.vfs_path("vkteams-bot")?;
     /// assert!(vfs_path.ends_with("vkteams-bot"));
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub fn vfs_path(&self, skill_name: &str) -> PathBuf {
-        Self::validate_skill_name(skill_name);
-        self.vfs_dir().join(skill_name)
+    pub fn vfs_path(&self, skill_name: &str) -> Result<PathBuf> {
+        Self::validate_skill_name(skill_name)?;
+        Ok(self.vfs_dir().join(skill_name))
     }
 
     /// Gets path to metadata file for a skill.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the skill name is invalid (contains path separators,
+    /// "..", null bytes, or is empty).
+    ///
     /// # Examples
     ///
     /// ```
@@ -281,33 +294,72 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// let metadata_path = cache.metadata_path("vkteams-bot");
+    /// let metadata_path = cache.metadata_path("vkteams-bot")?;
     /// assert!(metadata_path.ends_with("vkteams-bot.json"));
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub fn metadata_path(&self, skill_name: &str) -> PathBuf {
-        Self::validate_skill_name(skill_name);
-        self.metadata_dir().join(format!("{skill_name}.json"))
+    pub fn metadata_path(&self, skill_name: &str) -> Result<PathBuf> {
+        Self::validate_skill_name(skill_name)?;
+        Ok(self.metadata_dir().join(format!("{skill_name}.json")))
     }
 
     /// Validates a skill name to prevent path traversal and invalid filenames.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the skill name contains path separators, "..", or is empty.
-    fn validate_skill_name(name: &str) {
-        if name.is_empty()
-            || name.contains('/')
-            || name.contains('\\')
-            || name.contains("..")
-            || name.contains('\0')
-        {
-            panic!("Invalid skill name for cache path: {name:?}");
+    /// Returns a `CacheError` if the skill name:
+    /// - Is empty
+    /// - Contains path separators (`/` or `\`)
+    /// - Contains `..` (directory traversal)
+    /// - Contains null bytes
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::CacheManager;
+    ///
+    /// // Valid names pass
+    /// assert!(CacheManager::validate_skill_name("valid-skill").is_ok());
+    /// assert!(CacheManager::validate_skill_name("skill_123").is_ok());
+    ///
+    /// // Invalid names fail
+    /// assert!(CacheManager::validate_skill_name("").is_err());
+    /// assert!(CacheManager::validate_skill_name("../etc/passwd").is_err());
+    /// assert!(CacheManager::validate_skill_name("..\\system32").is_err());
+    /// ```
+    fn validate_skill_name(name: &str) -> Result<()> {
+        if name.is_empty() {
+            return Err(Error::CacheError {
+                message: "Skill name cannot be empty".to_string(),
+            });
         }
+
+        if name.contains('/') || name.contains('\\') {
+            return Err(Error::CacheError {
+                message: format!("Skill name cannot contain path separators: {name:?}"),
+            });
+        }
+
+        if name.contains("..") {
+            return Err(Error::CacheError {
+                message: format!("Skill name cannot contain '..': {name:?}"),
+            });
+        }
+
+        if name.contains('\0') {
+            return Err(Error::CacheError {
+                message: format!("Skill name cannot contain null bytes: {name:?}"),
+            });
+        }
+
+        Ok(())
     }
     /// Checks if WASM module exists in cache for a skill.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the skill name is invalid.
     ///
     /// # Examples
     ///
@@ -316,18 +368,21 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// if !cache.has_wasm("vkteams-bot") {
+    /// if !cache.has_wasm("vkteams-bot")? {
     ///     println!("WASM not cached");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub fn has_wasm(&self, skill_name: &str) -> bool {
-        self.wasm_path(skill_name).exists()
+    pub fn has_wasm(&self, skill_name: &str) -> Result<bool> {
+        Ok(self.wasm_path(skill_name)?.exists())
     }
 
     /// Checks if VFS cache exists for a skill.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the skill name is invalid.
     ///
     /// # Examples
     ///
@@ -336,18 +391,21 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// if !cache.has_vfs("vkteams-bot") {
+    /// if !cache.has_vfs("vkteams-bot")? {
     ///     println!("VFS not cached");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub fn has_vfs(&self, skill_name: &str) -> bool {
-        self.vfs_path(skill_name).exists()
+    pub fn has_vfs(&self, skill_name: &str) -> Result<bool> {
+        Ok(self.vfs_path(skill_name)?.exists())
     }
 
     /// Checks if metadata exists for a skill.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the skill name is invalid.
     ///
     /// # Examples
     ///
@@ -356,15 +414,14 @@ impl CacheManager {
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
-    /// if !cache.has_metadata("vkteams-bot") {
+    /// if !cache.has_metadata("vkteams-bot")? {
     ///     println!("Metadata not cached");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub fn has_metadata(&self, skill_name: &str) -> bool {
-        self.metadata_path(skill_name).exists()
+    pub fn has_metadata(&self, skill_name: &str) -> Result<bool> {
+        Ok(self.metadata_path(skill_name)?.exists())
     }
 
     /// Clears all cache data.
@@ -418,13 +475,13 @@ impl CacheManager {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = CacheManager::new()?;
     /// cache.clear_skill("vkteams-bot")?;
-    /// assert!(!cache.has_wasm("vkteams-bot"));
+    /// assert!(!cache.has_wasm("vkteams-bot")?);
     /// # Ok(())
     /// # }
     /// ```
     pub fn clear_skill(&self, skill_name: &str) -> Result<()> {
         // Remove WASM module
-        let wasm_path = self.wasm_path(skill_name);
+        let wasm_path = self.wasm_path(skill_name)?;
         if wasm_path.exists() {
             fs::remove_file(&wasm_path).map_err(|e| Error::CacheError {
                 message: format!("Failed to remove WASM module: {e}"),
@@ -433,7 +490,7 @@ impl CacheManager {
         }
 
         // Remove VFS directory
-        let vfs_path = self.vfs_path(skill_name);
+        let vfs_path = self.vfs_path(skill_name)?;
         if vfs_path.exists() {
             fs::remove_dir_all(&vfs_path).map_err(|e| Error::CacheError {
                 message: format!("Failed to remove VFS directory: {e}"),
@@ -442,7 +499,7 @@ impl CacheManager {
         }
 
         // Remove metadata
-        let metadata_path = self.metadata_path(skill_name);
+        let metadata_path = self.metadata_path(skill_name)?;
         if metadata_path.exists() {
             fs::remove_file(&metadata_path).map_err(|e| Error::CacheError {
                 message: format!("Failed to remove metadata: {e}"),
@@ -632,15 +689,15 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let cache = CacheManager::with_directory(temp.path()).unwrap();
 
-        let wasm_path = cache.wasm_path("test-skill");
+        let wasm_path = cache.wasm_path("test-skill").unwrap();
         assert!(wasm_path.to_string_lossy().contains("wasm"));
         assert!(wasm_path.ends_with("test-skill.wasm"));
 
-        let vfs_path = cache.vfs_path("test-skill");
+        let vfs_path = cache.vfs_path("test-skill").unwrap();
         assert!(vfs_path.to_string_lossy().contains("vfs"));
         assert!(vfs_path.ends_with("test-skill"));
 
-        let metadata_path = cache.metadata_path("test-skill");
+        let metadata_path = cache.metadata_path("test-skill").unwrap();
         assert!(metadata_path.to_string_lossy().contains("metadata"));
         assert!(metadata_path.ends_with("test-skill.json"));
     }
@@ -651,24 +708,24 @@ mod tests {
         let cache = CacheManager::with_directory(temp.path()).unwrap();
 
         // Initially, nothing should exist
-        assert!(!cache.has_wasm("test-skill"));
-        assert!(!cache.has_vfs("test-skill"));
-        assert!(!cache.has_metadata("test-skill"));
+        assert!(!cache.has_wasm("test-skill").unwrap());
+        assert!(!cache.has_vfs("test-skill").unwrap());
+        assert!(!cache.has_metadata("test-skill").unwrap());
 
         // Create WASM file
-        let wasm_path = cache.wasm_path("test-skill");
+        let wasm_path = cache.wasm_path("test-skill").unwrap();
         fs::write(&wasm_path, b"fake wasm").unwrap();
-        assert!(cache.has_wasm("test-skill"));
+        assert!(cache.has_wasm("test-skill").unwrap());
 
         // Create VFS directory
-        let vfs_path = cache.vfs_path("test-skill");
+        let vfs_path = cache.vfs_path("test-skill").unwrap();
         fs::create_dir(&vfs_path).unwrap();
-        assert!(cache.has_vfs("test-skill"));
+        assert!(cache.has_vfs("test-skill").unwrap());
 
         // Create metadata file
-        let metadata_path = cache.metadata_path("test-skill");
+        let metadata_path = cache.metadata_path("test-skill").unwrap();
         fs::write(&metadata_path, b"{}").unwrap();
-        assert!(cache.has_metadata("test-skill"));
+        assert!(cache.has_metadata("test-skill").unwrap());
     }
 
     #[test]
@@ -677,22 +734,22 @@ mod tests {
         let cache = CacheManager::with_directory(temp.path()).unwrap();
 
         // Create cache files
-        fs::write(cache.wasm_path("test-skill"), b"wasm").unwrap();
-        fs::create_dir(cache.vfs_path("test-skill")).unwrap();
-        fs::write(cache.metadata_path("test-skill"), b"{}").unwrap();
+        fs::write(cache.wasm_path("test-skill").unwrap(), b"wasm").unwrap();
+        fs::create_dir(cache.vfs_path("test-skill").unwrap()).unwrap();
+        fs::write(cache.metadata_path("test-skill").unwrap(), b"{}").unwrap();
 
         // Verify they exist
-        assert!(cache.has_wasm("test-skill"));
-        assert!(cache.has_vfs("test-skill"));
-        assert!(cache.has_metadata("test-skill"));
+        assert!(cache.has_wasm("test-skill").unwrap());
+        assert!(cache.has_vfs("test-skill").unwrap());
+        assert!(cache.has_metadata("test-skill").unwrap());
 
         // Clear cache for skill
         cache.clear_skill("test-skill").unwrap();
 
         // Verify they're gone
-        assert!(!cache.has_wasm("test-skill"));
-        assert!(!cache.has_vfs("test-skill"));
-        assert!(!cache.has_metadata("test-skill"));
+        assert!(!cache.has_wasm("test-skill").unwrap());
+        assert!(!cache.has_vfs("test-skill").unwrap());
+        assert!(!cache.has_metadata("test-skill").unwrap());
     }
 
     #[test]
@@ -702,9 +759,9 @@ mod tests {
 
         // Create multiple cached skills
         for skill in &["skill1", "skill2", "skill3"] {
-            fs::write(cache.wasm_path(skill), b"wasm").unwrap();
-            fs::create_dir(cache.vfs_path(skill)).unwrap();
-            fs::write(cache.metadata_path(skill), b"{}").unwrap();
+            fs::write(cache.wasm_path(skill).unwrap(), b"wasm").unwrap();
+            fs::create_dir(cache.vfs_path(skill).unwrap()).unwrap();
+            fs::write(cache.metadata_path(skill).unwrap(), b"{}").unwrap();
         }
 
         // Clear all
@@ -717,9 +774,9 @@ mod tests {
 
         // Verify all cache is cleared
         for skill in &["skill1", "skill2", "skill3"] {
-            assert!(!cache.has_wasm(skill));
-            assert!(!cache.has_vfs(skill));
-            assert!(!cache.has_metadata(skill));
+            assert!(!cache.has_wasm(skill).unwrap());
+            assert!(!cache.has_vfs(skill).unwrap());
+            assert!(!cache.has_metadata(skill).unwrap());
         }
     }
 
@@ -736,10 +793,10 @@ mod tests {
         assert_eq!(stats.total_size_bytes, 0);
 
         // Add some cache files
-        fs::write(cache.wasm_path("skill1"), b"wasm1").unwrap();
-        fs::write(cache.wasm_path("skill2"), b"wasm2").unwrap();
-        fs::create_dir(cache.vfs_path("skill1")).unwrap();
-        fs::write(cache.metadata_path("skill1"), b"{}").unwrap();
+        fs::write(cache.wasm_path("skill1").unwrap(), b"wasm1").unwrap();
+        fs::write(cache.wasm_path("skill2").unwrap(), b"wasm2").unwrap();
+        fs::create_dir(cache.vfs_path("skill1").unwrap()).unwrap();
+        fs::write(cache.metadata_path("skill1").unwrap(), b"{}").unwrap();
 
         let stats = cache.stats().unwrap();
         assert_eq!(stats.total_wasm_files, 2);
@@ -795,5 +852,70 @@ mod tests {
 
         assert_eq!(metadata.skill_name, deserialized.skill_name);
         assert_eq!(metadata.generator_version, deserialized.generator_version);
+    }
+
+    #[test]
+    fn test_path_traversal_prevention() {
+        let temp = TempDir::new().unwrap();
+        let cache = CacheManager::with_directory(temp.path()).unwrap();
+
+        // Unix-style path traversal attempts
+        let result = cache.wasm_path("../../../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(".."));
+
+        // Windows-style path traversal attempts
+        let result = cache.wasm_path("..\\..\\system32\\file");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(".."));
+
+        // Path with forward slash
+        let result = cache.vfs_path("path/with/slash");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("path separators"));
+
+        // Path with backslash
+        let result = cache.metadata_path("path\\with\\backslash");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("path separators"));
+    }
+
+    #[test]
+    fn test_empty_skill_name_validation() {
+        let temp = TempDir::new().unwrap();
+        let cache = CacheManager::with_directory(temp.path()).unwrap();
+
+        let result = cache.wasm_path("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_null_byte_validation() {
+        let temp = TempDir::new().unwrap();
+        let cache = CacheManager::with_directory(temp.path()).unwrap();
+
+        let result = cache.wasm_path("skill\0name");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("null bytes"));
+    }
+
+    #[test]
+    fn test_valid_skill_names() {
+        let temp = TempDir::new().unwrap();
+        let cache = CacheManager::with_directory(temp.path()).unwrap();
+
+        // These should all be valid
+        assert!(cache.wasm_path("valid-skill").is_ok());
+        assert!(cache.wasm_path("skill_123").is_ok());
+        assert!(cache.wasm_path("vkteams-bot").is_ok());
+        assert!(cache.wasm_path("my.skill.name").is_ok());
+        assert!(cache.wasm_path("UPPERCASE").is_ok());
     }
 }
