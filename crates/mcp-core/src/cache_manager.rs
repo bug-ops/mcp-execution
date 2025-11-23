@@ -275,9 +275,25 @@ impl CacheManager {
     /// ```
     #[must_use]
     pub fn metadata_path(&self, skill_name: &str) -> PathBuf {
+        Self::validate_skill_name(skill_name);
         self.metadata_dir().join(format!("{skill_name}.json"))
     }
 
+    /// Validates a skill name to prevent path traversal and invalid filenames.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the skill name contains path separators, "..", or is empty.
+    fn validate_skill_name(name: &str) {
+        if name.is_empty()
+            || name.contains('/')
+            || name.contains('\\')
+            || name.contains("..")
+            || name.contains('\0')
+        {
+            panic!("Invalid skill name for cache path: {:?}", name);
+        }
+    }
     /// Checks if WASM module exists in cache for a skill.
     ///
     /// # Examples
