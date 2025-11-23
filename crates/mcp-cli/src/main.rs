@@ -186,6 +186,17 @@ pub enum Commands {
         action: commands::skill::SkillAction,
     },
 
+    /// Manage internal cache.
+    ///
+    /// View, clear, and verify the internal cache directory (~/.mcp-execution/cache/).
+    /// The cache stores WASM modules, VFS files, and build metadata that can be
+    /// safely deleted and regenerated.
+    Cache {
+        /// Cache management action
+        #[command(subcommand)]
+        action: commands::cache::CacheCommand,
+    },
+
     /// Generate shell completions.
     ///
     /// Generates completion scripts for various shells that can be
@@ -291,6 +302,10 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         Commands::Debug { action } => commands::debug::run(action, output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
         Commands::Skill { action } => commands::skill::run(action, output_format).await,
+        Commands::Cache { action } => {
+            commands::cache::handle(action).await?;
+            Ok(ExitCode::SUCCESS)
+        }
         Commands::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
