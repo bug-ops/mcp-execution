@@ -314,20 +314,7 @@ impl CacheManager {
     /// - Contains `..` (directory traversal)
     /// - Contains null bytes
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_core::CacheManager;
-    ///
-    /// // Valid names pass
-    /// assert!(CacheManager::validate_skill_name("valid-skill").is_ok());
-    /// assert!(CacheManager::validate_skill_name("skill_123").is_ok());
-    ///
-    /// // Invalid names fail
-    /// assert!(CacheManager::validate_skill_name("").is_err());
-    /// assert!(CacheManager::validate_skill_name("../etc/passwd").is_err());
-    /// assert!(CacheManager::validate_skill_name("..\\system32").is_err());
-    /// ```
+    /// This validation is tested through public APIs like `wasm_path()`, `vfs_path()`, etc.
     fn validate_skill_name(name: &str) -> Result<()> {
         if name.is_empty() {
             return Err(Error::CacheError {
