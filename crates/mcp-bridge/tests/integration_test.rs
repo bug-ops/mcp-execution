@@ -4,6 +4,7 @@
 //! calling tools, and caching results.
 
 use mcp_bridge::{Bridge, CacheStats};
+use mcp_core::stats::BridgeStats;
 use mcp_core::{Error, ServerId, ToolName};
 use serde_json::json;
 
@@ -525,4 +526,70 @@ fn test_cache_state_persistence() {
 
     // Should be stable
     assert!(!format!("{bridge:?}").is_empty());
+}
+
+/// Tests `collect_stats` method with realistic scenario
+#[tokio::test]
+async fn test_collect_stats_integration() {
+    let bridge = Bridge::new(1000);
+
+    // Initial state - all counters should be zero
+    let stats = bridge.collect_stats().await;
+    assert_eq!(stats.total_tool_calls, 0);
+    assert_eq!(stats.cache_hits, 0);
+    assert_eq!(stats.active_connections, 0);
+    assert_eq!(stats.total_connections, 0);
+    assert_eq!(stats.connection_failures, 0);
+
+    // No rates available with zero operations
+    assert_eq!(stats.cache_hit_rate(), None);
+    assert_eq!(stats.connection_success_rate(), None);
+}
+
+/// Tests that `collect_stats` returns consistent results
+#[tokio::test]
+async fn test_collect_stats_consistency() {
+    let bridge = Bridge::new(1000);
+
+    // Collect stats multiple times
+    let stats1 = bridge.collect_stats().await;
+    let stats2 = bridge.collect_stats().await;
+
+    // Should be identical when no operations happen
+    assert_eq!(stats1.total_tool_calls, stats2.total_tool_calls);
+    assert_eq!(stats1.cache_hits, stats2.cache_hits);
+    assert_eq!(stats1.active_connections, stats2.active_connections);
+}
+
+/// Tests `BridgeStats` type properties
+#[test]
+fn test_bridge_stats_type() {
+    let stats = BridgeStats::new(100, 75, 5, 10, 2);
+
+    // Verify all fields are accessible
+    assert_eq!(stats.total_tool_calls, 100);
+    assert_eq!(stats.cache_hits, 75);
+    assert_eq!(stats.active_connections, 5);
+    assert_eq!(stats.total_connections, 10);
+    assert_eq!(stats.connection_failures, 2);
+
+    // Verify calculated rates
+    assert_eq!(stats.cache_hit_rate(), Some(0.75));
+    assert_eq!(stats.connection_success_rate(), Some(0.8));
+}
+
+/// Tests `BridgeStats` serialization/deserialization
+#[test]
+fn test_bridge_stats_serialization() {
+    let stats = BridgeStats::new(100, 75, 5, 10, 2);
+
+    // Serialize to JSON
+    let json = serde_json::to_string(&stats).unwrap();
+    assert!(json.contains("\"total_tool_calls\":100"));
+    assert!(json.contains("\"cache_hits\":75"));
+
+    // Deserialize back
+    let deserialized: BridgeStats = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.total_tool_calls, stats.total_tool_calls);
+    assert_eq!(deserialized.cache_hits, stats.cache_hits);
 }

@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 blake3.workspace = true
+chrono = { workspace = true, features = ["serde"] }
 dirs.workspace = true
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }

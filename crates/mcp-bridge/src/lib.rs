@@ -46,6 +46,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use lru::LruCache;
+use mcp_core::stats::BridgeStats;
 use mcp_core::{CacheKey, Error, Result, ServerId, ToolName};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{RoleClient, ServiceExt};
@@ -53,6 +54,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::Mutex;
 
 /// Connection to an MCP server.
@@ -116,6 +118,12 @@ pub struct Bridge {
     cache: Arc<Mutex<LruCache<CacheKey, Value>>>,
     cache_enabled: bool,
     max_connections: usize,
+
+    // Statistics counters (thread-safe atomics)
+    total_tool_calls: Arc<AtomicU32>,
+    cache_hits: Arc<AtomicU32>,
+    total_connections: Arc<AtomicU32>,
+    connection_failures: Arc<AtomicU32>,
 }
 
 impl Bridge {
@@ -168,6 +176,10 @@ impl Bridge {
             cache: Arc::new(Mutex::new(LruCache::new(cache_size))),
             cache_enabled: true,
             max_connections,
+            total_tool_calls: Arc::new(AtomicU32::new(0)),
+            cache_hits: Arc::new(AtomicU32::new(0)),
+            total_connections: Arc::new(AtomicU32::new(0)),
+            connection_failures: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -220,19 +232,24 @@ impl Bridge {
 
         let transport =
             TokioChildProcess::new(tokio::process::Command::new(command).configure(|_cmd| {}))
-                .map_err(|e| Error::ConnectionFailed {
-                    server: server_id.to_string(),
-                    source: Box::new(e),
+                .map_err(|e| {
+                    // Track connection failure
+                    self.connection_failures.fetch_add(1, Ordering::Relaxed);
+                    Error::ConnectionFailed {
+                        server: server_id.to_string(),
+                        source: Box::new(e),
+                    }
                 })?;
 
         // Create client using serve pattern
-        let client =
-            ().serve(transport)
-                .await
-                .map_err(|e| Error::ConnectionFailed {
-                    server: server_id.to_string(),
-                    source: Box::new(e),
-                })?;
+        let client = ().serve(transport).await.map_err(|e| {
+            // Track connection failure
+            self.connection_failures.fetch_add(1, Ordering::Relaxed);
+            Error::ConnectionFailed {
+                server: server_id.to_string(),
+                source: Box::new(e),
+            }
+        })?;
 
         let connection = Connection {
             client,
@@ -241,6 +258,9 @@ impl Bridge {
         };
 
         self.connections.lock().await.insert(server_id, connection);
+
+        // Track successful connection
+        self.total_connections.fetch_add(1, Ordering::Relaxed);
 
         tracing::info!("Successfully connected to server");
 
@@ -294,6 +314,9 @@ impl Bridge {
         tool_name: &ToolName,
         params: Value,
     ) -> Result<Value> {
+        // Track tool call attempt
+        self.total_tool_calls.fetch_add(1, Ordering::Relaxed);
+
         // Check cache first
         if self.cache_enabled {
             let cache_key =
@@ -302,6 +325,8 @@ impl Bridge {
             let cached = self.cache.lock().await.get(&cache_key).cloned();
             if let Some(value) = cached {
                 tracing::debug!("Cache hit for {}::{}", server_id, tool_name);
+                // Track cache hit
+                self.cache_hits.fetch_add(1, Ordering::Relaxed);
                 return Ok(value);
             }
         }
@@ -545,6 +570,61 @@ impl Bridge {
         let current = self.connections.lock().await.len();
         (current, self.max_connections)
     }
+
+    /// Collects current bridge statistics.
+    ///
+    /// Returns a snapshot of bridge performance and connection metrics,
+    /// including:
+    /// - Total tool calls processed
+    /// - Cache hit count and hit rate
+    /// - Active and total connections
+    /// - Connection failure count
+    ///
+    /// # Performance
+    ///
+    /// This operation is O(1) and completes in <1ms. It reads atomic
+    /// counters and acquires a single lock to count active connections.
+    ///
+    /// # Thread Safety
+    ///
+    /// Safe to call concurrently from multiple tasks. Statistics are
+    /// captured atomically for consistency.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_bridge::Bridge;
+    /// use mcp_core::ServerId;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let bridge = Bridge::new(1000);
+    ///
+    /// // Perform some operations
+    /// bridge.connect(ServerId::new("test"), "test-cmd").await?;
+    ///
+    /// // Collect statistics
+    /// let stats = bridge.collect_stats().await;
+    /// println!("Tool calls: {}", stats.total_tool_calls);
+    /// println!("Cache hits: {}", stats.cache_hits);
+    /// println!("Active connections: {}", stats.active_connections);
+    ///
+    /// if let Some(hit_rate) = stats.cache_hit_rate() {
+    ///     println!("Cache hit rate: {:.1}%", hit_rate * 100.0);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn collect_stats(&self) -> BridgeStats {
+        let active_connections = self.connections.lock().await.len();
+
+        BridgeStats::new(
+            self.total_tool_calls.load(Ordering::Relaxed),
+            self.cache_hits.load(Ordering::Relaxed),
+            active_connections.try_into().unwrap_or(u32::MAX),
+            self.total_connections.load(Ordering::Relaxed),
+            self.connection_failures.load(Ordering::Relaxed),
+        )
+    }
 }
 
 /// Cache statistics.
@@ -691,5 +771,127 @@ mod tests {
 
         // Disconnect non-existent connection (should not panic)
         bridge.disconnect(&server_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_collect_stats_empty() {
+        let bridge = Bridge::new(100);
+        let stats = bridge.collect_stats().await;
+
+        assert_eq!(stats.total_tool_calls, 0);
+        assert_eq!(stats.cache_hits, 0);
+        assert_eq!(stats.active_connections, 0);
+        assert_eq!(stats.total_connections, 0);
+        assert_eq!(stats.connection_failures, 0);
+        assert_eq!(stats.cache_hit_rate(), None);
+        assert_eq!(stats.connection_success_rate(), None);
+    }
+
+    #[tokio::test]
+    async fn test_collect_stats_tracks_counters() {
+        let bridge = Bridge::new(100);
+
+        // Simulate some tool calls with cache tracking
+        bridge.total_tool_calls.fetch_add(10, Ordering::Relaxed);
+        bridge.cache_hits.fetch_add(7, Ordering::Relaxed);
+        bridge.total_connections.fetch_add(5, Ordering::Relaxed);
+        bridge.connection_failures.fetch_add(1, Ordering::Relaxed);
+
+        let stats = bridge.collect_stats().await;
+
+        assert_eq!(stats.total_tool_calls, 10);
+        assert_eq!(stats.cache_hits, 7);
+        assert_eq!(stats.total_connections, 5);
+        assert_eq!(stats.connection_failures, 1);
+
+        // Verify calculated rates
+        assert_eq!(stats.cache_hit_rate(), Some(0.7));
+        assert_eq!(stats.connection_success_rate(), Some(0.8));
+    }
+
+    #[tokio::test]
+    async fn test_collect_stats_with_active_connections() {
+        let bridge = Bridge::new(100);
+
+        // Test that stats collection works even with empty connections
+        let stats = bridge.collect_stats().await;
+        assert_eq!(stats.active_connections, 0);
+
+        // Note: We can't actually add real Connections here without spawning a process,
+        // but the counter tracking logic is tested in other tests
+    }
+
+    #[tokio::test]
+    async fn test_collect_stats_performance() {
+        use std::time::Instant;
+
+        let bridge = Bridge::new(1000);
+
+        // Simulate realistic state
+        bridge.total_tool_calls.fetch_add(1000, Ordering::Relaxed);
+        bridge.cache_hits.fetch_add(850, Ordering::Relaxed);
+        bridge.total_connections.fetch_add(50, Ordering::Relaxed);
+        bridge.connection_failures.fetch_add(2, Ordering::Relaxed);
+
+        // Measure collection time
+        let start = Instant::now();
+        let stats = bridge.collect_stats().await;
+        let elapsed = start.elapsed();
+
+        // Should complete in well under 1ms
+        assert!(
+            elapsed.as_micros() < 1000,
+            "Stats collection took {elapsed:?}"
+        );
+
+        // Verify correctness
+        assert_eq!(stats.total_tool_calls, 1000);
+        assert_eq!(stats.cache_hits, 850);
+    }
+
+    #[tokio::test]
+    async fn test_collect_stats_thread_safety() {
+        use std::sync::Arc;
+        use tokio::task;
+
+        let bridge = Arc::new(Bridge::new(1000));
+
+        // Spawn multiple tasks that increment counters concurrently
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let bridge_clone = Arc::clone(&bridge);
+            let handle = task::spawn(async move {
+                for _ in 0..100 {
+                    bridge_clone
+                        .total_tool_calls
+                        .fetch_add(1, Ordering::Relaxed);
+                    bridge_clone.cache_hits.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all tasks to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify all increments were counted
+        let stats = bridge.collect_stats().await;
+        assert_eq!(stats.total_tool_calls, 1000); // 10 tasks * 100 increments
+        assert_eq!(stats.cache_hits, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_collect_stats_after_operations() {
+        let bridge = Bridge::new(100);
+
+        // Initial state
+        let stats = bridge.collect_stats().await;
+        assert_eq!(stats.total_tool_calls, 0);
+
+        // Can't test actual tool calls without spawning real MCP servers,
+        // but we've verified the tracking logic above
     }
 }

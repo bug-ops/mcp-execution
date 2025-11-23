@@ -12,11 +12,13 @@ use crate::types::{
 };
 use chrono::Utc;
 use mcp_codegen::skills::claude::SkillData;
-use mcp_core::SkillName;
+use mcp_core::{SkillName, stats::SkillStats};
 use mcp_vfs::{Vfs, VfsBuilder};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use walkdir::WalkDir;
 
 /// RAII guard for skill directory cleanup on error.
@@ -128,6 +130,10 @@ impl Drop for SkillDirGuard {
 #[derive(Debug, Clone)]
 pub struct SkillStore {
     base_dir: PathBuf,
+    /// Generation success counter (thread-safe)
+    generation_successes: Arc<AtomicU32>,
+    /// Generation failure counter (thread-safe)
+    generation_failures: Arc<AtomicU32>,
 }
 
 impl SkillStore {
@@ -158,7 +164,11 @@ impl SkillStore {
             tracing::debug!("Created skill store directory: {}", base_dir.display());
         }
 
-        Ok(Self { base_dir })
+        Ok(Self {
+            base_dir,
+            generation_successes: Arc::new(AtomicU32::new(0)),
+            generation_failures: Arc::new(AtomicU32::new(0)),
+        })
     }
 
     /// Saves a skill to disk.
@@ -314,6 +324,9 @@ impl SkillStore {
 
         // Success - disable cleanup
         guard.commit();
+
+        // Increment success counter
+        self.generation_successes.fetch_add(1, Ordering::Relaxed);
 
         tracing::info!(
             "Successfully saved skill for server: {} ({} files, {} tools)",
@@ -832,6 +845,9 @@ impl SkillStore {
         // Success - disable cleanup
         guard.commit();
 
+        // Increment success counter
+        self.generation_successes.fetch_add(1, Ordering::Relaxed);
+
         tracing::info!(
             "Successfully saved Claude skill: {} ({} tools)",
             skill_name.as_str(),
@@ -1058,6 +1074,134 @@ impl SkillStore {
         fs::remove_dir_all(&skill_dir)?;
         tracing::info!("Removed Claude skill: {}", skill_name.as_str());
         Ok(())
+    }
+
+    /// Collects current skill storage statistics.
+    ///
+    /// Returns statistics about:
+    /// - Total skills saved (both legacy and Claude formats)
+    /// - Total storage size (bytes)
+    /// - Generation success count
+    /// - Generation failure count
+    ///
+    /// # Performance
+    ///
+    /// This operation walks the skill directory tree to calculate storage size,
+    /// which is O(n) where n is the total number of files across all skills.
+    /// Typically completes in <10ms for small stores (<100 skills).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the skill directory fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new("./skills")?;
+    ///
+    /// let stats = store.collect_stats()?;
+    /// println!("Total skills: {}", stats.total_skills);
+    /// println!("Storage used: {} bytes", stats.total_storage_bytes);
+    /// if let Some(rate) = stats.generation_success_rate() {
+    ///     println!("Success rate: {:.1}%", rate * 100.0);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn collect_stats(&self) -> Result<SkillStats> {
+        // Count total skills (includes both legacy and Claude formats)
+        let skill_count = self.count_skills()?;
+
+        // Calculate total storage size by walking all skill directories
+        let total_storage_bytes = self.calculate_total_storage();
+
+        // Get generation counters
+        let generation_successes = self.generation_successes.load(Ordering::Relaxed);
+        let generation_failures = self.generation_failures.load(Ordering::Relaxed);
+
+        Ok(SkillStats::new(
+            skill_count,
+            total_storage_bytes,
+            generation_successes,
+            generation_failures,
+        ))
+    }
+
+    /// Counts total number of skills (both legacy and Claude formats).
+    ///
+    /// A directory is counted as a skill if it contains either:
+    /// - skill.json (legacy format)
+    /// - .metadata.json (Claude format)
+    fn count_skills(&self) -> Result<u32> {
+        let mut count = 0;
+
+        for entry in fs::read_dir(&self.base_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_dir() {
+                continue;
+            }
+
+            // Check if this is a valid skill directory
+            let has_legacy_metadata = path.join(METADATA_FILE).exists();
+            let has_claude_metadata = path.join(CLAUDE_METADATA_FILE).exists();
+
+            if has_legacy_metadata || has_claude_metadata {
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Calculates total storage used by all skills in bytes.
+    ///
+    /// Recursively walks all skill directories and sums file sizes.
+    fn calculate_total_storage(&self) -> u64 {
+        let mut total_bytes = 0u64;
+
+        for entry in WalkDir::new(&self.base_dir)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if entry.file_type().is_file()
+                && let Ok(metadata) = entry.metadata()
+            {
+                total_bytes = total_bytes.saturating_add(metadata.len());
+            }
+        }
+
+        total_bytes
+    }
+
+    /// Records a generation failure.
+    ///
+    /// This method should be called by higher-level code when skill generation
+    /// fails. It increments the failure counter used in statistics.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new("./skills")?;
+    ///
+    /// // Simulate a generation failure
+    /// store.record_generation_failure();
+    ///
+    /// let stats = store.collect_stats()?;
+    /// assert_eq!(stats.generation_failures, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn record_generation_failure(&self) {
+        self.generation_failures.fetch_add(1, Ordering::Relaxed);
+        tracing::debug!("Recorded generation failure");
     }
 }
 
@@ -1725,6 +1869,248 @@ mod tests {
                 "Should reject control character {c} in server name"
             );
         }
+    }
+
+    #[test]
+    fn test_collect_stats_empty_store() {
+        let temp = TempDir::new().unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
+
+        let stats = store.collect_stats().unwrap();
+
+        assert_eq!(stats.total_skills, 0);
+        assert_eq!(stats.total_storage_bytes, 0);
+        assert_eq!(stats.generation_successes, 0);
+        assert_eq!(stats.generation_failures, 0);
+        assert_eq!(stats.generation_success_rate(), None);
+        assert_eq!(stats.avg_skill_size_bytes(), None);
+    }
+
+    #[test]
+    fn test_collect_stats_with_skills() {
+        let temp = TempDir::new().unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
+
+        // Save three skills
+        let vfs = create_test_vfs();
+        let wasm = vec![0x00, 0x61, 0x73, 0x6D];
+
+        for i in 1..=3 {
+            let server_name = format!("server-{i}");
+            let server_info = create_test_server_info(&server_name);
+            let tools = create_test_tools();
+
+            store
+                .save_skill(&server_name, &vfs, &wasm, server_info, tools)
+                .unwrap();
+        }
+
+        let stats = store.collect_stats().unwrap();
+
+        // Verify counts
+        assert_eq!(stats.total_skills, 3);
+        assert_eq!(stats.generation_successes, 3);
+        assert_eq!(stats.generation_failures, 0);
+
+        // Verify storage size is non-zero
+        assert!(stats.total_storage_bytes > 0);
+
+        // Verify success rate
+        assert_eq!(stats.generation_success_rate(), Some(1.0));
+
+        // Verify average size
+        let avg_size = stats.avg_skill_size_bytes().unwrap();
+        assert!(avg_size > 0);
+        assert_eq!(avg_size, stats.total_storage_bytes / 3);
+    }
+
+    #[test]
+    fn test_record_generation_failure() {
+        let temp = TempDir::new().unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
+
+        // Record some failures
+        store.record_generation_failure();
+        store.record_generation_failure();
+        store.record_generation_failure();
+
+        let stats = store.collect_stats().unwrap();
+
+        assert_eq!(stats.generation_failures, 3);
+        assert_eq!(stats.generation_successes, 0);
+        assert_eq!(stats.generation_success_rate(), Some(0.0));
+    }
+
+    #[test]
+    fn test_collect_stats_mixed_success_failure() {
+        let temp = TempDir::new().unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
+
+        // Save 2 skills (2 successes)
+        let vfs = create_test_vfs();
+        let wasm = vec![0x00, 0x61, 0x73, 0x6D];
+
+        for i in 1..=2 {
+            let server_name = format!("server-{i}");
+            let server_info = create_test_server_info(&server_name);
+            let tools = create_test_tools();
+
+            store
+                .save_skill(&server_name, &vfs, &wasm, server_info, tools)
+                .unwrap();
+        }
+
+        // Record 1 failure
+        store.record_generation_failure();
+
+        let stats = store.collect_stats().unwrap();
+
+        assert_eq!(stats.total_skills, 2);
+        assert_eq!(stats.generation_successes, 2);
+        assert_eq!(stats.generation_failures, 1);
+
+        // Success rate should be 2/3 = 0.666...
+        let rate = stats.generation_success_rate().unwrap();
+        assert!((rate - 0.6667).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_collect_stats_includes_claude_skills() {
+        let temp = TempDir::new().unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
+
+        // Save legacy skill
+        let vfs = create_test_vfs();
+        let wasm = vec![0x00, 0x61, 0x73, 0x6D];
+        let server_info = create_test_server_info("legacy-server");
+        let tools = create_test_tools();
+
+        store
+            .save_skill("legacy-server", &vfs, &wasm, server_info, tools)
+            .unwrap();
+
+        // Save Claude skill manually (simulating Claude format)
+        let claude_dir = temp.path().join("claude-skill");
+        fs::create_dir(&claude_dir).unwrap();
+
+        let metadata = serde_json::json!({
+            "skill_name": "claude-skill",
+            "server_name": "test-server",
+            "server_version": "1.0.0",
+            "protocol_version": "1.0",
+            "tool_count": 2,
+            "generated_at": chrono::Utc::now(),
+            "generator_version": "0.1.0",
+            "checksums": {
+                "skill_md": "blake3:abc123",
+                "reference_md": null
+            }
+        });
+
+        fs::write(
+            claude_dir.join(".metadata.json"),
+            serde_json::to_string_pretty(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        fs::write(claude_dir.join("SKILL.md"), "# Test skill").unwrap();
+
+        let stats = store.collect_stats().unwrap();
+
+        // Should count both legacy and Claude format skills
+        assert_eq!(stats.total_skills, 2);
+        assert!(stats.total_storage_bytes > 0);
+    }
+
+    #[test]
+    fn test_collect_stats_concurrent_updates() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let temp = TempDir::new().unwrap();
+        let store = Arc::new(SkillStore::new(temp.path()).unwrap());
+
+        // Spawn threads to record failures concurrently
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let store_clone = Arc::clone(&store);
+            let handle = thread::spawn(move || {
+                for _ in 0..10 {
+                    store_clone.record_generation_failure();
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let stats = store.collect_stats().unwrap();
+
+        // Should have exactly 100 failures (10 threads * 10 failures each)
+        assert_eq!(stats.generation_failures, 100);
+    }
+
+    #[test]
+    fn test_collect_stats_storage_calculation() {
+        let temp = TempDir::new().unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
+
+        // Create a skill with known file sizes
+        let vfs = VfsBuilder::new()
+            .add_file("/index.ts", "a".repeat(100)) // 100 bytes
+            .add_file("/types.ts", "b".repeat(200)) // 200 bytes
+            .build()
+            .unwrap();
+
+        let wasm = vec![0x00; 500]; // 500 bytes
+        let server_info = create_test_server_info("test-server");
+
+        store
+            .save_skill("test-server", &vfs, &wasm, server_info, vec![])
+            .unwrap();
+
+        let stats = store.collect_stats().unwrap();
+
+        // Total should include:
+        // - WASM file: 500 bytes
+        // - index.ts: 100 bytes
+        // - types.ts: 200 bytes
+        // - skill.json: some bytes
+        // Total >= 800 bytes
+        assert!(stats.total_storage_bytes >= 800);
+    }
+
+    #[test]
+    fn test_count_skills_ignores_non_skill_directories() {
+        let temp = TempDir::new().unwrap();
+        let store = SkillStore::new(temp.path()).unwrap();
+
+        // Create a valid skill
+        let vfs = create_test_vfs();
+        let wasm = vec![0x00, 0x61, 0x73, 0x6D];
+        let server_info = create_test_server_info("valid-skill");
+        let tools = create_test_tools();
+
+        store
+            .save_skill("valid-skill", &vfs, &wasm, server_info, tools)
+            .unwrap();
+
+        // Create a directory without metadata (should be ignored)
+        let invalid_dir = temp.path().join("not-a-skill");
+        fs::create_dir(&invalid_dir).unwrap();
+        fs::write(invalid_dir.join("random.txt"), "not a skill").unwrap();
+
+        // Create a file in base directory (should be ignored)
+        fs::write(temp.path().join("README.md"), "readme").unwrap();
+
+        let stats = store.collect_stats().unwrap();
+
+        // Should only count the valid skill
+        assert_eq!(stats.total_skills, 1);
     }
 
     #[test]
