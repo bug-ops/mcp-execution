@@ -3,7 +3,8 @@
 // NOTE(mvp): Many async functions are stubs prepared for future expansion.
 // These will be implemented as features are added beyond Phase 8.
 #![allow(clippy::unused_async)]
-#![allow(clippy::cast_possible_truncation)] // u128->u64 for millis is safe in practice
+#![allow(clippy::cast_possible_truncation)]
+// u128->u64 for millis is safe in practice
 // TODO(phase-7.3): Add comprehensive error documentation to all public CLI functions
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::needless_collect)]
