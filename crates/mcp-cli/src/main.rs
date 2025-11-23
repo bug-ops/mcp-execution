@@ -303,7 +303,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         Commands::Config { action } => commands::config::run(action, output_format).await,
         Commands::Skill { action } => commands::skill::run(action, output_format).await,
         Commands::Cache { action } => {
-            commands::cache::handle(action).await?;
+            commands::cache::handle(action)?;
             Ok(ExitCode::SUCCESS)
         }
         Commands::Completions { shell } => {

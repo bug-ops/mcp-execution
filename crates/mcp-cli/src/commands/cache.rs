@@ -34,16 +34,16 @@ pub enum CacheCommand {
 /// # Errors
 ///
 /// Returns an error if the cache operation fails.
-pub async fn handle(cmd: CacheCommand) -> Result<()> {
+pub fn handle(cmd: CacheCommand) -> Result<()> {
     match cmd {
-        CacheCommand::Info => show_cache_info().await,
-        CacheCommand::Clear { skill, yes } => clear_cache(skill, yes).await,
-        CacheCommand::Verify => verify_cache().await,
+        CacheCommand::Info => show_cache_info(),
+        CacheCommand::Clear { skill, yes } => clear_cache(skill, yes),
+        CacheCommand::Verify => verify_cache(),
     }
 }
 
 /// Show cache information and statistics.
-async fn show_cache_info() -> Result<()> {
+fn show_cache_info() -> Result<()> {
     let cache = CacheManager::new().context("Failed to access cache")?;
     let stats = cache.stats().context("Failed to read cache statistics")?;
 
@@ -100,7 +100,7 @@ async fn show_cache_info() -> Result<()> {
 }
 
 /// Clear cache data.
-async fn clear_cache(skill: Option<String>, yes: bool) -> Result<()> {
+fn clear_cache(skill: Option<String>, yes: bool) -> Result<()> {
     let cache = CacheManager::new().context("Failed to access cache")?;
 
     // Confirmation prompt
@@ -149,7 +149,7 @@ async fn clear_cache(skill: Option<String>, yes: bool) -> Result<()> {
 }
 
 /// Verify cache integrity.
-async fn verify_cache() -> Result<()> {
+fn verify_cache() -> Result<()> {
     let cache = CacheManager::new().context("Failed to access cache")?;
     let stats = cache.stats().context("Failed to read cache statistics")?;
 
