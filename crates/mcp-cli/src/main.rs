@@ -334,8 +334,14 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parsing_debug_info() {
-        let cli = Cli::parse_from(["mcp-cli", "debug", "info"]);
+    fn test_cli_parsing_debug_cache() {
+        let cli = Cli::parse_from(["mcp-cli", "debug", "cache"]);
+        assert!(matches!(cli.command, Commands::Debug { .. }));
+    }
+
+    #[test]
+    fn test_cli_parsing_debug_system() {
+        let cli = Cli::parse_from(["mcp-cli", "debug", "system"]);
         assert!(matches!(cli.command, Commands::Debug { .. }));
     }
 
