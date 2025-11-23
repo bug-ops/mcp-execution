@@ -919,7 +919,7 @@ mod tests {
         // Check that it's F32 with correct bits
         if let Val::F32(bits) = parsed[0] {
             let value = f32::from_bits(bits);
-            assert!((value - 3.14).abs() < 0.01);
+            assert!((value - std::f32::consts::PI).abs() < 0.01);
         } else {
             panic!("Expected F32 value");
         }
@@ -932,7 +932,7 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         if let Val::F64(bits) = parsed[0] {
             let value = f64::from_bits(bits);
-            assert!((value - 2.71828).abs() < 0.0001);
+            assert!((value - std::f64::consts::E).abs() < 0.0001);
         } else {
             panic!("Expected F64 value");
         }

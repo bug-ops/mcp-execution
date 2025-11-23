@@ -841,8 +841,7 @@ mod tests {
         // Should complete in well under 1ms
         assert!(
             elapsed.as_micros() < 1000,
-            "Stats collection took {:?}",
-            elapsed
+            "Stats collection took {elapsed:?}"
         );
 
         // Verify correctness

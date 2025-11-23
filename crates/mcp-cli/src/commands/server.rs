@@ -758,7 +758,7 @@ mod tests {
 
     // Integration tests (require CLAUDE_CONFIG_PATH or Claude Desktop installed)
     #[tokio::test]
-    #[ignore] // Only run when explicitly requested
+    #[ignore = "requires CLAUDE_CONFIG_PATH environment variable"]
     async fn test_list_servers_integration() {
         // This test requires CLAUDE_CONFIG_PATH to be set
         if std::env::var("CLAUDE_CONFIG_PATH").is_err() {
@@ -770,7 +770,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Only run when explicitly requested
+    #[ignore = "requires CLAUDE_CONFIG_PATH and configured server"]
     async fn test_server_info_integration() {
         // This test requires CLAUDE_CONFIG_PATH and a configured server
         if std::env::var("CLAUDE_CONFIG_PATH").is_err() {

@@ -1,6 +1,6 @@
 //! Demonstrates runtime statistics collection.
 //!
-//! Run with: cargo run --example stats_demo
+//! Run with: `cargo run --example stats_demo`
 
 use mcp_bridge::Bridge;
 use mcp_wasm_runtime::{Runtime, security::SecurityConfig};

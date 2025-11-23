@@ -372,7 +372,7 @@ mod tests {
         for action in actions {
             for format in formats {
                 let result = run(action.clone(), format).await;
-                assert!(result.is_ok(), "Failed for {:?} with {:?}", action, format);
+                assert!(result.is_ok(), "Failed for {action:?} with {format:?}");
                 assert_eq!(result.unwrap(), ExitCode::SUCCESS);
             }
         }

@@ -217,11 +217,13 @@ mod tests {
         let bridge = stats.bridge();
 
         // Verify all fields are accessible (u32 fields are always >= 0)
-        let _total_calls = bridge.total_tool_calls;
-        let _hits = bridge.cache_hits;
-        let _active = bridge.active_connections;
-        let _total = bridge.total_connections;
-        let _failures = bridge.connection_failures;
+        let (_total_calls, _hits, _active, _total, _failures) = (
+            bridge.total_tool_calls,
+            bridge.cache_hits,
+            bridge.active_connections,
+            bridge.total_connections,
+            bridge.connection_failures,
+        );
 
         // Verify invariant: hits <= total calls (if any calls made)
         if bridge.total_tool_calls > 0 {
@@ -234,17 +236,22 @@ mod tests {
         let stats = collect_all_stats().await.unwrap();
         let runtime = stats.runtime();
 
-        // Verify all fields are accessible (u32/u64 fields are always >= 0)
-        let _executions = runtime.total_executions;
-        let _hits = runtime.cache_hits;
-        let _exec_failures = runtime.execution_failures;
-        let _comp_failures = runtime.compilation_failures;
-        let _avg_time = runtime.avg_execution_time_us;
+        // Verify all fields are accessible and invariants hold
+        // u32/u64 fields are always >= 0 by type
 
         // Verify invariant: hits <= total executions (if any executions)
         if runtime.total_executions > 0 {
             assert!(runtime.cache_hits <= runtime.total_executions);
         }
+
+        // Access all fields to ensure they're public
+        let _ = (
+            runtime.total_executions,
+            runtime.cache_hits,
+            runtime.execution_failures,
+            runtime.compilation_failures,
+            runtime.avg_execution_time_us,
+        );
     }
 
     #[tokio::test]
@@ -252,13 +259,16 @@ mod tests {
         let stats = collect_all_stats().await.unwrap();
         let skills = stats.skills();
 
-        // Verify all fields are accessible (u32/u64 fields are always >= 0)
-        let _total = skills.total_skills;
-        let _storage = skills.total_storage_bytes;
-        let _successes = skills.generation_successes;
-        let _failures = skills.generation_failures;
-
+        // Verify all fields are accessible (u32/u64 fields are always >= 0 by type)
         // No invariants to check for skills (all fields independent)
+
+        // Access all fields to ensure they're public
+        let _ = (
+            skills.total_skills,
+            skills.total_storage_bytes,
+            skills.generation_successes,
+            skills.generation_failures,
+        );
     }
 
     #[tokio::test]

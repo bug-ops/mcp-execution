@@ -528,7 +528,7 @@ fn test_cache_state_persistence() {
     assert!(!format!("{bridge:?}").is_empty());
 }
 
-/// Tests collect_stats method with realistic scenario
+/// Tests `collect_stats` method with realistic scenario
 #[tokio::test]
 async fn test_collect_stats_integration() {
     let bridge = Bridge::new(1000);
@@ -546,7 +546,7 @@ async fn test_collect_stats_integration() {
     assert_eq!(stats.connection_success_rate(), None);
 }
 
-/// Tests that collect_stats returns consistent results
+/// Tests that `collect_stats` returns consistent results
 #[tokio::test]
 async fn test_collect_stats_consistency() {
     let bridge = Bridge::new(1000);
@@ -561,7 +561,7 @@ async fn test_collect_stats_consistency() {
     assert_eq!(stats1.active_connections, stats2.active_connections);
 }
 
-/// Tests BridgeStats type properties
+/// Tests `BridgeStats` type properties
 #[test]
 fn test_bridge_stats_type() {
     let stats = BridgeStats::new(100, 75, 5, 10, 2);
@@ -578,7 +578,7 @@ fn test_bridge_stats_type() {
     assert_eq!(stats.connection_success_rate(), Some(0.8));
 }
 
-/// Tests BridgeStats serialization/deserialization
+/// Tests `BridgeStats` serialization/deserialization
 #[test]
 fn test_bridge_stats_serialization() {
     let stats = BridgeStats::new(100, 75, 5, 10, 2);
