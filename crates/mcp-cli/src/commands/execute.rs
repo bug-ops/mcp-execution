@@ -249,6 +249,7 @@ async fn list_module_exports(module: &PathBuf, output_format: OutputFormat) -> R
 ///     "main".to_string(),
 ///     vec![],     // No arguments
 ///     false,      // Don't list exports
+///     None,       // profile (use default or custom limits)
 ///     Some(512),  // 512MB memory limit
 ///     Some(30),   // 30s timeout
 ///     OutputFormat::Json,
