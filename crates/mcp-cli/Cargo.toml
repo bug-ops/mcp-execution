@@ -1,19 +1,26 @@
 [package]
-name = "mcp-cli"
+name = "mcp-execution-cli"
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = true
+description = "Command-line interface for MCP Code Execution"
+homepage = "https://github.com/bug-ops/mcp-execution"
+keywords = ["mcp", "cli", "execution", "wasm", "tools"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
 
 [lints]
 workspace = true
 
 [lib]
-name = "mcp_cli"
+name = "mcp_execution_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "mcp-cli"
+name = "mcp-execution-cli"
 path = "src/main.rs"
 
 [dependencies]

@@ -108,13 +108,13 @@ pub struct SystemDiagnostics {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::debug;
+/// use mcp_execution_cli::commands::debug;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
 /// # #[tokio::main]
 /// # async fn main() {
 /// let result = debug::run(
-///     mcp_cli::DebugAction::Cache,
+///     mcp_execution_cli::DebugAction::Cache,
 ///     OutputFormat::Json
 /// ).await;
 /// assert!(result.is_ok());

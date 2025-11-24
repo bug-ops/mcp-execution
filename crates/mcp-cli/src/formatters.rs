@@ -21,7 +21,7 @@ use serde::Serialize;
 /// # Examples
 ///
 /// ```
-/// use mcp_cli::formatters::format_output;
+/// use mcp_execution_cli::formatters::format_output;
 /// use mcp_core::cli::OutputFormat;
 /// use serde::Serialize;
 ///

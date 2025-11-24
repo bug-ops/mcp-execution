@@ -391,13 +391,13 @@ pub struct SetResult {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::config;
+/// use mcp_execution_cli::commands::config;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
 /// # #[tokio::main]
 /// # async fn main() {
 /// let result = config::run(
-///     mcp_cli::ConfigAction::Show,
+///     mcp_execution_cli::ConfigAction::Show,
 ///     OutputFormat::Json
 /// ).await;
 /// assert!(result.is_ok());

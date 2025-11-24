@@ -62,7 +62,7 @@ struct GenerationResult {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::generate;
+/// use mcp_execution_cli::commands::generate;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
