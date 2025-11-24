@@ -329,7 +329,11 @@ impl SkillValidator {
         self.validate_content(&skill.content, &mut report);
 
         // Validate checksum
-        Self::validate_checksum(&skill.content, &skill.metadata.checksums.skill_md, &mut report);
+        Self::validate_checksum(
+            &skill.content,
+            &skill.metadata.checksums.skill_md,
+            &mut report,
+        );
 
         // Update validity based on errors
         report.valid = report.errors.is_empty();
@@ -337,11 +341,7 @@ impl SkillValidator {
     }
 
     /// Validates skill metadata.
-    fn validate_metadata(
-        &self,
-        metadata: &ClaudeSkillMetadata,
-        report: &mut ValidationReport,
-    ) {
+    fn validate_metadata(&self, metadata: &ClaudeSkillMetadata, report: &mut ValidationReport) {
         // Validate skill name
         if metadata.skill_name.is_empty() {
             report.errors.push(ValidationError {
@@ -425,10 +425,15 @@ impl SkillValidator {
     /// Validates YAML frontmatter.
     fn validate_frontmatter(&self, content: &str, report: &mut ValidationReport) {
         // Find the second --- delimiter
-        let content_after_first = content.strip_prefix("---\n").or_else(|| content.strip_prefix("---\r\n"));
+        let content_after_first = content
+            .strip_prefix("---\n")
+            .or_else(|| content.strip_prefix("---\r\n"));
 
         if let Some(remaining) = content_after_first {
-            if let Some(end_pos) = remaining.find("\n---\n").or_else(|| remaining.find("\r\n---\r\n")) {
+            if let Some(end_pos) = remaining
+                .find("\n---\n")
+                .or_else(|| remaining.find("\r\n---\r\n"))
+            {
                 let frontmatter = &remaining[..end_pos];
 
                 // Check for required 'name' field
@@ -449,18 +454,15 @@ impl SkillValidator {
             } else {
                 report.errors.push(ValidationError {
                     field: "content.frontmatter".to_string(),
-                    message: "YAML frontmatter not properly closed (missing closing '---')".to_string(),
+                    message: "YAML frontmatter not properly closed (missing closing '---')"
+                        .to_string(),
                 });
             }
         }
     }
 
     /// Validates checksum matches content.
-    fn validate_checksum(
-        content: &str,
-        stored_checksum: &str,
-        report: &mut ValidationReport,
-    ) {
+    fn validate_checksum(content: &str, stored_checksum: &str, report: &mut ValidationReport) {
         use blake3::Hasher;
 
         // Extract actual hash from "blake3:HASH" format
@@ -483,9 +485,7 @@ impl SkillValidator {
         if actual != expected {
             report.errors.push(ValidationError {
                 field: "checksums.skill_md".to_string(),
-                message: format!(
-                    "Checksum mismatch: expected '{expected}', got '{actual}'"
-                ),
+                message: format!("Checksum mismatch: expected '{expected}', got '{actual}'"),
             });
         }
     }
@@ -585,10 +585,12 @@ mod tests {
         let report = validator.validate(&skill).unwrap();
 
         assert!(!report.valid);
-        assert!(report
-            .errors
-            .iter()
-            .any(|e| e.field == "skill_name" && e.message.contains("Invalid skill name")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.field == "skill_name" && e.message.contains("Invalid skill name"))
+        );
     }
 
     #[test]
@@ -698,10 +700,12 @@ mod tests {
         let report = validator.validate(&skill).unwrap();
 
         assert!(!report.valid);
-        assert!(report
-            .errors
-            .iter()
-            .any(|e| e.field == "content" && e.message.contains("frontmatter")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.field == "content" && e.message.contains("frontmatter"))
+        );
     }
 
     #[test]
@@ -713,10 +717,13 @@ mod tests {
         let report = validator.validate(&skill).unwrap();
 
         assert!(!report.valid);
-        assert!(report.errors.iter().any(|e| e
-            .field
-            .contains("frontmatter")
-            && e.message.contains("not properly closed")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.field.contains("frontmatter")
+                    && e.message.contains("not properly closed"))
+        );
     }
 
     #[test]
@@ -728,10 +735,12 @@ mod tests {
         let report = validator.validate(&skill).unwrap();
 
         assert!(!report.valid);
-        assert!(report
-            .errors
-            .iter()
-            .any(|e| e.field.contains("frontmatter") && e.message.contains("name")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.field.contains("frontmatter") && e.message.contains("name"))
+        );
     }
 
     #[test]
@@ -758,10 +767,12 @@ mod tests {
         // Strict mode: warning
         let strict_validator = SkillValidator::strict();
         let report = strict_validator.validate(&skill).unwrap();
-        assert!(report
-            .warnings
-            .iter()
-            .any(|w| w.field.contains("frontmatter") && w.message.contains("description")));
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.field.contains("frontmatter") && w.message.contains("description"))
+        );
     }
 
     #[test]
@@ -794,18 +805,22 @@ mod tests {
         // Normal mode: no warning
         let validator = SkillValidator::new();
         let report = validator.validate(&skill).unwrap();
-        assert!(!report
-            .warnings
-            .iter()
-            .any(|w| w.field == "content" && w.message.contains("short")));
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|w| w.field == "content" && w.message.contains("short"))
+        );
 
         // Strict mode: warning
         let strict_validator = SkillValidator::strict();
         let report = strict_validator.validate(&skill).unwrap();
-        assert!(report
-            .warnings
-            .iter()
-            .any(|w| w.field == "content" && w.message.contains("short")));
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.field == "content" && w.message.contains("short"))
+        );
     }
 
     #[test]
@@ -817,10 +832,12 @@ mod tests {
         let report = validator.validate(&skill).unwrap();
 
         assert!(!report.valid);
-        assert!(report
-            .errors
-            .iter()
-            .any(|e| e.field.contains("checksum") && e.message.contains("mismatch")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.field.contains("checksum") && e.message.contains("mismatch"))
+        );
     }
 
     #[test]
@@ -854,10 +871,12 @@ mod tests {
         let report = validator.validate(&skill).unwrap();
 
         // Should warn about missing prefix
-        assert!(report
-            .warnings
-            .iter()
-            .any(|w| w.field.contains("checksum") && w.message.contains("blake3:")));
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.field.contains("checksum") && w.message.contains("blake3:"))
+        );
     }
 
     #[test]

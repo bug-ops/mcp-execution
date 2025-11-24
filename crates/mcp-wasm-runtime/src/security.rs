@@ -602,10 +602,7 @@ mod tests {
         let moderate = SecurityConfig::moderate();
         let default = SecurityConfig::default();
 
-        assert_eq!(
-            moderate.memory_limit_bytes(),
-            default.memory_limit_bytes()
-        );
+        assert_eq!(moderate.memory_limit_bytes(), default.memory_limit_bytes());
         assert_eq!(moderate.execution_timeout(), default.execution_timeout());
         assert_eq!(moderate.allow_network(), default.allow_network());
         assert_eq!(moderate.max_host_calls(), default.max_host_calls());
