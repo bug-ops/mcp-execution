@@ -2,7 +2,7 @@
 //!
 //! These tests validate server discovery, tool extraction, and metadata management.
 
-use mcp_core::{ServerId, ToolName};
+use mcp_core::{ServerConfig, ServerId, ToolName};
 use mcp_introspector::{Introspector, ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 
@@ -282,9 +282,10 @@ async fn test_invalid_command_rejection() {
     let server_id = ServerId::new("test");
 
     // Try to discover with invalid command (should fail validation)
-    let result = introspector
-        .discover_server(server_id, "echo test; rm -rf /")
-        .await;
+    let config = ServerConfig::builder()
+        .command("echo test; rm -rf /".to_string())
+        .build();
+    let result = introspector.discover_server(server_id, &config).await;
 
     // Should fail due to validation or connection error
     assert!(result.is_err());
@@ -362,27 +363,23 @@ fn test_multiple_server_management() {
 }
 
 /// Tests `discover_server` with empty command
-#[tokio::test]
-async fn test_discover_server_empty_command() {
-    let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test");
-
-    let result = introspector.discover_server(server_id, "").await;
-
-    // Should fail validation or connection
+#[test]
+fn test_discover_server_empty_command() {
+    // Empty command should fail during build
+    let result = ServerConfig::builder().command(String::new()).try_build();
     assert!(result.is_err());
+    assert!(result.unwrap_err().contains("empty"));
 }
 
 /// Tests `discover_server` with whitespace command
-#[tokio::test]
-async fn test_discover_server_whitespace_command() {
-    let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test");
-
-    let result = introspector.discover_server(server_id, "   ").await;
-
-    // Should fail validation or connection
+#[test]
+fn test_discover_server_whitespace_command() {
+    // Whitespace-only command should fail during build
+    let result = ServerConfig::builder()
+        .command("   ".to_string())
+        .try_build();
     assert!(result.is_err());
+    assert!(result.unwrap_err().contains("empty"));
 }
 
 /// Tests `discover_server` with command containing shell operators
@@ -401,7 +398,10 @@ async fn test_discover_server_shell_operators() {
     ];
 
     for cmd in dangerous_commands {
-        let result = introspector.discover_server(server_id.clone(), cmd).await;
+        let config = ServerConfig::builder().command(cmd.to_string()).build();
+        let result = introspector
+            .discover_server(server_id.clone(), &config)
+            .await;
 
         // Should fail validation
         assert!(result.is_err(), "Command should be rejected: {cmd}");
@@ -414,9 +414,10 @@ async fn test_discover_server_nonexistent_command() {
     let mut introspector = Introspector::new();
     let server_id = ServerId::new("test");
 
-    let result = introspector
-        .discover_server(server_id, "nonexistent-command-12345")
-        .await;
+    let config = ServerConfig::builder()
+        .command("nonexistent-command-12345".to_string())
+        .build();
+    let result = introspector.discover_server(server_id, &config).await;
 
     // Should fail to spawn process
     assert!(result.is_err());

@@ -17,13 +17,14 @@
 //! use mcp_codegen::skills::claude::render_skill_md;
 //! use mcp_codegen::TemplateEngine;
 //! use mcp_introspector::{Introspector, ServerInfo};
-//! use mcp_core::{ServerId, SkillName, SkillDescription};
+//! use mcp_core::{ServerId, ServerConfig, SkillName, SkillDescription};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // 1. Introspect MCP server
 //! let mut introspector = Introspector::new();
 //! let server_id = ServerId::new("github");
-//! let server_info = introspector.discover_server(server_id, "github-server").await?;
+//! let config = ServerConfig::builder().command("github-server".to_string()).build();
+//! let server_info = introspector.discover_server(server_id, &config).await?;
 //!
 //! // 2. Create skill metadata
 //! let name = SkillName::new("github")?;

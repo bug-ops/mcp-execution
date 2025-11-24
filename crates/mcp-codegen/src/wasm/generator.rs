@@ -8,12 +8,13 @@
 //! ```no_run
 //! use mcp_codegen::CodeGenerator;
 //! use mcp_introspector::{Introspector, ServerInfo};
-//! use mcp_core::ServerId;
+//! use mcp_core::{ServerId, ServerConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut introspector = Introspector::new();
 //! let server_id = ServerId::new("github");
-//! let info = introspector.discover_server(server_id, "/path/to/server").await?;
+//! let config = ServerConfig::builder().command("/path/to/server".to_string()).build();
+//! let info = introspector.discover_server(server_id, &config).await?;
 //!
 //! let generator = CodeGenerator::new()?;
 //! let code = generator.generate(&info)?;

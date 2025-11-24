@@ -12,7 +12,7 @@ use mcp_codegen::TemplateEngine;
 use mcp_codegen::skills::claude::{render_reference_md, render_skill_md};
 use mcp_codegen::skills::converter::SkillConverter;
 use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
-use mcp_core::{ServerId, SkillDescription, SkillName};
+use mcp_core::{ServerConfig, ServerId, SkillDescription, SkillName};
 use mcp_introspector::Introspector;
 use mcp_skill_store::SkillStore;
 use serde::Serialize;
@@ -94,8 +94,11 @@ pub async fn run(
     let mut introspector = Introspector::new();
 
     let server_cmd = server_command.as_deref().unwrap_or(server_conn.as_str());
+    let config = ServerConfig::builder()
+        .command(server_cmd.to_string())
+        .build();
     let server_info = introspector
-        .discover_server(server_id, server_cmd)
+        .discover_server(server_id, &config)
         .await
         .context("failed to introspect MCP server")?;
 

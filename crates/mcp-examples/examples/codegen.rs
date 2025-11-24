@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result};
 use mcp_codegen::CodeGenerator;
-use mcp_core::ServerId;
+use mcp_core::{ServerConfig, ServerId};
 use mcp_introspector::Introspector;
 use std::env;
 use std::fs;
@@ -38,13 +38,16 @@ async fn main() -> Result<()> {
 
     let server_command = &args[1];
     let server_id = ServerId::new("example-server");
+    let server_config = ServerConfig::builder()
+        .command(server_command.clone())
+        .build();
 
     tracing::info!("Discovering MCP server: {}", server_command);
 
     // Step 1: Discover the server
     let mut introspector = Introspector::new();
     let server_info = introspector
-        .discover_server(server_id.clone(), server_command)
+        .discover_server(server_id.clone(), &server_config)
         .await
         .context("Failed to discover MCP server")?;
 
