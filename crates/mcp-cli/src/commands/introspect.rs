@@ -2,11 +2,12 @@
 //!
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
-use anyhow::{Context, Result};
-use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
-use mcp_core::{ServerConfig, ServerId};
+use anyhow::{Context, Result, bail};
+use mcp_core::cli::{ExitCode, OutputFormat};
+use mcp_core::{ServerConfig, ServerConfigBuilder, ServerId};
 use mcp_introspector::{Introspector, ServerInfo, ToolInfo};
 use serde::Serialize;
+use std::path::PathBuf;
 use tracing::info;
 
 /// Result of server introspection.
@@ -86,7 +87,7 @@ pub struct ToolMetadata {
 ///
 /// # Process
 ///
-/// 1. Validates the server connection string
+/// 1. Builds `ServerConfig` from CLI arguments
 /// 2. Creates an introspector and connects to the server
 /// 3. Discovers server capabilities and tools
 /// 4. Formats the output according to the specified format
@@ -94,14 +95,20 @@ pub struct ToolMetadata {
 ///
 /// # Arguments
 ///
-/// * `server` - Server connection string or command
+/// * `server` - Server command (binary name or path), None for HTTP/SSE
+/// * `args` - Arguments to pass to the server command
+/// * `env` - Environment variables in KEY=VALUE format
+/// * `cwd` - Working directory for the server process
+/// * `http` - HTTP transport URL
+/// * `sse` - SSE transport URL
+/// * `headers` - HTTP headers in KEY=VALUE format
 /// * `detailed` - Whether to show detailed tool schemas
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - Server connection string is invalid
+/// - Server configuration is invalid
 /// - Server connection fails
 /// - Server introspection fails
 /// - Output formatting fails
@@ -113,40 +120,64 @@ pub struct ToolMetadata {
 /// use mcp_core::cli::OutputFormat;
 ///
 /// # async fn example() -> anyhow::Result<()> {
+/// // Simple server
 /// let exit_code = introspect::run(
-///     "github".to_string(),
+///     Some("github-mcp-server".to_string()),
+///     vec!["stdio".to_string()],
+///     vec![],
+///     None,
+///     None,
+///     None,
+///     vec![],
+///     false,
+///     OutputFormat::Json
+/// ).await?;
+///
+/// // HTTP transport
+/// let exit_code = introspect::run(
+///     None,
+///     vec![],
+///     vec![],
+///     None,
+///     Some("https://api.githubcopilot.com/mcp/".to_string()),
+///     None,
+///     vec!["Authorization=Bearer token".to_string()],
 ///     false,
 ///     OutputFormat::Json
 /// ).await?;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn run(server: String, detailed: bool, output_format: OutputFormat) -> Result<ExitCode> {
-    info!("Introspecting server: {}", server);
+#[allow(clippy::too_many_arguments)]
+pub async fn run(
+    server: Option<String>,
+    args: Vec<String>,
+    env: Vec<String>,
+    cwd: Option<String>,
+    http: Option<String>,
+    sse: Option<String>,
+    headers: Vec<String>,
+    detailed: bool,
+    output_format: OutputFormat,
+) -> Result<ExitCode> {
+    // Build ServerConfig from CLI arguments
+    let (server_id, config) = build_server_config(server, args, env, cwd, http, sse, headers)?;
+
+    info!("Introspecting server: {}", server_id);
+    info!("Transport: {:?}", config.transport());
     info!("Detailed: {}", detailed);
     info!("Output format: {}", output_format);
-
-    // Validate server connection string
-    let conn_string = ServerConnectionString::new(&server).with_context(|| {
-        format!(
-            "invalid server connection string: '{server}' (allowed characters: a-z, A-Z, 0-9, -, _, ., /, :)"
-        )
-    })?;
 
     // Create introspector
     let mut introspector = Introspector::new();
 
     // Discover server
-    let server_id = ServerId::new(conn_string.as_str());
-    let config = ServerConfig::builder()
-        .command(conn_string.to_string())
-        .build();
     let server_info = introspector
-        .discover_server(server_id, &config)
+        .discover_server(server_id.clone(), &config)
         .await
         .with_context(|| {
             format!(
-                "failed to connect to server '{server}' - ensure the server is installed and accessible"
+                "failed to connect to server '{server_id}' - ensure the server is installed and accessible"
             )
         })?;
 
@@ -217,6 +248,94 @@ pub fn build_result(server_info: &ServerInfo, detailed: bool) -> IntrospectionRe
         .collect();
 
     IntrospectionResult { server, tools }
+}
+
+/// Builds `ServerConfig` from CLI arguments.
+///
+/// Parses CLI arguments into a `ServerConfig` for connecting to an MCP server.
+///
+/// # Arguments
+///
+/// * `server` - Server command (binary name or path)
+/// * `args` - Arguments to pass to the server command
+/// * `env` - Environment variables in KEY=VALUE format
+/// * `cwd` - Working directory for the server process
+/// * `http` - HTTP transport URL
+/// * `sse` - SSE transport URL
+/// * `headers` - HTTP headers in KEY=VALUE format
+///
+/// # Errors
+///
+/// Returns an error if environment variables or headers are not in KEY=VALUE format.
+fn build_server_config(
+    server: Option<String>,
+    args: Vec<String>,
+    env: Vec<String>,
+    cwd: Option<String>,
+    http: Option<String>,
+    sse: Option<String>,
+    headers: Vec<String>,
+) -> Result<(ServerId, ServerConfig)> {
+    // Parse environment variables
+    let parse_key_value = |s: &str, kind: &str| -> Result<(String, String)> {
+        let parts: Vec<&str> = s.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            bail!("invalid {kind} format: '{s}' (expected KEY=VALUE)");
+        }
+        Ok((parts[0].to_string(), parts[1].to_string()))
+    };
+
+    // Build config based on transport type
+    let (server_id, config) = if let Some(url) = http {
+        // HTTP transport
+        let mut builder = ServerConfig::builder().http_transport(url.clone());
+
+        // Add headers
+        for header in headers {
+            let (key, value) = parse_key_value(&header, "header")?;
+            builder = builder.header(key, value);
+        }
+
+        let id = ServerId::new(&url);
+        (id, builder.build())
+    } else if let Some(url) = sse {
+        // SSE transport
+        let mut builder = ServerConfig::builder().sse_transport(url.clone());
+
+        // Add headers
+        for header in headers {
+            let (key, value) = parse_key_value(&header, "header")?;
+            builder = builder.header(key, value);
+        }
+
+        let id = ServerId::new(&url);
+        (id, builder.build())
+    } else {
+        // Stdio transport (default)
+        let command = server.expect("server is required for stdio transport");
+        let mut builder: ServerConfigBuilder = ServerConfig::builder().command(command.clone());
+
+        // Add arguments
+        if !args.is_empty() {
+            builder = builder.args(args);
+        }
+
+        // Add environment variables
+        for env_var in env {
+            let (key, value) = parse_key_value(&env_var, "environment variable")?;
+            builder = builder.env(key, value);
+        }
+
+        // Add working directory
+        if let Some(dir) = cwd {
+            builder = builder.cwd(PathBuf::from(dir));
+        }
+
+        let id = ServerId::new(&command);
+        (id, builder.build())
+    };
+
+    Ok((server_id, config))
 }
 
 /// Builds tool metadata from tool info.
@@ -468,27 +587,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_invalid_server_string() {
-        let result = run("invalid && rm -rf /".to_string(), false, OutputFormat::Json).await;
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("invalid server connection string"));
-    }
-
-    #[tokio::test]
-    async fn test_run_empty_server_string() {
-        let result = run(String::new(), false, OutputFormat::Json).await;
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("invalid server connection string"));
-    }
-
-    #[tokio::test]
     async fn test_run_server_connection_failure() {
         let result = run(
-            "nonexistent-server-xyz".to_string(),
+            Some("nonexistent-server-xyz".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
             false,
             OutputFormat::Json,
         )
@@ -497,6 +604,97 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("failed to connect to server"));
+    }
+
+    #[test]
+    fn test_build_server_config_stdio() {
+        let (id, config) = build_server_config(
+            Some("github-mcp-server".to_string()),
+            vec!["stdio".to_string()],
+            vec!["TOKEN=abc123".to_string()],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(id.as_str(), "github-mcp-server");
+        assert_eq!(config.command(), "github-mcp-server");
+        assert_eq!(config.args(), &["stdio"]);
+        assert_eq!(config.env().get("TOKEN"), Some(&"abc123".to_string()));
+    }
+
+    #[test]
+    fn test_build_server_config_docker() {
+        let (id, config) = build_server_config(
+            Some("docker".to_string()),
+            vec![
+                "run".to_string(),
+                "-i".to_string(),
+                "--rm".to_string(),
+                "ghcr.io/github/github-mcp-server".to_string(),
+            ],
+            vec!["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx".to_string()],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(id.as_str(), "docker");
+        assert_eq!(config.command(), "docker");
+        assert_eq!(
+            config.args(),
+            &["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
+        );
+        assert_eq!(
+            config.env().get("GITHUB_PERSONAL_ACCESS_TOKEN"),
+            Some(&"ghp_xxx".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_http() {
+        let (id, config) = build_server_config(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://api.githubcopilot.com/mcp/".to_string()),
+            None,
+            vec!["Authorization=Bearer token123".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(id.as_str(), "https://api.githubcopilot.com/mcp/");
+        assert_eq!(config.url(), Some("https://api.githubcopilot.com/mcp/"));
+        assert_eq!(
+            config.headers().get("Authorization"),
+            Some(&"Bearer token123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_invalid_env() {
+        let result = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec!["INVALID_FORMAT".to_string()],
+            None,
+            None,
+            None,
+            vec![],
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected KEY=VALUE")
+        );
     }
 
     #[test]

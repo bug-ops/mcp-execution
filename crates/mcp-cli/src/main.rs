@@ -80,12 +80,56 @@ pub enum Commands {
     ///
     /// Connects to an MCP server, discovers its tools, and displays
     /// detailed information about available capabilities.
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Simple binary
+    /// mcp-cli introspect github-mcp-server
+    ///
+    /// # With arguments
+    /// mcp-cli introspect github-mcp-server --arg stdio
+    ///
+    /// # Docker container
+    /// mcp-cli introspect docker --arg run --arg -i --arg --rm \
+    ///     --arg ghcr.io/github/github-mcp-server \
+    ///     --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
+    ///
+    /// # HTTP transport
+    /// mcp-cli introspect --http https://api.githubcopilot.com/mcp/ \
+    ///     --header "Authorization=Bearer ghp_xxx"
+    /// ```
     Introspect {
-        /// Server connection string or command
+        /// Server command (binary name or path)
         ///
-        /// Can be a server name like "github" or a full command
-        /// like "node server.js"
-        server: String,
+        /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
+        /// Not required when using --http or --sse
+        #[arg(required_unless_present_any = ["http", "sse"])]
+        server: Option<String>,
+
+        /// Arguments to pass to the server command
+        #[arg(short, long = "arg", num_args = 1)]
+        args: Vec<String>,
+
+        /// Environment variables in KEY=VALUE format
+        #[arg(short, long = "env", num_args = 1)]
+        env: Vec<String>,
+
+        /// Working directory for the server process
+        #[arg(long)]
+        cwd: Option<String>,
+
+        /// Use HTTP transport with specified URL
+        #[arg(long, conflicts_with = "sse")]
+        http: Option<String>,
+
+        /// Use SSE transport with specified URL
+        #[arg(long, conflicts_with = "http")]
+        sse: Option<String>,
+
+        /// HTTP headers in KEY=VALUE format (for HTTP/SSE transport)
+        #[arg(long = "header", num_args = 1)]
+        headers: Vec<String>,
 
         /// Show detailed tool schemas
         #[arg(short, long)]
@@ -269,8 +313,28 @@ fn init_logging(verbose: bool) -> Result<()> {
 /// Returns an error if command execution fails.
 async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
     match command {
-        Commands::Introspect { server, detailed } => {
-            commands::introspect::run(server, detailed, output_format).await
+        Commands::Introspect {
+            server,
+            args,
+            env,
+            cwd,
+            http,
+            sse,
+            headers,
+            detailed,
+        } => {
+            commands::introspect::run(
+                server,
+                args,
+                env,
+                cwd,
+                http,
+                sse,
+                headers,
+                detailed,
+                output_format,
+            )
+            .await
         }
         Commands::Generate {
             server,
@@ -333,6 +397,59 @@ mod tests {
     fn test_cli_parsing_introspect() {
         let cli = Cli::parse_from(["mcp-cli", "introspect", "github"]);
         assert!(matches!(cli.command, Commands::Introspect { .. }));
+    }
+
+    #[test]
+    fn test_cli_parsing_introspect_with_args() {
+        // Use --arg=VALUE format for arguments that start with -
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "docker",
+            "--arg=run",
+            "--arg=-i",
+            "--arg=--rm",
+            "--arg=ghcr.io/github/github-mcp-server",
+            "--env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx",
+        ]);
+        if let Commands::Introspect {
+            server, args, env, ..
+        } = cli.command
+        {
+            assert_eq!(server, Some("docker".to_string()));
+            assert_eq!(
+                args,
+                vec!["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
+            );
+            assert_eq!(env, vec!["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"]);
+        } else {
+            panic!("Expected Introspect command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_introspect_http() {
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "--http",
+            "https://api.githubcopilot.com/mcp/",
+            "--header",
+            "Authorization=Bearer token",
+        ]);
+        if let Commands::Introspect {
+            server,
+            http,
+            headers,
+            ..
+        } = cli.command
+        {
+            assert_eq!(server, None);
+            assert_eq!(http, Some("https://api.githubcopilot.com/mcp/".to_string()));
+            assert_eq!(headers, vec!["Authorization=Bearer token"]);
+        } else {
+            panic!("Expected Introspect command");
+        }
     }
 
     #[test]
