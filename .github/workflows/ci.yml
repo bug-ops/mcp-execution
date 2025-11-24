@@ -280,7 +280,7 @@ jobs:
       - name: Check binary sizes
         run: |
           echo "Binary sizes:"
-          ls -lh target/release/ | grep -E "(mcp-cli|mcp-examples)" || true
+          ls -lh target/release/ | grep -E "(mcp-execution-cli|mcp-examples)" || true
           echo ""
           echo "Target directory size:"
           du -sh target/release/

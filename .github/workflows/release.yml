@@ -22,24 +22,24 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: mcp-cli
-            asset_name: mcp-cli-linux-amd64
+            artifact_name: mcp-execution-cli
+            asset_name: mcp-execution-cli-linux-amd64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact_name: mcp-cli
-            asset_name: mcp-cli-linux-arm64
+            artifact_name: mcp-execution-cli
+            asset_name: mcp-execution-cli-linux-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: mcp-cli
-            asset_name: mcp-cli-macos-amd64
+            artifact_name: mcp-execution-cli
+            asset_name: mcp-execution-cli-macos-amd64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: mcp-cli
-            asset_name: mcp-cli-macos-arm64
+            artifact_name: mcp-execution-cli
+            asset_name: mcp-execution-cli-macos-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: mcp-cli.exe
-            asset_name: mcp-cli-windows-amd64.exe
+            artifact_name: mcp-execution-cli.exe
+            asset_name: mcp-execution-cli-windows-amd64.exe
 
     steps:
       - uses: actions/checkout@v5
@@ -71,7 +71,7 @@ jobs:
           shared-key: "release-${{ matrix.target }}"
 
       - name: Build release
-        run: cargo build --release --target ${{ matrix.target }} --package mcp-cli
+        run: cargo build --release --target ${{ matrix.target }} --package mcp-execution-cli
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
