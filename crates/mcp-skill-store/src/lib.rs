@@ -128,6 +128,7 @@ pub mod checksum;
 pub mod error;
 pub mod store;
 pub mod types;
+pub mod validation;
 
 // Re-export main types
 pub use checksum::constant_time_compare;
@@ -142,3 +143,8 @@ pub use types::{
 
 // Legacy format types (deprecated - for backward compatibility only)
 pub use types::{Checksums, LoadedSkill, ServerInfo, SkillInfo, SkillMetadata, ToolInfo};
+
+// Validation types
+pub use validation::{
+    ClaudeSkill, SkillValidator, ValidationError, ValidationReport, ValidationWarning,
+};

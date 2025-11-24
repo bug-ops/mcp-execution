@@ -65,4 +65,4 @@ pub use compiler::{CompilationBackend, Compiler};
 pub use host_functions::HostContext;
 pub use monitor::ResourceMonitor;
 pub use sandbox::Runtime;
-pub use security::{SecurityConfig, SecurityConfigBuilder};
+pub use security::{SecurityConfig, SecurityConfigBuilder, SecurityProfile};

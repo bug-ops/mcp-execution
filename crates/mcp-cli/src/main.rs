@@ -132,11 +132,20 @@ pub enum Commands {
         #[arg(short, long)]
         list_exports: bool,
 
-        /// Memory limit in MB (overrides config file)
+        /// Security profile (strict, moderate, permissive)
+        ///
+        /// Overrides individual security settings with predefined profiles:
+        /// - strict: Maximum security (128MB, 30s timeout, no network)
+        /// - moderate: Balanced security (256MB, 60s timeout, no network)
+        /// - permissive: Relaxed security (512MB, 120s timeout, network enabled)
+        #[arg(short, long, value_enum)]
+        profile: Option<mcp_wasm_runtime::SecurityProfile>,
+
+        /// Memory limit in MB (overrides config file and profile)
         #[arg(short, long)]
         memory_limit: Option<u64>,
 
-        /// Execution timeout in seconds (overrides config file)
+        /// Execution timeout in seconds (overrides config file and profile)
         #[arg(short, long)]
         timeout: Option<u64>,
     },
@@ -283,6 +292,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             entry,
             args,
             list_exports,
+            profile,
             memory_limit,
             timeout,
         } => {
@@ -291,6 +301,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 entry,
                 args,
                 list_exports,
+                profile,
                 memory_limit,
                 timeout,
                 output_format,
