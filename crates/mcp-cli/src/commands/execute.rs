@@ -22,7 +22,7 @@ use wasmtime::Val;
 /// # Examples
 ///
 /// ```
-/// use mcp_cli::commands::execute::ExecutionResult;
+/// use mcp_execution_cli::commands::execute::ExecutionResult;
 /// use serde_json;
 ///
 /// let result = ExecutionResult {
@@ -239,7 +239,7 @@ async fn list_module_exports(module: &PathBuf, output_format: OutputFormat) -> R
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::execute;
+/// use mcp_execution_cli::commands::execute;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 /// use std::path::PathBuf;
 ///

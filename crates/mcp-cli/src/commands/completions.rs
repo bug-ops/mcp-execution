@@ -22,7 +22,7 @@ use tracing::info;
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::completions;
+/// use mcp_execution_cli::commands::completions;
 /// use clap_complete::Shell;
 /// use clap::Command;
 ///
@@ -48,7 +48,7 @@ pub fn generate_completions(shell: Shell, cmd: &mut Command) {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::completions;
+/// use mcp_execution_cli::commands::completions;
 /// use clap::{Command, CommandFactory};
 /// use clap_complete::Shell;
 ///

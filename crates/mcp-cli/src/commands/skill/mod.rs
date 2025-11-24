@@ -146,7 +146,7 @@ struct RemoveResult {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::skill::{SkillAction, run};
+/// use mcp_execution_cli::commands::skill::{SkillAction, run};
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {

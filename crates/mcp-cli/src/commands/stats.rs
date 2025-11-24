@@ -28,7 +28,7 @@ use tracing::info;
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_cli::commands::stats;
+/// use mcp_execution_cli::commands::stats;
 /// use mcp_core::cli::{ExitCode, OutputFormat};
 ///
 /// # #[tokio::main]
