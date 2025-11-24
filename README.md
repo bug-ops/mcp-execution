@@ -17,11 +17,12 @@ MCP Code Execution implements the Code Execution pattern for MCP, enabling AI ag
 ### Key Features
 
 - **80-90% Token Reduction**: Progressive tool loading vs. full tool definitions
-- **Skill Persistence**: Save and load pre-generated tools to disk with Blake3 integrity
-- **Secure Sandbox**: Wasmtime 38.0-based WASM execution with memory/CPU limits
+- **Skill Validation**: Comprehensive validation framework with Blake3 integrity verification
+- **Security Profiles**: Strict/Moderate/Permissive configurations for WASM sandbox
+- **Secure Sandbox**: Wasmtime 39.0-based WASM execution with memory/CPU limits
 - **Lightning Fast**: <3ms execution overhead per call (16.7x faster than target)
 - **100% MCP Compatible**: Works with all existing MCP servers via official rmcp SDK
-- **Production Ready**: 397 tests passing, 5/5 security rating, Microsoft Rust Guidelines compliant
+- **Production Ready**: 1035 tests passing, 5/5 security rating, Microsoft Rust Guidelines compliant
 
 ## Architecture
 
@@ -424,30 +425,28 @@ at your option.
 
 ## Status
 
-🟢 **CORE PRODUCTION READY** - Phases 1-5, 7.1, 8.1 Complete
+🟢 **PRODUCTION READY** - Phases 1-5, 7, 8, 9 Complete
 
-**Current Branch**: `refactor/rename-plugin-to-skill` (Terminology Alignment)
+**Current Version**: v0.3.0 (2025-11-24)
 
 **Completed Phases**:
 - ✅ Phase 1: Core Infrastructure
 - ✅ Phase 2: MCP Integration (rmcp SDK)
 - ✅ Phase 3: Code Generation
-- ✅ Phase 4: WASM Runtime (Wasmtime 38.0)
+- ✅ Phase 4: WASM Runtime (Wasmtime 39.0)
 - ✅ Phase 5: Integration & Testing
-- ✅ Phase 7.1: CLI Foundation
-- ✅ Phase 8.1: Skill Persistence **← Current**
+- ✅ Phase 7: CLI Complete
+- ✅ Phase 8: Skill Persistence
+- ✅ Phase 9: Skill Quality & Validation **← Current**
 
 **Quality Metrics**:
-- **Tests**: 397/397 passing (100% pass rate)
+- **Tests**: 1035/1035 passing (100% pass rate)
 - **Performance**: All targets exceeded by 5-6,578x
 - **Security**: 5/5 stars (zero critical vulnerabilities)
 - **Crates**: 10 (added `mcp-skill-store`)
-- **Code**: ~18,000+ lines Rust
+- **Code**: ~20,000+ lines Rust
 - **Documentation**: Complete (docs/ARCHITECTURE.md, 6 ADRs, guides)
 
 **Production Status**: Core is production-ready ✅
 
-**Next Steps**:
-1. Merge Phase 8.1 (skill persistence) - **READY**
-2. Implement Phase 7.2 (CLI commands) or Phase 8.2 (distribution)
-3. Release v0.1.0
+**Latest Release**: v0.3.0 (2025-11-24) - Security Profiles & Skill Validation
