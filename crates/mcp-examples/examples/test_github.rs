@@ -1,25 +1,56 @@
-//! Example: Testing MCP integration with github server.
+//! Example: Testing MCP integration with GitHub MCP server.
 //!
 //! This example demonstrates Phase 2 functionality:
 //! - Server discovery using mcp-introspector
 //! - Connection management using mcp-bridge
 //! - Tool introspection and metadata extraction
 //!
-//! # Requirements
+//! # GitHub MCP Server
 //!
-//! This example requires the github MCP server to be installed and
-//! accessible via the command `github-server`. If the server is not
-//! available, the example will gracefully report the failure.
+//! See: <https://github.com/github/github-mcp-server>
 //!
-//! # Usage
+//! ## Configuration Options
+//!
+//! ### Option 1: Docker (Recommended for local)
 //!
 //! ```bash
-//! cargo run --example test_github
+//! export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxxxxxxxxxx
+//! cargo run --example test_github -- docker
 //! ```
+//!
+//! This runs:
+//! ```text
+//! docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+//! ```
+//!
+//! ### Option 2: Remote Server (HTTP)
+//!
+//! ```bash
+//! export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxxxxxxxxxx
+//! cargo run --example test_github -- remote
+//! ```
+//!
+//! This connects to: `https://api.githubcopilot.com/mcp/`
+//!
+//! ### Option 3: Local Binary
+//!
+//! ```bash
+//! export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxxxxxxxxxx
+//! cargo run --example test_github -- local
+//! ```
+//!
+//! Requires `github-mcp-server` binary in PATH (built from source).
+//!
+//! ## Environment Variables
+//!
+//! - `GITHUB_PERSONAL_ACCESS_TOKEN` - Required. Your GitHub PAT.
+//! - `GITHUB_HOST` - Optional. For GitHub Enterprise (e.g., `https://octocorp.ghe.com`).
+//! - `GITHUB_TOOLSETS` - Optional. Comma-separated toolsets (e.g., `repos,issues,pull_requests`).
 
 use mcp_bridge::Bridge;
-use mcp_core::{ServerConfig, ServerId};
+use mcp_core::{ServerConfig, ServerId, TransportType};
 use mcp_introspector::Introspector;
+use std::env;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,21 +61,122 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     println!("╔════════════════════════════════════════════════╗");
-    println!("║   MCP Phase 2 Integration Test                ║");
+    println!("║   GitHub MCP Server Integration Test          ║");
     println!("║   Testing: mcp-introspector + mcp-bridge      ║");
     println!("╚════════════════════════════════════════════════╝\n");
 
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
+    let mode = args.get(1).map_or("docker", String::as_str);
+
+    // Get GitHub token from environment
+    let github_token = env::var("GITHUB_PERSONAL_ACCESS_TOKEN").ok();
+
+    // Build server configuration based on mode
+    let server_config = match mode {
+        "docker" => {
+            println!("Mode: Docker container");
+            let mut builder = ServerConfig::builder()
+                .command("docker".to_string())
+                .args(vec![
+                    "run".to_string(),
+                    "-i".to_string(),
+                    "--rm".to_string(),
+                    "-e".to_string(),
+                    "GITHUB_PERSONAL_ACCESS_TOKEN".to_string(),
+                    "ghcr.io/github/github-mcp-server".to_string(),
+                ]);
+
+            // Pass token to docker if available
+            if let Some(token) = &github_token {
+                builder = builder.env("GITHUB_PERSONAL_ACCESS_TOKEN".to_string(), token.clone());
+            }
+
+            // Pass optional GitHub host
+            if let Ok(host) = env::var("GITHUB_HOST") {
+                builder = builder
+                    .args(vec!["-e".to_string(), "GITHUB_HOST".to_string()])
+                    .env("GITHUB_HOST".to_string(), host);
+            }
+
+            // Pass optional toolsets
+            if let Ok(toolsets) = env::var("GITHUB_TOOLSETS") {
+                builder = builder
+                    .args(vec!["-e".to_string(), "GITHUB_TOOLSETS".to_string()])
+                    .env("GITHUB_TOOLSETS".to_string(), toolsets);
+            }
+
+            builder.build()
+        }
+        "remote" => {
+            println!("Mode: Remote server (HTTP)");
+            let mut builder = ServerConfig::builder()
+                .http_transport("https://api.githubcopilot.com/mcp/".to_string());
+
+            // Add authorization header if token available
+            if let Some(token) = &github_token {
+                builder = builder.header("Authorization".to_string(), format!("Bearer {token}"));
+            }
+
+            builder.build()
+        }
+        "local" => {
+            println!("Mode: Local binary");
+            let mut builder = ServerConfig::builder()
+                .command("github-mcp-server".to_string())
+                .args(vec!["stdio".to_string()]);
+
+            // Pass token to process if available
+            if let Some(token) = &github_token {
+                builder = builder.env("GITHUB_PERSONAL_ACCESS_TOKEN".to_string(), token.clone());
+            }
+
+            // Pass optional GitHub host
+            if let Ok(host) = env::var("GITHUB_HOST") {
+                builder = builder.env("GITHUB_HOST".to_string(), host);
+            }
+
+            // Pass optional toolsets
+            if let Ok(toolsets) = env::var("GITHUB_TOOLSETS") {
+                builder = builder.env("GITHUB_TOOLSETS".to_string(), toolsets);
+            }
+
+            builder.build()
+        }
+        _ => {
+            eprintln!("Unknown mode: {mode}");
+            eprintln!("Usage: cargo run --example test_github -- [docker|remote|local]");
+            std::process::exit(1);
+        }
+    };
+
+    // Check if token is available
+    if github_token.is_none() {
+        println!("⚠ Warning: GITHUB_PERSONAL_ACCESS_TOKEN not set");
+        println!("  Some operations may fail without authentication.\n");
+    }
+
     // 1. Test Introspector
-    println!("━━━ Step 1: Server Discovery ━━━");
+    println!("\n━━━ Step 1: Server Discovery ━━━");
     let mut introspector = Introspector::new();
 
     let server_id = ServerId::new("github");
-    let server_config = ServerConfig::builder()
-        .command("github-server".to_string())
-        .build();
 
     println!("→ Attempting to discover server: {server_id}");
-    println!("  Command: {}", server_config.command());
+    println!("  Transport: {:?}", server_config.transport());
+    match server_config.transport() {
+        TransportType::Stdio => {
+            println!("  Command: {}", server_config.command());
+            if !server_config.args().is_empty() {
+                println!("  Args: {:?}", server_config.args());
+            }
+        }
+        TransportType::Http | TransportType::Sse => {
+            if let Some(url) = server_config.url() {
+                println!("  URL: {url}");
+            }
+        }
+    }
 
     match introspector
         .discover_server(server_id.clone(), &server_config)
@@ -140,20 +272,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => {
             println!("✗ Server discovery failed: {e}");
             println!();
-            println!("This is expected if github server is not installed.");
+            println!("Setup instructions:");
             println!();
-            println!("To install github:");
-            println!("  1. Clone: git clone <github-repo>");
-            println!("  2. Follow installation instructions");
-            println!("  3. Ensure 'github-server' is in PATH");
+            println!("Option 1: Docker (recommended)");
+            println!("  export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxx");
+            println!("  cargo run --example test_github -- docker");
             println!();
-            println!("Alternative: Test with any other MCP server");
-            println!("by modifying server_command in this example.");
+            println!("Option 2: Remote server");
+            println!("  export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxx");
+            println!("  cargo run --example test_github -- remote");
             println!();
+            println!("Option 3: Local binary (build from source)");
+            println!("  git clone https://github.com/github/github-mcp-server");
+            println!("  cd github-mcp-server");
+            println!("  go build -o github-mcp-server ./cmd/github-mcp-server");
+            println!("  export PATH=$PATH:$(pwd)");
+            println!("  export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxx");
+            println!("  cargo run --example test_github -- local");
+            println!();
+            println!("See: https://github.com/github/github-mcp-server");
 
-            println!("╔════════════════════════════════════════════════╗");
-            println!("║   ℹ Phase 2 Test Incomplete                   ║");
-            println!("║   Server not available (expected)              ║");
+            println!("\n╔════════════════════════════════════════════════╗");
+            println!("║   ℹ Test Incomplete - Server not available    ║");
             println!("╚════════════════════════════════════════════════╝");
         }
     }
