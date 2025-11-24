@@ -18,7 +18,7 @@
 //! ```
 
 use mcp_bridge::Bridge;
-use mcp_core::ServerId;
+use mcp_core::{ServerConfig, ServerId};
 use mcp_introspector::Introspector;
 
 #[tokio::main]
@@ -39,13 +39,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut introspector = Introspector::new();
 
     let server_id = ServerId::new("github");
-    let server_command = "github-server";
+    let server_config = ServerConfig::builder()
+        .command("github-server".to_string())
+        .build();
 
     println!("→ Attempting to discover server: {server_id}");
-    println!("  Command: {server_command}");
+    println!("  Command: {}", server_config.command());
 
     match introspector
-        .discover_server(server_id.clone(), server_command)
+        .discover_server(server_id.clone(), &server_config)
         .await
     {
         Ok(info) => {
@@ -85,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bridge = Bridge::new(1000);
 
             println!("→ Connecting bridge to server...");
-            match bridge.connect(server_id.clone(), server_command).await {
+            match bridge.connect(server_id.clone(), &server_config).await {
                 Ok(()) => {
                     println!("✓ Bridge connected successfully!");
 

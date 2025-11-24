@@ -18,16 +18,19 @@
 //!
 //! ```no_run
 //! use mcp_bridge::Bridge;
-//! use mcp_core::{ServerId, ToolName};
+//! use mcp_core::{ServerId, ServerConfig, ToolName};
 //! use serde_json::json;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create bridge with 1000-entry cache
 //! let bridge = Bridge::new(1000);
 //!
-//! // Connect to server
+//! // Connect to server with configuration
 //! let server_id = ServerId::new("github");
-//! bridge.connect(server_id.clone(), "github-server").await?;
+//! let config = ServerConfig::builder()
+//!     .command("github-server".to_string())
+//!     .build();
+//! bridge.connect(server_id.clone(), &config).await?;
 //!
 //! // Call tool
 //! let params = json!({"chat_id": "123", "text": "Hello"});
@@ -47,7 +50,7 @@
 
 use lru::LruCache;
 use mcp_core::stats::BridgeStats;
-use mcp_core::{CacheKey, Error, Result, ServerId, ToolName};
+use mcp_core::{CacheKey, Error, Result, ServerConfig, ServerId, ToolName, validate_server_config};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::Value;
@@ -95,14 +98,16 @@ impl std::fmt::Debug for Connection {
 ///
 /// ```no_run
 /// use mcp_bridge::Bridge;
-/// use mcp_core::ServerId;
+/// use mcp_core::{ServerId, ServerConfig};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let bridge = Bridge::new(1000);
 ///
 /// // Connect to multiple servers
-/// bridge.connect(ServerId::new("server1"), "cmd1").await?;
-/// bridge.connect(ServerId::new("server2"), "cmd2").await?;
+/// let config1 = ServerConfig::builder().command("cmd1".to_string()).build();
+/// let config2 = ServerConfig::builder().command("cmd2".to_string()).build();
+/// bridge.connect(ServerId::new("server1"), &config1).await?;
+/// bridge.connect(ServerId::new("server2"), &config2).await?;
 ///
 /// let stats = bridge.cache_stats().await;
 /// println!("Cache: {}/{}", stats.size, stats.capacity);
@@ -186,30 +191,44 @@ impl Bridge {
     /// Connects to an MCP server via stdio.
     ///
     /// Creates a new connection to the specified MCP server using
-    /// stdio transport. The connection is stored in the pool for
-    /// subsequent tool calls.
+    /// stdio transport with the provided configuration. The connection
+    /// is stored in the pool for subsequent tool calls.
     ///
     /// # Errors
     ///
     /// Returns error if:
     /// - Maximum connection limit is reached (see `DEFAULT_MAX_CONNECTIONS`)
-    /// - Command fails security validation
+    /// - Server configuration fails security validation
     /// - The server process cannot be spawned
-    /// - The command path is invalid
+    /// - The command path is invalid or not executable
     ///
     /// # Examples
     ///
     /// ```no_run
     /// use mcp_bridge::Bridge;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
-    /// bridge.connect(ServerId::new("github"), "github-server").await?;
+    ///
+    /// // Simple configuration
+    /// let config = ServerConfig::builder()
+    ///     .command("github-server".to_string())
+    ///     .build();
+    /// bridge.connect(ServerId::new("github"), &config).await?;
+    ///
+    /// // Configuration with arguments and environment
+    /// let config = ServerConfig::builder()
+    ///     .command("docker".to_string())
+    ///     .arg("run".to_string())
+    ///     .arg("mcp-server".to_string())
+    ///     .env("LOG_LEVEL".to_string(), "debug".to_string())
+    ///     .build();
+    /// bridge.connect(ServerId::new("docker-server"), &config).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(&self, server_id: ServerId, command: &str) -> Result<()> {
+    pub async fn connect(&self, server_id: ServerId, config: &ServerConfig) -> Result<()> {
         tracing::info!("Connecting to MCP server: {}", server_id);
 
         // Check connection limit
@@ -227,19 +246,26 @@ impl Bridge {
             }
         }
 
-        // Validate command for security (prevents command injection)
-        mcp_core::validate_command(command)?;
+        // Validate server configuration for security (prevents command injection)
+        validate_server_config(config)?;
 
-        let transport =
-            TokioChildProcess::new(tokio::process::Command::new(command).configure(|_cmd| {}))
-                .map_err(|e| {
-                    // Track connection failure
-                    self.connection_failures.fetch_add(1, Ordering::Relaxed);
-                    Error::ConnectionFailed {
-                        server: server_id.to_string(),
-                        source: Box::new(e),
-                    }
-                })?;
+        let transport = TokioChildProcess::new(
+            tokio::process::Command::new(&config.command).configure(|cmd| {
+                cmd.args(&config.args);
+                cmd.envs(&config.env);
+                if let Some(cwd) = &config.cwd {
+                    cmd.current_dir(cwd);
+                }
+            }),
+        )
+        .map_err(|e| {
+            // Track connection failure
+            self.connection_failures.fetch_add(1, Ordering::Relaxed);
+            Error::ConnectionFailed {
+                server: server_id.to_string(),
+                source: Box::new(e),
+            }
+        })?;
 
         // Create client using serve pattern
         let client = ().serve(transport).await.map_err(|e| {
@@ -290,14 +316,17 @@ impl Bridge {
     ///
     /// ```no_run
     /// use mcp_bridge::Bridge;
-    /// use mcp_core::{ServerId, ToolName};
+    /// use mcp_core::{ServerId, ServerConfig, ToolName};
     /// use serde_json::json;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
     /// let server_id = ServerId::new("github");
     ///
-    /// bridge.connect(server_id.clone(), "github-server").await?;
+    /// let config = ServerConfig::builder()
+    ///     .command("github-server".to_string())
+    ///     .build();
+    /// bridge.connect(server_id.clone(), &config).await?;
     ///
     /// let params = json!({"chat_id": "123", "text": "Hello"});
     /// let result = bridge.call_tool(
@@ -474,13 +503,16 @@ impl Bridge {
     ///
     /// ```no_run
     /// use mcp_bridge::Bridge;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
     /// let server_id = ServerId::new("test");
     ///
-    /// bridge.connect(server_id.clone(), "test-cmd").await?;
+    /// let config = ServerConfig::builder()
+    ///     .command("test-cmd".to_string())
+    ///     .build();
+    /// bridge.connect(server_id.clone(), &config).await?;
     ///
     /// let count = bridge.connection_call_count(&server_id).await;
     /// println!("Calls: {}", count.unwrap_or(0));
@@ -501,13 +533,16 @@ impl Bridge {
     ///
     /// ```no_run
     /// use mcp_bridge::Bridge;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
     /// let server_id = ServerId::new("test");
     ///
-    /// bridge.connect(server_id.clone(), "test-cmd").await?;
+    /// let config = ServerConfig::builder()
+    ///     .command("test-cmd".to_string())
+    ///     .build();
+    /// bridge.connect(server_id.clone(), &config).await?;
     /// bridge.disconnect(&server_id).await;
     /// # Ok(())
     /// # }
@@ -523,14 +558,17 @@ impl Bridge {
     ///
     /// ```no_run
     /// use mcp_bridge::Bridge;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
     ///
     /// assert_eq!(bridge.connection_count().await, 0);
     ///
-    /// bridge.connect(ServerId::new("s1"), "cmd1").await?;
+    /// let config = ServerConfig::builder()
+    ///     .command("cmd1".to_string())
+    ///     .build();
+    /// bridge.connect(ServerId::new("s1"), &config).await?;
     /// assert_eq!(bridge.connection_count().await, 1);
     /// # Ok(())
     /// # }
@@ -594,13 +632,16 @@ impl Bridge {
     ///
     /// ```no_run
     /// use mcp_bridge::Bridge;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let bridge = Bridge::new(1000);
     ///
     /// // Perform some operations
-    /// bridge.connect(ServerId::new("test"), "test-cmd").await?;
+    /// let config = ServerConfig::builder()
+    ///     .command("test-cmd".to_string())
+    ///     .build();
+    /// bridge.connect(ServerId::new("test"), &config).await?;
     ///
     /// // Collect statistics
     /// let stats = bridge.collect_stats().await;

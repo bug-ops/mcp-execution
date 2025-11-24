@@ -4,8 +4,8 @@
 
 use crate::actions::ServerAction;
 use anyhow::{Context, Result};
-use mcp_core::ServerId;
 use mcp_core::cli::{ExitCode, OutputFormat};
+use mcp_core::{ServerConfig as CoreServerConfig, ServerId};
 use mcp_introspector::Introspector;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -256,8 +256,10 @@ impl ServerManager {
         let mut introspector = Introspector::new();
         let server_id = ServerId::new(server_name);
 
+        let server_config = CoreServerConfig::builder().command(command_str).build();
+
         introspector
-            .discover_server(server_id, &command_str)
+            .discover_server(server_id, &server_config)
             .await
             .context(format!("Failed to introspect server '{server_name}'"))
     }

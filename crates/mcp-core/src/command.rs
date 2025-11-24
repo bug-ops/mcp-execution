@@ -1,119 +1,158 @@
 //! Command validation and sanitization for secure subprocess execution.
 //!
-//! This module provides security-focused validation of command strings before
+//! This module provides security-focused validation of server configurations before
 //! they are executed as subprocesses, preventing command injection attacks.
 //!
 //! # Security
 //!
 //! The validation enforces:
-//! - Absolute paths only (prevents PATH manipulation)
-//! - File existence verification
-//! - Forbidden shell metacharacters blocking
-//! - Executable permission checks
+//! - Command validation (absolute path or binary name)
+//! - Argument sanitization (no shell metacharacters)
+//! - Environment variable validation (block dangerous names)
+//! - Executable permission checks (for absolute paths)
 //!
 //! # Examples
 //!
 //! ```
-//! use mcp_core::validate_command;
+//! use mcp_core::{ServerConfig, validate_server_config};
 //!
-//! // Valid absolute path
-//! # let temp_file = if cfg!(windows) {
-//! #     std::env::temp_dir().join("test-mcp-server.exe")
-//! # } else {
-//! #     std::path::PathBuf::from("/tmp/test-mcp-server")
-//! # };
-//! # std::fs::write(&temp_file, "#!/bin/sh\n").unwrap();
-//! # #[cfg(unix)]
-//! # {
-//! # use std::os::unix::fs::PermissionsExt;
-//! # let mut perms = std::fs::metadata(&temp_file).unwrap().permissions();
-//! # perms.set_mode(0o755);
-//! # std::fs::set_permissions(&temp_file, perms).unwrap();
-//! # }
-//! let result = validate_command(temp_file.to_str().unwrap());
-//! # std::fs::remove_file(&temp_file).ok();
-//! # if result.is_err() {
-//! #     // On some systems, execution permission check might fail
-//! #     return;
-//! # }
-//! assert!(result.is_ok());
+//! // Valid binary name (resolved via PATH)
+//! let config = ServerConfig::builder()
+//!     .command("docker".to_string())
+//!     .arg("run".to_string())
+//!     .build();
+//! assert!(validate_server_config(&config).is_ok());
 //!
-//! // Invalid: relative path
-//! assert!(validate_command("./server").is_err());
-//!
-//! // Invalid: shell metacharacters
-//! assert!(validate_command("/usr/bin/server; rm -rf /").is_err());
+//! // Invalid: shell metacharacters in arg
+//! let config = ServerConfig::builder()
+//!     .command("docker".to_string())
+//!     .arg("run; rm -rf /".to_string())
+//!     .build();
+//! assert!(validate_server_config(&config).is_err());
 //! ```
 
-use crate::{Error, Result};
+use crate::{Error, Result, ServerConfig};
 use std::path::Path;
 
 /// Shell metacharacters that indicate potential command injection.
 const FORBIDDEN_CHARS: &[char] = &[';', '|', '&', '>', '<', '`', '$', '(', ')', '\n', '\r'];
 
-/// Validates a command string for safe subprocess execution.
+/// Forbidden environment variable names that pose security risks.
+const FORBIDDEN_ENV_NAMES: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "PATH", // Block PATH override to prevent binary substitution
+];
+
+/// Validates a `ServerConfig` for safe subprocess execution.
 ///
 /// This function performs comprehensive security validation to prevent
-/// command injection attacks. It checks:
+/// command injection attacks. It validates:
 ///
-/// 1. **Absolute Path**: Command must start with `/` (Unix) or drive letter (Windows)
-/// 2. **File Existence**: The file must exist at the specified path
-/// 3. **Executable**: The file must have execute permissions
-/// 4. **No Shell Metacharacters**: Forbidden characters are rejected
+/// 1. **Command**: Can be absolute path (with existence/permission checks) or binary name
+/// 2. **Arguments**: Each arg checked for shell metacharacters
+/// 3. **Environment**: Variables checked for dangerous names
+///
+/// # Security Rules
+///
+/// - **Forbidden chars in command/args**: `;`, `|`, `&`, `>`, `<`, `` ` ``, `$`, `(`, `)`, `\n`, `\r`
+/// - **Forbidden env names**: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`
+/// - **Absolute paths**: Must exist and be executable
+/// - **Binary names**: Allowed (resolved via PATH at runtime)
 ///
 /// # Errors
 ///
 /// Returns `Error::SecurityViolation` if:
 /// - Command is empty or whitespace
-/// - Command is not an absolute path
-/// - Command contains shell metacharacters
-/// - File does not exist
-/// - File is not executable
+/// - Command/args contain shell metacharacters
+/// - Absolute path does not exist or is not executable
+/// - Environment variable name is forbidden
 ///
 /// # Examples
 ///
-/// ```no_run
-/// use mcp_core::validate_command;
+/// ```
+/// use mcp_core::{ServerConfig, validate_server_config};
 ///
-/// // Valid command
-/// match validate_command("/usr/local/bin/mcp-server") {
-///     Ok(()) => println!("Command is safe"),
-///     Err(e) => eprintln!("Validation failed: {}", e),
-/// }
+/// // Valid: binary name
+/// let config = ServerConfig::builder()
+///     .command("docker".to_string())
+///     .build();
+/// assert!(validate_server_config(&config).is_ok());
+///
+/// // Invalid: forbidden env var
+/// let config = ServerConfig::builder()
+///     .command("docker".to_string())
+///     .env("LD_PRELOAD".to_string(), "/evil.so".to_string())
+///     .build();
+/// assert!(validate_server_config(&config).is_err());
 /// ```
 ///
 /// # Security Considerations
 ///
-/// This function only validates the command path itself. Callers should:
-/// - Never pass untrusted user input as command arguments
-/// - Use `Command::arg()` for arguments (which properly escapes them)
-/// - Consider using a whitelist of allowed commands
-/// - Run commands with minimal privileges
-pub fn validate_command(command: &str) -> Result<()> {
-    // Check for empty command
-    let command = command.trim();
-    if command.is_empty() {
+/// - Binary names are allowed and resolved via PATH at runtime
+/// - Absolute paths undergo strict validation (existence, permissions)
+/// - All arguments are validated separately to prevent injection
+/// - Environment variables are checked against forbidden names
+pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
+    // Validate command
+    validate_command_string(&config.command, "command")?;
+
+    // If command is absolute path, perform additional checks
+    let command_path = Path::new(&config.command);
+    if command_path.is_absolute() {
+        validate_absolute_path(&config.command)?;
+    }
+    // If not absolute, it's a binary name (to be resolved via PATH) - this is OK
+
+    // Validate each argument separately
+    for (idx, arg) in config.args.iter().enumerate() {
+        validate_command_string(arg, &format!("argument {idx}"))?;
+    }
+
+    // Validate environment variable names
+    for env_name in config.env.keys() {
+        validate_env_name(env_name)?;
+    }
+
+    Ok(())
+}
+
+/// Validates a command string for forbidden shell metacharacters.
+///
+/// This is an internal helper that checks a string (command or argument)
+/// for dangerous shell metacharacters.
+fn validate_command_string(value: &str, context: &str) -> Result<()> {
+    // Check for empty
+    let value = value.trim();
+    if value.is_empty() {
         return Err(Error::SecurityViolation {
-            reason: "Command cannot be empty".into(),
+            reason: format!("{context} cannot be empty"),
         });
     }
 
     // Check for shell metacharacters
     for forbidden in FORBIDDEN_CHARS {
-        if command.contains(*forbidden) {
+        if value.contains(*forbidden) {
             return Err(Error::SecurityViolation {
-                reason: format!("Command contains forbidden shell metacharacter: '{forbidden}'"),
+                reason: format!(
+                    "{context} contains forbidden shell metacharacter '{forbidden}': {value}"
+                ),
             });
         }
     }
 
-    // Verify absolute path
+    Ok(())
+}
+
+/// Validates an absolute path command for existence and executability.
+///
+/// This is an internal helper that performs file system checks on
+/// absolute path commands.
+fn validate_absolute_path(command: &str) -> Result<()> {
     let path = Path::new(command);
-    if !path.is_absolute() {
-        return Err(Error::SecurityViolation {
-            reason: format!("Command must be an absolute path, got: {command}"),
-        });
-    }
 
     // Verify file exists
     if !path.exists() {
@@ -150,6 +189,28 @@ pub fn validate_command(command: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validates an environment variable name.
+///
+/// This is an internal helper that checks if an environment variable
+/// name is in the forbidden list.
+fn validate_env_name(name: &str) -> Result<()> {
+    // Check for forbidden env names (exact match)
+    if FORBIDDEN_ENV_NAMES.contains(&name) {
+        return Err(Error::SecurityViolation {
+            reason: format!("Forbidden environment variable name: {name}"),
+        });
+    }
+
+    // Check for DYLD_* prefix (macOS dynamic linker variables)
+    if name.starts_with("DYLD_") {
+        return Err(Error::SecurityViolation {
+            reason: format!("Forbidden environment variable prefix DYLD_: {name}"),
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,35 +218,69 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn test_validate_command_empty() {
-        assert!(validate_command("").is_err());
-        assert!(validate_command("   ").is_err());
+    fn test_validate_server_config_binary_name() {
+        // Binary names (not absolute paths) should be valid
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+
+        let config = ServerConfig::builder()
+            .command("python".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+
+        let config = ServerConfig::builder().command("node".to_string()).build();
+        assert!(validate_server_config(&config).is_ok());
     }
 
     #[test]
-    fn test_validate_command_relative_path() {
-        assert!(validate_command("./server").is_err());
-        assert!(validate_command("server").is_err());
-        assert!(validate_command("../bin/server").is_err());
+    fn test_validate_server_config_binary_with_args() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg("run".to_string())
+            .arg("--rm".to_string())
+            .arg("mcp-server".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
     }
 
     #[test]
-    fn test_validate_command_shell_metacharacters() {
-        let dangerous = vec![
-            "/usr/bin/server; rm -rf /",
-            "/usr/bin/server | cat",
-            "/usr/bin/server && echo pwned",
-            "/usr/bin/server > /tmp/out",
-            "/usr/bin/server < /tmp/in",
-            "/usr/bin/server `whoami`",
-            "/usr/bin/server $(whoami)",
-            "/usr/bin/server & background",
-            "/usr/bin/server\nrm -rf /",
+    fn test_validate_server_config_empty_command() {
+        // Empty command should fail during build
+        let result = ServerConfig::builder().command(String::new()).try_build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+
+        // Whitespace-only command should fail during build
+        let result = ServerConfig::builder()
+            .command("   ".to_string())
+            .try_build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn test_validate_server_config_command_with_metacharacters() {
+        let dangerous_commands = vec![
+            "docker; rm -rf /",
+            "docker | cat",
+            "docker && echo pwned",
+            "docker > /tmp/out",
+            "docker < /tmp/in",
+            "docker `whoami`",
+            "docker $(whoami)",
+            "docker & background",
+            "docker\nrm -rf /",
         ];
 
-        for cmd in dangerous {
-            let result = validate_command(cmd);
-            assert!(result.is_err(), "Should reject dangerous command: {cmd}");
+        for cmd in dangerous_commands {
+            let config = ServerConfig::builder().command(cmd.to_string()).build();
+            let result = validate_server_config(&config);
+            assert!(
+                result.is_err(),
+                "Should reject command with metacharacters: {cmd}"
+            );
             if let Err(Error::SecurityViolation { reason }) = result {
                 assert!(
                     reason.contains("forbidden") || reason.contains("metacharacter"),
@@ -196,88 +291,234 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_command_nonexistent() {
-        #[cfg(unix)]
-        let nonexistent_path = "/absolutely/nonexistent/path/to/server";
-        #[cfg(windows)]
-        let nonexistent_path = "C:\\absolutely\\nonexistent\\path\\to\\server.exe";
+    fn test_validate_server_config_args_with_metacharacters() {
+        let dangerous_args = vec![
+            "run; rm -rf /",
+            "run | cat",
+            "run && echo pwned",
+            "run > /tmp/out",
+            "run < /tmp/in",
+            "run `whoami`",
+            "run $(whoami)",
+            "run & background",
+            "run\nrm -rf /",
+        ];
 
-        let result = validate_command(nonexistent_path);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("does not exist"));
-        } else {
-            panic!("Expected SecurityViolation error");
+        for arg in dangerous_args {
+            let config = ServerConfig::builder()
+                .command("docker".to_string())
+                .arg(arg.to_string())
+                .build();
+            let result = validate_server_config(&config);
+            assert!(
+                result.is_err(),
+                "Should reject arg with metacharacters: {arg}"
+            );
+            if let Err(Error::SecurityViolation { reason }) = result {
+                assert!(
+                    reason.contains("argument")
+                        && (reason.contains("forbidden") || reason.contains("metacharacter")),
+                    "Error should mention argument and forbidden character: {reason}"
+                );
+            }
         }
     }
 
     #[test]
-    fn test_validate_command_directory() {
-        // Use /tmp which should exist on Unix and %TEMP% on Windows
-        #[cfg(unix)]
-        let dir_path = "/tmp";
-        #[cfg(windows)]
-        let dir_path = "C:\\Windows\\Temp";
+    fn test_validate_server_config_empty_arg() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg(String::new())
+            .build();
+        assert!(validate_server_config(&config).is_err());
+    }
 
-        let result = validate_command(dir_path);
+    #[test]
+    fn test_validate_server_config_forbidden_env_ld_preload() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .env("LD_PRELOAD".to_string(), "/evil.so".to_string())
+            .build();
+        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("not a file"));
-        } else {
-            panic!("Expected SecurityViolation error");
+            assert!(reason.contains("LD_PRELOAD"));
         }
+    }
+
+    #[test]
+    fn test_validate_server_config_forbidden_env_ld_library_path() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .env("LD_LIBRARY_PATH".to_string(), "/evil".to_string())
+            .build();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("LD_LIBRARY_PATH"));
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_forbidden_env_dyld() {
+        let dyld_vars = vec![
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+            "DYLD_PRINT_TO_FILE",
+            "DYLD_CUSTOM_VAR",
+        ];
+
+        for var in dyld_vars {
+            let config = ServerConfig::builder()
+                .command("docker".to_string())
+                .env(var.to_string(), "/evil".to_string())
+                .build();
+            let result = validate_server_config(&config);
+            assert!(result.is_err(), "Should reject DYLD_* variable: {var}");
+            if let Err(Error::SecurityViolation { reason }) = result {
+                assert!(
+                    reason.contains("DYLD_"),
+                    "Error should mention DYLD_: {reason}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_forbidden_env_path() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .env("PATH".to_string(), "/evil:/usr/bin".to_string())
+            .build();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("PATH"));
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_safe_env() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .env("LOG_LEVEL".to_string(), "debug".to_string())
+            .env("DEBUG".to_string(), "1".to_string())
+            .env("HOME".to_string(), "/home/user".to_string())
+            .env("MY_CUSTOM_VAR".to_string(), "value".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
     }
 
     #[test]
     #[cfg(unix)]
-    fn test_validate_command_not_executable() {
-        use std::os::unix::fs::PermissionsExt;
-
-        // Create a temporary non-executable file
-        let temp_file = "/tmp/test-mcp-nonexec";
-        let mut file = fs::File::create(temp_file).unwrap();
-        writeln!(file, "#!/bin/sh").unwrap();
-
-        // Remove execute permissions
-        let mut perms = fs::metadata(temp_file).unwrap().permissions();
-        perms.set_mode(0o644); // rw-r--r--
-        fs::set_permissions(temp_file, perms).unwrap();
-
-        let result = validate_command(temp_file);
-        fs::remove_file(temp_file).ok();
-
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("not executable"));
-        } else {
-            panic!("Expected SecurityViolation error");
-        }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn test_validate_command_valid() {
+    fn test_validate_server_config_absolute_path_valid() {
         use std::os::unix::fs::PermissionsExt;
 
         // Create a temporary executable file
-        let temp_file = "/tmp/test-mcp-exec";
+        let temp_file = "/tmp/test-mcp-server-config";
         let mut file = fs::File::create(temp_file).unwrap();
         writeln!(file, "#!/bin/sh").unwrap();
 
         // Set execute permissions
         let mut perms = fs::metadata(temp_file).unwrap().permissions();
-        perms.set_mode(0o755); // rwxr-xr-x
+        perms.set_mode(0o755);
         fs::set_permissions(temp_file, perms).unwrap();
 
-        let result = validate_command(temp_file);
+        let config = ServerConfig::builder()
+            .command(temp_file.to_string())
+            .arg("--port".to_string())
+            .arg("8080".to_string())
+            .build();
+
+        let result = validate_server_config(&config);
         fs::remove_file(temp_file).ok();
 
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_is_security_error() {
-        let error = validate_command("./relative").unwrap_err();
-        assert!(error.is_security_error());
+    #[cfg(unix)]
+    fn test_validate_server_config_absolute_path_not_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Create a temporary non-executable file
+        let temp_file = "/tmp/test-mcp-server-config-noexec";
+        let mut file = fs::File::create(temp_file).unwrap();
+        writeln!(file, "#!/bin/sh").unwrap();
+
+        // Remove execute permissions
+        let mut perms = fs::metadata(temp_file).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(temp_file, perms).unwrap();
+
+        let config = ServerConfig::builder()
+            .command(temp_file.to_string())
+            .build();
+
+        let result = validate_server_config(&config);
+        fs::remove_file(temp_file).ok();
+
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("not executable"));
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_absolute_path_nonexistent() {
+        #[cfg(unix)]
+        let nonexistent = "/absolutely/nonexistent/path/to/server";
+        #[cfg(windows)]
+        let nonexistent = "C:\\absolutely\\nonexistent\\path\\to\\server.exe";
+
+        let config = ServerConfig::builder()
+            .command(nonexistent.to_string())
+            .build();
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("does not exist"));
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_with_cwd() {
+        // cwd doesn't affect validation (it's not security-critical)
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .cwd(std::path::PathBuf::from("/tmp"))
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_complex_valid() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg("run".to_string())
+            .arg("--rm".to_string())
+            .arg("-e".to_string())
+            .arg("DEBUG=1".to_string())
+            .arg("mcp-server".to_string())
+            .env("LOG_LEVEL".to_string(), "info".to_string())
+            .env("CACHE_DIR".to_string(), "/var/cache".to_string())
+            .cwd(std::path::PathBuf::from("/opt/app"))
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_env_name_edge_cases() {
+        // Test exact matches and prefix matches
+        assert!(validate_env_name("LD_PRELOAD").is_err());
+        assert!(validate_env_name("DYLD_TEST").is_err());
+        assert!(validate_env_name("PATH").is_err());
+
+        // These should be OK (not in forbidden list)
+        assert!(validate_env_name("LD_DEBUG").is_ok()); // Not in list
+        assert!(validate_env_name("MY_PATH").is_ok()); // Not exact match
+        assert!(validate_env_name("DYLD").is_ok()); // No underscore, not prefix match
     }
 }

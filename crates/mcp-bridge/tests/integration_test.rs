@@ -5,7 +5,7 @@
 
 use mcp_bridge::{Bridge, CacheStats};
 use mcp_core::stats::BridgeStats;
-use mcp_core::{Error, ServerId, ToolName};
+use mcp_core::{Error, ServerConfig, ServerId, ToolName};
 use serde_json::json;
 
 /// Tests bridge creation with various configurations
@@ -201,9 +201,10 @@ async fn test_connect_command_validation() {
     let server_id = ServerId::new("test");
 
     // Test with potentially dangerous command (should be caught by validation)
-    let result = bridge
-        .connect(server_id.clone(), "echo hello; rm -rf /")
-        .await;
+    let config = ServerConfig::builder()
+        .command("echo hello; rm -rf /".to_string())
+        .build();
+    let result = bridge.connect(server_id.clone(), &config).await;
 
     // Should fail validation or connection (either is acceptable)
     // The important part is it doesn't execute the dangerous command
@@ -259,7 +260,10 @@ async fn test_connection_limit_reached() {
 
     // First connection should be allowed (but will fail without valid command)
     let server1 = ServerId::new("server1");
-    let _result1 = bridge.connect(server1.clone(), "nonexistent-cmd").await;
+    let config = ServerConfig::builder()
+        .command("nonexistent-cmd".to_string())
+        .build();
+    let _result1 = bridge.connect(server1.clone(), &config).await;
 
     // Should either succeed in attempting connection or fail due to invalid command
     // Either way, connection limit logic is tested
@@ -277,7 +281,10 @@ async fn test_empty_server_id() {
     let server_id = ServerId::new("");
 
     // Should handle empty server IDs gracefully
-    let result = bridge.connect(server_id.clone(), "test-cmd").await;
+    let config = ServerConfig::builder()
+        .command("test-cmd".to_string())
+        .build();
+    let result = bridge.connect(server_id.clone(), &config).await;
     assert!(result.is_err());
 }
 
@@ -288,7 +295,10 @@ async fn test_command_with_whitespace() {
     let server_id = ServerId::new("test");
 
     // Command with spaces should be validated
-    let result = bridge.connect(server_id, "test cmd with spaces").await;
+    let config = ServerConfig::builder()
+        .command("test cmd with spaces".to_string())
+        .build();
+    let result = bridge.connect(server_id, &config).await;
 
     // Should either fail validation or connection attempt
     assert!(result.is_err());
@@ -491,7 +501,8 @@ async fn test_command_validation_special_chars() {
     ];
 
     for cmd in dangerous_commands {
-        let result = bridge.connect(server_id.clone(), cmd).await;
+        let config = ServerConfig::builder().command(cmd.to_string()).build();
+        let result = bridge.connect(server_id.clone(), &config).await;
         // Should fail validation or connection
         assert!(result.is_err(), "Command should be rejected: {cmd}");
     }

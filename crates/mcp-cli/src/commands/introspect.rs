@@ -3,8 +3,8 @@
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
 use anyhow::{Context, Result};
-use mcp_core::ServerId;
 use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
+use mcp_core::{ServerConfig, ServerId};
 use mcp_introspector::{Introspector, ServerInfo, ToolInfo};
 use serde::Serialize;
 use tracing::info;
@@ -138,8 +138,11 @@ pub async fn run(server: String, detailed: bool, output_format: OutputFormat) ->
 
     // Discover server
     let server_id = ServerId::new(conn_string.as_str());
+    let config = ServerConfig::builder()
+        .command(conn_string.to_string())
+        .build();
     let server_info = introspector
-        .discover_server(server_id, conn_string.as_str())
+        .discover_server(server_id, &config)
         .await
         .with_context(|| {
             format!(

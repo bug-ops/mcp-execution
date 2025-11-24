@@ -36,6 +36,7 @@ mod cache_manager;
 mod command;
 mod config;
 mod error;
+mod server_config;
 mod types;
 
 pub mod cli;
@@ -53,11 +54,14 @@ pub use types::{
 // Re-export configuration types
 pub use config::{RuntimeConfig, RuntimeConfigBuilder, SecurityPolicy};
 
+// Re-export server configuration types
+pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
+
 // Re-export traits for convenience
 pub use traits::{CacheProvider, CodeExecutor, StateStorage};
 
 // Re-export command validation
-pub use command::validate_command;
+pub use command::validate_server_config;
 
 // Re-export cache management
 pub use cache_manager::{BuildMetadata, CacheManager, CacheStats};

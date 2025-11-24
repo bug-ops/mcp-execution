@@ -14,15 +14,19 @@
 //!
 //! ```no_run
 //! use mcp_introspector::Introspector;
-//! use mcp_core::ServerId;
+//! use mcp_core::{ServerId, ServerConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut introspector = Introspector::new();
 //!
 //! // Connect to github server
 //! let server_id = ServerId::new("github");
+//! let config = ServerConfig::builder()
+//!     .command("github-server".to_string())
+//!     .build();
+//!
 //! let info = introspector
-//!     .discover_server(server_id, "github-server")
+//!     .discover_server(server_id, &config)
 //!     .await?;
 //!
 //! println!("Server: {} v{}", info.name, info.version);
@@ -38,7 +42,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-use mcp_core::{Error, Result, ServerId, ToolName};
+use mcp_core::{Error, Result, ServerConfig, ServerId, ToolName, validate_server_config};
 use rmcp::ServiceExt;
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde::{Deserialize, Serialize};
@@ -165,17 +169,23 @@ pub struct ServerCapabilities {
 ///
 /// ```no_run
 /// use mcp_introspector::Introspector;
-/// use mcp_core::ServerId;
+/// use mcp_core::{ServerId, ServerConfig};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut introspector = Introspector::new();
 ///
 /// // Discover multiple servers
 /// let server1 = ServerId::new("server1");
-/// introspector.discover_server(server1.clone(), "server1-cmd").await?;
+/// let config1 = ServerConfig::builder()
+///     .command("server1-cmd".to_string())
+///     .build();
+/// introspector.discover_server(server1.clone(), &config1).await?;
 ///
 /// let server2 = ServerId::new("server2");
-/// introspector.discover_server(server2.clone(), "server2-cmd").await?;
+/// let config2 = ServerConfig::builder()
+///     .command("server2-cmd".to_string())
+///     .build();
+/// introspector.discover_server(server2.clone(), &config2).await?;
 ///
 /// // Retrieve information
 /// if let Some(info) = introspector.get_server(&server1) {
@@ -214,15 +224,17 @@ impl Introspector {
     /// Connects to an MCP server via stdio and discovers its capabilities.
     ///
     /// This method:
-    /// 1. Spawns the server process using stdio transport
-    /// 2. Connects via rmcp client
-    /// 3. Queries server information using `ServiceExt::get_server_info`
-    /// 4. Extracts tools and capabilities
-    /// 5. Caches the information for later retrieval
+    /// 1. Validates the server configuration for security
+    /// 2. Spawns the server process using stdio transport
+    /// 3. Connects via rmcp client
+    /// 4. Queries server information using `ServiceExt::list_all_tools`
+    /// 5. Extracts tools and capabilities
+    /// 6. Caches the information for later retrieval
     ///
     /// # Errors
     ///
     /// Returns error if:
+    /// - Server configuration contains security violations
     /// - The server process cannot be spawned
     /// - Connection to the server fails
     /// - Server does not respond to capability queries
@@ -232,14 +244,17 @@ impl Introspector {
     ///
     /// ```no_run
     /// use mcp_introspector::Introspector;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
     /// let server_id = ServerId::new("github");
+    /// let config = ServerConfig::builder()
+    ///     .command("github-server".to_string())
+    ///     .build();
     ///
     /// let info = introspector
-    ///     .discover_server(server_id, "github-server")
+    ///     .discover_server(server_id, &config)
     ///     .await?;
     ///
     /// println!("Found {} tools", info.tools.len());
@@ -249,20 +264,27 @@ impl Introspector {
     pub async fn discover_server(
         &mut self,
         server_id: ServerId,
-        command: &str,
+        config: &ServerConfig,
     ) -> Result<ServerInfo> {
         tracing::info!("Discovering MCP server: {}", server_id);
 
-        // Validate command for security (prevents command injection)
-        mcp_core::validate_command(command)?;
+        // Validate server config for security (prevents command injection)
+        validate_server_config(config)?;
 
-        // Connect via stdio using rmcp
-        let transport =
-            TokioChildProcess::new(tokio::process::Command::new(command).configure(|_cmd| {}))
-                .map_err(|e| Error::ConnectionFailed {
-                    server: server_id.to_string(),
-                    source: Box::new(e),
-                })?;
+        // Connect via stdio using rmcp with full configuration
+        let transport = TokioChildProcess::new(
+            tokio::process::Command::new(&config.command).configure(|cmd| {
+                cmd.args(&config.args);
+                cmd.envs(&config.env);
+                if let Some(cwd) = &config.cwd {
+                    cmd.current_dir(cwd);
+                }
+            }),
+        )
+        .map_err(|e| Error::ConnectionFailed {
+            server: server_id.to_string(),
+            source: Box::new(e),
+        })?;
 
         // Create client using serve pattern
         let client =
@@ -313,7 +335,7 @@ impl Introspector {
 
         let info = ServerInfo {
             id: server_id.clone(),
-            name: command.to_string(),      // Use command as name
+            name: config.command.clone(),   // Use command as name
             version: "unknown".to_string(), // MCP doesn't expose version via ServiceExt
             tools,
             capabilities,
@@ -334,7 +356,7 @@ impl Introspector {
     ///
     /// ```no_run
     /// use mcp_introspector::Introspector;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
@@ -344,7 +366,10 @@ impl Introspector {
     /// assert!(introspector.get_server(&server_id).is_none());
     ///
     /// // Discover it
-    /// introspector.discover_server(server_id.clone(), "test-cmd").await?;
+    /// let config = ServerConfig::builder()
+    ///     .command("test-cmd".to_string())
+    ///     .build();
+    /// introspector.discover_server(server_id.clone(), &config).await?;
     ///
     /// // Now available
     /// assert!(introspector.get_server(&server_id).is_some());
@@ -398,13 +423,16 @@ impl Introspector {
     ///
     /// ```no_run
     /// use mcp_introspector::Introspector;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
     /// let server_id = ServerId::new("test");
+    /// let config = ServerConfig::builder()
+    ///     .command("test-cmd".to_string())
+    ///     .build();
     ///
-    /// introspector.discover_server(server_id.clone(), "test-cmd").await?;
+    /// introspector.discover_server(server_id.clone(), &config).await?;
     /// assert_eq!(introspector.server_count(), 1);
     ///
     /// let removed = introspector.remove_server(&server_id);
@@ -423,13 +451,16 @@ impl Introspector {
     ///
     /// ```no_run
     /// use mcp_introspector::Introspector;
-    /// use mcp_core::ServerId;
+    /// use mcp_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
     ///
-    /// introspector.discover_server(ServerId::new("s1"), "cmd1").await?;
-    /// introspector.discover_server(ServerId::new("s2"), "cmd2").await?;
+    /// let config1 = ServerConfig::builder().command("cmd1".to_string()).build();
+    /// let config2 = ServerConfig::builder().command("cmd2".to_string()).build();
+    ///
+    /// introspector.discover_server(ServerId::new("s1"), &config1).await?;
+    /// introspector.discover_server(ServerId::new("s2"), &config2).await?;
     /// assert_eq!(introspector.server_count(), 2);
     ///
     /// introspector.clear();
