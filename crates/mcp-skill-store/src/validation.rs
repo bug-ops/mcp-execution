@@ -84,6 +84,8 @@
 //! # }
 //! ```
 
+use blake3::Hasher;
+
 use crate::error::Result;
 use crate::types::ClaudeSkillMetadata;
 
@@ -463,8 +465,6 @@ impl SkillValidator {
 
     /// Validates checksum matches content.
     fn validate_checksum(content: &str, stored_checksum: &str, report: &mut ValidationReport) {
-        use blake3::Hasher;
-
         // Extract actual hash from "blake3:HASH" format
         let expected = if let Some(hash) = stored_checksum.strip_prefix("blake3:") {
             hash
@@ -521,7 +521,6 @@ mod tests {
         let content = "---\nname: test-skill\ndescription: A test skill\n---\n\n# Test Skill\n\nThis is a test skill.";
 
         // Calculate checksum
-        use blake3::Hasher;
         let mut hasher = Hasher::new();
         hasher.update(content.as_bytes());
         let checksum = format!("blake3:{}", hasher.finalize().to_hex());
@@ -600,8 +599,7 @@ mod tests {
         for name in valid_names {
             assert!(
                 SkillValidator::is_valid_skill_name(name),
-                "Expected '{}' to be valid",
-                name
+                "Expected '{name}' to be valid"
             );
         }
     }
@@ -620,8 +618,7 @@ mod tests {
         for name in invalid_names {
             assert!(
                 !SkillValidator::is_valid_skill_name(name),
-                "Expected '{}' to be invalid",
-                name
+                "Expected '{name}' to be invalid"
             );
         }
     }
@@ -749,7 +746,6 @@ mod tests {
         skill.content = "---\nname: test\n---\n\nContent here".to_string();
 
         // Recalculate checksum
-        use blake3::Hasher;
         let mut hasher = Hasher::new();
         hasher.update(skill.content.as_bytes());
         skill.metadata.checksums.skill_md = format!("blake3:{}", hasher.finalize().to_hex());
@@ -780,7 +776,6 @@ mod tests {
         let short_content = "---\nname: test\n---\n\nShort";
 
         // Calculate checksum
-        use blake3::Hasher;
         let mut hasher = Hasher::new();
         hasher.update(short_content.as_bytes());
         let checksum = format!("blake3:{}", hasher.finalize().to_hex());
@@ -845,7 +840,6 @@ mod tests {
         let content = "---\nname: test\n---\n\nContent";
 
         // Calculate checksum without prefix
-        use blake3::Hasher;
         let mut hasher = Hasher::new();
         hasher.update(content.as_bytes());
         let checksum_no_prefix = hasher.finalize().to_hex().to_string();
@@ -860,7 +854,7 @@ mod tests {
                 generated_at: Utc::now(),
                 generator_version: "0.1.0".to_string(),
                 checksums: SkillChecksums {
-                    skill_md: checksum_no_prefix.clone(),
+                    skill_md: checksum_no_prefix,
                     reference_md: None,
                 },
             },
@@ -955,7 +949,6 @@ mod tests {
         let content = "---\r\nname: test\r\ndescription: Test\r\n---\r\n\r\nContent";
 
         // Calculate checksum
-        use blake3::Hasher;
         let mut hasher = Hasher::new();
         hasher.update(content.as_bytes());
         let checksum = format!("blake3:{}", hasher.finalize().to_hex());
