@@ -38,14 +38,14 @@ handlebars = "6.3"
 human-panic = "2.0"
 indicatif = "0.18"
 lru = "0.16"
-mcp-bridge = { path = "crates/mcp-bridge" }
-mcp-codegen = { path = "crates/mcp-codegen" }
-mcp-core = { path = "crates/mcp-core" }
-mcp-introspector = { path = "crates/mcp-introspector" }
-mcp-skill-store = { path = "crates/mcp-skill-store" }
-mcp-skill-generator = { path = "crates/mcp-skill-generator" }
-mcp-vfs = { path = "crates/mcp-vfs" }
-mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
+mcp-bridge = {version = "0.4.0", path = "crates/mcp-bridge" }
+mcp-codegen = {version = "0.4.0", path = "crates/mcp-codegen" }
+mcp-core = {version = "0.4.0", path = "crates/mcp-core" }
+mcp-introspector = {version = "0.4.0", path = "crates/mcp-introspector" }
+mcp-skill-store = {version = "0.4.0", path = "crates/mcp-skill-store" }
+mcp-skill-generator = {version = "0.4.0", path = "crates/mcp-skill-generator" }
+mcp-vfs = {version = "0.4.0", path = "crates/mcp-vfs" }
+mcp-wasm-runtime = {version = "0.4.0", path = "crates/mcp-wasm-runtime" }
 mockall = "0.14"
 proc-macro2 = "1.0"
 quote = "1.0"
