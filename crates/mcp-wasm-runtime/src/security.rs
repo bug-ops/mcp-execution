@@ -41,6 +41,7 @@ use std::time::Duration;
 /// assert_eq!(permissive.memory_limit_bytes(), 512 * 1024 * 1024);
 /// assert!(permissive.allow_network());
 /// ```
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecurityProfile {
     /// Maximum security with minimal permissions.

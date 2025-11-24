@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use mcp_bridge::Bridge;
 use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_wasm_runtime::{Runtime, SecurityConfig};
+use mcp_wasm_runtime::{Runtime, SecurityConfig, SecurityProfile};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -263,6 +263,7 @@ pub async fn run(
     entry: String,
     args: Vec<String>,
     list_exports: bool,
+    profile: Option<SecurityProfile>,
     memory_limit: Option<u64>,
     timeout: Option<u64>,
     output_format: OutputFormat,
@@ -323,10 +324,31 @@ pub async fn run(
     }
 
     // Build security configuration
-    let security_config = SecurityConfig::builder()
-        .memory_limit_mb(memory_mb)
-        .execution_timeout(Duration::from_secs(timeout_secs))
-        .build();
+    // Start with profile (if specified), then apply CLI overrides for memory and timeout
+    let security_config = profile.map_or_else(
+        || {
+            // No profile, use CLI args or defaults
+            SecurityConfig::builder()
+                .memory_limit_mb(memory_mb)
+                .execution_timeout(Duration::from_secs(timeout_secs))
+                .build()
+        },
+        |prof| {
+            info!("Using security profile: {prof:?}");
+            // Create from profile, but CLI args for memory/timeout take precedence
+            let base = SecurityConfig::from_profile(prof);
+            // If user specified memory or timeout, override the profile defaults
+            // Otherwise use profile values as-is
+            if memory_limit.is_some() || timeout.is_some() {
+                SecurityConfig::builder()
+                    .memory_limit_mb(memory_mb)
+                    .execution_timeout(Duration::from_secs(timeout_secs))
+                    .build()
+            } else {
+                base
+            }
+        },
+    );
 
     // Create bridge and runtime
     let bridge = Bridge::new(1000); // Max 1000 cached tool results
@@ -445,6 +467,7 @@ mod tests {
             false,
             None,
             None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -460,6 +483,7 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None,
             None,
             None,
             OutputFormat::Json,
@@ -544,6 +568,7 @@ mod tests {
             false,
             None,
             None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -584,6 +609,7 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None,
             None,
             None,
             OutputFormat::Json,
@@ -629,8 +655,9 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None,      // profile
             Some(512), // Custom 512MB memory limit
-            None,
+            None,      // timeout
             OutputFormat::Json,
         )
         .await;
@@ -659,7 +686,8 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
-            None,
+            None,     // profile
+            None,     // memory_limit
             Some(30), // Custom 30s timeout
             OutputFormat::Json,
         )
@@ -689,6 +717,7 @@ mod tests {
             "nonexistent_function".to_string(),
             vec![],
             false,
+            None,
             None,
             None,
             OutputFormat::Json,
@@ -725,6 +754,7 @@ mod tests {
             false,
             None,
             None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -738,6 +768,7 @@ mod tests {
             false,
             None,
             None,
+            None,
             OutputFormat::Text,
         )
         .await;
@@ -749,6 +780,7 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None,
             None,
             None,
             OutputFormat::Pretty,
@@ -788,6 +820,7 @@ mod tests {
                 "main".to_string(),
                 vec![],
                 false,
+                None,
                 None,
                 None,
                 OutputFormat::Json,
@@ -830,8 +863,9 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None,    // profile
             Some(1), // 1MB - very small
-            None,
+            None,    // timeout
             OutputFormat::Json,
         )
         .await;
@@ -849,6 +883,7 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None,
             None,
             None,
             OutputFormat::Json,
@@ -884,6 +919,7 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None, // profile
             None, // Should use DEFAULT_MEMORY_LIMIT_MB (256)
             None, // Should use DEFAULT_TIMEOUT_SECS (60)
             OutputFormat::Json,
@@ -1003,8 +1039,9 @@ mod tests {
             "main".to_string(),
             vec![],
             true, // list_exports = true
-            None,
-            None,
+            None, // profile
+            None, // memory_limit
+            None, // timeout
             OutputFormat::Json,
         )
         .await;
@@ -1037,6 +1074,7 @@ mod tests {
             "main".to_string(),
             vec![],
             false,
+            None, // profile
             None, // Will use config file or defaults
             None,
             OutputFormat::Json,

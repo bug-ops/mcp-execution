@@ -3,6 +3,8 @@
 //! Provides commands to save, load, list, and manage skills saved to disk.
 //! Skills are stored in a directory structure with VFS files and WASM modules.
 
+mod test;
+
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use mcp_core::SkillName;
@@ -10,6 +12,8 @@ use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_skill_store::SkillStore;
 use serde::Serialize;
 use tracing::{info, warn};
+
+pub use test::TestCommand;
 
 /// Skill management actions.
 #[derive(Subcommand, Debug)]
@@ -37,6 +41,12 @@ pub enum SkillAction {
     Info {
         /// Skill name
         name: String,
+    },
+
+    /// Test skill validity and integrity
+    Test {
+        #[command(flatten)]
+        cmd: TestCommand,
     },
 }
 
@@ -153,6 +163,7 @@ pub async fn run(action: SkillAction, output_format: OutputFormat) -> Result<Exi
         SkillAction::List => list_skills(output_format),
         SkillAction::Remove { name, yes } => remove_skill(&name, yes, output_format),
         SkillAction::Info { name } => show_skill_info(&name, output_format),
+        SkillAction::Test { cmd } => cmd.execute(output_format),
     }
 }
 
