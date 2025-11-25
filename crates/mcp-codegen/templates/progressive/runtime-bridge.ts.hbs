@@ -1,40 +1,146 @@
 /**
  * MCP Bridge Runtime
  *
- * Provides runtime helpers for calling MCP tools via the mcp-cli bridge.
+ * Provides runtime helpers for calling MCP tools from generated TypeScript code.
  *
  * ## Overview
  *
  * This module acts as the runtime bridge between generated TypeScript code
  * and the actual MCP server. All tool calls go through `callMCPTool()`,
- * which communicates with the MCP server via the mcp-cli bridge command.
+ * which communicates with the MCP server via stdio transport.
  *
- * ## Implementation Status
+ * ## Requirements
  *
- * The bridge command will be implemented in Phase 2.3 of the progressive
- * loading pivot. For now, this provides the type-safe interface that
- * generated tools will use.
+ * This implementation requires the `@modelcontextprotocol/sdk` package:
+ * ```bash
+ * npm install @modelcontextprotocol/sdk
+ * ```
+ *
+ * ## Server Configuration
+ *
+ * Server connection details should be configured via environment variables
+ * or a configuration file. See your MCP server documentation for details.
  *
  * @packageDocumentation
  */
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
 /**
- * Calls an MCP tool via the bridge command.
+ * Cache of active MCP client connections.
+ * Reuses connections for multiple tool calls to the same server.
+ */
+const clientCache = new Map<string, Client>();
+
+/**
+ * Gets server configuration from Claude Code MCP settings.
  *
- * This function communicates with the mcp-cli bridge to execute MCP tools.
- * It handles serialization of parameters, execution of the tool, and
- * deserialization of results.
+ * Reads server configuration from ~/.claude/mcp.json, which is the
+ * standard location for Claude Code MCP server configuration.
+ *
+ * @param serverId - MCP server identifier
+ * @returns Server configuration with command and args
+ * @throws {Error} If server configuration is not found
+ */
+async function getServerConfig(serverId: string): Promise<{
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}> {
+  const fs = await import('fs/promises');
+  const path = await import('path');
+  const os = await import('os');
+
+  const configPath = path.join(os.homedir(), '.claude', 'mcp.json');
+
+  try {
+    const configData = await fs.readFile(configPath, 'utf-8');
+    const config = JSON.parse(configData);
+
+    if (!config.mcpServers || !config.mcpServers[serverId]) {
+      throw new Error(
+        `Server '${serverId}' not found in ${configPath}. ` +
+        `Available servers: ${Object.keys(config.mcpServers || {}).join(', ')}`
+      );
+    }
+
+    return config.mcpServers[serverId];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(
+        `MCP configuration file not found at ${configPath}. ` +
+        `Please create it with your server configurations.`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Gets or creates an MCP client for the specified server.
+ *
+ * Clients are cached and reused across multiple tool calls for performance.
+ *
+ * @param serverId - MCP server identifier
+ * @returns Connected MCP client
+ */
+async function getClient(serverId: string): Promise<Client> {
+  // Return cached client if available
+  if (clientCache.has(serverId)) {
+    return clientCache.get(serverId)!;
+  }
+
+  // Get server configuration
+  const config = await getServerConfig(serverId);
+
+  // Create stdio transport
+  const transport = new StdioClientTransport({
+    command: config.command,
+    args: config.args,
+    env: {
+      ...process.env,
+      ...config.env,
+    },
+  });
+
+  // Create and connect client
+  const client = new Client(
+    {
+      name: 'mcp-progressive-client',
+      version: '1.0.0',
+    },
+    {
+      capabilities: {},
+    }
+  );
+
+  await client.connect(transport);
+
+  // Cache for reuse
+  clientCache.set(serverId, client);
+
+  return client;
+}
+
+/**
+ * Calls an MCP tool on the specified server.
+ *
+ * This function handles connection management, parameter serialization,
+ * tool execution, and result deserialization. Connections are cached
+ * for performance.
  *
  * @param serverId - MCP server identifier (e.g., "github", "google-drive")
  * @param toolName - Tool name to call (e.g., "create_issue")
  * @param params - Tool parameters (will be serialized to JSON)
  * @returns Tool execution result
- * @throws {Error} If tool execution fails or bridge is not available
+ * @throws {Error} If tool execution fails or server is not configured
  *
  * @example
  * ```typescript
  * const result = await callMCPTool('github', 'create_issue', {
- *   repo: 'owner/repo',
+ *   owner: 'myorg',
+ *   repo: 'myrepo',
  *   title: 'Bug report',
  *   body: 'Description'
  * });
@@ -45,15 +151,54 @@ export async function callMCPTool(
   toolName: string,
   params: unknown
 ): Promise<unknown> {
-  // TODO: Phase 2.3 - Implement bridge command
-  // This will execute: mcp-cli bridge call <serverId> <toolName> <params>
-  // For now, this is a placeholder that will be implemented when
-  // CLI bridge command is added
+  try {
+    // Get connected client
+    const client = await getClient(serverId);
 
-  throw new Error(
-    `callMCPTool not yet implemented. ` +
-    `Attempted to call ${serverId}:${toolName} with params: ${JSON.stringify(params)}`
+    // Call tool
+    const response = await client.callTool({
+      name: toolName,
+      arguments: params as Record<string, unknown>,
+    });
+
+    // Check for errors in response
+    if (response.isError) {
+      throw new Error(
+        `Tool ${toolName} failed: ${JSON.stringify(response.content)}`
+      );
+    }
+
+    // Extract content from response
+    // MCP responses are in format: { content: [...], isError: false }
+    return response.content;
+  } catch (error) {
+    // Add context to error
+    const errorMessage =
+      error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to call ${serverId}:${toolName}: ${errorMessage}`
+    );
+  }
+}
+
+/**
+ * Closes all cached MCP client connections.
+ *
+ * Call this when your application is shutting down to cleanly
+ * close all server connections.
+ *
+ * @example
+ * ```typescript
+ * // In your cleanup code
+ * await closeAllConnections();
+ * ```
+ */
+export async function closeAllConnections(): Promise<void> {
+  const closePromises = Array.from(clientCache.values()).map((client) =>
+    client.close()
   );
+  await Promise.all(closePromises);
+  clientCache.clear();
 }
 
 /**

@@ -1,446 +1,367 @@
-# Progressive Loading Usage Example
+# Progressive Loading Usage Guide
 
-This example demonstrates how to use progressive loading to achieve 98% token savings when working with MCP servers in Claude Code.
+Complete guide for using progressive loading pattern with MCP tools.
 
-## Prerequisites
+## Overview
 
-- `mcp-cli` installed (`cargo install --path crates/mcp-cli`)
-- An MCP server (e.g., `github-mcp-server`)
-- Required environment variables (e.g., `GITHUB_TOKEN` for GitHub server)
+Progressive loading generates one TypeScript file per MCP tool, achieving **98% token savings** by loading only the tools you need. Instead of loading 30,000 tokens for all tools, you load 500-1,500 tokens per tool.
 
-## Step 1: Generate TypeScript Files for an MCP Server
+## Quick Start
 
-Generate progressive loading files for the GitHub MCP server:
+### 1. Generate Progressive Loading Files
 
 ```bash
-mcp-cli generate github-mcp-server \
-  --env GITHUB_TOKEN=ghp_your_token_here
+# Generate TypeScript files for GitHub MCP server
+mcp-execution-cli generate docker \
+  --arg=run --arg=-i --arg=--rm \
+  --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
+  --arg=ghcr.io/github/github-mcp-server \
+  --env=GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_YOUR_TOKEN \
+  --name=github
+
+# Files are created in: ~/.claude/servers/github/
 ```
 
-**Output:**
+### 2. Configure MCP Servers
 
-```
-✓ Introspecting MCP server 'github-mcp-server'...
-✓ Discovered 45 tools
-✓ Generating progressive loading code...
-✓ Exported 47 files to ~/.claude/servers/github/
-
-Server: GitHub MCP Server
-Tools: 45
-Output: /Users/username/.claude/servers/github
-```
-
-**Files generated:**
-
-- 45 tool files (e.g., `createIssue.ts`, `updateIssue.ts`, ...)
-- 1 index file (`index.ts`)
-- 1 runtime bridge (`_runtime/mcp-bridge.ts`)
-- **Total**: 47 files
-
-## Step 2: Claude Code Discovers Available MCP Servers
-
-Claude Code can now discover what MCP servers have been generated:
-
-```bash
-$ ls ~/.claude/servers/
-```
-
-**Output:**
-
-```
-github/
-```
-
-If you generate more servers, you'll see them all:
-
-```bash
-$ mcp-cli generate slack-mcp-server --env SLACK_TOKEN=xoxb-...
-$ mcp-cli generate google-drive-mcp-server --env GOOGLE_CREDENTIALS=...
-
-$ ls ~/.claude/servers/
-```
-
-**Output:**
-
-```
-github/
-google-drive/
-slack/
-```
-
-## Step 3: Discover Tools in a Specific Server
-
-List all tools available in the GitHub server:
-
-```bash
-$ ls ~/.claude/servers/github/
-```
-
-**Output:**
-
-```
-addComment.ts
-createIssue.ts
-createPullRequest.ts
-deleteFile.ts
-getFile.ts
-getIssue.ts
-getPullRequest.ts
-listBranches.ts
-listCommits.ts
-listIssues.ts
-listPullRequests.ts
-searchCode.ts
-searchIssues.ts
-searchRepositories.ts
-updateIssue.ts
-updatePullRequest.ts
-... (29 more files)
-_runtime/
-index.ts
-```
-
-## Step 4: Progressive Loading - Load Only What You Need
-
-This is where token savings happen!
-
-### Traditional Approach (Load Everything)
-
-```bash
-# ❌ Loading entire server definition
-$ cat ~/.claude/servers/github/index.ts
-
-# Result: ~30,000 tokens for all 45 tools
-```
-
-### Progressive Loading (Load One Tool)
-
-```bash
-# ✅ Load only the createIssue tool
-$ cat ~/.claude/servers/github/createIssue.ts
-
-# Result: ~500-1,500 tokens
-# Savings: 98%! 🎉
-```
-
-## Step 5: Understanding Tool Structure
-
-When you load a single tool file, you see its complete API:
-
-```bash
-$ cat ~/.claude/servers/github/createIssue.ts
-```
-
-**Output:**
-
-```typescript
-import { callMCPTool } from './_runtime/mcp-bridge.js';
-
-/**
- * Creates a new issue in a GitHub repository
- *
- * @param params - Tool parameters
- * @returns Tool execution result
- * @throws {Error} If tool execution fails
- */
-export async function createIssue(
-  params: CreateIssueParams
-): Promise<CreateIssueResult> {
-  return await callMCPTool('github', 'create_issue', params);
-}
-
-/**
- * Parameters for createIssue tool.
- */
-export interface CreateIssueParams {
-  /**
-   * Repository in format "owner/repo"
-   */
-  repo: string;
-
-  /**
-   * Issue title
-   */
-  title: string;
-
-  /**
-   * Issue body
-   */
-  body?: string;
-
-  /**
-   * Labels to apply
-   */
-  labels?: string[];
-
-  /**
-   * Assignees
-   */
-  assignees?: string[];
-}
-
-/**
- * Result type for createIssue tool.
- *
- * The structure of the result depends on the specific tool implementation.
- * Refer to the MCP server documentation for details.
- */
-export interface CreateIssueResult {
-  [key: string]: unknown;
-}
-```
-
-### What Claude Code Learns
-
-From this TypeScript file, Claude Code can see:
-
-1. **Function signature**: `createIssue(params: CreateIssueParams): Promise<CreateIssueResult>`
-2. **Required parameters**: `repo` and `title` (no `?` mark)
-3. **Optional parameters**: `body`, `labels`, `assignees` (has `?` mark)
-4. **Parameter types**: All clearly typed (`string`, `string[]`, etc.)
-5. **Documentation**: JSDoc comments explain each parameter
-
-## Step 6: Loading Multiple Tools (Still Efficient)
-
-If Claude Code needs multiple tools, it loads them individually:
-
-```bash
-# Load createIssue
-$ cat ~/.claude/servers/github/createIssue.ts
-# ~500 tokens
-
-# Load updateIssue
-$ cat ~/.claude/servers/github/updateIssue.ts
-# ~600 tokens
-
-# Load getIssue
-$ cat ~/.claude/servers/github/getIssue.ts
-# ~400 tokens
-
-# Total: ~1,500 tokens for 3 tools
-# vs ~30,000 tokens for all 45 tools
-# Savings: 95% even when loading multiple tools!
-```
-
-## Token Savings Analysis
-
-### Scenario: Creating a GitHub Issue
-
-**Traditional approach** (load entire server):
-
-```
-Load all 45 tools: ~30,000 tokens
-Use 1 tool: 0 additional tokens
-Total: 30,000 tokens
-```
-
-**Progressive loading**:
-
-```
-Load 1 tool (createIssue): ~500 tokens
-Use 1 tool: 0 additional tokens
-Total: 500 tokens
-Savings: 98.3%! 🎉
-```
-
-### Scenario: Working with Issues (5 tools)
-
-**Traditional approach**:
-
-```
-Load all 45 tools: ~30,000 tokens
-Use 5 tools: 0 additional tokens
-Total: 30,000 tokens
-```
-
-**Progressive loading**:
-
-```
-Load createIssue: ~500 tokens
-Load updateIssue: ~600 tokens
-Load getIssue: ~400 tokens
-Load listIssues: ~700 tokens
-Load addComment: ~450 tokens
-Total: 2,650 tokens
-Savings: 91.2%! 🎉
-```
-
-## Current Limitations
-
-### callMCPTool() Is Not Yet Implemented
-
-The generated TypeScript shows the API structure, but the `callMCPTool()` function in `_runtime/mcp-bridge.ts` is currently a stub:
-
-```typescript
-// Current implementation (stub)
-export async function callMCPTool(
-  serverId: string,
-  toolName: string,
-  params: unknown
-): Promise<unknown> {
-  throw new Error(
-    `callMCPTool not yet implemented. ` +
-    `Attempted to call ${serverId}:${toolName} with params: ${JSON.stringify(params)}`
-  );
-}
-```
-
-### Workarounds
-
-Until `callMCPTool()` is implemented (planned for Phase 2.3):
-
-**Option 1: Use MCP Server Directly**
-
-```bash
-# Call GitHub MCP server directly using its native protocol
-# (requires MCP protocol knowledge)
-```
-
-**Option 2: Use for Discovery Only**
-
-```bash
-# Use progressive loading to discover and understand tools
-# Then manually construct MCP requests based on TypeScript interfaces
-```
-
-**Option 3: Wait for Phase 2.3**
-
-Implementation of `mcp-cli bridge` command will make `callMCPTool()` functional:
-
-```bash
-# Future: mcp-cli bridge will execute MCP calls
-mcp-cli bridge call github create_issue '{"repo":"owner/repo","title":"Bug report"}'
-```
-
-## Advanced Usage
-
-### Custom Output Directory
-
-Generate tools to a custom location:
-
-```bash
-mcp-cli generate github-mcp-server \
-  --progressive-output /custom/path/github \
-  --env GITHUB_TOKEN=ghp_xxx
-```
-
-### HTTP/SSE Transport
-
-For MCP servers using HTTP or SSE:
-
-```bash
-# HTTP transport
-mcp-cli generate --http https://api.example.com/mcp \
-  --header "Authorization=Bearer token"
-
-# SSE transport
-mcp-cli generate --sse https://api.example.com/mcp/events \
-  --header "Authorization=Bearer token"
-```
-
-### Docker-Based MCP Servers
-
-For MCP servers running in Docker:
-
-```bash
-mcp-cli generate docker \
-  --arg run --arg -i --arg --rm \
-  --arg ghcr.io/org/mcp-server \
-  --env API_KEY=xxx
-```
-
-### JSON Output (for Scripting)
-
-```bash
-mcp-cli generate github-mcp-server \
-  --env GITHUB_TOKEN=ghp_xxx \
-  --format json
-```
-
-**Output:**
+Create `~/.claude/mcp.json` with your server configurations:
 
 ```json
 {
-  "server_id": "github",
-  "server_name": "GitHub MCP Server",
-  "tool_count": 45,
-  "output_path": "/Users/username/.claude/servers/github"
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_YOUR_TOKEN_HERE"
+      }
+    }
+  }
 }
+```
+
+See [`mcp.json.example`](./mcp.json.example) for more server examples.
+
+### 3. Install Dependencies
+
+The runtime bridge requires the MCP SDK:
+
+```bash
+npm install @modelcontextprotocol/sdk
+```
+
+### 4. Use Generated Tools
+
+Load only the tools you need:
+
+```typescript
+// Load only the specific tools needed
+import { createIssue } from '~/.claude/servers/github/github/createIssue.js';
+import { listIssues } from '~/.claude/servers/github/github/listIssues.js';
+
+// Call tools with type-safe parameters
+const issue = await createIssue({
+  owner: 'myorg',
+  repo: 'myrepo',
+  title: 'Bug: Login button not working',
+  body: 'Steps to reproduce:\n1. Navigate to /login\n2. Click login button\n3. Nothing happens'
+});
+
+console.log(`Created issue #${issue.number}`);
+```
+
+## Generated File Structure
+
+```
+~/.claude/servers/github/
+└── github/
+    ├── _runtime/
+    │   └── mcp-bridge.ts       # Runtime bridge for MCP communication
+    ├── index.ts                 # Re-exports all tools (not recommended)
+    ├── createIssue.ts          # Individual tool (500 tokens)
+    ├── updateIssue.ts          # Individual tool (500 tokens)
+    ├── listIssues.ts           # Individual tool (500 tokens)
+    └── ...                      # 37 more tools
 ```
 
 ## Best Practices
 
-### 1. Generate Once, Use Many Times
-
-```bash
-# Generate tools once
-mcp-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
-
-# Use them in many Claude Code sessions
-# No need to regenerate unless server changes
-```
-
-### 2. Organize by Server
-
-Keep different servers in separate directories:
-
-```
-~/.claude/servers/
-├── github/        # GitHub tools
-├── slack/         # Slack tools
-└── google-drive/  # Google Drive tools
-```
-
-### 3. Load Tools Progressively
-
-```bash
-# ❌ Don't load index.ts (loads all tools)
-cat ~/.claude/servers/github/index.ts
-
-# ✅ Load individual tools as needed
-cat ~/.claude/servers/github/createIssue.ts
-cat ~/.claude/servers/github/updateIssue.ts
-```
-
-### 4. Use TypeScript Interfaces
-
-The generated interfaces show exactly what parameters are required:
+### ✅ DO: Load Specific Tools
 
 ```typescript
-export interface CreateIssueParams {
-  repo: string;        // Required (no ?)
-  title: string;       // Required (no ?)
-  body?: string;       // Optional (has ?)
-  labels?: string[];   // Optional (has ?)
+// GOOD: Load only what you need (500 tokens)
+import { createIssue } from '~/.claude/servers/github/github/createIssue.js';
+```
+
+### ❌ DON'T: Load All Tools
+
+```typescript
+// BAD: Loads everything (30,000 tokens)
+import * as github from '~/.claude/servers/github/github/index.js';
+```
+
+## Token Savings Comparison
+
+| Pattern | Tools Loaded | Tokens | Savings |
+|---------|--------------|--------|---------|
+| **Traditional** | All 40 tools | ~30,000 | 0% |
+| **Progressive** | 1 tool | ~500 | 98% |
+| **Progressive** | 3 tools | ~1,500 | 95% |
+| **Progressive** | 10 tools | ~5,000 | 83% |
+
+## Server Configuration
+
+### GitHub MCP Server (Docker)
+
+```json
+{
+  "github": {
+    "command": "docker",
+    "args": [
+      "run", "-i", "--rm",
+      "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+      "ghcr.io/github/github-mcp-server"
+    ],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_..."
+    }
+  }
 }
 ```
 
-## Summary
+### Filesystem MCP Server (npx)
 
-Progressive loading provides:
+```json
+{
+  "filesystem": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "/path/to/allowed/directory"
+    ]
+  }
+}
+```
 
-- ✅ **98% token savings** vs traditional all-in-one approach
-- ✅ **Type-safe interfaces** for all MCP tools
-- ✅ **On-demand loading** - load only what you need
-- ✅ **Simple discovery** - `ls` and `cat` to explore tools
-- ✅ **Full documentation** - JSDoc comments in every file
+### PostgreSQL MCP Server
 
-Current limitation:
+```json
+{
+  "postgres": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-postgres",
+      "postgresql://localhost/mydb"
+    ]
+  }
+}
+```
 
-- ⚠️ **Execution not yet implemented** - waiting for Phase 2.3 (`mcp-cli bridge`)
+## Runtime Bridge
 
-For now, use progressive loading for **tool discovery and understanding**. Execution will be added in future releases.
+The `_runtime/mcp-bridge.ts` file provides the connection between generated TypeScript and MCP servers.
 
-## Next Steps
+### Key Features
 
-1. Generate tools for your favorite MCP servers
-2. Explore the TypeScript files to understand available tools
-3. Achieve 98% token savings through progressive loading
-4. Watch for Phase 2.3 updates to enable full execution
+1. **Connection Caching**: Reuses MCP client connections across multiple tool calls
+2. **Automatic Configuration**: Reads from `~/.claude/mcp.json`
+3. **Error Handling**: Clear error messages for debugging
+4. **Type Safety**: Full TypeScript type checking
 
-## Related Documentation
+### API
 
-- **CLI Reference**: See `mcp-cli --help`
-- **SKILL.md**: `~/.claude/skills/mcp-progressive-loading/SKILL.md`
-- **ADR-010**: Decision to focus on progressive loading only
-- **Project README**: `/path/to/mcp-execution/README.md`
+#### `callMCPTool(serverId, toolName, params)`
+
+Calls an MCP tool with given parameters.
+
+```typescript
+const result = await callMCPTool('github', 'create_issue', {
+  owner: 'myorg',
+  repo: 'myrepo',
+  title: 'Bug report',
+  body: 'Description'
+});
+```
+
+#### `closeAllConnections()`
+
+Closes all cached connections (call during shutdown).
+
+```typescript
+// Cleanup on exit
+process.on('SIGINT', async () => {
+  await closeAllConnections();
+  process.exit(0);
+});
+```
+
+## Examples
+
+### Create GitHub Issue
+
+```typescript
+import { createIssue } from '~/.claude/servers/github/github/createIssue.js';
+
+const issue = await createIssue({
+  owner: 'modelcontextprotocol',
+  repo: 'specification',
+  title: 'Feature request: Support for streaming responses',
+  body: 'It would be great to support streaming for long-running operations...',
+  labels: ['enhancement', 'discussion']
+});
+
+console.log(`Issue created: ${issue.html_url}`);
+```
+
+### List Pull Requests
+
+```typescript
+import { listPullRequests } from '~/.claude/servers/github/github/listPullRequests.js';
+
+const prs = await listPullRequests({
+  owner: 'modelcontextprotocol',
+  repo: 'specification',
+  state: 'open',
+  perPage: 10
+});
+
+prs.forEach(pr => {
+  console.log(`#${pr.number}: ${pr.title} by ${pr.user.login}`);
+});
+```
+
+### Search Code
+
+```typescript
+import { searchCode } from '~/.claude/servers/github/github/searchCode.js';
+
+const results = await searchCode({
+  query: 'language:rust progressive loading',
+  perPage: 5
+});
+
+results.items.forEach(item => {
+  console.log(`${item.repository.full_name}:${item.path}`);
+});
+```
+
+## Troubleshooting
+
+### Error: MCP configuration file not found
+
+**Solution**: Create `~/.claude/mcp.json` with your server configurations.
+
+```bash
+cp examples/mcp.json.example ~/.claude/mcp.json
+# Edit with your tokens and paths
+```
+
+### Error: Server 'xyz' not found in config
+
+**Solution**: Add the server to your `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "xyz": {
+      "command": "...",
+      "args": [...]
+    }
+  }
+}
+```
+
+### Error: Cannot find module '@modelcontextprotocol/sdk'
+
+**Solution**: Install the MCP SDK:
+
+```bash
+npm install @modelcontextprotocol/sdk
+```
+
+## Performance
+
+Progressive loading is optimized for:
+
+- **Generation**: ~2ms to generate 42 files (TypeScript code)
+- **Loading**: 500-1,500 tokens per tool vs 30,000 for all tools
+- **Runtime**: Connections cached and reused across calls
+
+## CLI Commands
+
+### Generate Progressive Loading Files
+
+```bash
+mcp-execution-cli generate <server> [OPTIONS]
+```
+
+Options:
+- `--name <NAME>` - Custom directory name (default: server command)
+- `--arg <ARG>` - Server command argument (repeatable)
+- `--env <KEY=VALUE>` - Environment variable (repeatable)
+- `--progressive-output <DIR>` - Custom output directory
+
+### Examples
+
+```bash
+# GitHub via Docker with custom name
+mcp-execution-cli generate docker \
+  --arg=run --arg=-i --arg=--rm \
+  --arg=ghcr.io/github/github-mcp-server \
+  --name=github
+
+# Filesystem via npx
+mcp-execution-cli generate npx \
+  --arg=-y \
+  --arg=@modelcontextprotocol/server-filesystem \
+  --arg=/path/to/dir \
+  --name=filesystem
+
+# Custom output directory
+mcp-execution-cli generate docker \
+  --arg=... \
+  --progressive-output=/tmp/my-tools
+```
+
+## Architecture
+
+```
+┌─────────────────────┐
+│ Generated Tools     │  500-1,500 tokens each
+│ (createIssue.ts)    │  Type-safe interfaces
+└──────────┬──────────┘
+           │
+           ↓
+┌─────────────────────┐
+│ Runtime Bridge      │  Connection management
+│ (mcp-bridge.ts)     │  Parameter serialization
+└──────────┬──────────┘
+           │
+           ↓
+┌─────────────────────┐
+│ MCP SDK             │  Official @modelcontextprotocol/sdk
+│ (StdioTransport)    │  stdio communication
+└──────────┬──────────┘
+           │
+           ↓
+┌─────────────────────┐
+│ MCP Server          │  GitHub, Filesystem, etc.
+│ (Docker/npx)        │  Tool execution
+└─────────────────────┘
+```
+
+## Further Reading
+
+- [MCP Specification](https://github.com/modelcontextprotocol/specification)
+- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+- [GitHub MCP Server](https://github.com/github/github-mcp-server)
+- [Progressive Loading ADR](../docs/adr/010-simplify-to-progressive-only.md)
