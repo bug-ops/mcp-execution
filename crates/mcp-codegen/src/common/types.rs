@@ -96,6 +96,28 @@ impl GeneratedCode {
     pub fn file_count(&self) -> usize {
         self.files.len()
     }
+
+    /// Returns an iterator over the generated files.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_codegen::{GeneratedCode, GeneratedFile};
+    ///
+    /// let mut code = GeneratedCode::new();
+    /// code.add_file(GeneratedFile {
+    ///     path: "test.ts".to_string(),
+    ///     content: "content".to_string(),
+    /// });
+    ///
+    /// for file in code.files() {
+    ///     println!("Path: {}", file.path);
+    /// }
+    /// ```
+    #[inline]
+    pub fn files(&self) -> impl Iterator<Item = &GeneratedFile> {
+        self.files.iter()
+    }
 }
 
 impl Default for GeneratedCode {
@@ -127,6 +149,48 @@ pub struct GeneratedFile {
     pub path: String,
     /// File content
     pub content: String,
+}
+
+impl GeneratedFile {
+    /// Returns the file path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_codegen::GeneratedFile;
+    ///
+    /// let file = GeneratedFile {
+    ///     path: "test.ts".to_string(),
+    ///     content: String::new(),
+    /// };
+    ///
+    /// assert_eq!(file.path(), "test.ts");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Returns the file content.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_codegen::GeneratedFile;
+    ///
+    /// let file = GeneratedFile {
+    ///     path: "test.ts".to_string(),
+    ///     content: "export {}".to_string(),
+    /// };
+    ///
+    /// assert_eq!(file.content(), "export {}");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
 }
 
 /// Template context for code generation.

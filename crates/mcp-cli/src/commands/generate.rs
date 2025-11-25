@@ -5,17 +5,49 @@
 //! 1. Introspects the server to discover tools and schemas
 //! 2. Prompts user for skill name and description
 //! 3. Converts to `SkillData` and renders templates
-//! 4. Saves skill to `.claude/skills/` directory
+//! 4. Saves skill to `.claude/skills/` directory or generates progressive loading files
 
 use super::common::build_server_config;
 use anyhow::{Context, Result, bail};
+use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_codegen::skills::SkillOrchestrator;
 use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_core::{SkillDescription, SkillName};
 use mcp_introspector::Introspector;
 use mcp_skill_store::SkillStore;
+use mcp_vfs::VfsBuilder;
 use serde::Serialize;
+use std::path::PathBuf;
 use tracing::{info, warn};
+
+/// Output mode for code generation.
+///
+/// Determines what kind of files to generate from the MCP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    /// Generate SKILL.md only (backward compatible)
+    Skill,
+    /// Generate progressive loading files only
+    Progressive,
+    /// Generate both SKILL.md and progressive files
+    Both,
+}
+
+impl OutputMode {
+    /// Parse output mode from string.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if mode string is invalid.
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "skill" => Ok(Self::Skill),
+            "progressive" => Ok(Self::Progressive),
+            "both" => Ok(Self::Both),
+            _ => bail!("Invalid output mode: '{s}'. Valid options: skill, progressive, both"),
+        }
+    }
+}
 
 /// Result of Claude skill generation.
 #[derive(Debug, Serialize)]
@@ -56,6 +88,9 @@ struct GenerationResult {
 /// * `use_llm` - Use LLM-based categorization (requires `ANTHROPIC_API_KEY`)
 /// * `dictionary` - Path to custom categorization dictionary YAML file
 /// * `categorize` - Generate categorized skill with progressive loading
+/// * `output_mode` - Output mode: skill, progressive, or both
+/// * `progressive_output` - Custom output directory for progressive files
+/// * `skill_output` - Custom output directory for skill files
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -88,6 +123,9 @@ struct GenerationResult {
 ///     false, // use_llm
 ///     None,  // dictionary
 ///     false, // categorize
+///     "skill".to_string(), // output_mode
+///     None,  // progressive_output
+///     None,  // skill_output
 ///     OutputFormat::Pretty,
 /// ).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);
@@ -108,6 +146,9 @@ pub async fn run(
     use_llm: bool,
     dictionary: Option<String>,
     categorize: bool,
+    output_mode_str: String,
+    progressive_output: Option<String>,
+    skill_output: Option<String>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build ServerConfig from CLI arguments
@@ -135,37 +176,172 @@ pub async fn run(
 
     info!("Discovered {} tools from server", server_info.tools.len());
 
-    // Step 2: Get skill metadata (interactive or from CLI args)
-    let server_name = server_id.as_str();
-    let skill_name = if let Some(name) = skill_name_input {
-        SkillName::new(&name).context("invalid skill name")?
-    } else {
-        prompt_skill_name(server_name)?
-    };
+    // Parse output mode
+    let output_mode = OutputMode::from_str(&output_mode_str)?;
+    info!("Output mode: {:?}", output_mode);
 
-    let skill_description = if let Some(desc) = skill_description_input {
-        SkillDescription::new(&desc).context("invalid skill description")?
-    } else {
-        prompt_skill_description(server_name, &server_info)?
-    };
-
-    info!("Creating skill: {}", skill_name.as_str());
-
-    // Log categorization strategy
-    if use_llm {
-        info!("Using LLM-based intelligent categorization");
-    } else if let Some(ref dict_path) = dictionary {
-        info!("Using custom dictionary: {}", dict_path);
-    } else {
-        info!("Using default heuristic categorization");
+    // Generate progressive loading files if requested
+    if matches!(output_mode, OutputMode::Progressive | OutputMode::Both) {
+        generate_progressive_files(&server_info, &server_id, progressive_output.as_deref())?;
     }
 
-    // Step 3: Generate skill bundle with orchestrator
-    let orchestrator = SkillOrchestrator::new().context("failed to create skill orchestrator")?;
+    // Generate SKILL.md if requested
+    if matches!(output_mode, OutputMode::Skill | OutputMode::Both) {
+        // Step 2: Get skill metadata (interactive or from CLI args)
+        let server_name = server_id.as_str();
+        let skill_name = if let Some(name) = skill_name_input {
+            SkillName::new(&name).context("invalid skill name")?
+        } else {
+            prompt_skill_name(server_name)?
+        };
 
-    let store = SkillStore::new_claude().context("failed to initialize skill store")?;
+        let skill_description = if let Some(desc) = skill_description_input {
+            SkillDescription::new(&desc).context("invalid skill description")?
+        } else {
+            prompt_skill_description(server_name, &server_info)?
+        };
 
-    // Generate and save based on categorize flag
+        info!("Creating skill: {}", skill_name.as_str());
+
+        // Log categorization strategy
+        if use_llm {
+            info!("Using LLM-based intelligent categorization");
+        } else if let Some(ref dict_path) = dictionary {
+            info!("Using custom dictionary: {}", dict_path);
+        } else {
+            info!("Using default heuristic categorization");
+        }
+
+        // Step 3: Generate skill bundle with orchestrator
+        let orchestrator =
+            SkillOrchestrator::new().context("failed to create skill orchestrator")?;
+
+        let store_path = skill_output.as_ref().map(PathBuf::from);
+        let store = if let Some(path) = store_path {
+            SkillStore::new(path).context("failed to initialize skill store")?
+        } else {
+            SkillStore::new_claude().context("failed to initialize skill store")?
+        };
+
+        // Generate and save based on categorize flag
+        generate_skill_files(
+            &orchestrator,
+            &store,
+            &server_info,
+            &skill_name,
+            &skill_description,
+            use_llm,
+            categorize,
+        )
+        .await?;
+
+        // Get skill path
+        let home = dirs::home_dir().context("failed to get home directory")?;
+        let skill_path = skill_output
+            .as_ref()
+            .map_or_else(|| home.join(".claude/skills"), PathBuf::from)
+            .join(skill_name.as_str());
+        info!("Skill saved to: {}", skill_path.display());
+
+        // Output success message
+        let result = GenerationResult {
+            skill_name: skill_name.to_string(),
+            server_name: server_info.name.clone(),
+            tool_count: server_info.tools.len(),
+            skill_path: skill_path.display().to_string(),
+        };
+
+        let formatted = crate::formatters::format_output(&result, output_format)?;
+        println!("{formatted}");
+
+        info!(
+            "Successfully created skill '{}' with {} tools",
+            result.skill_name, result.tool_count
+        );
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Generates progressive loading files for a server.
+///
+/// Creates TypeScript files for each tool and exports to filesystem.
+///
+/// # Errors
+///
+/// Returns error if generation or filesystem export fails.
+fn generate_progressive_files(
+    server_info: &mcp_introspector::ServerInfo,
+    server_id: &mcp_core::ServerId,
+    progressive_output: Option<&str>,
+) -> Result<()> {
+    info!("\nGenerating progressive loading files...");
+
+    // Create generator
+    let generator =
+        ProgressiveGenerator::new().context("failed to create progressive generator")?;
+
+    // Generate TypeScript files
+    let generated_code = generator
+        .generate(server_info)
+        .context("failed to generate progressive files")?;
+
+    info!("  Generated {} files", generated_code.file_count());
+
+    // Build VFS from generated code
+    let base_path = format!("/{}/", server_id.as_str());
+    let vfs = VfsBuilder::from_generated_code(generated_code, base_path.as_str())
+        .build()
+        .context("failed to build VFS")?;
+
+    // Determine output directory
+    let output_dir = if let Some(path) = progressive_output {
+        PathBuf::from(path)
+    } else {
+        dirs::home_dir()
+            .context("cannot determine home directory")?
+            .join(".claude/servers")
+    };
+
+    info!("  Output directory: {}", output_dir.display());
+
+    // Export to filesystem
+    vfs.export_to_filesystem(&output_dir)
+        .context("failed to export files to filesystem")?;
+
+    info!("Progressive loading files generated successfully");
+    info!(
+        "   Location: {}/{}/",
+        output_dir.display(),
+        server_id.as_str()
+    );
+    info!("   Files:");
+    for path in vfs.all_paths() {
+        // Strip leading server path for cleaner display
+        let display_path = path
+            .as_str()
+            .strip_prefix(&base_path)
+            .unwrap_or(path.as_str());
+        info!("     - {}", display_path);
+    }
+
+    Ok(())
+}
+
+/// Generates skill files (SKILL.md, REFERENCE.md, etc).
+///
+/// # Errors
+///
+/// Returns error if generation or save fails.
+async fn generate_skill_files(
+    orchestrator: &SkillOrchestrator,
+    store: &SkillStore,
+    server_info: &mcp_introspector::ServerInfo,
+    skill_name: &SkillName,
+    skill_description: &SkillDescription,
+    use_llm: bool,
+    categorize: bool,
+) -> Result<()> {
     if categorize {
         info!("Generating categorized skill with progressive loading...");
 
@@ -173,9 +349,9 @@ pub async fn run(
             // Async LLM-based categorization
             let bundle = orchestrator
                 .generate_categorized_bundle_async(
-                    &server_info,
-                    &skill_name,
-                    &skill_description,
+                    server_info,
+                    skill_name,
+                    skill_description,
                     "claude-sonnet-4",
                     10,
                 )
@@ -194,7 +370,7 @@ pub async fn run(
         } else {
             // Sync dictionary/universal categorization
             let bundle = orchestrator
-                .generate_categorized_bundle(&server_info, &skill_name, &skill_description)
+                .generate_categorized_bundle(server_info, skill_name, skill_description)
                 .context("failed to generate categorized bundle")?;
 
             info!(
@@ -210,7 +386,7 @@ pub async fn run(
     } else {
         // Standard non-categorized generation
         let bundle = orchestrator
-            .generate_bundle(&server_info, &skill_name, &skill_description)
+            .generate_bundle(server_info, skill_name, skill_description)
             .context("failed to generate skill bundle")?;
 
         info!(
@@ -227,28 +403,7 @@ pub async fn run(
             .context("failed to save skill bundle")?;
     }
 
-    // Get skill path from HOME/.claude/skills/skill-name
-    let home = dirs::home_dir().context("failed to get home directory")?;
-    let skill_path = home.join(".claude/skills").join(skill_name.as_str());
-    info!("Skill saved to: {}", skill_path.display());
-
-    // Step 6: Output success message
-    let result = GenerationResult {
-        skill_name: skill_name.to_string(),
-        server_name: server_info.name,
-        tool_count: server_info.tools.len(),
-        skill_path: skill_path.display().to_string(),
-    };
-
-    let formatted = crate::formatters::format_output(&result, output_format)?;
-    println!("{formatted}");
-
-    info!(
-        "Successfully created skill '{}' with {} tools",
-        result.skill_name, result.tool_count
-    );
-
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 /// Prompts user for skill name interactively.
@@ -426,9 +581,12 @@ mod tests {
             vec![],
             Some("test-skill".to_string()),
             Some("Test skill description".to_string()),
-            false, // use_llm
-            None,  // dictionary
-            false, // categorize
+            false,               // use_llm
+            None,                // dictionary
+            false,               // categorize
+            "skill".to_string(), // output_mode
+            None,                // progressive_output
+            None,                // skill_output
             OutputFormat::Json,
         )
         .await;
@@ -465,9 +623,12 @@ mod tests {
             vec![],
             Some("Invalid-Skill-Name".to_string()), // uppercase invalid
             Some("Test description".to_string()),
-            false, // use_llm
-            None,  // dictionary
-            false, // categorize
+            false,               // use_llm
+            None,                // dictionary
+            false,               // categorize
+            "skill".to_string(), // output_mode
+            None,                // progressive_output
+            None,                // skill_output
             OutputFormat::Json,
         )
         .await;
@@ -492,6 +653,9 @@ mod tests {
             false,                                              // use_llm
             None,                                               // dictionary
             false,                                              // categorize
+            "skill".to_string(),                                // output_mode
+            None,                                               // progressive_output
+            None,                                               // skill_output
             OutputFormat::Json,
         )
         .await;
@@ -513,9 +677,12 @@ mod tests {
             vec![],
             Some("test-skill".to_string()),
             Some("Test skill".to_string()),
-            false, // use_llm
-            None,  // dictionary
-            false, // categorize
+            false,               // use_llm
+            None,                // dictionary
+            false,               // categorize
+            "skill".to_string(), // output_mode
+            None,                // progressive_output
+            None,                // skill_output
             OutputFormat::Json,
         )
         .await;
@@ -538,9 +705,12 @@ mod tests {
             vec![],
             Some("test-skill".to_string()),
             Some("Test skill".to_string()),
-            false, // use_llm
-            None,  // dictionary
-            false, // categorize
+            false,               // use_llm
+            None,                // dictionary
+            false,               // categorize
+            "skill".to_string(), // output_mode
+            None,                // progressive_output
+            None,                // skill_output
             OutputFormat::Json,
         )
         .await;
@@ -565,9 +735,12 @@ mod tests {
                 vec![],
                 Some("skill".to_string()),
                 Some("Description".to_string()),
-                false, // use_llm
-                None,  // dictionary
-                false, // categorize
+                false,               // use_llm
+                None,                // dictionary
+                false,               // categorize
+                "skill".to_string(), // output_mode
+                None,                // progressive_output
+                None,                // skill_output
                 format,
             )
             .await;

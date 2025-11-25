@@ -28,10 +28,11 @@ colored.workspace = true
 dialoguer.workspace = true
 dirs.workspace = true
 mcp-bridge.workspace = true
-mcp-codegen = { workspace = true, features = ["skills"] }
+mcp-codegen = { workspace = true, features = ["skills", "progressive"] }
 mcp-core.workspace = true
 mcp-introspector.workspace = true
 mcp-skill-store.workspace = true
+mcp-vfs.workspace = true
 mcp-wasm-runtime = { workspace = true, features = ["cli"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

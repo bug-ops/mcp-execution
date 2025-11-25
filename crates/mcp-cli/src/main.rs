@@ -205,6 +205,20 @@ pub enum Commands {
         /// Generate categorized skill with progressive loading
         #[arg(long)]
         categorize: bool,
+
+        /// Output mode: skill (SKILL.md only), progressive (TypeScript files), or both
+        #[arg(long, default_value = "skill")]
+        output_mode: String,
+
+        /// Custom output directory for progressive loading files
+        /// (default: ~/.claude/servers/)
+        #[arg(long)]
+        progressive_output: Option<String>,
+
+        /// Custom output directory for skill files
+        /// (default: ~/.claude/skills/)
+        #[arg(long)]
+        skill_output: Option<String>,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -399,6 +413,9 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             use_llm,
             dictionary,
             categorize,
+            output_mode,
+            progressive_output,
+            skill_output,
         } => {
             commands::generate::run(
                 server,
@@ -413,6 +430,9 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 use_llm,
                 dictionary,
                 categorize,
+                output_mode,
+                progressive_output,
+                skill_output,
                 output_format,
             )
             .await
