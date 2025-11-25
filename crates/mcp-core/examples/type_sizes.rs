@@ -11,9 +11,6 @@ fn main() {
     println!("\n=== Domain Types ===");
     println!("ServerId: {} bytes", size_of::<mcp_core::ServerId>());
     println!("ToolName: {} bytes", size_of::<mcp_core::ToolName>());
-    println!("SessionId: {} bytes", size_of::<mcp_core::SessionId>());
-    println!("MemoryLimit: {} bytes", size_of::<mcp_core::MemoryLimit>());
-    println!("CacheKey: {} bytes", size_of::<mcp_core::CacheKey>());
 
     println!("\n=== Config Types ===");
     println!(

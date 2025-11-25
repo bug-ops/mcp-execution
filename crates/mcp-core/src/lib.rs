@@ -6,10 +6,10 @@
 //! # Architecture
 //!
 //! The core consists of:
-//! - Strong domain types (`ServerId`, `ToolName`, `SessionId`, `MemoryLimit`, `CacheKey`)
+//! - Strong domain types (`ServerId`, `ToolName`)
 //! - Error hierarchy with contextual information
-//! - Core traits for execution, caching, and state storage
 //! - Server configuration with security validation
+//! - Command validation utilities
 //!
 //! # Examples
 //!
@@ -36,22 +36,15 @@ mod server_config;
 mod types;
 
 pub mod cli;
-pub mod stats;
-pub mod traits;
 
 // Re-export error types
 pub use error::{Error, Result};
 
 // Re-export domain types
-pub use types::{
-    CacheKey, MemoryLimit, ServerId, SessionId, SkillDescription, SkillName, ToolName,
-};
+pub use types::{ServerId, ToolName};
 
 // Re-export server configuration types
 pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
-
-// Re-export traits for convenience
-pub use traits::{CacheProvider, CodeExecutor, StateStorage};
 
 // Re-export command validation
 pub use command::validate_server_config;
