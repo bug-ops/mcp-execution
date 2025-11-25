@@ -179,6 +179,11 @@ pub enum Commands {
         #[arg(long = "header", num_args = 1)]
         server_headers: Vec<String>,
 
+        /// Custom server name for directory (e.g., 'github' instead of 'docker')
+        /// (default: uses server command name)
+        #[arg(long)]
+        name: Option<String>,
+
         /// Custom output directory for progressive loading files
         /// (default: ~/.claude/servers/)
         #[arg(long)]
@@ -288,6 +293,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             http_url,
             sse_url,
             server_headers,
+            name,
             progressive_output,
         } => {
             commands::generate::run(
@@ -298,6 +304,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 http_url,
                 sse_url,
                 server_headers,
+                name,
                 progressive_output,
                 output_format,
             )

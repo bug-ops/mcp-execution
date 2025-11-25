@@ -48,6 +48,7 @@ struct GenerationResult {
 /// * `http` - HTTP transport URL
 /// * `sse` - SSE transport URL
 /// * `headers` - HTTP headers in KEY=VALUE format
+/// * `name` - Custom server name for directory (default: `server_id`)
 /// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
 /// * `output_format` - Output format (json, text, pretty)
 ///
@@ -68,6 +69,7 @@ pub async fn run(
     http: Option<String>,
     sse: Option<String>,
     headers: Vec<String>,
+    name: Option<String>,
     output_dir: Option<PathBuf>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
@@ -107,8 +109,11 @@ pub async fn run(
         generated_code.file_count()
     );
 
+    // Determine server directory name (use custom name if provided, otherwise server_id)
+    let server_dir_name = name.unwrap_or_else(|| server_info.id.to_string());
+
     // Build VFS with generated code
-    let base_path = format!("/{}/", server_info.id.as_str());
+    let base_path = format!("/{server_dir_name}/");
     let vfs = FilesBuilder::from_generated_code(generated_code, &base_path)
         .build()
         .context("failed to build VFS")?;
@@ -121,10 +126,14 @@ pub async fn run(
             .context("failed to get home directory")?
             .join(".claude")
             .join("servers")
-            .join(server_info.id.as_str())
+            .join(&server_dir_name)
     };
 
     info!("Exporting files to: {}", output_path.display());
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(&output_path)
+        .context("failed to create output directory")?;
 
     // Export VFS to filesystem
     vfs.export_to_filesystem(&output_path)
