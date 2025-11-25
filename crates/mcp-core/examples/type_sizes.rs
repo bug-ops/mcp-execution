@@ -17,12 +17,12 @@ fn main() {
 
     println!("\n=== Config Types ===");
     println!(
-        "RuntimeConfig: {} bytes",
-        size_of::<mcp_core::RuntimeConfig>()
+        "ServerConfig: {} bytes",
+        size_of::<mcp_core::ServerConfig>()
     );
     println!(
-        "SecurityPolicy: {} bytes",
-        size_of::<mcp_core::SecurityPolicy>()
+        "TransportType: {} bytes",
+        size_of::<mcp_core::TransportType>()
     );
 
     println!("\n=== Standard Types (Reference) ===");

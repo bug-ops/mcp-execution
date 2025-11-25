@@ -17,8 +17,8 @@ fn test_domain_types_are_send_sync() {
 #[test]
 fn test_config_types_are_send_sync() {
     // Configuration types must be Send + Sync
-    assert_send_sync::<RuntimeConfig>();
-    assert_send_sync::<SecurityPolicy>();
+    assert_send_sync::<ServerConfig>();
+    assert_send_sync::<TransportType>();
 }
 
 #[test]

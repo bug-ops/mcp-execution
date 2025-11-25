@@ -9,31 +9,28 @@
 //! - Strong domain types (`ServerId`, `ToolName`, `SessionId`, `MemoryLimit`, `CacheKey`)
 //! - Error hierarchy with contextual information
 //! - Core traits for execution, caching, and state storage
-//! - Configuration types with security policies
+//! - Server configuration with security validation
 //!
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{RuntimeConfig, SecurityPolicy, MemoryLimit};
-//! use std::time::Duration;
+//! use mcp_core::{ServerConfig, ServerId};
 //!
-//! // Create a runtime configuration
-//! let config = RuntimeConfig::builder()
-//!     .memory_limit(MemoryLimit::from_mb(512).unwrap())
-//!     .execution_timeout(Duration::from_secs(60))
-//!     .enable_cache(true)
-//!     .security(SecurityPolicy::strict())
+//! // Create a server configuration
+//! let config = ServerConfig::builder()
+//!     .command("docker".to_string())
+//!     .arg("run".to_string())
+//!     .env("LOG_LEVEL".to_string(), "debug".to_string())
 //!     .build();
 //!
-//! // Validate configuration
-//! assert!(config.validate().is_ok());
+//! // Server ID
+//! let server_id = ServerId::new("github").unwrap();
 //! ```
 
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
 mod command;
-mod config;
 mod error;
 mod server_config;
 mod types;
@@ -49,9 +46,6 @@ pub use error::{Error, Result};
 pub use types::{
     CacheKey, MemoryLimit, ServerId, SessionId, SkillDescription, SkillName, ToolName,
 };
-
-// Re-export configuration types
-pub use config::{RuntimeConfig, RuntimeConfigBuilder, SecurityPolicy};
 
 // Re-export server configuration types
 pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
