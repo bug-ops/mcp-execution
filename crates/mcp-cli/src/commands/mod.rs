@@ -5,6 +5,7 @@
 //! operation, and formatting output according to the requested format.
 
 pub mod cache;
+pub mod common;
 pub mod completions;
 pub mod config;
 pub mod debug;
