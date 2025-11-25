@@ -10,21 +10,26 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+dirs.workspace = true
+dhat = { workspace = true, optional = true }
 mcp-codegen.workspace = true
+rayon = { workspace = true, optional = true }
 thiserror.workspace = true
-
-[dependencies.dhat]
-version = "0.3"
-optional = true
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
+tempfile.workspace = true
 
 [features]
 dhat-heap = ["dhat"]
+parallel = ["dep:rayon"]
 
 [[bench]]
 name = "vfs_benchmarks"
+harness = false
+
+[[bench]]
+name = "filesystem_export"
 harness = false
 
 [[example]]

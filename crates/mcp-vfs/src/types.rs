@@ -35,7 +35,7 @@ use thiserror::Error;
 ///
 /// assert!(error.is_not_found());
 /// ```
-#[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[derive(Error, Debug)]
 pub enum VfsError {
     /// File or directory not found at the specified path
     #[error("File not found: {path}")]
@@ -70,6 +70,15 @@ pub enum VfsError {
     InvalidPathComponent {
         /// The path with invalid components
         path: String,
+    },
+
+    /// I/O operation failed during filesystem export
+    #[error("I/O error at {path}: {source}")]
+    IoError {
+        /// The path where the I/O error occurred
+        path: String,
+        /// The underlying I/O error
+        source: std::io::Error,
     },
 }
 
@@ -131,6 +140,26 @@ impl VfsError {
                 | Self::PathNotAbsolute { .. }
                 | Self::InvalidPathComponent { .. }
         )
+    }
+
+    /// Returns `true` if this is an I/O error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_vfs::VfsError;
+    /// use std::io;
+    ///
+    /// let error = VfsError::IoError {
+    ///     path: "/test.ts".to_string(),
+    ///     source: io::Error::from(io::ErrorKind::PermissionDenied),
+    /// };
+    ///
+    /// assert!(error.is_io_error());
+    /// ```
+    #[must_use]
+    pub const fn is_io_error(&self) -> bool {
+        matches!(self, Self::IoError { .. })
     }
 }
 

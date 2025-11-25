@@ -78,10 +78,12 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 pub mod builder;
+pub mod filesystem;
 pub mod types;
 pub mod vfs;
 
 // Re-export main types
 pub use builder::VfsBuilder;
+pub use filesystem::ExportOptions;
 pub use types::{Result, VfsError, VfsFile, VfsPath};
 pub use vfs::Vfs;

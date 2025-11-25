@@ -250,6 +250,26 @@ impl Vfs {
         paths
     }
 
+    /// Returns an iterator over all files in the VFS.
+    ///
+    /// Each item is a tuple of `(&VfsPath, &VfsFile)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_vfs::Vfs;
+    ///
+    /// let mut vfs = Vfs::new();
+    /// vfs.add_file("/a.ts", "content a").unwrap();
+    /// vfs.add_file("/b.ts", "content b").unwrap();
+    ///
+    /// let files: Vec<_> = vfs.files().collect();
+    /// assert_eq!(files.len(), 2);
+    /// ```
+    pub fn files(&self) -> impl Iterator<Item = (&VfsPath, &VfsFile)> {
+        self.files.iter()
+    }
+
     /// Removes all files from the VFS.
     ///
     /// # Examples
