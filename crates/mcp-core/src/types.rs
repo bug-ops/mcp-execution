@@ -491,50 +491,6 @@ impl CacheKey {
         Self(key.into())
     }
 
-    /// Creates a cache key from server, tool, and parameters.
-    ///
-    /// This method generates a consistent, collision-resistant cache key by hashing
-    /// the server ID, tool name, and parameters using BLAKE3. Each component is
-    /// separated with null bytes to prevent injection attacks.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_core::CacheKey;
-    ///
-    /// let key = CacheKey::from_parts(
-    ///     "github",
-    ///     "send_message",
-    ///     r#"{"chat_id": "123", "text": "hello"}"#
-    /// );
-    ///
-    /// // Same inputs always produce the same hash
-    /// let key2 = CacheKey::from_parts(
-    ///     "github",
-    ///     "send_message",
-    ///     r#"{"chat_id": "123", "text": "hello"}"#
-    /// );
-    /// assert_eq!(key, key2);
-    ///
-    /// // Different inputs produce different hashes
-    /// let key3 = CacheKey::from_parts("other", "send_message", "{}");
-    /// assert_ne!(key, key3);
-    /// ```
-    #[must_use]
-    pub fn from_parts(server: &str, tool: &str, params: &str) -> Self {
-        use blake3::Hasher;
-
-        let mut hasher = Hasher::new();
-        hasher.update(server.as_bytes());
-        hasher.update(b"\0"); // Null byte separator prevents injection
-        hasher.update(tool.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(params.as_bytes());
-
-        let hash = hasher.finalize();
-        Self(format!("cache_{}", hash.to_hex()))
-    }
-
     /// Returns the cache key as a string slice.
     ///
     /// # Examples
@@ -1115,38 +1071,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_key_from_parts() {
-        let key = CacheKey::from_parts("server", "tool", r#"{"arg": "value"}"#);
-        let key_str = key.as_str();
-
-        // Key should be a hash (cache_ prefix + 64 hex chars)
-        assert!(key_str.starts_with("cache_"));
-        assert_eq!(key_str.len(), 6 + 64); // "cache_" + 64 hex chars
-    }
-
-    #[test]
-    fn test_cache_key_from_parts_consistency() {
-        let key1 = CacheKey::from_parts("srv", "tool", "params");
-        let key2 = CacheKey::from_parts("srv", "tool", "params");
-
-        // Same inputs should produce same key
-        assert_eq!(key1, key2);
-    }
-
-    #[test]
-    fn test_cache_key_from_parts_uniqueness() {
-        let key1 = CacheKey::from_parts("srv1", "tool", "params");
-        let key2 = CacheKey::from_parts("srv2", "tool", "params");
-        let key3 = CacheKey::from_parts("srv1", "tool2", "params");
-        let key4 = CacheKey::from_parts("srv1", "tool", "params2");
-
-        // Different inputs should produce different keys
-        assert_ne!(key1, key2);
-        assert_ne!(key1, key3);
-        assert_ne!(key1, key4);
-    }
-
-    #[test]
     fn test_cache_key_from_str() {
         let key: CacheKey = "test-key".into();
         assert_eq!(key.as_str(), "test-key");
@@ -1200,48 +1124,6 @@ mod tests {
         // Total length: 8 (prefix) + 36 (UUID) = 44 characters
         assert_eq!(id1.as_str().len(), 44);
         assert_eq!(id2.as_str().len(), 44);
-    }
-
-    // Security tests for CacheKey
-    #[test]
-    fn test_cache_key_collision_resistance() {
-        // These should produce different hashes
-        let key1 = CacheKey::from_parts("server", "tool", "params");
-        let key2 = CacheKey::from_parts("server::", "tool", "params");
-        let key3 = CacheKey::from_parts("server", "tool::", "params");
-        let key4 = CacheKey::from_parts("serv", "er::tool", "params");
-
-        assert_ne!(key1, key2);
-        assert_ne!(key1, key3);
-        assert_ne!(key1, key4);
-        assert_ne!(key2, key3);
-        assert_ne!(key3, key4);
-    }
-
-    #[test]
-    fn test_cache_key_deterministic() {
-        // Same inputs should produce same hash
-        let key1 = CacheKey::from_parts("server", "tool", "params");
-        let key2 = CacheKey::from_parts("server", "tool", "params");
-
-        assert_eq!(key1, key2);
-    }
-
-    #[test]
-    fn test_cache_key_null_byte_separation() {
-        // Null byte separator should prevent these from colliding
-        let key1 = CacheKey::from_parts("ab", "cd", "ef");
-        let key2 = CacheKey::from_parts("a", "bcd", "ef");
-        let key3 = CacheKey::from_parts("abc", "d", "ef");
-        let key4 = CacheKey::from_parts("ab", "c", "def");
-
-        // All should be different due to null byte separators
-        assert_ne!(key1, key2);
-        assert_ne!(key1, key3);
-        assert_ne!(key1, key4);
-        assert_ne!(key2, key3);
-        assert_ne!(key2, key4);
-        assert_ne!(key3, key4);
     }
 
     // ========================================================================
