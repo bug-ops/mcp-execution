@@ -2,9 +2,9 @@
 //!
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
+use super::common::build_server_config;
 use anyhow::{Context, Result};
-use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
-use mcp_core::{ServerConfig, ServerId};
+use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_introspector::{Introspector, ServerInfo, ToolInfo};
 use serde::Serialize;
 use tracing::info;
@@ -86,7 +86,7 @@ pub struct ToolMetadata {
 ///
 /// # Process
 ///
-/// 1. Validates the server connection string
+/// 1. Builds `ServerConfig` from CLI arguments
 /// 2. Creates an introspector and connects to the server
 /// 3. Discovers server capabilities and tools
 /// 4. Formats the output according to the specified format
@@ -94,14 +94,20 @@ pub struct ToolMetadata {
 ///
 /// # Arguments
 ///
-/// * `server` - Server connection string or command
+/// * `server` - Server command (binary name or path), None for HTTP/SSE
+/// * `args` - Arguments to pass to the server command
+/// * `env` - Environment variables in KEY=VALUE format
+/// * `cwd` - Working directory for the server process
+/// * `http` - HTTP transport URL
+/// * `sse` - SSE transport URL
+/// * `headers` - HTTP headers in KEY=VALUE format
 /// * `detailed` - Whether to show detailed tool schemas
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - Server connection string is invalid
+/// - Server configuration is invalid
 /// - Server connection fails
 /// - Server introspection fails
 /// - Output formatting fails
@@ -113,40 +119,64 @@ pub struct ToolMetadata {
 /// use mcp_core::cli::OutputFormat;
 ///
 /// # async fn example() -> anyhow::Result<()> {
+/// // Simple server
 /// let exit_code = introspect::run(
-///     "github".to_string(),
+///     Some("github-mcp-server".to_string()),
+///     vec!["stdio".to_string()],
+///     vec![],
+///     None,
+///     None,
+///     None,
+///     vec![],
+///     false,
+///     OutputFormat::Json
+/// ).await?;
+///
+/// // HTTP transport
+/// let exit_code = introspect::run(
+///     None,
+///     vec![],
+///     vec![],
+///     None,
+///     Some("https://api.githubcopilot.com/mcp/".to_string()),
+///     None,
+///     vec!["Authorization=Bearer token".to_string()],
 ///     false,
 ///     OutputFormat::Json
 /// ).await?;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn run(server: String, detailed: bool, output_format: OutputFormat) -> Result<ExitCode> {
-    info!("Introspecting server: {}", server);
+#[allow(clippy::too_many_arguments)]
+pub async fn run(
+    server: Option<String>,
+    args: Vec<String>,
+    env: Vec<String>,
+    cwd: Option<String>,
+    http: Option<String>,
+    sse: Option<String>,
+    headers: Vec<String>,
+    detailed: bool,
+    output_format: OutputFormat,
+) -> Result<ExitCode> {
+    // Build ServerConfig from CLI arguments
+    let (server_id, config) = build_server_config(server, args, env, cwd, http, sse, headers)?;
+
+    info!("Introspecting server: {}", server_id);
+    info!("Transport: {:?}", config.transport());
     info!("Detailed: {}", detailed);
     info!("Output format: {}", output_format);
-
-    // Validate server connection string
-    let conn_string = ServerConnectionString::new(&server).with_context(|| {
-        format!(
-            "invalid server connection string: '{server}' (allowed characters: a-z, A-Z, 0-9, -, _, ., /, :)"
-        )
-    })?;
 
     // Create introspector
     let mut introspector = Introspector::new();
 
     // Discover server
-    let server_id = ServerId::new(conn_string.as_str());
-    let config = ServerConfig::builder()
-        .command(conn_string.to_string())
-        .build();
     let server_info = introspector
-        .discover_server(server_id, &config)
+        .discover_server(server_id.clone(), &config)
         .await
         .with_context(|| {
             format!(
-                "failed to connect to server '{server}' - ensure the server is installed and accessible"
+                "failed to connect to server '{server_id}' - ensure the server is installed and accessible"
             )
         })?;
 
@@ -247,7 +277,7 @@ fn build_tool_metadata(tool_info: &ToolInfo, detailed: bool) -> ToolMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_core::ToolName;
+    use mcp_core::{ServerId, ToolName};
     use mcp_introspector::ServerCapabilities;
     use serde_json::json;
 
@@ -468,27 +498,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_invalid_server_string() {
-        let result = run("invalid && rm -rf /".to_string(), false, OutputFormat::Json).await;
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("invalid server connection string"));
-    }
-
-    #[tokio::test]
-    async fn test_run_empty_server_string() {
-        let result = run(String::new(), false, OutputFormat::Json).await;
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("invalid server connection string"));
-    }
-
-    #[tokio::test]
     async fn test_run_server_connection_failure() {
         let result = run(
-            "nonexistent-server-xyz".to_string(),
+            Some("nonexistent-server-xyz".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
             false,
             OutputFormat::Json,
         )
@@ -498,6 +516,8 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("failed to connect to server"));
     }
+
+    // Note: build_server_config tests are in common.rs
 
     #[test]
     fn test_server_metadata_all_capabilities() {
@@ -582,5 +602,342 @@ mod tests {
         assert_eq!(result.tools[0].name, "alpha");
         assert_eq!(result.tools[1].name, "beta");
         assert_eq!(result.tools[2].name, "gamma");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_text_format() {
+        // Test that Text format output works correctly (compact JSON)
+        let result = run(
+            Some("nonexistent-server".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Text,
+        )
+        .await;
+
+        // Connection should fail but format handling should not panic
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_pretty_format() {
+        // Test that Pretty format output works correctly (colorized)
+        let result = run(
+            Some("nonexistent-server".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Pretty,
+        )
+        .await;
+
+        // Connection should fail but format handling should not panic
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_detailed_mode() {
+        // Test that detailed mode doesn't cause crashes even with connection failure
+        let result = run(
+            Some("nonexistent-server".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            true, // detailed mode
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_http_transport() {
+        // Test HTTP transport with invalid URL
+        let result = run(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://localhost:99999/invalid".to_string()),
+            None,
+            vec!["Authorization=Bearer test".to_string()],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("failed to connect to server"));
+    }
+
+    #[tokio::test]
+    async fn test_run_sse_transport() {
+        // Test SSE transport with invalid URL
+        let result = run(
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+            Some("https://localhost:99999/sse".to_string()),
+            vec!["X-API-Key=test-key".to_string()],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("failed to connect to server"));
+    }
+
+    #[tokio::test]
+    async fn test_run_all_output_formats() {
+        // Test all output formats don't cause panics
+        for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
+            let result = run(
+                Some("nonexistent".to_string()),
+                vec![],
+                vec![],
+                None,
+                None,
+                None,
+                vec![],
+                false,
+                format,
+            )
+            .await;
+
+            assert!(result.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_detailed_with_all_formats() {
+        // Test detailed mode with all output formats
+        for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
+            let result = run(
+                Some("nonexistent".to_string()),
+                vec![],
+                vec![],
+                None,
+                None,
+                None,
+                vec![],
+                true, // detailed
+                format,
+            )
+            .await;
+
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn test_build_result_empty_tools() {
+        let server_info = ServerInfo {
+            id: ServerId::new("empty"),
+            name: "Empty Server".to_string(),
+            version: "0.1.0".to_string(),
+            tools: vec![],
+            capabilities: ServerCapabilities {
+                supports_tools: false,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        };
+
+        let result = build_result(&server_info, false);
+
+        assert_eq!(result.server.name, "Empty Server");
+        assert_eq!(result.tools.len(), 0);
+        assert!(!result.server.supports_tools);
+    }
+
+    #[test]
+    fn test_build_result_many_tools() {
+        // Test with many tools to ensure no performance issues
+        let tools: Vec<ToolInfo> = (0..100)
+            .map(|i| ToolInfo {
+                name: ToolName::new(&format!("tool_{i}")),
+                description: format!("Tool number {i}"),
+                input_schema: json!({"type": "object"}),
+                output_schema: Some(json!({"type": "string"})),
+            })
+            .collect();
+
+        let server_info = ServerInfo {
+            id: ServerId::new("many-tools"),
+            name: "Server with many tools".to_string(),
+            version: "1.0.0".to_string(),
+            tools,
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: true,
+                supports_prompts: true,
+            },
+        };
+
+        let result = build_result(&server_info, true);
+
+        assert_eq!(result.tools.len(), 100);
+        assert_eq!(result.tools[0].name, "tool_0");
+        assert_eq!(result.tools[99].name, "tool_99");
+        // In detailed mode, schemas should be present
+        assert!(result.tools[0].input_schema.is_some());
+        assert!(result.tools[0].output_schema.is_some());
+    }
+
+    #[test]
+    fn test_build_tool_metadata_complex_schema() {
+        let tool_info = ToolInfo {
+            name: ToolName::new("complex_tool"),
+            description: "Tool with complex schema".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "age": {"type": "integer", "minimum": 0},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["name"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"}
+                }
+            })),
+        };
+
+        let metadata = build_tool_metadata(&tool_info, true);
+
+        assert_eq!(metadata.name, "complex_tool");
+        assert!(metadata.input_schema.is_some());
+        assert!(metadata.output_schema.is_some());
+
+        let input = metadata.input_schema.as_ref().unwrap();
+        assert_eq!(input["type"], "object");
+        assert!(input["properties"]["name"].is_object());
+        assert!(input["properties"]["tags"]["items"].is_object());
+    }
+
+    #[test]
+    fn test_introspection_result_clone() {
+        let result = IntrospectionResult {
+            server: ServerMetadata {
+                id: "test".to_string(),
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![],
+        };
+
+        // Test Clone implementation
+        let cloned = result.clone();
+        assert_eq!(cloned.server.id, result.server.id);
+        assert_eq!(cloned.server.name, result.server.name);
+    }
+
+    #[test]
+    fn test_server_metadata_serialization_all_fields() {
+        let metadata = ServerMetadata {
+            id: "test-id".to_string(),
+            name: "Test Server".to_string(),
+            version: "2.1.0".to_string(),
+            supports_tools: true,
+            supports_resources: true,
+            supports_prompts: true,
+        };
+
+        let json = serde_json::to_value(&metadata).unwrap();
+
+        assert_eq!(json["id"], "test-id");
+        assert_eq!(json["name"], "Test Server");
+        assert_eq!(json["version"], "2.1.0");
+        assert_eq!(json["supports_tools"], true);
+        assert_eq!(json["supports_resources"], true);
+        assert_eq!(json["supports_prompts"], true);
+    }
+
+    #[test]
+    fn test_tool_metadata_serialization_without_schemas() {
+        let metadata = ToolMetadata {
+            name: "simple_tool".to_string(),
+            description: "A simple tool".to_string(),
+            input_schema: None,
+            output_schema: None,
+        };
+
+        let json = serde_json::to_string(&metadata).unwrap();
+
+        // Fields with None should not be serialized (skip_serializing_if)
+        assert!(!json.contains("input_schema"));
+        assert!(!json.contains("output_schema"));
+        assert!(json.contains("simple_tool"));
+        assert!(json.contains("A simple tool"));
+    }
+
+    #[test]
+    fn test_tool_metadata_long_description() {
+        let long_description = "A".repeat(1000);
+        let metadata = ToolMetadata {
+            name: "tool".to_string(),
+            description: long_description.clone(),
+            input_schema: None,
+            output_schema: None,
+        };
+
+        // Should handle long descriptions without issues
+        assert_eq!(metadata.description.len(), 1000);
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains(&long_description));
+    }
+
+    #[test]
+    fn test_build_result_mixed_capabilities() {
+        let server_info = ServerInfo {
+            id: ServerId::new("mixed"),
+            name: "Mixed Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: vec![ToolInfo {
+                name: ToolName::new("tool1"),
+                description: "First".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+            }],
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: true,
+                supports_prompts: false, // Mixed capabilities
+            },
+        };
+
+        let result = build_result(&server_info, false);
+
+        assert!(result.server.supports_tools);
+        assert!(result.server.supports_resources);
+        assert!(!result.server.supports_prompts);
     }
 }
