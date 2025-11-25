@@ -55,6 +55,7 @@ struct GenerationResult {
 /// * `skill_description` - Optional skill description (interactive if not provided)
 /// * `use_llm` - Use LLM-based categorization (requires `ANTHROPIC_API_KEY`)
 /// * `dictionary` - Path to custom categorization dictionary YAML file
+/// * `categorize` - Generate categorized skill with progressive loading
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -103,6 +104,7 @@ pub async fn run(
     skill_description_input: Option<String>,
     use_llm: bool,
     dictionary: Option<String>,
+    categorize: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build ServerConfig from CLI arguments
@@ -158,24 +160,69 @@ pub async fn run(
     // Step 3: Generate skill bundle with orchestrator
     let orchestrator = SkillOrchestrator::new().context("failed to create skill orchestrator")?;
 
-    let bundle = orchestrator
-        .generate_bundle(&server_info, &skill_name, &skill_description)
-        .context("failed to generate skill bundle")?;
-
-    info!(
-        "Generated skill bundle with {} scripts",
-        bundle.scripts().len()
-    );
-    info!("SKILL.md: {} bytes", bundle.skill_md().len());
-    if let Some(ref_md) = bundle.reference_md() {
-        info!("REFERENCE.md: {} bytes", ref_md.len());
-    }
-
-    // Step 4: Save bundle to .claude/skills/
     let store = SkillStore::new_claude().context("failed to initialize skill store")?;
-    store
-        .save_bundle(&bundle)
-        .context("failed to save skill bundle")?;
+
+    // Generate and save based on categorize flag
+    if categorize {
+        info!("Generating categorized skill with progressive loading...");
+
+        if use_llm {
+            // Async LLM-based categorization
+            let bundle = orchestrator
+                .generate_categorized_bundle_async(
+                    &server_info,
+                    &skill_name,
+                    &skill_description,
+                    "claude-sonnet-4",
+                    10,
+                )
+                .await
+                .context("failed to generate categorized bundle with LLM")?;
+
+            info!(
+                "Generated categorized bundle: {} categories, {} scripts",
+                bundle.categories().len(),
+                bundle.scripts().len()
+            );
+
+            store
+                .save_categorized_bundle(&bundle)
+                .context("failed to save categorized bundle")?;
+        } else {
+            // Sync dictionary/universal categorization
+            let bundle = orchestrator
+                .generate_categorized_bundle(&server_info, &skill_name, &skill_description)
+                .context("failed to generate categorized bundle")?;
+
+            info!(
+                "Generated categorized bundle: {} categories, {} scripts",
+                bundle.categories().len(),
+                bundle.scripts().len()
+            );
+
+            store
+                .save_categorized_bundle(&bundle)
+                .context("failed to save categorized bundle")?;
+        }
+    } else {
+        // Standard non-categorized generation
+        let bundle = orchestrator
+            .generate_bundle(&server_info, &skill_name, &skill_description)
+            .context("failed to generate skill bundle")?;
+
+        info!(
+            "Generated skill bundle with {} scripts",
+            bundle.scripts().len()
+        );
+        info!("SKILL.md: {} bytes", bundle.skill_md().len());
+        if let Some(ref_md) = bundle.reference_md() {
+            info!("REFERENCE.md: {} bytes", ref_md.len());
+        }
+
+        store
+            .save_bundle(&bundle)
+            .context("failed to save skill bundle")?;
+    }
 
     // Get skill path from HOME/.claude/skills/skill-name
     let home = dirs::home_dir().context("failed to get home directory")?;
@@ -376,6 +423,9 @@ mod tests {
             vec![],
             Some("test-skill".to_string()),
             Some("Test skill description".to_string()),
+            false, // use_llm
+            None,  // dictionary
+            false, // categorize
             OutputFormat::Json,
         )
         .await;
@@ -412,6 +462,9 @@ mod tests {
             vec![],
             Some("Invalid-Skill-Name".to_string()), // uppercase invalid
             Some("Test description".to_string()),
+            false, // use_llm
+            None,  // dictionary
+            false, // categorize
             OutputFormat::Json,
         )
         .await;
@@ -433,6 +486,9 @@ mod tests {
             vec![],
             Some("test-skill".to_string()),
             Some("<xml>Invalid description</xml>".to_string()), // XML tags not allowed
+            false,                                              // use_llm
+            None,                                               // dictionary
+            false,                                              // categorize
             OutputFormat::Json,
         )
         .await;
@@ -454,6 +510,9 @@ mod tests {
             vec![],
             Some("test-skill".to_string()),
             Some("Test skill".to_string()),
+            false, // use_llm
+            None,  // dictionary
+            false, // categorize
             OutputFormat::Json,
         )
         .await;
@@ -476,6 +535,9 @@ mod tests {
             vec![],
             Some("test-skill".to_string()),
             Some("Test skill".to_string()),
+            false, // use_llm
+            None,  // dictionary
+            false, // categorize
             OutputFormat::Json,
         )
         .await;
@@ -500,6 +562,9 @@ mod tests {
                 vec![],
                 Some("skill".to_string()),
                 Some("Description".to_string()),
+                false, // use_llm
+                None,  // dictionary
+                false, // categorize
                 format,
             )
             .await;

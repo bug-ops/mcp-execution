@@ -917,7 +917,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "skill_md is required")]
     fn test_categorized_skill_bundle_builder_missing_skill_md() {
-        let repos = SkillCategory::new("repos").unwrap();
+        let _repos = SkillCategory::new("repos").unwrap();
         let manifest = CategoryManifest::builder().build();
 
         let _bundle = CategorizedSkillBundle::builder("github")

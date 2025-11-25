@@ -1123,6 +1123,182 @@ impl SkillStore {
         Ok(())
     }
 
+    /// Saves a categorized skill bundle to the public skills directory.
+    ///
+    /// Creates the skill directory with:
+    /// - `SKILL.md` - Minimal skill file with category references
+    /// - `manifest.yaml` - Category manifest
+    /// - `categories/` - Individual category markdown files
+    /// - `scripts/` - TypeScript tool implementations
+    /// - `REFERENCE.md` - Complete API reference (optional)
+    /// - `.metadata.json` - Generation metadata with checksums
+    ///
+    /// The operation is atomic: either all files are written successfully,
+    /// or the skill directory is removed on error.
+    ///
+    /// # Arguments
+    ///
+    /// * `bundle` - The categorized skill bundle to save
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Skill directory already exists
+    /// - File write operations fail
+    /// - Permission errors occur
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use mcp_core::CategorizedSkillBundle;
+    ///
+    /// # fn example(bundle: &CategorizedSkillBundle) -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_in_user_home()?;
+    /// store.save_categorized_bundle(bundle)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn save_categorized_bundle(&self, bundle: &mcp_core::CategorizedSkillBundle) -> Result<()> {
+        let skill_name = bundle.name();
+        let skill_dir = self.skill_path(skill_name.as_str());
+
+        // Create directory atomically - fails if already exists
+        match fs::create_dir(&skill_dir) {
+            Ok(()) => {
+                tracing::debug!(
+                    "Created categorized skill directory: {}",
+                    skill_dir.display()
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(SkillStoreError::SkillAlreadyExists {
+                    server_name: skill_name.as_str().to_string(),
+                });
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+
+        // Set up cleanup guard
+        let guard = SkillDirGuard::new(skill_dir.clone());
+
+        tracing::info!(
+            "Saving categorized skill: {} ({} categories, {} scripts)",
+            skill_name.as_str(),
+            bundle.categories().len(),
+            bundle.scripts().len()
+        );
+
+        // Write SKILL.md atomically
+        let skill_path = skill_dir.join(CLAUDE_SKILL_FILE);
+        Self::write_file_atomic(&skill_path, bundle.skill_md().as_bytes())?;
+        let skill_checksum = calculate_checksum(bundle.skill_md().as_bytes());
+        tracing::debug!("Wrote SKILL.md: {} bytes", bundle.skill_md().len());
+
+        // Write manifest.yaml
+        let manifest_yaml = serde_yaml::to_string(bundle.manifest()).map_err(|e| {
+            SkillStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to serialize manifest: {e}"),
+            ))
+        })?;
+        let manifest_path = skill_dir.join("manifest.yaml");
+        Self::write_file_atomic(&manifest_path, manifest_yaml.as_bytes())?;
+        tracing::debug!("Wrote manifest.yaml: {} bytes", manifest_yaml.len());
+
+        // Create categories directory
+        let categories_dir = skill_dir.join("categories");
+        fs::create_dir(&categories_dir)?;
+        tracing::debug!("Created categories directory");
+
+        // Write category files
+        for (category, content) in bundle.categories() {
+            let filename = category.filename();
+            let category_path = categories_dir.join(&filename);
+            Self::write_file_atomic(&category_path, content.as_bytes())?;
+            tracing::debug!("Wrote category: {} ({} bytes)", filename, content.len());
+
+            // Set permissions (0644 - readable by all, writable by owner)
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&category_path)?.permissions();
+                perms.set_mode(0o644);
+                fs::set_permissions(&category_path, perms)?;
+            }
+        }
+
+        // Create scripts directory
+        let scripts_dir = skill_dir.join("scripts");
+        fs::create_dir(&scripts_dir)?;
+        tracing::debug!("Created scripts directory");
+
+        // Write script files
+        for script in bundle.scripts() {
+            let script_path = skill_dir.join(script.reference().relative_path());
+            Self::write_file_atomic(&script_path, script.content().as_bytes())?;
+            tracing::debug!("Wrote script: {}", script.reference().filename());
+
+            // Set executable permission on Unix (0755)
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&script_path)?.permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&script_path, perms)?;
+            }
+        }
+
+        // Write REFERENCE.md if present
+        let reference_checksum = if let Some(reference_md) = bundle.reference_md() {
+            let reference_path = skill_dir.join(CLAUDE_REFERENCE_FILE);
+            Self::write_file_atomic(&reference_path, reference_md.as_bytes())?;
+            let checksum = calculate_checksum(reference_md.as_bytes());
+            tracing::debug!("Wrote REFERENCE.md: {} bytes", reference_md.len());
+            Some(checksum)
+        } else {
+            None
+        };
+
+        // Create metadata with checksums
+        let metadata = ClaudeSkillMetadata {
+            skill_name: skill_name.as_str().to_string(),
+            server_name: skill_name.as_str().to_string(),
+            server_version: "unknown".to_string(),
+            protocol_version: "2024-11-05".to_string(),
+            tool_count: bundle.scripts().len(),
+            generated_at: Utc::now(),
+            generator_version: env!("CARGO_PKG_VERSION").to_string(),
+            checksums: SkillChecksums {
+                skill_md: skill_checksum,
+                reference_md: reference_checksum,
+            },
+        };
+
+        // Write metadata atomically
+        let metadata_path = skill_dir.join(CLAUDE_METADATA_FILE);
+        let metadata_json = serde_json::to_string_pretty(&metadata)?;
+        Self::write_file_atomic(&metadata_path, metadata_json.as_bytes())?;
+        tracing::debug!("Wrote .metadata.json");
+
+        // Success - disable cleanup
+        guard.commit();
+
+        // Increment success counter
+        self.generation_successes.fetch_add(1, Ordering::Relaxed);
+
+        tracing::info!(
+            "Successfully saved categorized skill: {} ({} categories, {} scripts)",
+            skill_name.as_str(),
+            bundle.categories().len(),
+            bundle.scripts().len()
+        );
+
+        Ok(())
+    }
+
     /// Writes a file atomically using temp file + rename.
     ///
     /// This ensures that the file is either fully written or not written at all,

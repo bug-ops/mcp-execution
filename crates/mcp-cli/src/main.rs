@@ -201,6 +201,10 @@ pub enum Commands {
         /// Path to custom categorization dictionary YAML file
         #[arg(long)]
         dictionary: Option<String>,
+
+        /// Generate categorized skill with progressive loading
+        #[arg(long)]
+        categorize: bool,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -394,6 +398,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             skill_description,
             use_llm,
             dictionary,
+            categorize,
         } => {
             commands::generate::run(
                 server,
@@ -407,6 +412,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 skill_description,
                 use_llm,
                 dictionary,
+                categorize,
                 output_format,
             )
             .await

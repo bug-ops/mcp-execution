@@ -1,0 +1,26 @@
+# {{category_name}}
+
+{{category_description}}
+
+---
+
+{{#each tools}}
+## {{name}}
+
+{{description}}
+
+**Script**: `{{script_path}}`
+
+{{#if parameters}}
+### Parameters
+
+{{#each parameters}}
+- **{{name}}** (`{{type_name}}`){{#if required}} *required*{{/if}}{{#if description}}: {{description}}{{/if}}
+{{/each}}
+{{else}}
+No parameters required.
+{{/if}}
+
+---
+
+{{/each}}

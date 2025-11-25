@@ -167,6 +167,37 @@ impl<'a> TemplateEngine<'a> {
                 source: None,
             })?;
 
+        // Categorized skill templates
+        handlebars
+            .register_template_string(
+                "skill_categorized_md",
+                include_str!("../templates/skills/skill_categorized.md.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register skill_categorized_md template: {}", e),
+                source: None,
+            })?;
+
+        handlebars
+            .register_template_string(
+                "category_md",
+                include_str!("../templates/skills/category.md.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register category_md template: {}", e),
+                source: None,
+            })?;
+
+        handlebars
+            .register_template_string(
+                "manifest_yaml",
+                include_str!("../templates/skills/manifest.yaml.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register manifest_yaml template: {}", e),
+                source: None,
+            })?;
+
         Ok(())
     }
 

@@ -297,6 +297,239 @@ impl SkillOrchestrator {
 
         Ok(params)
     }
+
+    /// Generates a categorized skill bundle (synchronous).
+    ///
+    /// Uses dictionary-based or universal categorization to organize tools into categories.
+    ///
+    /// # Arguments
+    ///
+    /// * `server_info` - MCP server information with tools
+    /// * `skill_name` - Name for the skill
+    /// * `skill_description` - Description for the skill
+    ///
+    /// # Returns
+    ///
+    /// A `CategorizedSkillBundle` containing manifest, category files, and scripts.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Manifest generation fails
+    /// - Category markdown generation fails
+    /// - Script generation fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_codegen::skills::SkillOrchestrator;
+    /// use mcp_core::{SkillName, SkillDescription};
+    /// # use mcp_introspector::ServerInfo;
+    ///
+    /// # fn example(server_info: &ServerInfo) -> Result<(), mcp_core::Error> {
+    /// let orchestrator = SkillOrchestrator::new()?;
+    /// let name = SkillName::new("github")?;
+    /// let desc = SkillDescription::new("GitHub integration")?;
+    ///
+    /// let bundle = orchestrator.generate_categorized_bundle(
+    ///     server_info,
+    ///     &name,
+    ///     &desc,
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn generate_categorized_bundle(
+        &self,
+        server_info: &ServerInfo,
+        skill_name: &SkillName,
+        skill_description: &SkillDescription,
+    ) -> Result<mcp_core::CategorizedSkillBundle> {
+        use crate::skills::{CategoryGenerator, ManifestGenerator};
+        use std::collections::HashMap;
+
+        // Step 1: Generate scripts for all tools
+        let scripts = self.generate_scripts(&server_info.tools)?;
+
+        // Step 2: Generate manifest (auto-detect strategy)
+        let manifest_gen = ManifestGenerator::auto()?;
+        let manifest = manifest_gen.generate(&server_info.tools)?;
+
+        // Step 3: Generate category markdown files
+        let category_gen = CategoryGenerator::new(&self.template_engine);
+        let mut categories = HashMap::new();
+
+        for (category, tool_names) in manifest.categories() {
+            let tools: Vec<_> = server_info
+                .tools
+                .iter()
+                .filter(|t| tool_names.contains(&t.name.as_str().to_string()))
+                .collect();
+
+            let description = Self::get_category_description(category);
+            let content = category_gen.generate_category(category, &tools, &description)?;
+            categories.insert(category.clone(), content);
+        }
+
+        // Step 4: Render minimal SKILL.md
+        let skill_md =
+            self.render_categorized_skill_md(skill_name, skill_description, &manifest)?;
+
+        // Step 5: Render REFERENCE.md (optional)
+        let reference_md = self.render_reference_md(server_info)?;
+
+        // Step 6: Build bundle
+        Ok(
+            mcp_core::CategorizedSkillBundle::builder(skill_name.as_str())?
+                .skill_md(skill_md)
+                .manifest(manifest)
+                .categories(categories)
+                .scripts(scripts)
+                .reference_md(reference_md)
+                .build(),
+        )
+    }
+
+    /// Generates a categorized skill bundle with LLM assistance (asynchronous).
+    ///
+    /// Uses LLM-based categorization for intelligent tool grouping.
+    ///
+    /// # Arguments
+    ///
+    /// * `server_info` - MCP server information with tools
+    /// * `skill_name` - Name for the skill
+    /// * `skill_description` - Description for the skill
+    /// * `model_name` - LLM model to use (e.g., "claude-sonnet-4")
+    /// * `max_categories` - Maximum number of categories
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - LLM categorization fails
+    /// - Manifest generation fails
+    /// - Category markdown generation fails
+    pub async fn generate_categorized_bundle_async(
+        &self,
+        server_info: &ServerInfo,
+        skill_name: &SkillName,
+        skill_description: &SkillDescription,
+        model_name: &str,
+        max_categories: usize,
+    ) -> Result<mcp_core::CategorizedSkillBundle> {
+        use crate::skills::{CategoryGenerator, ManifestGenerator};
+        use std::collections::HashMap;
+
+        // Step 1: Generate scripts for all tools
+        let scripts = self.generate_scripts(&server_info.tools)?;
+
+        // Step 2: Generate manifest with LLM
+        let manifest_gen = ManifestGenerator::with_llm(model_name, max_categories)?;
+        let manifest = manifest_gen.generate_async(&server_info.tools).await?;
+
+        // Step 3: Generate category markdown files
+        let category_gen = CategoryGenerator::new(&self.template_engine);
+        let mut categories = HashMap::new();
+
+        for (category, tool_names) in manifest.categories() {
+            let tools: Vec<_> = server_info
+                .tools
+                .iter()
+                .filter(|t| tool_names.contains(&t.name.as_str().to_string()))
+                .collect();
+
+            let description = Self::get_category_description(category);
+            let content = category_gen.generate_category(category, &tools, &description)?;
+            categories.insert(category.clone(), content);
+        }
+
+        // Step 4: Render minimal SKILL.md
+        let skill_md =
+            self.render_categorized_skill_md(skill_name, skill_description, &manifest)?;
+
+        // Step 5: Render REFERENCE.md (optional)
+        let reference_md = self.render_reference_md(server_info)?;
+
+        // Step 6: Build bundle
+        Ok(
+            mcp_core::CategorizedSkillBundle::builder(skill_name.as_str())?
+                .skill_md(skill_md)
+                .manifest(manifest)
+                .categories(categories)
+                .scripts(scripts)
+                .reference_md(reference_md)
+                .build(),
+        )
+    }
+
+    fn render_categorized_skill_md(
+        &self,
+        skill_name: &SkillName,
+        skill_description: &SkillDescription,
+        manifest: &mcp_core::CategoryManifest,
+    ) -> Result<String> {
+        #[derive(serde::Serialize)]
+        struct Context {
+            skill_name: String,
+            skill_description: String,
+            categories: Vec<CategoryInfo>,
+        }
+
+        #[derive(serde::Serialize)]
+        struct CategoryInfo {
+            name: String,
+            description: String,
+            filename: String,
+            tool_count: usize,
+        }
+
+        let category_infos: Vec<_> = manifest
+            .categories()
+            .iter()
+            .map(|(cat, tools)| CategoryInfo {
+                name: cat.as_str().to_string(),
+                description: Self::get_category_description(cat),
+                filename: cat.filename(),
+                tool_count: tools.len(),
+            })
+            .collect();
+
+        let context = Context {
+            skill_name: skill_name.as_str().to_string(),
+            skill_description: skill_description.as_str().to_string(),
+            categories: category_infos,
+        };
+
+        self.template_engine
+            .render("skill_categorized_md", &context)
+    }
+
+    fn get_category_description(category: &mcp_core::SkillCategory) -> String {
+        // Generate description based on category name
+        match category.as_str() {
+            "create" => "Creation and initialization operations",
+            "read" => "Read and retrieval operations",
+            "update" => "Update and modification operations",
+            "delete" => "Deletion and cleanup operations",
+            "search" => "Search and query operations",
+            "users" => "User and account management",
+            "files" => "File and document operations",
+            "messages" => "Messaging and communication",
+            "issues" => "Issue and task tracking",
+            "repositories" => "Repository management",
+            "pull_requests" => "Pull request operations",
+            "branches" => "Branch management",
+            "commits" => "Commit operations",
+            "reviews" => "Code review operations",
+            "workflows" => "Workflow and automation",
+            "deployments" => "Deployment operations",
+            "releases" => "Release management",
+            "projects" => "Project management",
+            "teams" => "Team management",
+            "organizations" => "Organization management",
+            _ => "Additional operations",
+        }
+        .to_string()
+    }
 }
 
 /// Extracts type name from JSON Schema.

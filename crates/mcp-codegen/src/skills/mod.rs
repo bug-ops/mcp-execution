@@ -40,6 +40,7 @@
 //! # }
 //! ```
 
+pub mod category_generator;
 pub mod claude;
 pub mod converter;
 pub mod dictionary;
@@ -49,6 +50,7 @@ pub mod orchestrator;
 pub mod script_generator;
 
 // Re-export main types for convenient access
+pub use category_generator::CategoryGenerator;
 pub use dictionary::CategorizationDictionary;
 pub use llm_categorizer::LlmCategorizer;
 pub use manifest_generator::{FallbackStrategy, GroupingPreference, ManifestGenerator};
