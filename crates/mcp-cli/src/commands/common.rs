@@ -266,4 +266,222 @@ mod tests {
                 .contains("expected KEY=VALUE")
         );
     }
+
+    #[test]
+    fn test_build_server_config_multiple_env_vars() {
+        let (_, config) = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec![
+                "TOKEN=abc123".to_string(),
+                "API_KEY=secret456".to_string(),
+                "DEBUG=true".to_string(),
+            ],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(config.env().get("TOKEN"), Some(&"abc123".to_string()));
+        assert_eq!(config.env().get("API_KEY"), Some(&"secret456".to_string()));
+        assert_eq!(config.env().get("DEBUG"), Some(&"true".to_string()));
+        assert_eq!(config.env().len(), 3);
+    }
+
+    #[test]
+    fn test_build_server_config_env_with_special_chars() {
+        // Test environment variable values containing equals signs
+        let (_, config) = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec![
+                "TOKEN=abc=def=123".to_string(),
+                "URL=https://example.com?key=value".to_string(),
+                "ENCODED=a=b=c=d".to_string(),
+            ],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(config.env().get("TOKEN"), Some(&"abc=def=123".to_string()));
+        assert_eq!(
+            config.env().get("URL"),
+            Some(&"https://example.com?key=value".to_string())
+        );
+        assert_eq!(config.env().get("ENCODED"), Some(&"a=b=c=d".to_string()));
+    }
+
+    #[test]
+    fn test_build_server_config_empty_args_stdio() {
+        let (id, config) = build_server_config(
+            Some("simple-server".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(id.as_str(), "simple-server");
+        assert_eq!(config.command(), "simple-server");
+        assert!(config.args().is_empty());
+        assert!(config.env().is_empty());
+    }
+
+    #[test]
+    fn test_build_server_config_http_multiple_headers() {
+        let (_, config) = build_server_config(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://api.example.com".to_string()),
+            None,
+            vec![
+                "Authorization=Bearer token123".to_string(),
+                "X-API-Key=secret".to_string(),
+                "Content-Type=application/json".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.headers().get("Authorization"),
+            Some(&"Bearer token123".to_string())
+        );
+        assert_eq!(
+            config.headers().get("X-API-Key"),
+            Some(&"secret".to_string())
+        );
+        assert_eq!(
+            config.headers().get("Content-Type"),
+            Some(&"application/json".to_string())
+        );
+        assert_eq!(config.headers().len(), 3);
+    }
+
+    #[test]
+    fn test_build_server_config_header_with_special_chars() {
+        // Test header values containing equals signs
+        let (_, config) = build_server_config(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://api.example.com".to_string()),
+            None,
+            vec![
+                "X-Custom=value=with=equals".to_string(),
+                "X-Query=a=b&c=d".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.headers().get("X-Custom"),
+            Some(&"value=with=equals".to_string())
+        );
+        assert_eq!(
+            config.headers().get("X-Query"),
+            Some(&"a=b&c=d".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_sse_with_headers() {
+        let (id, config) = build_server_config(
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+            Some("https://sse.example.com/events".to_string()),
+            vec!["Authorization=Bearer xyz".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(id.as_str(), "https://sse.example.com/events");
+        assert_eq!(config.url(), Some("https://sse.example.com/events"));
+        assert_eq!(
+            config.headers().get("Authorization"),
+            Some(&"Bearer xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_empty_value_in_env() {
+        // Test environment variable with empty value after equals
+        let (_, config) = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec!["EMPTY=".to_string()],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(config.env().get("EMPTY"), Some(&String::new()));
+    }
+
+    #[test]
+    fn test_build_server_config_empty_value_in_header() {
+        // Test header with empty value after equals
+        let (_, config) = build_server_config(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://example.com".to_string()),
+            None,
+            vec!["X-Empty=".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(config.headers().get("X-Empty"), Some(&String::new()));
+    }
+
+    #[test]
+    fn test_build_server_config_complex_docker_scenario() {
+        let (id, config) = build_server_config(
+            Some("docker".to_string()),
+            vec![
+                "run".to_string(),
+                "-i".to_string(),
+                "--rm".to_string(),
+                "--network=host".to_string(),
+                "my-image:latest".to_string(),
+            ],
+            vec![
+                "API_TOKEN=secret123".to_string(),
+                "LOG_LEVEL=debug".to_string(),
+            ],
+            Some("/app/workdir".to_string()),
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(id.as_str(), "docker");
+        assert_eq!(config.command(), "docker");
+        assert_eq!(
+            config.args(),
+            &["run", "-i", "--rm", "--network=host", "my-image:latest"]
+        );
+        assert_eq!(
+            config.env().get("API_TOKEN"),
+            Some(&"secret123".to_string())
+        );
+        assert_eq!(config.env().get("LOG_LEVEL"), Some(&"debug".to_string()));
+        assert_eq!(config.cwd(), Some(PathBuf::from("/app/workdir")).as_ref());
+    }
 }
