@@ -88,12 +88,12 @@ pub enum Commands {
     /// mcp-cli introspect github-mcp-server
     ///
     /// # With arguments
-    /// mcp-cli introspect github-mcp-server --arg stdio
+    /// mcp-cli introspect github-mcp-server --arg=stdio
     ///
     /// # Docker container
-    /// mcp-cli introspect docker --arg run --arg -i --arg --rm \
-    ///     --arg ghcr.io/github/github-mcp-server \
-    ///     --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
+    /// mcp-cli introspect docker --arg=run --arg=-i --arg=--rm \
+    ///     --arg=ghcr.io/github/github-mcp-server \
+    ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
     ///
     /// # HTTP transport
     /// mcp-cli introspect --http https://api.githubcopilot.com/mcp/ \

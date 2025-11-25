@@ -63,36 +63,40 @@ pub fn build_server_config(
         if parts.len() != 2 {
             bail!("invalid {kind} format: '{s}' (expected KEY=VALUE)");
         }
+        if parts[0].is_empty() {
+            bail!("invalid {kind} format: '{s}' (key cannot be empty)");
+        }
         Ok((parts[0].to_string(), parts[1].to_string()))
     };
 
     // Build config based on transport type
     let (server_id, config) = if let Some(url) = http {
         // HTTP transport
-        let mut builder = ServerConfig::builder().http_transport(url.clone());
+        let id = ServerId::new(&url);
+        let mut builder = ServerConfig::builder().http_transport(url);
 
         for header in headers {
             let (key, value) = parse_key_value(&header, "header")?;
             builder = builder.header(key, value);
         }
 
-        let id = ServerId::new(&url);
         (id, builder.build())
     } else if let Some(url) = sse {
         // SSE transport
-        let mut builder = ServerConfig::builder().sse_transport(url.clone());
+        let id = ServerId::new(&url);
+        let mut builder = ServerConfig::builder().sse_transport(url);
 
         for header in headers {
             let (key, value) = parse_key_value(&header, "header")?;
             builder = builder.header(key, value);
         }
 
-        let id = ServerId::new(&url);
         (id, builder.build())
     } else {
         // Stdio transport (default)
         let command = server.expect("server is required for stdio transport");
-        let mut builder: ServerConfigBuilder = ServerConfig::builder().command(command.clone());
+        let id = ServerId::new(&command);
+        let mut builder: ServerConfigBuilder = ServerConfig::builder().command(command);
 
         if !args.is_empty() {
             builder = builder.args(args);
@@ -107,7 +111,6 @@ pub fn build_server_config(
             builder = builder.cwd(PathBuf::from(dir));
         }
 
-        let id = ServerId::new(&command);
         (id, builder.build())
     };
 
@@ -483,5 +486,47 @@ mod tests {
         );
         assert_eq!(config.env().get("LOG_LEVEL"), Some(&"debug".to_string()));
         assert_eq!(config.cwd(), Some(PathBuf::from("/app/workdir")).as_ref());
+    }
+
+    #[test]
+    fn test_build_server_config_empty_key_in_env() {
+        let result = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec!["=value".to_string()],
+            None,
+            None,
+            None,
+            vec![],
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("key cannot be empty")
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_empty_key_in_header() {
+        let result = build_server_config(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://example.com".to_string()),
+            None,
+            vec!["=value".to_string()],
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("key cannot be empty")
+        );
     }
 }
