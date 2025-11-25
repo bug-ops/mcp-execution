@@ -493,8 +493,10 @@ impl Bridge {
             size: cache.len(),
             capacity: cache.cap().get(),
             enabled: cache.cap().get() > 0,
-            total_tool_calls: 0, // TODO: Track tool calls
-            cache_hits: 0,       // TODO: Track cache hits
+            total_tool_calls: self
+                .total_tool_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 

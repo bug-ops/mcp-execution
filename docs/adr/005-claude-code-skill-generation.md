@@ -2,7 +2,13 @@
 
 ## Status
 
-Proposed
+**Superseded** by ADR-010 (2025-01-25)
+
+This ADR described skills generation architecture that has been removed in favor of progressive loading only. The `mcp-skill-generator` and `mcp-skill-store` crates have been deleted. See ADR-010 for rationale.
+
+---
+
+**Original Status**: Proposed
 
 ## Context
 
