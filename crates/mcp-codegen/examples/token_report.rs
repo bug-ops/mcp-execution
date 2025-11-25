@@ -12,7 +12,11 @@ use serde_json::json;
 
 /// Approximates token count using simple heuristic: words * 1.3
 fn count_tokens(text: &str) -> usize {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     let tokens = (text.split_whitespace().count() as f64 * 1.3) as usize;
     tokens
 }
