@@ -969,6 +969,160 @@ impl SkillStore {
         Ok(())
     }
 
+    /// Saves a complete skill bundle to disk with multi-file structure.
+    ///
+    /// Creates a skill directory with separate script files:
+    /// ```text
+    /// ~/.claude/skills/skill-name/
+    /// ├── SKILL.md
+    /// ├── scripts/
+    /// │   ├── tool1.ts
+    /// │   └── tool2.ts
+    /// ├── REFERENCE.md
+    /// └── .metadata.json
+    /// ```
+    ///
+    /// All writes are atomic - the skill is either fully written or not at all.
+    /// If any operation fails, the entire skill directory is removed.
+    ///
+    /// # Arguments
+    ///
+    /// * `bundle` - Complete skill bundle with SKILL.md, scripts, and REFERENCE.md
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Skill already exists
+    /// - Directory or file creation fails
+    /// - File write fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_skill_store::SkillStore;
+    /// use mcp_core::{SkillBundle, ScriptFile};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = SkillStore::new_claude()?;
+    /// let bundle = SkillBundle::builder("github")?
+    ///     .skill_md("---\nname: github\n---\n# GitHub")
+    ///     .script(ScriptFile::new("create_issue", "ts", "// code"))
+    ///     .reference_md("# Reference")
+    ///     .build();
+    ///
+    /// store.save_bundle(&bundle)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn save_bundle(&self, bundle: &mcp_core::SkillBundle) -> Result<()> {
+        let skill_name = bundle.name();
+        let skill_dir = self.skill_path(skill_name.as_str());
+
+        // Create directory atomically - fails if already exists
+        match fs::create_dir(&skill_dir) {
+            Ok(()) => {
+                tracing::debug!("Created skill bundle directory: {}", skill_dir.display());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(SkillStoreError::SkillAlreadyExists {
+                    server_name: skill_name.as_str().to_string(),
+                });
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+
+        // Set up cleanup guard
+        let guard = SkillDirGuard::new(skill_dir.clone());
+
+        tracing::info!(
+            "Saving skill bundle: {} ({} scripts)",
+            skill_name.as_str(),
+            bundle.scripts().len()
+        );
+
+        // Write SKILL.md atomically
+        let skill_path = skill_dir.join(CLAUDE_SKILL_FILE);
+        Self::write_file_atomic(&skill_path, bundle.skill_md().as_bytes())?;
+        let skill_checksum = calculate_checksum(bundle.skill_md().as_bytes());
+        tracing::debug!("Wrote SKILL.md: {} bytes", bundle.skill_md().len());
+
+        // Create scripts directory
+        let scripts_dir = skill_dir.join("scripts");
+        fs::create_dir(&scripts_dir)?;
+        tracing::debug!("Created scripts directory");
+
+        // Write all script files
+        for script in bundle.scripts() {
+            let script_path = skill_dir.join(script.reference().relative_path());
+            Self::write_file_atomic(&script_path, script.content().as_bytes())?;
+            tracing::debug!("Wrote script: {}", script.reference().filename());
+
+            // Set executable permission on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&script_path)?.permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&script_path, perms)?;
+                tracing::debug!(
+                    "Set executable permission: {}",
+                    script.reference().filename()
+                );
+            }
+        }
+
+        // Write REFERENCE.md if present
+        let reference_checksum = if let Some(reference_md) = bundle.reference_md() {
+            let reference_path = skill_dir.join(CLAUDE_REFERENCE_FILE);
+            Self::write_file_atomic(&reference_path, reference_md.as_bytes())?;
+            let checksum = calculate_checksum(reference_md.as_bytes());
+            tracing::debug!("Wrote REFERENCE.md: {} bytes", reference_md.len());
+            Some(checksum)
+        } else {
+            None
+        };
+
+        // Create metadata with checksums
+        // Note: For now, we don't include server info in bundle
+        // This can be extended in the future by adding server_info to SkillBundle
+        let metadata = ClaudeSkillMetadata {
+            skill_name: skill_name.as_str().to_string(),
+            server_name: skill_name.as_str().to_string(), // Temporary: use skill name
+            server_version: "unknown".to_string(),
+            protocol_version: "2024-11-05".to_string(),
+            tool_count: bundle.scripts().len(),
+            generated_at: Utc::now(),
+            generator_version: env!("CARGO_PKG_VERSION").to_string(),
+            checksums: SkillChecksums {
+                skill_md: skill_checksum,
+                reference_md: reference_checksum,
+            },
+        };
+
+        // Write metadata atomically
+        let metadata_path = skill_dir.join(CLAUDE_METADATA_FILE);
+        let metadata_json = serde_json::to_string_pretty(&metadata)?;
+        Self::write_file_atomic(&metadata_path, metadata_json.as_bytes())?;
+        tracing::debug!("Wrote .metadata.json");
+
+        // Success - disable cleanup
+        guard.commit();
+
+        // Increment success counter
+        self.generation_successes.fetch_add(1, Ordering::Relaxed);
+
+        tracing::info!(
+            "Successfully saved skill bundle: {} ({} scripts, {} tools)",
+            skill_name.as_str(),
+            bundle.scripts().len(),
+            bundle.scripts().len()
+        );
+
+        Ok(())
+    }
+
     /// Writes a file atomically using temp file + rename.
     ///
     /// This ensures that the file is either fully written or not written at all,

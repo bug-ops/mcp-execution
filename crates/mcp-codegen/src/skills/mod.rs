@@ -42,3 +42,8 @@
 
 pub mod claude;
 pub mod converter;
+pub mod orchestrator;
+pub mod script_generator;
+
+// Re-export main orchestrator for convenient access
+pub use orchestrator::SkillOrchestrator;
