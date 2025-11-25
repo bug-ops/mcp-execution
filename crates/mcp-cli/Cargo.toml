@@ -27,7 +27,6 @@ clap_complete.workspace = true
 colored.workspace = true
 dialoguer.workspace = true
 dirs.workspace = true
-mcp-bridge.workspace = true
 mcp-codegen.workspace = true
 mcp-core.workspace = true
 mcp-introspector.workspace = true

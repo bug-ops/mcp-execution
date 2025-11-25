@@ -15,7 +15,7 @@
 - ✅ 684 tests passing (100% pass rate)
 - ✅ 98% token savings (30,000 → 500-1,500 tokens per tool)
 - ✅ 526x faster than target (2ms generation)
-- ✅ 6 crates (simplified from 10)
+- ✅ 5 crates (simplified from 10)
 - ✅ ~12,000 lines Rust (down from ~48,000)
 
 ## Executive Summary
@@ -61,7 +61,6 @@ mcp-execution/
 │   ├── mcp-core/             # Foundation: types, traits, errors
 │   ├── mcp-introspector/     # MCP server analysis (rmcp)
 │   ├── mcp-codegen/          # TypeScript code generation
-│   ├── mcp-bridge/           # MCP proxy with caching
 │   ├── mcp-vfs/              # Virtual filesystem
 │   └── mcp-execution-cli/    # CLI application
 ├── examples/
@@ -83,10 +82,7 @@ graph TD
     CODEGEN --> VFS[mcp-vfs<br/>Virtual filesystem]
     CODEGEN --> CORE
 
-    BRIDGE[mcp-bridge<br/>MCP proxy] --> RMCP[rmcp<br/>Official MCP SDK]
-    BRIDGE --> CORE
-
-    INTRO --> RMCP
+    INTRO --> RMCP[rmcp<br/>Official MCP SDK]
     INTRO --> CORE
 
     VFS --> CORE
@@ -319,32 +315,6 @@ required = false => "paramName?: type"
 required = true  => "paramName: type"
 ```
 
-### mcp-bridge
-
-**Purpose**: MCP server communication with caching.
-
-**Key Features**:
-```rust
-pub struct Bridge {
-    cache: LruCache<String, Value>,  // LRU cache for tool results
-    total_tool_calls: AtomicU32,     // Statistics tracking
-    cache_hits: AtomicU32,
-}
-
-impl Bridge {
-    pub async fn call_tool(
-        &self,
-        server_id: &ServerId,
-        tool_name: &ToolName,
-        params: Value,
-    ) -> Result<Value>;
-
-    pub async fn cache_stats(&self) -> CacheStats;
-}
-```
-
-**Integration**: Uses `rmcp::client` for all MCP communication.
-
 ### mcp-vfs
 
 **Purpose**: Virtual filesystem for code generation.
@@ -371,7 +341,9 @@ impl VirtualFilesystem {
 **Commands**:
 - `generate` - Generate progressive loading files
 - `introspect` - Analyze MCP servers
-- `stats` - View cache statistics
+- `config` - Configuration management
+- `cache` - Cache management
+- `server` - Server management
 - `completions` - Shell completions
 
 **Example**:
@@ -539,8 +511,8 @@ All architectural decisions documented:
 ✅ **Focused**: One clear purpose - progressive loading TypeScript generation
 ✅ **Fast**: 526x faster than target (2ms per server)
 ✅ **Effective**: 98% token savings achieved
-✅ **Simple**: 6 crates, 12,000 LOC, clear architecture
-✅ **Maintainable**: No WASM complexity, no LLM dependencies
+✅ **Simple**: 5 crates, 12,000 LOC, clear architecture
+✅ **Maintainable**: Simple codebase, no LLM dependencies
 ✅ **Production Ready**: 684 tests passing, all targets exceeded
 
 **Result**: A simple, focused tool that solves the token efficiency problem without over-engineering.

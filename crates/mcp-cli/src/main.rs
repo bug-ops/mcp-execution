@@ -18,24 +18,20 @@
 //!
 //! The CLI is organized around subcommands:
 //! - `introspect` - Analyze MCP servers and display capabilities
-//! - `generate` - Generate code from MCP server tools
-//! - `execute` - Execute WASM modules in sandbox
+//! - `generate` - Generate progressive loading TypeScript files
 //! - `server` - Manage MCP server connections
-//! - `stats` - Display runtime statistics
-//! - `debug` - Debug utilities and diagnostics
 //! - `config` - Configuration management
+//! - `cache` - Manage internal cache
+//! - `completions` - Generate shell completions
 //!
 //! # Examples
 //!
 //! ```bash
 //! # Introspect a server
-//! mcp-cli introspect github
+//! mcp-execution-cli introspect github-mcp-server
 //!
-//! # Generate code
-//! mcp-cli generate github --output ./generated
-//!
-//! # Execute WASM module
-//! mcp-cli execute module.wasm --entry main
+//! # Generate progressive loading files
+//! mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
 //! ```
 
 use anyhow::Result;
@@ -200,11 +196,6 @@ pub enum Commands {
         action: ServerAction,
     },
 
-    /// Show runtime statistics.
-    ///
-    /// Display MCP Bridge cache statistics and performance metrics.
-    Stats,
-
     /// Configuration management.
     ///
     /// Initialize, view, and modify CLI configuration.
@@ -335,7 +326,6 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             .await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
-        Commands::Stats => commands::stats::run(output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
         Commands::Cache { action } => {
             commands::cache::handle(action)?;
@@ -442,12 +432,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parsing_stats() {
-        let cli = Cli::parse_from(["mcp-cli", "stats"]);
-        assert!(matches!(cli.command, Commands::Stats));
-    }
-
-    #[test]
     fn test_cli_parsing_config_init() {
         let cli = Cli::parse_from(["mcp-cli", "config", "init"]);
         assert!(matches!(cli.command, Commands::Config { .. }));
@@ -455,19 +439,19 @@ mod tests {
 
     #[test]
     fn test_cli_verbose_flag() {
-        let cli = Cli::parse_from(["mcp-cli", "--verbose", "stats"]);
+        let cli = Cli::parse_from(["mcp-cli", "--verbose", "config", "init"]);
         assert!(cli.verbose);
     }
 
     #[test]
     fn test_cli_output_format_default() {
-        let cli = Cli::parse_from(["mcp-cli", "stats"]);
+        let cli = Cli::parse_from(["mcp-cli", "config", "init"]);
         assert_eq!(cli.format, "pretty");
     }
 
     #[test]
     fn test_cli_output_format_custom() {
-        let cli = Cli::parse_from(["mcp-cli", "--format", "json", "stats"]);
+        let cli = Cli::parse_from(["mcp-cli", "--format", "json", "config", "init"]);
         assert_eq!(cli.format, "json");
     }
 

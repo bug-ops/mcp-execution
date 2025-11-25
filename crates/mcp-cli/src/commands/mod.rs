@@ -11,4 +11,3 @@ pub mod config;
 pub mod generate;
 pub mod introspect;
 pub mod server;
-pub mod stats;

@@ -25,7 +25,7 @@ MCP Code Execution generates TypeScript files for Model Context Protocol (MCP) t
 
 ## Architecture
 
-### 6 Workspace Crates
+### 5 Workspace Crates
 
 ```
 mcp-execution/
@@ -33,7 +33,6 @@ mcp-execution/
 │   ├── mcp-core/             # Foundation: types, traits, errors
 │   ├── mcp-introspector/     # Server analysis using rmcp SDK
 │   ├── mcp-codegen/          # TypeScript code generation (progressive loading)
-│   ├── mcp-bridge/           # MCP proxy with caching (rmcp client)
 │   ├── mcp-vfs/              # Virtual filesystem
 │   └── mcp-cli/              # CLI application
 ├── examples/              # Progressive loading usage examples
@@ -280,7 +279,7 @@ See [docs/adr/](docs/adr/) for security architecture decisions.
 
 ### Phase 1: Core Infrastructure ✅ COMPLETE
 
-- [x] Workspace structure (6 crates)
+- [x] Workspace structure (5 crates)
 - [x] Dependency configuration (rmcp v0.8)
 - [x] ADR-004: Use rmcp official SDK
 - [x] Core types and traits (ServerId, ToolName, etc.)
