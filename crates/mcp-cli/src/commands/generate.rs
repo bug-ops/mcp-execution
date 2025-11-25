@@ -53,6 +53,8 @@ struct GenerationResult {
 /// * `headers` - HTTP headers in KEY=VALUE format
 /// * `skill_name` - Optional skill name (interactive if not provided)
 /// * `skill_description` - Optional skill description (interactive if not provided)
+/// * `use_llm` - Use LLM-based categorization (requires `ANTHROPIC_API_KEY`)
+/// * `dictionary` - Path to custom categorization dictionary YAML file
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -99,6 +101,8 @@ pub async fn run(
     headers: Vec<String>,
     skill_name_input: Option<String>,
     skill_description_input: Option<String>,
+    use_llm: bool,
+    dictionary: Option<String>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build ServerConfig from CLI arguments
@@ -141,6 +145,15 @@ pub async fn run(
     };
 
     info!("Creating skill: {}", skill_name.as_str());
+
+    // Log categorization strategy
+    if use_llm {
+        info!("Using LLM-based intelligent categorization");
+    } else if let Some(ref dict_path) = dictionary {
+        info!("Using custom dictionary: {}", dict_path);
+    } else {
+        info!("Using default heuristic categorization");
+    }
 
     // Step 3: Generate skill bundle with orchestrator
     let orchestrator = SkillOrchestrator::new().context("failed to create skill orchestrator")?;

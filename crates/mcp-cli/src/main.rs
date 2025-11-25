@@ -193,6 +193,14 @@ pub enum Commands {
         /// Skill description (interactive prompt if not provided)
         #[arg(long)]
         skill_description: Option<String>,
+
+        /// Use LLM-based intelligent categorization (requires `ANTHROPIC_API_KEY`)
+        #[arg(long)]
+        use_llm: bool,
+
+        /// Path to custom categorization dictionary YAML file
+        #[arg(long)]
+        dictionary: Option<String>,
     },
 
     /// Execute a WASM module in the secure sandbox.
@@ -384,6 +392,8 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             server_headers,
             skill_name,
             skill_description,
+            use_llm,
+            dictionary,
         } => {
             commands::generate::run(
                 server,
@@ -395,6 +405,8 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 server_headers,
                 skill_name,
                 skill_description,
+                use_llm,
+                dictionary,
                 output_format,
             )
             .await

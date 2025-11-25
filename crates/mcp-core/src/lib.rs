@@ -38,6 +38,7 @@ mod config;
 mod error;
 mod server_config;
 mod skill_bundle;
+mod skill_category;
 mod types;
 
 pub mod cli;
@@ -69,3 +70,9 @@ pub use cache_manager::{BuildMetadata, CacheManager, CacheStats};
 
 // Re-export skill bundle types
 pub use skill_bundle::{ScriptFile, ScriptReference, SkillBundle, SkillBundleBuilder};
+
+// Re-export skill category types
+pub use skill_category::{
+    CategorizedSkillBundle, CategorizedSkillBundleBuilder, CategoryManifest,
+    CategoryManifestBuilder, ManifestMetadata, SkillCategory,
+};
