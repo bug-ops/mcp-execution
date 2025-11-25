@@ -1,78 +1,43 @@
 //! Generate command implementation.
 //!
-//! Generates Claude skills from MCP server tool definitions.
+//! Generates progressive loading TypeScript files from MCP server tool definitions.
 //! This command:
 //! 1. Introspects the server to discover tools and schemas
-//! 2. Prompts user for skill name and description
-//! 3. Converts to `SkillData` and renders templates
-//! 4. Saves skill to `.claude/skills/` directory or generates progressive loading files
+//! 2. Generates TypeScript files for progressive loading (one file per tool)
+//! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
 use super::common::build_server_config;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_codegen::skills::SkillOrchestrator;
 use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_core::{SkillDescription, SkillName};
 use mcp_introspector::Introspector;
-use mcp_skill_store::SkillStore;
 use mcp_vfs::VfsBuilder;
 use serde::Serialize;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-/// Output mode for code generation.
-///
-/// Determines what kind of files to generate from the MCP server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputMode {
-    /// Generate SKILL.md only (backward compatible)
-    Skill,
-    /// Generate progressive loading files only
-    Progressive,
-    /// Generate both SKILL.md and progressive files
-    Both,
-}
-
-impl OutputMode {
-    /// Parse output mode from string.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if mode string is invalid.
-    fn from_str(s: &str) -> Result<Self> {
-        match s.to_lowercase().as_str() {
-            "skill" => Ok(Self::Skill),
-            "progressive" => Ok(Self::Progressive),
-            "both" => Ok(Self::Both),
-            _ => bail!("Invalid output mode: '{s}'. Valid options: skill, progressive, both"),
-        }
-    }
-}
-
-/// Result of Claude skill generation.
+/// Result of progressive loading code generation.
 #[derive(Debug, Serialize)]
 struct GenerationResult {
-    /// Skill name
-    skill_name: String,
+    /// Server ID
+    server_id: String,
     /// Server name
     server_name: String,
-    /// Number of tools in skill
+    /// Number of tools generated
     tool_count: usize,
-    /// Path where skill was saved
-    skill_path: String,
+    /// Path where files were saved
+    output_path: String,
 }
 
 /// Runs the generate command.
 ///
-/// Generates a Claude skill from an MCP server.
+/// Generates progressive loading TypeScript files from an MCP server.
 ///
 /// This command performs the following steps:
 /// 1. Builds `ServerConfig` from CLI arguments
 /// 2. Introspects the MCP server to discover tools
-/// 3. Prompts user for skill name and description (or uses CLI args)
-/// 4. Converts server info to `SkillData`
-/// 5. Renders `SKILL.md` and `REFERENCE.md` templates
-/// 6. Saves skill to `.claude/skills/` directory
+/// 3. Generates TypeScript files (one per tool) using progressive loading pattern
+/// 4. Exports VFS to `~/.claude/servers/{server-id}/` directory
 ///
 /// # Arguments
 ///
@@ -83,14 +48,7 @@ struct GenerationResult {
 /// * `http` - HTTP transport URL
 /// * `sse` - SSE transport URL
 /// * `headers` - HTTP headers in KEY=VALUE format
-/// * `skill_name` - Optional skill name (interactive if not provided)
-/// * `skill_description` - Optional skill description (interactive if not provided)
-/// * `use_llm` - Use LLM-based categorization (requires `ANTHROPIC_API_KEY`)
-/// * `dictionary` - Path to custom categorization dictionary YAML file
-/// * `categorize` - Generate categorized skill with progressive loading
-/// * `output_mode` - Output mode: skill, progressive, or both
-/// * `progressive_output` - Custom output directory for progressive files
-/// * `skill_output` - Custom output directory for skill files
+/// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -98,40 +56,9 @@ struct GenerationResult {
 /// Returns an error if:
 /// - Server configuration is invalid
 /// - Server connection fails
-/// - Server has no tools
-/// - Skill name/description validation fails
-/// - Template rendering fails
-/// - File system operations fail
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::generate;
-/// use mcp_core::cli::{ExitCode, OutputFormat};
-///
-/// # async fn example() -> Result<(), anyhow::Error> {
-/// let result = generate::run(
-///     Some("github-mcp-server".to_string()),
-///     vec!["stdio".to_string()],
-///     vec![],
-///     None,
-///     None,
-///     None,
-///     vec![],
-///     Some("github".to_string()),
-///     Some("GitHub integration".to_string()),
-///     false, // use_llm
-///     None,  // dictionary
-///     false, // categorize
-///     "skill".to_string(), // output_mode
-///     None,  // progressive_output
-///     None,  // skill_output
-///     OutputFormat::Pretty,
-/// ).await?;
-/// assert_eq!(result, ExitCode::SUCCESS);
-/// # Ok(())
-/// # }
-/// ```
+/// - Tool introspection fails
+/// - Code generation fails
+/// - File export fails
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     server: Option<String>,
@@ -141,717 +68,157 @@ pub async fn run(
     http: Option<String>,
     sse: Option<String>,
     headers: Vec<String>,
-    skill_name_input: Option<String>,
-    skill_description_input: Option<String>,
-    use_llm: bool,
-    dictionary: Option<String>,
-    categorize: bool,
-    output_mode_str: String,
-    progressive_output: Option<String>,
-    skill_output: Option<String>,
+    output_dir: Option<PathBuf>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    // Build ServerConfig from CLI arguments
-    let (server_id, config) = build_server_config(server, args, env, cwd, http, sse, headers)?;
+    // Build server config
+    let (server_id, server_config) =
+        build_server_config(server, args, env, cwd, http, sse, headers)?;
 
-    info!("Generating Claude skill for server: {}", server_id);
-    info!("Transport: {:?}", config.transport());
+    info!("Connecting to MCP server: {}", server_id);
 
-    // Step 1: Introspect MCP server
+    // Introspect server
     let mut introspector = Introspector::new();
-
     let server_info = introspector
-        .discover_server(server_id.clone(), &config)
+        .discover_server(server_id, &server_config)
         .await
-        .with_context(|| {
-            format!(
-                "failed to introspect MCP server '{server_id}' - ensure the server is accessible"
-            )
-        })?;
+        .context("failed to introspect MCP server")?;
+
+    info!(
+        "Discovered {} tools from server '{}'",
+        server_info.tools.len(),
+        server_info.name
+    );
 
     if server_info.tools.is_empty() {
-        warn!("Server '{server_id}' has no tools");
-        bail!("no tools found on server '{server_id}'");
+        warn!("Server has no tools to generate code for");
+        return Ok(ExitCode::SUCCESS);
     }
 
-    info!("Discovered {} tools from server", server_info.tools.len());
+    // Generate progressive loading files
+    let generator = ProgressiveGenerator::new().context("failed to create code generator")?;
 
-    // Parse output mode
-    let output_mode = OutputMode::from_str(&output_mode_str)?;
-    info!("Output mode: {:?}", output_mode);
+    let generated_code = generator
+        .generate(&server_info)
+        .context("failed to generate TypeScript code")?;
 
-    // Generate progressive loading files if requested
-    if matches!(output_mode, OutputMode::Progressive | OutputMode::Both) {
-        generate_progressive_files(&server_info, &server_id, progressive_output.as_deref())?;
-    }
+    info!(
+        "Generated {} files for progressive loading",
+        generated_code.file_count()
+    );
 
-    // Generate SKILL.md if requested
-    if matches!(output_mode, OutputMode::Skill | OutputMode::Both) {
-        // Step 2: Get skill metadata (interactive or from CLI args)
-        let server_name = server_id.as_str();
-        let skill_name = if let Some(name) = skill_name_input {
-            SkillName::new(&name).context("invalid skill name")?
-        } else {
-            prompt_skill_name(server_name)?
-        };
+    // Build VFS with generated code
+    let base_path = format!("/{}/", server_info.id.as_str());
+    let vfs = VfsBuilder::from_generated_code(generated_code, &base_path)
+        .build()
+        .context("failed to build VFS")?;
 
-        let skill_description = if let Some(desc) = skill_description_input {
-            SkillDescription::new(&desc).context("invalid skill description")?
-        } else {
-            prompt_skill_description(server_name, &server_info)?
-        };
+    // Determine output directory
+    let output_path = if let Some(custom_dir) = output_dir {
+        custom_dir
+    } else {
+        dirs::home_dir()
+            .context("failed to get home directory")?
+            .join(".claude")
+            .join("servers")
+            .join(server_info.id.as_str())
+    };
 
-        info!("Creating skill: {}", skill_name.as_str());
+    info!("Exporting files to: {}", output_path.display());
 
-        // Log categorization strategy
-        if use_llm {
-            info!("Using LLM-based intelligent categorization");
-        } else if let Some(ref dict_path) = dictionary {
-            info!("Using custom dictionary: {}", dict_path);
-        } else {
-            info!("Using default heuristic categorization");
+    // Export VFS to filesystem
+    vfs.export_to_filesystem(&output_path)
+        .context("failed to export files to filesystem")?;
+
+    // Prepare result
+    let result = GenerationResult {
+        server_id: server_info.id.to_string(),
+        server_name: server_info.name.clone(),
+        tool_count: server_info.tools.len(),
+        output_path: output_path.display().to_string(),
+    };
+
+    // Output result
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
-
-        // Step 3: Generate skill bundle with orchestrator
-        let orchestrator =
-            SkillOrchestrator::new().context("failed to create skill orchestrator")?;
-
-        let store_path = skill_output.as_ref().map(PathBuf::from);
-        let store = if let Some(path) = store_path {
-            SkillStore::new(path).context("failed to initialize skill store")?
-        } else {
-            SkillStore::new_claude().context("failed to initialize skill store")?
-        };
-
-        // Generate and save based on categorize flag
-        generate_skill_files(
-            &orchestrator,
-            &store,
-            &server_info,
-            &skill_name,
-            &skill_description,
-            use_llm,
-            categorize,
-        )
-        .await?;
-
-        // Get skill path
-        let home = dirs::home_dir().context("failed to get home directory")?;
-        let skill_path = skill_output
-            .as_ref()
-            .map_or_else(|| home.join(".claude/skills"), PathBuf::from)
-            .join(skill_name.as_str());
-        info!("Skill saved to: {}", skill_path.display());
-
-        // Output success message
-        let result = GenerationResult {
-            skill_name: skill_name.to_string(),
-            server_name: server_info.name.clone(),
-            tool_count: server_info.tools.len(),
-            skill_path: skill_path.display().to_string(),
-        };
-
-        let formatted = crate::formatters::format_output(&result, output_format)?;
-        println!("{formatted}");
-
-        info!(
-            "Successfully created skill '{}' with {} tools",
-            result.skill_name, result.tool_count
-        );
+        OutputFormat::Text => {
+            println!("Server: {} ({})", result.server_name, result.server_id);
+            println!("Generated {} tool files", result.tool_count);
+            println!("Output: {}", result.output_path);
+        }
+        OutputFormat::Pretty => {
+            println!("✓ Successfully generated progressive loading files");
+            println!("  Server: {} ({})", result.server_name, result.server_id);
+            println!("  Tools: {}", result.tool_count);
+            println!("  Location: {}", result.output_path);
+        }
     }
 
     Ok(ExitCode::SUCCESS)
 }
 
-/// Generates progressive loading files for a server.
-///
-/// Creates TypeScript files for each tool and exports to filesystem.
-///
-/// # Errors
-///
-/// Returns error if generation or filesystem export fails.
-fn generate_progressive_files(
-    server_info: &mcp_introspector::ServerInfo,
-    server_id: &mcp_core::ServerId,
-    progressive_output: Option<&str>,
-) -> Result<()> {
-    info!("\nGenerating progressive loading files...");
-
-    // Create generator
-    let generator =
-        ProgressiveGenerator::new().context("failed to create progressive generator")?;
-
-    // Generate TypeScript files
-    let generated_code = generator
-        .generate(server_info)
-        .context("failed to generate progressive files")?;
-
-    info!("  Generated {} files", generated_code.file_count());
-
-    // Build VFS from generated code
-    let base_path = format!("/{}/", server_id.as_str());
-    let vfs = VfsBuilder::from_generated_code(generated_code, base_path.as_str())
-        .build()
-        .context("failed to build VFS")?;
-
-    // Determine output directory
-    let output_dir = if let Some(path) = progressive_output {
-        PathBuf::from(path)
-    } else {
-        dirs::home_dir()
-            .context("cannot determine home directory")?
-            .join(".claude/servers")
-    };
-
-    info!("  Output directory: {}", output_dir.display());
-
-    // Export to filesystem
-    vfs.export_to_filesystem(&output_dir)
-        .context("failed to export files to filesystem")?;
-
-    info!("Progressive loading files generated successfully");
-    info!(
-        "   Location: {}/{}/",
-        output_dir.display(),
-        server_id.as_str()
-    );
-    info!("   Files:");
-    for path in vfs.all_paths() {
-        // Strip leading server path for cleaner display
-        let display_path = path
-            .as_str()
-            .strip_prefix(&base_path)
-            .unwrap_or(path.as_str());
-        info!("     - {}", display_path);
-    }
-
-    Ok(())
-}
-
-/// Generates skill files (SKILL.md, REFERENCE.md, etc).
-///
-/// # Errors
-///
-/// Returns error if generation or save fails.
-async fn generate_skill_files(
-    orchestrator: &SkillOrchestrator,
-    store: &SkillStore,
-    server_info: &mcp_introspector::ServerInfo,
-    skill_name: &SkillName,
-    skill_description: &SkillDescription,
-    use_llm: bool,
-    categorize: bool,
-) -> Result<()> {
-    if categorize {
-        info!("Generating categorized skill with progressive loading...");
-
-        if use_llm {
-            // Async LLM-based categorization
-            let bundle = orchestrator
-                .generate_categorized_bundle_async(
-                    server_info,
-                    skill_name,
-                    skill_description,
-                    "claude-sonnet-4",
-                    10,
-                )
-                .await
-                .context("failed to generate categorized bundle with LLM")?;
-
-            info!(
-                "Generated categorized bundle: {} categories, {} scripts",
-                bundle.categories().len(),
-                bundle.scripts().len()
-            );
-
-            store
-                .save_categorized_bundle(&bundle)
-                .context("failed to save categorized bundle")?;
-        } else {
-            // Sync dictionary/universal categorization
-            let bundle = orchestrator
-                .generate_categorized_bundle(server_info, skill_name, skill_description)
-                .context("failed to generate categorized bundle")?;
-
-            info!(
-                "Generated categorized bundle: {} categories, {} scripts",
-                bundle.categories().len(),
-                bundle.scripts().len()
-            );
-
-            store
-                .save_categorized_bundle(&bundle)
-                .context("failed to save categorized bundle")?;
-        }
-    } else {
-        // Standard non-categorized generation
-        let bundle = orchestrator
-            .generate_bundle(server_info, skill_name, skill_description)
-            .context("failed to generate skill bundle")?;
-
-        info!(
-            "Generated skill bundle with {} scripts",
-            bundle.scripts().len()
-        );
-        info!("SKILL.md: {} bytes", bundle.skill_md().len());
-        if let Some(ref_md) = bundle.reference_md() {
-            info!("REFERENCE.md: {} bytes", ref_md.len());
-        }
-
-        store
-            .save_bundle(&bundle)
-            .context("failed to save skill bundle")?;
-    }
-
-    Ok(())
-}
-
-/// Prompts user for skill name interactively.
-///
-/// Generates a sensible default from the server name by:
-/// - Removing common suffixes (-server, -bot)
-/// - Converting to lowercase
-/// - Replacing underscores with hyphens
-///
-/// # Errors
-///
-/// Returns an error if user input cannot be read or validation fails repeatedly.
-fn prompt_skill_name(server_name: &str) -> Result<SkillName> {
-    use dialoguer::Input;
-
-    let default_name = server_name
-        .trim_end_matches("-server")
-        .trim_end_matches("-bot")
-        .to_lowercase()
-        .replace('_', "-");
-
-    loop {
-        let input: String = Input::new()
-            .with_prompt("Skill name (lowercase, alphanumeric, hyphens)")
-            .default(default_name.clone())
-            .interact()
-            .context("failed to read user input")?;
-
-        match SkillName::new(&input) {
-            Ok(name) => return Ok(name),
-            Err(e) => {
-                eprintln!("Invalid skill name: {e}");
-                eprintln!("Requirements: 1-64 chars, [a-z0-9-_], start with letter");
-            }
-        }
-    }
-}
-
-/// Prompts user for skill description interactively.
-///
-/// Generates a default description from server metadata.
-///
-/// # Errors
-///
-/// Returns an error if user input cannot be read or validation fails repeatedly.
-fn prompt_skill_description(
-    server_name: &str,
-    server_info: &mcp_introspector::ServerInfo,
-) -> Result<SkillDescription> {
-    use dialoguer::Input;
-
-    let default_desc = format!(
-        "Interact with {} MCP server ({} tools available)",
-        server_name,
-        server_info.tools.len()
-    );
-
-    loop {
-        let input: String = Input::new()
-            .with_prompt("Skill description (max 1024 chars, actionable)")
-            .default(default_desc.clone())
-            .interact()
-            .context("failed to read user input")?;
-
-        match SkillDescription::new(&input) {
-            Ok(desc) => return Ok(desc),
-            Err(e) => {
-                eprintln!("Invalid description: {e}");
-                eprintln!("Requirements: max 1024 chars, no XML tags, no reserved words");
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mcp_core::ServerId;
+    use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
+    use serde_json::json;
+
+    fn create_mock_server_info() -> ServerInfo {
+        ServerInfo {
+            id: ServerId::new("test-server"),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: vec![ToolInfo {
+                name: mcp_core::ToolName::new("test_tool"),
+                description: "A test tool".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "param": {"type": "string"}
+                    }
+                }),
+                output_schema: None,
+            }],
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        }
+    }
 
     #[test]
     fn test_generation_result_serialization() {
         let result = GenerationResult {
-            skill_name: "test-skill".to_string(),
-            server_name: "test-server".to_string(),
+            server_id: "test".to_string(),
+            server_name: "Test Server".to_string(),
             tool_count: 5,
-            skill_path: "/home/user/.claude/skills/test-skill".to_string(),
+            output_path: "/path/to/output".to_string(),
         };
 
         let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("test-skill"));
-        assert!(json.contains("test-server"));
-        assert!(json.contains('5'));
+        assert!(json.contains("\"server_id\":\"test\""));
+        assert!(json.contains("\"tool_count\":5"));
     }
 
     #[test]
-    fn test_generation_result_fields() {
-        let result = GenerationResult {
-            skill_name: "my-skill".to_string(),
-            server_name: "my-server".to_string(),
-            tool_count: 10,
-            skill_path: "/path/to/skill".to_string(),
-        };
-
-        assert_eq!(result.skill_name, "my-skill");
-        assert_eq!(result.server_name, "my-server");
-        assert_eq!(result.tool_count, 10);
-        assert_eq!(result.skill_path, "/path/to/skill");
-    }
-
-    // Note: build_server_config tests are in common.rs
-
-    #[test]
-    fn test_skill_name_default_generation() {
-        // Test suffix removal
-        let server1 = "github";
-        let default1 = server1.trim_end_matches("-bot").to_lowercase();
-        assert_eq!(default1, "github");
-
-        let server2 = "my-server";
-        let default2 = server2.trim_end_matches("-server").to_lowercase();
-        assert_eq!(default2, "my");
-
-        // Test underscore replacement
-        let server3 = "my_cool_server";
-        let default3 = server3.to_lowercase().replace('_', "-");
-        assert_eq!(default3, "my-cool-server");
+    fn test_progressive_generator_creation() {
+        let generator = ProgressiveGenerator::new();
+        assert!(generator.is_ok());
     }
 
     #[test]
-    fn test_skill_name_validation() {
-        // Valid skill names
-        assert!(SkillName::new("valid-skill").is_ok());
-        assert!(SkillName::new("skill123").is_ok());
-        assert!(SkillName::new("a").is_ok());
+    fn test_progressive_code_generation() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_mock_server_info();
 
-        // Invalid skill names
-        assert!(SkillName::new("").is_err());
-        assert!(SkillName::new("Invalid-Skill").is_err()); // uppercase
-        assert!(SkillName::new("skill with spaces").is_err());
-        assert!(SkillName::new("123skill").is_err()); // starts with number
-    }
+        let result = generator.generate(&server_info);
+        assert!(result.is_ok());
 
-    #[test]
-    fn test_skill_description_validation() {
-        // Valid descriptions
-        assert!(SkillDescription::new("A valid description").is_ok());
-        assert!(SkillDescription::new("Interact with VK Teams bot").is_ok());
-
-        // Invalid descriptions
-        assert!(SkillDescription::new("").is_err());
-        assert!(SkillDescription::new("<xml>Invalid</xml>").is_err()); // XML tags
-        let long_desc = "a".repeat(1025);
-        assert!(SkillDescription::new(&long_desc).is_err()); // too long
-    }
-
-    #[test]
-    fn test_default_description_format() {
-        let server_name = "github";
-        let tool_count = 5;
-        let desc = format!("Interact with {server_name} MCP server ({tool_count} tools available)");
-
-        assert!(desc.contains("github"));
-        assert!(desc.contains("5 tools"));
-    }
-
-    #[tokio::test]
-    async fn test_run_server_connection_failure() {
-        // Test error path when server connection fails
-        let result = run(
-            Some("nonexistent-server-xyz-abc".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            Some("test-skill".to_string()),
-            Some("Test skill description".to_string()),
-            false,               // use_llm
-            None,                // dictionary
-            false,               // categorize
-            "skill".to_string(), // output_mode
-            None,                // progressive_output
-            None,                // skill_output
-            OutputFormat::Json,
-        )
-        .await;
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("failed to introspect MCP server")
-                || err_msg.contains("failed to connect")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_run_server_no_tools() {
-        // Note: This test would require a mock server with no tools
-        // Since we don't have a real server that fits, we document the expected behavior
-        // The run() function should return an error with "no tools found on server"
-        // when server_info.tools.is_empty() is true
-
-        // This is implicitly tested through the server_info validation logic
-        // at line 124-127 in the run() function
-    }
-
-    #[tokio::test]
-    async fn test_run_invalid_skill_name() {
-        // Test with invalid skill name (uppercase not allowed)
-        let result = run(
-            Some("nonexistent".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            Some("Invalid-Skill-Name".to_string()), // uppercase invalid
-            Some("Test description".to_string()),
-            false,               // use_llm
-            None,                // dictionary
-            false,               // categorize
-            "skill".to_string(), // output_mode
-            None,                // progressive_output
-            None,                // skill_output
-            OutputFormat::Json,
-        )
-        .await;
-
-        // Should fail during connection or skill name validation
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_run_invalid_skill_description() {
-        // Test with invalid skill description (contains XML tags)
-        let result = run(
-            Some("nonexistent".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            Some("test-skill".to_string()),
-            Some("<xml>Invalid description</xml>".to_string()), // XML tags not allowed
-            false,                                              // use_llm
-            None,                                               // dictionary
-            false,                                              // categorize
-            "skill".to_string(),                                // output_mode
-            None,                                               // progressive_output
-            None,                                               // skill_output
-            OutputFormat::Json,
-        )
-        .await;
-
-        // Should fail during connection or description validation
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_run_http_transport_connection_failure() {
-        // Test HTTP transport with unreachable URL
-        let result = run(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://localhost:99999/nonexistent".to_string()),
-            None,
-            vec![],
-            Some("test-skill".to_string()),
-            Some("Test skill".to_string()),
-            false,               // use_llm
-            None,                // dictionary
-            false,               // categorize
-            "skill".to_string(), // output_mode
-            None,                // progressive_output
-            None,                // skill_output
-            OutputFormat::Json,
-        )
-        .await;
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("failed to introspect MCP server"));
-    }
-
-    #[tokio::test]
-    async fn test_run_sse_transport_connection_failure() {
-        // Test SSE transport with unreachable URL
-        let result = run(
-            None,
-            vec![],
-            vec![],
-            None,
-            None,
-            Some("https://localhost:99999/sse".to_string()),
-            vec![],
-            Some("test-skill".to_string()),
-            Some("Test skill".to_string()),
-            false,               // use_llm
-            None,                // dictionary
-            false,               // categorize
-            "skill".to_string(), // output_mode
-            None,                // progressive_output
-            None,                // skill_output
-            OutputFormat::Json,
-        )
-        .await;
-
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("failed to introspect MCP server"));
-    }
-
-    #[tokio::test]
-    async fn test_run_with_different_output_formats() {
-        // Test that different output formats don't cause panics
-        // (even though connection will fail)
-        for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-            let result = run(
-                Some("nonexistent".to_string()),
-                vec![],
-                vec![],
-                None,
-                None,
-                None,
-                vec![],
-                Some("skill".to_string()),
-                Some("Description".to_string()),
-                false,               // use_llm
-                None,                // dictionary
-                false,               // categorize
-                "skill".to_string(), // output_mode
-                None,                // progressive_output
-                None,                // skill_output
-                format,
-            )
-            .await;
-
-            // Connection should fail, but format handling shouldn't panic
-            assert!(result.is_err());
-        }
-    }
-
-    #[test]
-    fn test_skill_name_suffix_removal() {
-        // Test that server name processing works correctly
-        let server1 = "github-server";
-        let processed1 = server1
-            .trim_end_matches("-server")
-            .trim_end_matches("-bot")
-            .to_lowercase()
-            .replace('_', "-");
-        assert_eq!(processed1, "github");
-
-        let server2 = "my-bot";
-        let processed2 = server2
-            .trim_end_matches("-server")
-            .trim_end_matches("-bot")
-            .to_lowercase()
-            .replace('_', "-");
-        assert_eq!(processed2, "my");
-
-        // Test underscore replacement (suffix removal happens before underscore replacement)
-        let server3 = "vk_teams_server";
-        let processed3 = server3
-            .trim_end_matches("-server") // No match (has underscore, not hyphen)
-            .trim_end_matches("-bot")
-            .to_lowercase()
-            .replace('_', "-");
-        // Since "vk_teams_server" doesn't end with "-server" or "-bot", only underscore replacement happens
-        assert_eq!(processed3, "vk-teams-server");
-
-        // Test with hyphenated suffix
-        let server4 = "vk-teams-server";
-        let processed4 = server4
-            .trim_end_matches("-server")
-            .trim_end_matches("-bot")
-            .to_lowercase()
-            .replace('_', "-");
-        assert_eq!(processed4, "vk-teams");
-    }
-
-    #[test]
-    fn test_skill_name_edge_cases() {
-        // Test edge cases for skill name validation
-        assert!(SkillName::new("a").is_ok()); // Single character
-        assert!(SkillName::new("skill-name-with-many-hyphens").is_ok());
-        assert!(SkillName::new("skill123test").is_ok());
-        assert!(SkillName::new("skill_with_underscores").is_ok());
-
-        // Invalid cases
-        assert!(SkillName::new("").is_err()); // Empty
-        assert!(SkillName::new("Skill").is_err()); // Uppercase
-        assert!(SkillName::new("123skill").is_err()); // Starts with number
-        assert!(SkillName::new("skill name").is_err()); // Contains space
-        assert!(SkillName::new("skill@name").is_err()); // Special character
-    }
-
-    #[test]
-    fn test_skill_description_edge_cases() {
-        // Test edge cases for skill description validation
-        assert!(SkillDescription::new("A").is_ok()); // Single character
-        assert!(SkillDescription::new("A valid description with punctuation!").is_ok());
-        assert!(SkillDescription::new("Description with numbers 123").is_ok());
-
-        // Create a description at exactly the limit
-        let exactly_1024 = "a".repeat(1024);
-        assert!(SkillDescription::new(&exactly_1024).is_ok());
-
-        // Invalid cases
-        let too_long = "a".repeat(1025);
-        assert!(SkillDescription::new(&too_long).is_err());
-        assert!(SkillDescription::new("").is_err());
-        assert!(SkillDescription::new("<script>alert('test')</script>").is_err());
-    }
-
-    #[test]
-    fn test_generation_result_debug_format() {
-        let result = GenerationResult {
-            skill_name: "test-skill".to_string(),
-            server_name: "test-server".to_string(),
-            tool_count: 3,
-            skill_path: "/path/to/skill".to_string(),
-        };
-
-        // Test Debug implementation
-        let debug_str = format!("{result:?}");
-        assert!(debug_str.contains("GenerationResult"));
-        assert!(debug_str.contains("test-skill"));
-    }
-
-    #[test]
-    fn test_generation_result_json_structure() {
-        let result = GenerationResult {
-            skill_name: "my-skill".to_string(),
-            server_name: "my-server".to_string(),
-            tool_count: 7,
-            skill_path: "/home/user/.claude/skills/my-skill".to_string(),
-        };
-
-        let json = serde_json::to_value(&result).unwrap();
-
-        assert_eq!(json["skill_name"], "my-skill");
-        assert_eq!(json["server_name"], "my-server");
-        assert_eq!(json["tool_count"], 7);
-        assert_eq!(json["skill_path"], "/home/user/.claude/skills/my-skill");
+        let code = result.unwrap();
+        assert!(code.file_count() > 0);
     }
 }

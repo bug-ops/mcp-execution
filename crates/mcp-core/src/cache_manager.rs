@@ -593,7 +593,7 @@ impl CacheManager {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CacheStats {
     /// Number of cached WASM modules
     pub total_wasm_files: usize,

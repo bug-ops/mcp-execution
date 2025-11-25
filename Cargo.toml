@@ -33,10 +33,7 @@ mcp-bridge = { path = "crates/mcp-bridge" }
 mcp-codegen = { path = "crates/mcp-codegen" }
 mcp-core = { path = "crates/mcp-core" }
 mcp-introspector = { path = "crates/mcp-introspector" }
-mcp-skill-store = { path = "crates/mcp-skill-store" }
-mcp-skill-generator = { path = "crates/mcp-skill-generator" }
 mcp-vfs = { path = "crates/mcp-vfs" }
-mcp-wasm-runtime = { path = "crates/mcp-wasm-runtime" }
 mockall = "0.14"
 proc-macro2 = "1.0"
 quote = "1.0"
@@ -60,9 +57,6 @@ tracing-appender = "0.2"
 tracing-subscriber = "0.3"
 uuid = "1.18"
 walkdir = "2.5"
-wasmtime = "39.0"
-wasmtime-wasi = "39.0"
-wat = "1.241"
 which = "8.0"
 
 [workspace.lints.rust]

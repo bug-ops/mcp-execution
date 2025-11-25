@@ -3,8 +3,6 @@
 //! Tests the full pipeline from `ServerInfo` to generated TypeScript files
 //! for progressive loading pattern.
 
-#![cfg(feature = "progressive")]
-
 use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::{ServerId, ToolName};
 use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};

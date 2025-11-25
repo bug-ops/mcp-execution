@@ -23,22 +23,6 @@ pub enum ServerAction {
     },
 }
 
-/// Debug actions.
-#[derive(Subcommand, Debug, Clone)]
-pub enum DebugAction {
-    /// Inspect Bridge cache state (size, hit rate, entries)
-    Cache,
-
-    /// Inspect Runtime module cache (compiled WASM modules)
-    Modules,
-
-    /// Inspect active MCP server connections
-    Connections,
-
-    /// Show system diagnostics (versions, paths, permissions)
-    System,
-}
-
 /// Configuration actions.
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {

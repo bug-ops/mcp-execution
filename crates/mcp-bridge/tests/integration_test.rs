@@ -101,18 +101,27 @@ fn test_cache_stats_methods() {
     let empty = CacheStats {
         size: 0,
         capacity: 1000,
+        enabled: true,
+        total_tool_calls: 0,
+        cache_hits: 0,
     };
     assert_eq!(empty.usage_percent(), 0.0);
 
     let half = CacheStats {
         size: 500,
         capacity: 1000,
+        enabled: true,
+        total_tool_calls: 0,
+        cache_hits: 0,
     };
     assert_eq!(half.usage_percent(), 50.0);
 
     let full = CacheStats {
         size: 1000,
         capacity: 1000,
+        enabled: true,
+        total_tool_calls: 0,
+        cache_hits: 0,
     };
     assert_eq!(full.usage_percent(), 100.0);
 
@@ -120,6 +129,9 @@ fn test_cache_stats_methods() {
     let zero = CacheStats {
         size: 0,
         capacity: 0,
+        enabled: false,
+        total_tool_calls: 0,
+        cache_hits: 0,
     };
     assert_eq!(zero.usage_percent(), 0.0);
 }
@@ -466,6 +478,9 @@ fn test_cache_stats_debug() {
     let stats = CacheStats {
         size: 42,
         capacity: 100,
+        enabled: true,
+        total_tool_calls: 10,
+        cache_hits: 5,
     };
 
     let debug_str = format!("{stats:?}");

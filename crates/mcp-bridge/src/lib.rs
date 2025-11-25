@@ -492,6 +492,9 @@ impl Bridge {
         CacheStats {
             size: cache.len(),
             capacity: cache.cap().get(),
+            enabled: cache.cap().get() > 0,
+            total_tool_calls: 0, // TODO: Track tool calls
+            cache_hits: 0,       // TODO: Track cache hits
         }
     }
 
@@ -684,12 +687,18 @@ impl Bridge {
 ///
 /// println!("Cache usage: {:.1}%", stats.usage_percent());
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CacheStats {
     /// Current number of cached entries
     pub size: usize,
     /// Maximum cache capacity
     pub capacity: usize,
+    /// Whether cache is enabled
+    pub enabled: bool,
+    /// Total tool calls made
+    pub total_tool_calls: u32,
+    /// Number of cache hits
+    pub cache_hits: u32,
 }
 
 impl CacheStats {
@@ -779,18 +788,27 @@ mod tests {
         let stats = CacheStats {
             size: 50,
             capacity: 100,
+            enabled: true,
+            total_tool_calls: 0,
+            cache_hits: 0,
         };
         assert_eq!(stats.usage_percent(), 50.0);
 
         let empty = CacheStats {
             size: 0,
             capacity: 100,
+            enabled: true,
+            total_tool_calls: 0,
+            cache_hits: 0,
         };
         assert_eq!(empty.usage_percent(), 0.0);
 
         let full = CacheStats {
             size: 100,
             capacity: 100,
+            enabled: true,
+            total_tool_calls: 0,
+            cache_hits: 0,
         };
         assert_eq!(full.usage_percent(), 100.0);
     }
@@ -801,6 +819,9 @@ mod tests {
         let stats = CacheStats {
             size: 0,
             capacity: 0,
+            enabled: false,
+            total_tool_calls: 0,
+            cache_hits: 0,
         };
         assert_eq!(stats.usage_percent(), 0.0);
     }

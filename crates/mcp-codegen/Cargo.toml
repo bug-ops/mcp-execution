@@ -10,11 +10,7 @@ publish.workspace = true
 workspace = true
 
 [features]
-default = ["wasm"]
-wasm = []
-skills = []
-progressive = []
-all = ["wasm", "skills", "progressive"]
+default = []
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
@@ -34,12 +30,4 @@ mcp-vfs.workspace = true
 
 [[bench]]
 name = "code_generation"
-harness = false
-
-[[bench]]
-name = "multi_file_generation"
-harness = false
-
-[[bench]]
-name = "categorization_tokens"
 harness = false

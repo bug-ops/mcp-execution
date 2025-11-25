@@ -49,7 +49,7 @@ mod actions;
 mod commands;
 pub mod formatters;
 
-use actions::{ConfigAction, DebugAction, ServerAction};
+use actions::{ConfigAction, ServerAction};
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -136,23 +136,22 @@ pub enum Commands {
         detailed: bool,
     },
 
-    /// Generate Claude skill from MCP server.
+    /// Generate progressive loading code from MCP server.
     ///
-    /// Introspects an MCP server and generates a Claude skill
-    /// in the .claude/skills/ directory.
+    /// Introspects an MCP server and generates TypeScript files
+    /// for progressive tool loading.
     ///
     /// # Examples
     ///
     /// ```bash
     /// # Simple server
-    /// mcp-cli generate github-mcp-server --skill-name github
+    /// mcp-cli generate github-mcp-server
     ///
     /// # Docker container
     /// mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
     ///     --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
     ///     --arg=ghcr.io/github/github-mcp-server \
-    ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx \
-    ///     --skill-name github
+    ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
     /// ```
     Generate {
         /// Server command (binary name or path)
@@ -186,76 +185,10 @@ pub enum Commands {
         #[arg(long = "header", num_args = 1)]
         server_headers: Vec<String>,
 
-        /// Skill name (interactive prompt if not provided)
-        #[arg(long)]
-        skill_name: Option<String>,
-
-        /// Skill description (interactive prompt if not provided)
-        #[arg(long)]
-        skill_description: Option<String>,
-
-        /// Use LLM-based intelligent categorization (requires `ANTHROPIC_API_KEY`)
-        #[arg(long)]
-        use_llm: bool,
-
-        /// Path to custom categorization dictionary YAML file
-        #[arg(long)]
-        dictionary: Option<String>,
-
-        /// Generate categorized skill with progressive loading
-        #[arg(long)]
-        categorize: bool,
-
-        /// Output mode: skill (SKILL.md only), progressive (TypeScript files), or both
-        #[arg(long, default_value = "skill")]
-        output_mode: String,
-
         /// Custom output directory for progressive loading files
         /// (default: ~/.claude/servers/)
         #[arg(long)]
-        progressive_output: Option<String>,
-
-        /// Custom output directory for skill files
-        /// (default: ~/.claude/skills/)
-        #[arg(long)]
-        skill_output: Option<String>,
-    },
-
-    /// Execute a WASM module in the secure sandbox.
-    ///
-    /// Runs a WebAssembly module with security policies and resource limits.
-    Execute {
-        /// Path to WASM module file
-        module: PathBuf,
-
-        /// Entry point function name
-        #[arg(short, long, default_value = "main")]
-        entry: String,
-
-        /// Function arguments in format "type:value" (e.g., "i32:42", "f64:3.14")
-        #[arg(short, long = "arg")]
-        args: Vec<String>,
-
-        /// List available exports without executing
-        #[arg(short, long)]
-        list_exports: bool,
-
-        /// Security profile (strict, moderate, permissive)
-        ///
-        /// Overrides individual security settings with predefined profiles:
-        /// - strict: Maximum security (128MB, 30s timeout, no network)
-        /// - moderate: Balanced security (256MB, 60s timeout, no network)
-        /// - permissive: Relaxed security (512MB, 120s timeout, network enabled)
-        #[arg(short, long, value_enum)]
-        profile: Option<mcp_wasm_runtime::SecurityProfile>,
-
-        /// Memory limit in MB (overrides config file and profile)
-        #[arg(short, long)]
-        memory_limit: Option<u64>,
-
-        /// Execution timeout in seconds (overrides config file and profile)
-        #[arg(short, long)]
-        timeout: Option<u64>,
+        progressive_output: Option<PathBuf>,
     },
 
     /// Manage MCP server connections.
@@ -269,21 +202,8 @@ pub enum Commands {
 
     /// Show runtime statistics.
     ///
-    /// Display cache statistics, execution metrics, and performance data.
-    Stats {
-        /// Statistics category (cache, runtime, all)
-        #[arg(default_value = "all")]
-        category: String,
-    },
-
-    /// Debug utilities and diagnostics.
-    ///
-    /// Display system information, runtime metrics, and debugging data.
-    Debug {
-        /// Debug command
-        #[command(subcommand)]
-        action: DebugAction,
-    },
+    /// Display MCP Bridge cache statistics and performance metrics.
+    Stats,
 
     /// Configuration management.
     ///
@@ -292,15 +212,6 @@ pub enum Commands {
         /// Configuration action
         #[command(subcommand)]
         action: ConfigAction,
-    },
-
-    /// Manage saved skills.
-    ///
-    /// Save, load, list, and manage skills stored on disk.
-    Skill {
-        /// Skill management action
-        #[command(subcommand)]
-        action: commands::skill::SkillAction,
     },
 
     /// Manage internal cache.
@@ -408,14 +319,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             http_url,
             sse_url,
             server_headers,
-            skill_name,
-            skill_description,
-            use_llm,
-            dictionary,
-            categorize,
-            output_mode,
             progressive_output,
-            skill_output,
         } => {
             commands::generate::run(
                 server,
@@ -425,44 +329,14 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 http_url,
                 sse_url,
                 server_headers,
-                skill_name,
-                skill_description,
-                use_llm,
-                dictionary,
-                categorize,
-                output_mode,
                 progressive_output,
-                skill_output,
-                output_format,
-            )
-            .await
-        }
-        Commands::Execute {
-            module,
-            entry,
-            args,
-            list_exports,
-            profile,
-            memory_limit,
-            timeout,
-        } => {
-            commands::execute::run(
-                module,
-                entry,
-                args,
-                list_exports,
-                profile,
-                memory_limit,
-                timeout,
                 output_format,
             )
             .await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
-        Commands::Stats { category } => commands::stats::run(category, output_format).await,
-        Commands::Debug { action } => commands::debug::run(action, output_format).await,
+        Commands::Stats => commands::stats::run(output_format).await,
         Commands::Config { action } => commands::config::run(action, output_format).await,
-        Commands::Skill { action } => commands::skill::run(action, output_format).await,
         Commands::Cache { action } => {
             commands::cache::handle(action)?;
             Ok(ExitCode::SUCCESS)
@@ -543,36 +417,22 @@ mod tests {
         let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
         assert!(matches!(cli.command, Commands::Generate { .. }));
 
-        // Test with skill name
-        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--skill-name", "my-skill"]);
-        if let Commands::Generate { skill_name, .. } = cli.command {
-            assert_eq!(skill_name, Some("my-skill".to_string()));
-        } else {
-            panic!("Expected Generate command");
-        }
-
-        // Test with skill description
+        // Test with progressive output
         let cli = Cli::parse_from([
             "mcp-cli",
             "generate",
             "server",
-            "--skill-description",
-            "Test description",
+            "--progressive-output",
+            "/tmp/output",
         ]);
         if let Commands::Generate {
-            skill_description, ..
+            progressive_output, ..
         } = cli.command
         {
-            assert_eq!(skill_description, Some("Test description".to_string()));
+            assert_eq!(progressive_output, Some(PathBuf::from("/tmp/output")));
         } else {
             panic!("Expected Generate command");
         }
-    }
-
-    #[test]
-    fn test_cli_parsing_execute() {
-        let cli = Cli::parse_from(["mcp-cli", "execute", "module.wasm"]);
-        assert!(matches!(cli.command, Commands::Execute { .. }));
     }
 
     #[test]
@@ -584,19 +444,7 @@ mod tests {
     #[test]
     fn test_cli_parsing_stats() {
         let cli = Cli::parse_from(["mcp-cli", "stats"]);
-        assert!(matches!(cli.command, Commands::Stats { .. }));
-    }
-
-    #[test]
-    fn test_cli_parsing_debug_cache() {
-        let cli = Cli::parse_from(["mcp-cli", "debug", "cache"]);
-        assert!(matches!(cli.command, Commands::Debug { .. }));
-    }
-
-    #[test]
-    fn test_cli_parsing_debug_system() {
-        let cli = Cli::parse_from(["mcp-cli", "debug", "system"]);
-        assert!(matches!(cli.command, Commands::Debug { .. }));
+        assert!(matches!(cli.command, Commands::Stats));
     }
 
     #[test]
