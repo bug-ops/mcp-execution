@@ -3,7 +3,7 @@
 //! These tests verify that unicode bypass vectors, encoding tricks,
 //! and other edge cases are properly handled by the validation logic.
 
-use mcp_core::cli::{CacheDir, ServerConnectionString};
+use mcp_core::cli::ServerConnectionString;
 
 /// Test that zero-width Unicode characters are rejected.
 #[test]
@@ -141,59 +141,4 @@ fn test_space_handling() {
         ServerConnectionString::new(only_spaces).is_err(),
         "Only spaces should be rejected after trimming"
     );
-}
-
-/// Test `CacheDir` with very long paths.
-#[test]
-fn test_cache_dir_long_path() {
-    // Test a reasonably long path (not extreme to avoid OS issues)
-    let long_segment = "a".repeat(200);
-    let long_path = format!("mcp/{long_segment}");
-
-    // Should still work (no explicit length limit currently)
-    let result = CacheDir::new(&long_path);
-    assert!(
-        result.is_ok(),
-        "Long paths should be accepted if within OS limits"
-    );
-}
-
-/// Test `CacheDir` with multiple path components.
-#[test]
-fn test_cache_dir_nested_valid() {
-    // Deeply nested but valid path
-    let nested = "mcp/cache/v1/servers/github/sessions";
-    let result = CacheDir::new(nested);
-    assert!(result.is_ok(), "Nested paths should be accepted");
-}
-
-/// Test that mixed separators work on Unix (backslash as filename).
-#[cfg(unix)]
-#[test]
-fn test_mixed_separators_unix() {
-    // On Unix, backslash is a valid filename character
-    let mixed = "cache/sub\\dir";
-    let result = CacheDir::new(mixed);
-
-    // This should work - backslash is treated as part of filename
-    // The .. check happens on components, not raw string
-    assert!(result.is_ok(), "Mixed separators should work on Unix");
-}
-
-/// Test that Windows-style absolute paths are rejected on Unix.
-#[cfg(unix)]
-#[test]
-fn test_windows_paths_on_unix() {
-    // Windows-style absolute path on Unix is just a relative path
-    // C: is not special on Unix, so C:\Windows becomes a relative path
-    let windows = "C:\\Windows\\System32";
-
-    // This might actually succeed as a relative path (weird but not dangerous)
-    // The important thing is it's resolved within cache dir
-    let result = CacheDir::new(windows);
-    if let Ok(cache) = result {
-        // Verify it's within cache directory
-        let cache_base = dirs::cache_dir().unwrap();
-        assert!(cache.as_path().starts_with(&cache_base));
-    }
 }

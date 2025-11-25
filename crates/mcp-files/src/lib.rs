@@ -17,22 +17,22 @@
 //! ## Basic usage
 //!
 //! ```
-//! use mcp_files::{Vfs, FilesBuilder};
+//! use mcp_files::{FileSystem, FilesBuilder};
 //!
-//! // Create VFS using builder
-//! let vfs = FilesBuilder::new()
+//! // Create FileSystem using builder
+//! let fs = FilesBuilder::new()
 //!     .add_file("/mcp-tools/manifest.json", "{}")
 //!     .add_file("/mcp-tools/types.ts", "export type Params = {};")
 //!     .build()
 //!     .unwrap();
 //!
 //! // Read files
-//! let content = vfs.read_file("/mcp-tools/manifest.json").unwrap();
+//! let content = fs.read_file("/mcp-tools/manifest.json").unwrap();
 //! assert_eq!(content, "{}");
 //!
 //! // Check existence
-//! assert!(vfs.exists("/mcp-tools/types.ts"));
-//! assert!(!vfs.exists("/missing.ts"));
+//! assert!(fs.exists("/mcp-tools/types.ts"));
+//! assert!(!fs.exists("/missing.ts"));
 //! ```
 //!
 //! ## Integration with code generation

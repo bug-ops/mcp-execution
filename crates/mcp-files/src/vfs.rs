@@ -6,12 +6,12 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_files::{Vfs, FilePath};
+//! use mcp_files::FileSystem;
 //!
-//! let mut vfs = FileSystem::new();
-//! vfs.add_file("/mcp-tools/test.ts", "export const VERSION = '1.0';").unwrap();
+//! let mut fs = FileSystem::new();
+//! fs.add_file("/mcp-tools/test.ts", "export const VERSION = '1.0';").unwrap();
 //!
-//! let content = vfs.read_file("/mcp-tools/test.ts").unwrap();
+//! let content = fs.read_file("/mcp-tools/test.ts").unwrap();
 //! assert_eq!(content, "export const VERSION = '1.0';");
 //! ```
 

@@ -24,7 +24,7 @@
 //!     .build();
 //!
 //! // Server ID
-//! let server_id = ServerId::new("github").unwrap();
+//! let server_id = ServerId::new("github");
 //! ```
 
 #![deny(unsafe_code)]

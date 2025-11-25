@@ -10,30 +10,14 @@
 //! - Invalid values being passed
 //! - Accidental type conversions
 //!
-//! # Skill Generation
-//!
-//! This project generates skills **exclusively** in the Anthropic Claude Agent Skills format:
-//! - Skills are generated in `.claude/skills/skill-name/` directory
-//! - Each skill has a `SKILL.md` file with YAML frontmatter
-//! - Follows Anthropic's specification for Claude Code/Desktop integration
-//! - No legacy format support, no backward compatibility concerns
-//!
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{ServerId, SessionId, MemoryLimit, SkillName, SkillDescription};
+//! use mcp_core::{ServerId, ToolName};
 //!
 //! // Type-safe identifiers
 //! let server = ServerId::new("my-server");
-//! let session = SessionId::generate();
-//!
-//! // Type-safe memory limits
-//! let limit = MemoryLimit::default();
-//! assert_eq!(limit.bytes(), 256 * 1024 * 1024);
-//!
-//! // Validated Anthropic skill types
-//! let name = SkillName::new("github").unwrap();
-//! let desc = SkillDescription::new("Sends messages to VK Teams. Use when...").unwrap();
+//! let tool = ToolName::new("execute_code");
 //! ```
 
 use serde::{Deserialize, Serialize};
