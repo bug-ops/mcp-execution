@@ -27,3 +27,11 @@ tracing.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 mcp-vfs.workspace = true
+
+[[bench]]
+name = "code_generation"
+harness = false
+
+[[bench]]
+name = "multi_file_generation"
+harness = false
