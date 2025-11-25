@@ -8,7 +8,7 @@
 //!
 //! Run with: cargo bench --package mcp-codegen --bench multi_file_generation
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_codegen::TemplateEngine;
 use mcp_core::{ServerId, SkillDescription, SkillName, ToolName};
 use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
@@ -89,19 +89,15 @@ fn bench_multi_file_vs_baseline(c: &mut Criterion) {
         group.throughput(Throughput::Elements(count as u64));
 
         // Benchmark current (baseline) implementation
-        group.bench_with_input(
-            BenchmarkId::new("baseline", count),
-            &count,
-            |b, _count| {
-                b.iter(|| {
-                    let skill_data =
-                        SkillConverter::convert(bb(&server_info), bb(&skill_name), bb(&skill_desc))
-                            .expect("Conversion should succeed");
-                    let _skill_md = render_skill_md(bb(&engine), bb(&skill_data))
-                        .expect("Rendering should succeed");
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("baseline", count), &count, |b, _count| {
+            b.iter(|| {
+                let skill_data =
+                    SkillConverter::convert(bb(&server_info), bb(&skill_name), bb(&skill_desc))
+                        .expect("Conversion should succeed");
+                let _skill_md = render_skill_md(bb(&engine), bb(&skill_data))
+                    .expect("Rendering should succeed");
+            });
+        });
 
         // TODO: Add multi-file benchmark when implementation is ready
         // group.bench_with_input(
@@ -285,8 +281,8 @@ fn bench_baseline_reference(c: &mut Criterion) {
                 let skill_data =
                     SkillConverter::convert(bb(&server_info), bb(&skill_name), bb(&skill_desc))
                         .expect("Conversion should succeed");
-                let _skill_md =
-                    render_skill_md(bb(&engine), bb(&skill_data)).expect("Rendering should succeed");
+                let _skill_md = render_skill_md(bb(&engine), bb(&skill_data))
+                    .expect("Rendering should succeed");
             });
         });
     }

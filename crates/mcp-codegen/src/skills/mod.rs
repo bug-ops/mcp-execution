@@ -42,3 +42,4 @@
 
 pub mod claude;
 pub mod converter;
+pub mod script_generator;

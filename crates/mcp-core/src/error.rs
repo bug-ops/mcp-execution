@@ -166,6 +166,38 @@ pub enum Error {
         /// The reserved word that was detected
         reserved_word: String,
     },
+
+    /// Script generation failed.
+    ///
+    /// Raised when generating TypeScript scripts from tool schemas fails.
+    #[error("Script generation failed for tool '{tool}': {message}")]
+    ScriptGenerationError {
+        /// The tool name that failed to generate
+        tool: String,
+        /// Description of the generation failure
+        message: String,
+        /// Optional underlying error
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
+    /// Skill bundle is incomplete.
+    ///
+    /// Raised when attempting to build or save a skill bundle that is missing required components.
+    #[error("Skill bundle incomplete: {message}")]
+    IncompleteBundleError {
+        /// Description of what is missing or incomplete
+        message: String,
+    },
+
+    /// Script file not found in bundle.
+    ///
+    /// Raised when attempting to access a script file that does not exist in the bundle.
+    #[error("Script file not found: {filename}")]
+    ScriptNotFound {
+        /// The filename that was not found
+        filename: String,
+    },
 }
 
 impl Error {
@@ -325,6 +357,59 @@ impl Error {
     #[must_use]
     pub const fn is_reserved_word_error(&self) -> bool {
         matches!(self, Self::ReservedWord { .. })
+    }
+
+    /// Returns `true` if this is a script generation error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::Error;
+    ///
+    /// let err = Error::ScriptGenerationError {
+    ///     tool: "send_message".to_string(),
+    ///     message: "Template rendering failed".to_string(),
+    ///     source: None,
+    /// };
+    /// assert!(err.is_script_generation_error());
+    /// ```
+    #[must_use]
+    pub const fn is_script_generation_error(&self) -> bool {
+        matches!(self, Self::ScriptGenerationError { .. })
+    }
+
+    /// Returns `true` if this is an incomplete bundle error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::Error;
+    ///
+    /// let err = Error::IncompleteBundleError {
+    ///     message: "skill_md is required".to_string(),
+    /// };
+    /// assert!(err.is_incomplete_bundle_error());
+    /// ```
+    #[must_use]
+    pub const fn is_incomplete_bundle_error(&self) -> bool {
+        matches!(self, Self::IncompleteBundleError { .. })
+    }
+
+    /// Returns `true` if this is a script not found error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_core::Error;
+    ///
+    /// let err = Error::ScriptNotFound {
+    ///     filename: "tool.ts".to_string(),
+    /// };
+    /// assert!(err.is_script_not_found());
+    /// ```
+    #[must_use]
+    pub const fn is_script_not_found(&self) -> bool {
+        matches!(self, Self::ScriptNotFound { .. })
     }
 }
 
