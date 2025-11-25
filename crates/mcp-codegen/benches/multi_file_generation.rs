@@ -6,7 +6,7 @@
 //! - scripts/*.ts (individual tool scripts)
 //! - reference.md (API documentation)
 //!
-//! Run with: cargo bench --package mcp-codegen --bench multi_file_generation
+//! Run with: `cargo bench --package mcp-codegen --bench multi_file_generation`
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_codegen::TemplateEngine;
@@ -120,7 +120,8 @@ fn bench_multi_file_vs_baseline(c: &mut Criterion) {
 ///
 /// Measures the cost of generating individual TypeScript scripts for each tool.
 #[cfg(feature = "skills")]
-fn bench_script_generation(_c: &mut Criterion) {
+#[allow(dead_code, clippy::missing_const_for_fn)]
+const fn bench_script_generation(_c: &mut Criterion) {
     // TODO: Implement when multi-file script generation is available
     // let mut group = c.benchmark_group("script_generation");
     //
@@ -144,7 +145,8 @@ fn bench_script_generation(_c: &mut Criterion) {
 ///
 /// Measures the cost of writing multiple files vs single file.
 #[cfg(feature = "skills")]
-fn bench_file_io_overhead(_c: &mut Criterion) {
+#[allow(dead_code, clippy::missing_const_for_fn)]
+const fn bench_file_io_overhead(_c: &mut Criterion) {
     // TODO: Implement when multi-file VFS integration is available
     // let mut group = c.benchmark_group("file_io_overhead");
     //
@@ -168,7 +170,8 @@ fn bench_file_io_overhead(_c: &mut Criterion) {
 ///
 /// Compares template complexity between single-file and multi-file.
 #[cfg(feature = "skills")]
-fn bench_template_complexity(_c: &mut Criterion) {
+#[allow(dead_code, clippy::missing_const_for_fn)]
+const fn bench_template_complexity(_c: &mut Criterion) {
     // TODO: Implement when multi-file templates are available
     // let mut group = c.benchmark_group("template_complexity");
     //
@@ -198,7 +201,8 @@ fn bench_template_complexity(_c: &mut Criterion) {
 ///
 /// Measures full workflow including file system operations.
 #[cfg(feature = "skills")]
-fn bench_end_to_end_multi_file(_c: &mut Criterion) {
+#[allow(dead_code, clippy::missing_const_for_fn)]
+const fn bench_end_to_end_multi_file(_c: &mut Criterion) {
     // TODO: Implement when multi-file implementation is complete
     // let mut group = c.benchmark_group("end_to_end_multi_file");
     //
@@ -230,7 +234,8 @@ fn bench_end_to_end_multi_file(_c: &mut Criterion) {
 
 /// Benchmarks memory allocation patterns in multi-file generation.
 #[cfg(feature = "skills")]
-fn bench_memory_patterns_multi_file(_c: &mut Criterion) {
+#[allow(dead_code, clippy::missing_const_for_fn)]
+const fn bench_memory_patterns_multi_file(_c: &mut Criterion) {
     // TODO: Implement when multi-file implementation is complete
     // let mut group = c.benchmark_group("memory_patterns_multi_file");
     // group.sample_size(50); // Fewer samples for memory-focused tests
@@ -259,7 +264,7 @@ fn bench_memory_patterns_multi_file(_c: &mut Criterion) {
 // Comparison Benchmark: Single-File Baseline
 // ============================================================================
 
-/// Baseline benchmark for comparison (mirrors code_generation.rs).
+/// Baseline benchmark for comparison (mirrors `code_generation.rs`).
 ///
 /// This establishes the performance target for multi-file implementation.
 #[cfg(feature = "skills")]

@@ -787,19 +787,19 @@ mod tests {
     #[test]
     fn test_types_implement_debug() {
         let reference = ScriptReference::new("test", "ts");
-        let debug_str = format!("{:?}", reference);
+        let debug_str = format!("{reference:?}");
         assert!(debug_str.contains("ScriptReference"));
         assert!(debug_str.contains("test"));
 
         let script = ScriptFile::new("test", "ts", "code");
-        let debug_str = format!("{:?}", script);
+        let debug_str = format!("{script:?}");
         assert!(debug_str.contains("ScriptFile"));
 
         let bundle = SkillBundle::builder("github")
             .unwrap()
             .skill_md("---")
             .build();
-        let debug_str = format!("{:?}", bundle);
+        let debug_str = format!("{bundle:?}");
         assert!(debug_str.contains("SkillBundle"));
     }
 
@@ -877,7 +877,7 @@ mod tests {
         let bundle = SkillBundle::builder("github")
             .unwrap()
             .skill_md("# GitHub Skill\n...")
-            .scripts(scripts.clone())
+            .scripts(scripts)
             .reference_md("# Reference Documentation")
             .build();
 
