@@ -85,6 +85,9 @@ struct GenerationResult {
 ///     vec![],
 ///     Some("github".to_string()),
 ///     Some("GitHub integration".to_string()),
+///     false, // use_llm
+///     None,  // dictionary
+///     false, // categorize
 ///     OutputFormat::Pretty,
 /// ).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);

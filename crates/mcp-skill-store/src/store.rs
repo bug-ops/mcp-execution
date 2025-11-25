@@ -1154,7 +1154,7 @@ impl SkillStore {
     /// use mcp_core::CategorizedSkillBundle;
     ///
     /// # fn example(bundle: &CategorizedSkillBundle) -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = SkillStore::new_in_user_home()?;
+    /// let store = SkillStore::new_claude()?;
     /// store.save_categorized_bundle(bundle)?;
     /// # Ok(())
     /// # }

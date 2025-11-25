@@ -18,7 +18,7 @@
 //!
 //! # fn example(tools: &[ToolInfo]) -> Result<(), mcp_core::Error> {
 //! // Universal: Works for ANY MCP server
-//! let generator = ManifestGenerator::auto().unwrap()?;
+//! let generator = ManifestGenerator::auto()?;
 //! let manifest = generator.generate(tools)?;
 //!
 //! println!("Generated {} categories", manifest.category_count());
@@ -107,7 +107,7 @@ pub enum FallbackStrategy {
 ///
 /// # fn example(tools: &[ToolInfo]) -> Result<(), mcp_core::Error> {
 /// // Simple: use defaults
-/// let generator = ManifestGenerator::auto().unwrap()?;
+/// let generator = ManifestGenerator::auto()?;
 /// let manifest = generator.generate(tools)?;
 ///
 /// // Advanced: customize grouping
@@ -140,7 +140,7 @@ impl ManifestGenerator {
     /// ```
     /// use mcp_codegen::skills::ManifestGenerator;
     ///
-    /// let generator = ManifestGenerator::auto().unwrap()?;
+    /// let generator = ManifestGenerator::auto()?;
     /// # Ok::<(), mcp_core::Error>(())
     /// ```
     pub fn auto() -> Result<Self> {
@@ -367,7 +367,7 @@ impl ManifestGenerator {
     /// use mcp_introspector::ToolInfo;
     ///
     /// # fn example(tools: &[ToolInfo]) -> Result<(), mcp_core::Error> {
-    /// let generator = ManifestGenerator::auto().unwrap()?;
+    /// let generator = ManifestGenerator::auto()?;
     /// let manifest = generator.generate(tools)?;
     ///
     /// for (category, tool_names) in manifest.categories() {
