@@ -42,7 +42,7 @@ fn bench_export_file_count(c: &mut Criterion) {
             builder = builder.add_file(
                 format!("/tools/tool{i}.ts"),
                 format!(
-                    r#"/**
+                    r"/**
  * Tool {i} implementation
  */
 export async function tool{i}(params: Params{i}): Promise<Result{i}> {{
@@ -58,7 +58,7 @@ export type Result{i} = {{
     success: boolean;
     data: unknown;
 }};
-"#
+"
                 ),
             );
         }

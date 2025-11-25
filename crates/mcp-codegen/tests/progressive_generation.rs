@@ -1,6 +1,6 @@
 //! Integration tests for progressive loading code generation.
 //!
-//! Tests the full pipeline from ServerInfo to generated TypeScript files
+//! Tests the full pipeline from `ServerInfo` to generated TypeScript files
 //! for progressive loading pattern.
 
 #![cfg(feature = "progressive")]
@@ -378,8 +378,11 @@ fn test_progressive_tool_camel_case_conversion() {
         .expect("Failed to generate code");
 
     // Should convert snake_case to camelCase for filename
-    let file_paths: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
-    assert!(file_paths.contains(&"sendTestMessage.ts"));
+    assert!(
+        code.files
+            .iter()
+            .any(|f| f.path.as_str() == "sendTestMessage.ts")
+    );
 
     let tool_file = code
         .files

@@ -240,7 +240,7 @@ fn test_export_special_characters() {
 fn test_export_preserves_content() {
     let temp_dir = TempDir::new().unwrap();
 
-    let original_content = r#"
+    let original_content = r"
 // TypeScript file with various content
 export interface Params {
     id: number;
@@ -251,7 +251,7 @@ export interface Params {
 export function tool(params: Params): void {
     console.log(`Processing: ${params.name}`);
 }
-"#;
+";
 
     let vfs = VfsBuilder::new()
         .add_file("/complex.ts", original_content)
@@ -325,8 +325,8 @@ fn test_export_typescript_module() {
 
     code.add_file(GeneratedFile {
         path: "index.ts".to_string(),
-        content: r#"export * from './types';
-export * from './tools';"#
+        content: r"export * from './types';
+export * from './tools';"
             .to_string(),
     });
 
@@ -337,8 +337,8 @@ export * from './tools';"#
 
     code.add_file(GeneratedFile {
         path: "tools/create.ts".to_string(),
-        content: r#"import type { ToolParams } from '../types';
-export function create(params: ToolParams) { return params.id; }"#
+        content: r"import type { ToolParams } from '../types';
+export function create(params: ToolParams) { return params.id; }"
             .to_string(),
     });
 
