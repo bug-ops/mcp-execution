@@ -32,7 +32,7 @@ lru = "0.16"
 mcp-codegen = { path = "crates/mcp-codegen" }
 mcp-core = { path = "crates/mcp-core" }
 mcp-introspector = { path = "crates/mcp-introspector" }
-mcp-vfs = { path = "crates/mcp-vfs" }
+mcp-files = { path = "crates/mcp-files" }
 mockall = "0.14"
 proc-macro2 = "1.0"
 quote = "1.0"

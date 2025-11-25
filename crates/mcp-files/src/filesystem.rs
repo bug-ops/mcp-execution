@@ -15,13 +15,13 @@
 //! ## Sequential export (safe default)
 //!
 //! ```
-//! use mcp_vfs::VfsBuilder;
+//! use mcp_files::FilesBuilder;
 //! use std::path::PathBuf;
 //! # use tempfile::TempDir;
 //!
 //! # let temp_dir = TempDir::new().unwrap();
 //! # let output_dir = temp_dir.path();
-//! let vfs = VfsBuilder::new()
+//! let vfs = FilesBuilder::new()
 //!     .add_file("/tools/create.ts", "export function create() {}")
 //!     .add_file("/tools/update.ts", "export function update() {}")
 //!     .build()
@@ -37,12 +37,12 @@
 //! ## Parallel export (faster for many files)
 //!
 //! ```
-//! use mcp_vfs::VfsBuilder;
+//! use mcp_files::FilesBuilder;
 //! # use tempfile::TempDir;
 //!
 //! # let temp_dir = TempDir::new().unwrap();
 //! # let output_dir = temp_dir.path();
-//! let vfs = VfsBuilder::new()
+//! let vfs = FilesBuilder::new()
 //!     .add_file("/tool1.ts", "export {}")
 //!     .add_file("/tool2.ts", "export {}")
 //!     .build()
@@ -54,8 +54,8 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::types::{Result, VfsError};
-use crate::vfs::Vfs;
+use crate::types::{FilesError, Result};
+use crate::vfs::FileSystem;
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
@@ -66,7 +66,7 @@ use std::path::{Path, PathBuf};
 /// # Examples
 ///
 /// ```
-/// use mcp_vfs::ExportOptions;
+/// use mcp_files::ExportOptions;
 ///
 /// let options = ExportOptions::default()
 ///     .with_atomic_writes(true)
@@ -115,7 +115,7 @@ impl Default for ExportOptions {
     }
 }
 
-impl Vfs {
+impl FileSystem {
     /// Exports VFS contents to real filesystem.
     ///
     /// This is a high-performance implementation optimized for the progressive
@@ -140,12 +140,12 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     /// # use tempfile::TempDir;
     ///
     /// # let temp = TempDir::new().unwrap();
     /// # let base = temp.path();
-    /// let vfs = VfsBuilder::new()
+    /// let vfs = FilesBuilder::new()
     ///     .add_file("/manifest.json", "{}")
     ///     .build()
     ///     .unwrap();
@@ -170,12 +170,12 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::{VfsBuilder, ExportOptions};
+    /// use mcp_files::{FilesBuilder, ExportOptions};
     /// # use tempfile::TempDir;
     ///
     /// # let temp = TempDir::new().unwrap();
     /// # let base = temp.path();
-    /// let vfs = VfsBuilder::new()
+    /// let vfs = FilesBuilder::new()
     ///     .add_file("/test.ts", "export {}")
     ///     .build()
     ///     .unwrap();
@@ -193,13 +193,13 @@ impl Vfs {
 
         // Validate base path exists
         if !base.exists() {
-            return Err(VfsError::FileNotFound {
+            return Err(FilesError::FileNotFound {
                 path: base.display().to_string(),
             });
         }
 
         // Canonicalize base path once (performance optimization)
-        let canonical_base = base.canonicalize().map_err(|e| VfsError::InvalidPath {
+        let canonical_base = base.canonicalize().map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to canonicalize {}: {}", base.display(), e),
         })?;
 
@@ -229,12 +229,12 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     /// # use tempfile::TempDir;
     ///
     /// # let temp = TempDir::new().unwrap();
     /// # let base = temp.path();
-    /// let vfs = VfsBuilder::new()
+    /// let vfs = FilesBuilder::new()
     ///     .add_file("/tool1.ts", "export {}")
     ///     .add_file("/tool2.ts", "export {}")
     ///     .build()
@@ -249,7 +249,7 @@ impl Vfs {
         use rayon::prelude::*;
 
         let base = base_path.as_ref();
-        let canonical_base = base.canonicalize().map_err(|e| VfsError::InvalidPath {
+        let canonical_base = base.canonicalize().map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to canonicalize {}: {}", base.display(), e),
         })?;
 
@@ -302,7 +302,7 @@ impl Vfs {
     /// Uses `fs::create_dir_all` which is efficient for creating directory trees.
     fn create_directories(dirs: &HashSet<PathBuf>) -> Result<()> {
         for dir in dirs {
-            fs::create_dir_all(dir).map_err(|e| VfsError::InvalidPath {
+            fs::create_dir_all(dir).map_err(|e| FilesError::InvalidPath {
                 path: format!("Failed to create directory {}: {}", dir.display(), e),
             })?;
         }
@@ -351,21 +351,21 @@ fn write_file_atomic(path: &Path, content: &str, options: &ExportOptions) -> Res
         let temp_path = path.with_extension("tmp");
 
         // Write to temp file
-        let mut file = fs::File::create(&temp_path).map_err(|e| VfsError::InvalidPath {
+        let mut file = fs::File::create(&temp_path).map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to create temp file {}: {}", temp_path.display(), e),
         })?;
 
         file.write_all(content.as_bytes())
-            .map_err(|e| VfsError::InvalidPath {
+            .map_err(|e| FilesError::InvalidPath {
                 path: format!("Failed to write to {}: {}", temp_path.display(), e),
             })?;
 
-        file.sync_all().map_err(|e| VfsError::InvalidPath {
+        file.sync_all().map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to sync {}: {}", temp_path.display(), e),
         })?;
 
         // Rename to final location
-        fs::rename(&temp_path, path).map_err(|e| VfsError::InvalidPath {
+        fs::rename(&temp_path, path).map_err(|e| FilesError::InvalidPath {
             path: format!(
                 "Failed to rename {} to {}: {}",
                 temp_path.display(),
@@ -375,7 +375,7 @@ fn write_file_atomic(path: &Path, content: &str, options: &ExportOptions) -> Res
         })?;
     } else {
         // Direct write (faster, but not atomic)
-        fs::write(path, content).map_err(|e| VfsError::InvalidPath {
+        fs::write(path, content).map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to write {}: {}", path.display(), e),
         })?;
     }
@@ -386,13 +386,13 @@ fn write_file_atomic(path: &Path, content: &str, options: &ExportOptions) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VfsBuilder;
+    use crate::FilesBuilder;
     use tempfile::TempDir;
 
     #[test]
     fn test_export_single_file() {
         let temp = TempDir::new().unwrap();
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/test.ts", "export const VERSION = '1.0';")
             .build()
             .unwrap();
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn test_export_nested_files() {
         let temp = TempDir::new().unwrap();
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/tools/create.ts", "export function create() {}")
             .add_file("/tools/update.ts", "export function update() {}")
             .add_file("/manifest.json", "{}")
@@ -432,7 +432,7 @@ mod tests {
         // Write initial file
         fs::write(&path, "old content").unwrap();
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/test.ts", "new content")
             .build()
             .unwrap();
@@ -450,7 +450,7 @@ mod tests {
         // Write initial file
         fs::write(&path, "old content").unwrap();
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/test.ts", "new content")
             .build()
             .unwrap();
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn test_export_atomic_writes() {
         let temp = TempDir::new().unwrap();
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/test.ts", "atomic content")
             .build()
             .unwrap();
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn test_export_non_atomic_writes() {
         let temp = TempDir::new().unwrap();
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/test.ts", "direct content")
             .build()
             .unwrap();
@@ -502,7 +502,10 @@ mod tests {
 
     #[test]
     fn test_export_invalid_base_path() {
-        let vfs = VfsBuilder::new().add_file("/test.ts", "").build().unwrap();
+        let vfs = FilesBuilder::new()
+            .add_file("/test.ts", "")
+            .build()
+            .unwrap();
 
         let result = vfs.export_to_filesystem("/nonexistent/path/that/does/not/exist");
         assert!(result.is_err());
@@ -511,7 +514,7 @@ mod tests {
     #[test]
     fn test_export_many_files() {
         let temp = TempDir::new().unwrap();
-        let mut builder = VfsBuilder::new();
+        let mut builder = FilesBuilder::new();
 
         // Add 30 files (GitHub server typical case)
         for i in 0..30 {
@@ -533,7 +536,7 @@ mod tests {
     #[test]
     fn test_export_deep_nesting() {
         let temp = TempDir::new().unwrap();
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/a/b/c/d/e/deep.ts", "export {}")
             .build()
             .unwrap();
@@ -547,7 +550,7 @@ mod tests {
     #[cfg(feature = "parallel")]
     fn test_export_parallel() {
         let temp = TempDir::new().unwrap();
-        let mut builder = VfsBuilder::new();
+        let mut builder = FilesBuilder::new();
 
         for i in 0..100 {
             builder = builder.add_file(format!("/file{i}.ts"), format!("export const N = {i};"));

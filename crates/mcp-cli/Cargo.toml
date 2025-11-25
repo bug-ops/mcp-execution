@@ -30,7 +30,7 @@ dirs.workspace = true
 mcp-codegen.workspace = true
 mcp-core.workspace = true
 mcp-introspector.workspace = true
-mcp-vfs.workspace = true
+mcp-files.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }

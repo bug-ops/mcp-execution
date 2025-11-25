@@ -6,10 +6,10 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_vfs::{VfsPath, VfsFile};
+//! use mcp_files::{FilePath, FileEntry};
 //!
-//! let path = VfsPath::new("/mcp-tools/servers/github/manifest.json").unwrap();
-//! let file = VfsFile::new("{}");
+//! let path = FilePath::new("/mcp-tools/servers/github/manifest.json").unwrap();
+//! let file = FileEntry::new("{}");
 //!
 //! assert_eq!(path.as_str(), "/mcp-tools/servers/github/manifest.json");
 //! assert_eq!(file.content(), "{}");
@@ -27,16 +27,16 @@ use thiserror::Error;
 /// # Examples
 ///
 /// ```
-/// use mcp_vfs::VfsError;
+/// use mcp_files::FilesError;
 ///
-/// let error = VfsError::FileNotFound {
+/// let error = FilesError::FileNotFound {
 ///     path: "/missing.txt".to_string(),
 /// };
 ///
 /// assert!(error.is_not_found());
 /// ```
 #[derive(Error, Debug)]
-pub enum VfsError {
+pub enum FilesError {
     /// File or directory not found at the specified path
     #[error("File not found: {path}")]
     FileNotFound {
@@ -82,15 +82,15 @@ pub enum VfsError {
     },
 }
 
-impl VfsError {
+impl FilesError {
     /// Returns `true` if this is a file not found error.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsError;
+    /// use mcp_files::FilesError;
     ///
-    /// let error = VfsError::FileNotFound {
+    /// let error = FilesError::FileNotFound {
     ///     path: "/test.txt".to_string(),
     /// };
     ///
@@ -106,9 +106,9 @@ impl VfsError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsError;
+    /// use mcp_files::FilesError;
     ///
-    /// let error = VfsError::NotADirectory {
+    /// let error = FilesError::NotADirectory {
     ///     path: "/file.txt".to_string(),
     /// };
     ///
@@ -124,9 +124,9 @@ impl VfsError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsError;
+    /// use mcp_files::FilesError;
     ///
-    /// let error = VfsError::InvalidPath {
+    /// let error = FilesError::InvalidPath {
     ///     path: "".to_string(),
     /// };
     ///
@@ -147,10 +147,10 @@ impl VfsError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsError;
+    /// use mcp_files::FilesError;
     /// use std::io;
     ///
-    /// let error = VfsError::IoError {
+    /// let error = FilesError::IoError {
     ///     path: "/test.ts".to_string(),
     ///     source: io::Error::from(io::ErrorKind::PermissionDenied),
     /// };
@@ -165,7 +165,7 @@ impl VfsError {
 
 /// A validated virtual filesystem path.
 ///
-/// `VfsPath` ensures paths use Unix-style conventions on all platforms:
+/// `FilePath` ensures paths use Unix-style conventions on all platforms:
 /// - Must start with '/' (absolute paths only)
 /// - Free of parent directory references ('..')
 /// - Use forward slashes as separators
@@ -177,59 +177,59 @@ impl VfsError {
 /// # Examples
 ///
 /// ```
-/// use mcp_vfs::VfsPath;
+/// use mcp_files::FilePath;
 ///
-/// let path = VfsPath::new("/mcp-tools/servers/test/file.ts").unwrap();
+/// let path = FilePath::new("/mcp-tools/servers/test/file.ts").unwrap();
 /// assert_eq!(path.as_str(), "/mcp-tools/servers/test/file.ts");
 /// ```
 ///
 /// ```
-/// use mcp_vfs::VfsPath;
+/// use mcp_files::FilePath;
 ///
 /// // Invalid paths are rejected
-/// assert!(VfsPath::new("relative/path").is_err());
-/// assert!(VfsPath::new("/parent/../escape").is_err());
+/// assert!(FilePath::new("relative/path").is_err());
+/// assert!(FilePath::new("/parent/../escape").is_err());
 /// ```
 ///
 /// On Windows, Unix-style paths like "/mcp-tools/servers/test" are accepted
 /// (not Windows paths like "C:\mcp-tools\servers\test").
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct VfsPath(String);
+pub struct FilePath(String);
 
-impl VfsPath {
-    /// Creates a new `VfsPath` from a path-like type.
+impl FilePath {
+    /// Creates a new `FilePath` from a path-like type.
     ///
     /// The path must be absolute (start with '/') and must not contain parent
     /// directory references ('..').
     ///
-    /// `VfsPath` uses Unix-style path conventions on all platforms, ensuring
+    /// `FilePath` uses Unix-style path conventions on all platforms, ensuring
     /// consistent behavior on Linux, macOS, and Windows. Paths are validated
     /// using string-based checks rather than platform-specific `Path::is_absolute()`,
     /// which enables cross-platform compatibility.
     ///
     /// # Errors
     ///
-    /// Returns `VfsError::PathNotAbsolute` if the path does not start with '/'.
-    /// Returns `VfsError::InvalidPathComponent` if the path contains '..'.
-    /// Returns `VfsError::InvalidPath` if the path is empty or not UTF-8 valid.
+    /// Returns `FilesError::PathNotAbsolute` if the path does not start with '/'.
+    /// Returns `FilesError::InvalidPathComponent` if the path contains '..'.
+    /// Returns `FilesError::InvalidPath` if the path is empty or not UTF-8 valid.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsPath;
+    /// use mcp_files::FilePath;
     ///
-    /// let path = VfsPath::new("/mcp-tools/test.ts")?;
+    /// let path = FilePath::new("/mcp-tools/test.ts")?;
     /// assert_eq!(path.as_str(), "/mcp-tools/test.ts");
     ///
     /// // Works on all platforms (Unix-style paths)
-    /// let path = VfsPath::new("/mcp-tools/servers/test/manifest.json")?;
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// let path = FilePath::new("/mcp-tools/servers/test/manifest.json")?;
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
         // Convert to string for platform-independent validation
-        let path_str = path.to_str().ok_or_else(|| VfsError::InvalidPath {
+        let path_str = path.to_str().ok_or_else(|| FilesError::InvalidPath {
             path: path.display().to_string(),
         })?;
 
@@ -244,7 +244,7 @@ impl VfsPath {
 
         // Check if empty
         if normalized_str.is_empty() {
-            return Err(VfsError::InvalidPath {
+            return Err(FilesError::InvalidPath {
                 path: String::new(),
             });
         }
@@ -252,14 +252,14 @@ impl VfsPath {
         // Check if absolute using Unix-style path rules (starts with '/')
         // VFS uses Unix-style paths on all platforms
         if !normalized_str.starts_with('/') {
-            return Err(VfsError::PathNotAbsolute {
+            return Err(FilesError::PathNotAbsolute {
                 path: normalized_str,
             });
         }
 
         // Check for '..' components in the path string
         if normalized_str.contains("..") {
-            return Err(VfsError::InvalidPathComponent {
+            return Err(FilesError::InvalidPathComponent {
                 path: normalized_str,
             });
         }
@@ -273,12 +273,12 @@ impl VfsPath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsPath;
+    /// use mcp_files::FilePath;
     ///
-    /// let vfs_path = VfsPath::new("/test.ts")?;
+    /// let vfs_path = FilePath::new("/test.ts")?;
     /// let path = vfs_path.as_path();
     /// assert_eq!(path.to_str(), Some("/test.ts"));
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn as_path(&self) -> &Path {
@@ -290,11 +290,11 @@ impl VfsPath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsPath;
+    /// use mcp_files::FilePath;
     ///
-    /// let path = VfsPath::new("/mcp-tools/file.ts")?;
+    /// let path = FilePath::new("/mcp-tools/file.ts")?;
     /// assert_eq!(path.as_str(), "/mcp-tools/file.ts");
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -308,12 +308,12 @@ impl VfsPath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsPath;
+    /// use mcp_files::FilePath;
     ///
-    /// let path = VfsPath::new("/mcp-tools/servers/test.ts")?;
+    /// let path = FilePath::new("/mcp-tools/servers/test.ts")?;
     /// let parent = path.parent().unwrap();
     /// assert_eq!(parent.as_str(), "/mcp-tools/servers");
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
@@ -336,14 +336,14 @@ impl VfsPath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsPath;
+    /// use mcp_files::FilePath;
     ///
-    /// let dir = VfsPath::new("/mcp-tools/servers")?;
+    /// let dir = FilePath::new("/mcp-tools/servers")?;
     /// assert!(dir.is_dir_path());
     ///
-    /// let file = VfsPath::new("/mcp-tools/manifest.json")?;
+    /// let file = FilePath::new("/mcp-tools/manifest.json")?;
     /// assert!(!file.is_dir_path());
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn is_dir_path(&self) -> bool {
@@ -354,13 +354,13 @@ impl VfsPath {
     }
 }
 
-impl fmt::Display for VfsPath {
+impl fmt::Display for FilePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
     }
 }
 
-impl AsRef<Path> for VfsPath {
+impl AsRef<Path> for FilePath {
     fn as_ref(&self) -> &Path {
         Path::new(&self.0)
     }
@@ -373,26 +373,26 @@ impl AsRef<Path> for VfsPath {
 /// # Examples
 ///
 /// ```
-/// use mcp_vfs::VfsFile;
+/// use mcp_files::FileEntry;
 ///
-/// let file = VfsFile::new("console.log('hello');");
+/// let file = FileEntry::new("console.log('hello');");
 /// assert_eq!(file.content(), "console.log('hello');");
 /// assert_eq!(file.size(), 21);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VfsFile {
+pub struct FileEntry {
     content: String,
 }
 
-impl VfsFile {
+impl FileEntry {
     /// Creates a new VFS file with the given content.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsFile;
+    /// use mcp_files::FileEntry;
     ///
-    /// let file = VfsFile::new("export const VERSION = '1.0';");
+    /// let file = FileEntry::new("export const VERSION = '1.0';");
     /// assert_eq!(file.size(), 29);
     /// ```
     #[must_use]
@@ -407,9 +407,9 @@ impl VfsFile {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsFile;
+    /// use mcp_files::FileEntry;
     ///
-    /// let file = VfsFile::new("test content");
+    /// let file = FileEntry::new("test content");
     /// assert_eq!(file.content(), "test content");
     /// ```
     #[must_use]
@@ -422,9 +422,9 @@ impl VfsFile {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsFile;
+    /// use mcp_files::FileEntry;
     ///
-    /// let file = VfsFile::new("hello");
+    /// let file = FileEntry::new("hello");
     /// assert_eq!(file.size(), 5);
     /// ```
     #[must_use]
@@ -438,13 +438,13 @@ impl VfsFile {
 /// # Examples
 ///
 /// ```
-/// use mcp_vfs::{Result, VfsPath};
+/// use mcp_files::{Result, FilePath};
 ///
-/// fn validate_path(path: &str) -> Result<VfsPath> {
-///     VfsPath::new(path)
+/// fn validate_path(path: &str) -> Result<FilePath> {
+///     FilePath::new(path)
 /// }
 /// ```
-pub type Result<T> = std::result::Result<T, VfsError>;
+pub type Result<T> = std::result::Result<T, FilesError>;
 
 #[cfg(test)]
 mod tests {
@@ -452,76 +452,76 @@ mod tests {
 
     #[test]
     fn test_vfs_path_new_valid() {
-        let path = VfsPath::new("/mcp-tools/test.ts").unwrap();
+        let path = FilePath::new("/mcp-tools/test.ts").unwrap();
         assert_eq!(path.as_str(), "/mcp-tools/test.ts");
     }
 
     #[test]
     fn test_vfs_path_new_relative_fails() {
-        let result = VfsPath::new("relative/path");
+        let result = FilePath::new("relative/path");
         assert!(result.is_err());
         assert!(result.unwrap_err().is_invalid_path());
     }
 
     #[test]
     fn test_vfs_path_new_parent_dir_fails() {
-        let result = VfsPath::new("/parent/../escape");
+        let result = FilePath::new("/parent/../escape");
         assert!(result.is_err());
         assert!(result.unwrap_err().is_invalid_path());
     }
 
     #[test]
     fn test_vfs_path_new_empty_fails() {
-        let result = VfsPath::new("");
+        let result = FilePath::new("");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_vfs_path_parent() {
-        let path = VfsPath::new("/mcp-tools/servers/test.ts").unwrap();
+        let path = FilePath::new("/mcp-tools/servers/test.ts").unwrap();
         let parent = path.parent().unwrap();
         assert_eq!(parent.as_str(), "/mcp-tools/servers");
     }
 
     #[test]
     fn test_vfs_path_parent_root() {
-        let path = VfsPath::new("/test").unwrap();
+        let path = FilePath::new("/test").unwrap();
         let parent = path.parent();
         assert!(parent.is_some());
     }
 
     #[test]
     fn test_vfs_path_is_dir_path() {
-        let dir = VfsPath::new("/mcp-tools/servers").unwrap();
+        let dir = FilePath::new("/mcp-tools/servers").unwrap();
         assert!(dir.is_dir_path());
 
-        let file = VfsPath::new("/mcp-tools/test.ts").unwrap();
+        let file = FilePath::new("/mcp-tools/test.ts").unwrap();
         assert!(!file.is_dir_path());
     }
 
     #[test]
     fn test_vfs_path_display() {
-        let path = VfsPath::new("/test.ts").unwrap();
+        let path = FilePath::new("/test.ts").unwrap();
         assert_eq!(format!("{path}"), "/test.ts");
     }
 
     #[test]
     fn test_vfs_file_new() {
-        let file = VfsFile::new("test content");
+        let file = FileEntry::new("test content");
         assert_eq!(file.content(), "test content");
         assert_eq!(file.size(), 12);
     }
 
     #[test]
     fn test_vfs_file_empty() {
-        let file = VfsFile::new("");
+        let file = FileEntry::new("");
         assert_eq!(file.content(), "");
         assert_eq!(file.size(), 0);
     }
 
     #[test]
     fn test_vfs_error_is_not_found() {
-        let error = VfsError::FileNotFound {
+        let error = FilesError::FileNotFound {
             path: "/test".to_string(),
         };
         assert!(error.is_not_found());
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_vfs_error_is_not_directory() {
-        let error = VfsError::NotADirectory {
+        let error = FilesError::NotADirectory {
             path: "/file.txt".to_string(),
         };
         assert!(!error.is_not_found());
@@ -541,17 +541,17 @@ mod tests {
 
     #[test]
     fn test_vfs_error_is_invalid_path() {
-        let error = VfsError::InvalidPath {
+        let error = FilesError::InvalidPath {
             path: String::new(),
         };
         assert!(error.is_invalid_path());
 
-        let error = VfsError::PathNotAbsolute {
+        let error = FilesError::PathNotAbsolute {
             path: "relative".to_string(),
         };
         assert!(error.is_invalid_path());
 
-        let error = VfsError::InvalidPathComponent {
+        let error = FilesError::InvalidPathComponent {
             path: "../escape".to_string(),
         };
         assert!(error.is_invalid_path());
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_vfs_path_as_ref() {
-        let vfs_path = VfsPath::new("/test.ts").unwrap();
+        let vfs_path = FilePath::new("/test.ts").unwrap();
         let path: &Path = vfs_path.as_ref();
         assert_eq!(path.to_str(), Some("/test.ts"));
     }

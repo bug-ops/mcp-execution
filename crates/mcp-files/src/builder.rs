@@ -6,9 +6,9 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_vfs::VfsBuilder;
+//! use mcp_files::FilesBuilder;
 //!
-//! let vfs = VfsBuilder::new()
+//! let vfs = FilesBuilder::new()
 //!     .add_file("/mcp-tools/manifest.json", "{}")
 //!     .add_file("/mcp-tools/types.ts", "export type Params = {};")
 //!     .build()
@@ -17,15 +17,15 @@
 //! assert_eq!(vfs.file_count(), 2);
 //! ```
 
-use crate::types::{Result, VfsError};
-use crate::vfs::Vfs;
+use crate::types::{FilesError, Result};
+use crate::vfs::FileSystem;
 use mcp_codegen::GeneratedCode;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Builder for constructing a virtual filesystem.
 ///
-/// `VfsBuilder` provides a fluent API for creating VFS instances,
+/// `FilesBuilder` provides a fluent API for creating VFS instances,
 /// with support for adding files individually or bulk-loading from
 /// generated code.
 ///
@@ -34,21 +34,21 @@ use std::path::{Path, PathBuf};
 /// ## Building from scratch
 ///
 /// ```
-/// use mcp_vfs::VfsBuilder;
+/// use mcp_files::FilesBuilder;
 ///
-/// let vfs = VfsBuilder::new()
+/// let vfs = FilesBuilder::new()
 ///     .add_file("/test.ts", "console.log('test');")
 ///     .build()
 ///     .unwrap();
 ///
 /// assert!(vfs.exists("/test.ts"));
-/// # Ok::<(), mcp_vfs::VfsError>(())
+/// # Ok::<(), mcp_files::FilesError>(())
 /// ```
 ///
 /// ## Building from generated code
 ///
 /// ```
-/// use mcp_vfs::VfsBuilder;
+/// use mcp_files::FilesBuilder;
 /// use mcp_codegen::{GeneratedCode, GeneratedFile};
 ///
 /// let mut code = GeneratedCode::new();
@@ -57,35 +57,35 @@ use std::path::{Path, PathBuf};
 ///     content: "{}".to_string(),
 /// });
 ///
-/// let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/test")
+/// let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
 ///     .build()
 ///     .unwrap();
 ///
 /// assert!(vfs.exists("/mcp-tools/servers/test/manifest.json"));
-/// # Ok::<(), mcp_vfs::VfsError>(())
+/// # Ok::<(), mcp_files::FilesError>(())
 /// ```
 #[derive(Debug, Default)]
-pub struct VfsBuilder {
-    vfs: Vfs,
-    errors: Vec<VfsError>,
+pub struct FilesBuilder {
+    vfs: FileSystem,
+    errors: Vec<FilesError>,
 }
 
-impl VfsBuilder {
+impl FilesBuilder {
     /// Creates a new empty VFS builder.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     ///
-    /// let builder = VfsBuilder::new();
+    /// let builder = FilesBuilder::new();
     /// let vfs = builder.build().unwrap();
     /// assert_eq!(vfs.file_count(), 0);
     /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
-            vfs: Vfs::new(),
+            vfs: FileSystem::new(),
             errors: Vec::new(),
         }
     }
@@ -99,7 +99,7 @@ impl VfsBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     /// use mcp_codegen::{GeneratedCode, GeneratedFile};
     ///
     /// let mut code = GeneratedCode::new();
@@ -108,12 +108,12 @@ impl VfsBuilder {
     ///     content: "export type Params = {};".to_string(),
     /// });
     ///
-    /// let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/test")
+    /// let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
     ///     .build()
     ///     .unwrap();
     ///
     /// assert!(vfs.exists("/mcp-tools/servers/test/types.ts"));
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn from_generated_code(code: GeneratedCode, base_path: impl AsRef<Path>) -> Self {
@@ -145,15 +145,15 @@ impl VfsBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     ///
-    /// let vfs = VfsBuilder::new()
+    /// let vfs = FilesBuilder::new()
     ///     .add_file("/test.ts", "export const x = 1;")
     ///     .build()
     ///     .unwrap();
     ///
     /// assert_eq!(vfs.read_file("/test.ts").unwrap(), "export const x = 1;");
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn add_file(mut self, path: impl AsRef<Path>, content: impl Into<String>) -> Self {
@@ -170,20 +170,20 @@ impl VfsBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     ///
     /// let files = vec![
     ///     ("/file1.ts", "content1"),
     ///     ("/file2.ts", "content2"),
     /// ];
     ///
-    /// let vfs = VfsBuilder::new()
+    /// let vfs = FilesBuilder::new()
     ///     .add_files(files)
     ///     .build()
     ///     .unwrap();
     ///
     /// assert_eq!(vfs.file_count(), 2);
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn add_files<P, C>(mut self, files: impl IntoIterator<Item = (P, C)>) -> Self
@@ -220,16 +220,16 @@ impl VfsBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     ///
-    /// let vfs = VfsBuilder::new()
+    /// let vfs = FilesBuilder::new()
     ///     .add_file("/github/createIssue.ts", "export function createIssue() {}")
     ///     .build_and_export("~/.claude/servers/")?;
     ///
     /// // Files are now at: ~/.claude/servers/github/createIssue.ts
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
-    pub fn build_and_export(self, base_path: impl AsRef<Path>) -> Result<Vfs> {
+    pub fn build_and_export(self, base_path: impl AsRef<Path>) -> Result<FileSystem> {
         // First, build the VFS to check for errors
         let vfs = self.build()?;
 
@@ -254,9 +254,9 @@ impl VfsBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     ///
-    /// let vfs = VfsBuilder::new()
+    /// let vfs = FilesBuilder::new()
     ///     .add_file("/test.ts", "content")
     ///     .build()
     ///     .unwrap();
@@ -265,15 +265,15 @@ impl VfsBuilder {
     /// ```
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     ///
-    /// let result = VfsBuilder::new()
+    /// let result = FilesBuilder::new()
     ///     .add_file("invalid/relative/path", "content")
     ///     .build();
     ///
     /// assert!(result.is_err());
     /// ```
-    pub fn build(self) -> Result<Vfs> {
+    pub fn build(self) -> Result<FileSystem> {
         if let Some(error) = self.errors.into_iter().next() {
             return Err(error);
         }
@@ -287,9 +287,9 @@ impl VfsBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::VfsBuilder;
+    /// use mcp_files::FilesBuilder;
     ///
-    /// let mut builder = VfsBuilder::new();
+    /// let mut builder = FilesBuilder::new();
     /// assert_eq!(builder.file_count(), 0);
     ///
     /// builder = builder.add_file("/test.ts", "");
@@ -307,12 +307,12 @@ impl VfsBuilder {
 ///
 /// Returns an error if the home directory cannot be determined.
 fn expand_tilde(path: &Path) -> Result<PathBuf> {
-    let path_str = path.to_str().ok_or_else(|| VfsError::InvalidPath {
+    let path_str = path.to_str().ok_or_else(|| FilesError::InvalidPath {
         path: path.display().to_string(),
     })?;
 
     if path_str.starts_with("~/") || path_str == "~" {
-        let home = dirs::home_dir().ok_or_else(|| VfsError::IoError {
+        let home = dirs::home_dir().ok_or_else(|| FilesError::IoError {
             path: path_str.to_string(),
             source: std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -353,7 +353,7 @@ fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<
 
     // Security: Check for directory traversal
     if relative_path.contains("..") {
-        return Err(VfsError::InvalidPathComponent {
+        return Err(FilesError::InvalidPathComponent {
             path: vfs_path.to_string(),
         });
     }
@@ -363,7 +363,7 @@ fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<
 
     // Create parent directories
     if let Some(parent) = disk_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| VfsError::IoError {
+        fs::create_dir_all(parent).map_err(|e| FilesError::IoError {
             path: parent.display().to_string(),
             source: e,
         })?;
@@ -372,12 +372,12 @@ fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<
     // Atomic write: write to temp file, then rename
     let temp_path = disk_path.with_extension("tmp");
 
-    fs::write(&temp_path, content).map_err(|e| VfsError::IoError {
+    fs::write(&temp_path, content).map_err(|e| FilesError::IoError {
         path: temp_path.display().to_string(),
         source: e,
     })?;
 
-    fs::rename(&temp_path, &disk_path).map_err(|e| VfsError::IoError {
+    fs::rename(&temp_path, &disk_path).map_err(|e| FilesError::IoError {
         path: disk_path.display().to_string(),
         source: e,
     })?;
@@ -394,21 +394,21 @@ mod tests {
 
     #[test]
     fn test_builder_new() {
-        let builder = VfsBuilder::new();
+        let builder = FilesBuilder::new();
         let vfs = builder.build().unwrap();
         assert_eq!(vfs.file_count(), 0);
     }
 
     #[test]
     fn test_builder_default() {
-        let builder = VfsBuilder::default();
+        let builder = FilesBuilder::default();
         let vfs = builder.build().unwrap();
         assert_eq!(vfs.file_count(), 0);
     }
 
     #[test]
     fn test_add_file() {
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/test.ts", "content")
             .build()
             .unwrap();
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_add_file_invalid_path() {
-        let result = VfsBuilder::new()
+        let result = FilesBuilder::new()
             .add_file("relative/path", "content")
             .build();
 
@@ -431,7 +431,7 @@ mod tests {
     fn test_add_files() {
         let files = vec![("/file1.ts", "content1"), ("/file2.ts", "content2")];
 
-        let vfs = VfsBuilder::new().add_files(files).build().unwrap();
+        let vfs = FilesBuilder::new().add_files(files).build().unwrap();
 
         assert_eq!(vfs.file_count(), 2);
         assert_eq!(vfs.read_file("/file1.ts").unwrap(), "content1");
@@ -450,7 +450,7 @@ mod tests {
             content: "export {};".to_string(),
         });
 
-        let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/test")
+        let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
             .build()
             .unwrap();
 
@@ -467,7 +467,7 @@ mod tests {
             content: "export function sendMessage() {}".to_string(),
         });
 
-        let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/test")
+        let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
             .build()
             .unwrap();
 
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_file_count() {
-        let mut builder = VfsBuilder::new();
+        let mut builder = FilesBuilder::new();
         assert_eq!(builder.file_count(), 0);
 
         builder = builder.add_file("/test1.ts", "");
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_chaining() {
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/file1.ts", "content1")
             .add_file("/file2.ts", "content2")
             .add_file("/file3.ts", "content3")
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_error_collection() {
-        let result = VfsBuilder::new()
+        let result = FilesBuilder::new()
             .add_file("/valid.ts", "content")
             .add_file("invalid", "content") // Invalid path
             .add_file("/another-valid.ts", "content")
@@ -518,7 +518,7 @@ mod tests {
             content: "// generated".to_string(),
         });
 
-        let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/test")
+        let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
             .add_file("/mcp-tools/servers/test/manual.ts", "// manual")
             .build()
             .unwrap();
@@ -534,7 +534,7 @@ mod tests {
     fn test_build_and_export_creates_files() {
         let temp_dir = TempDir::new().unwrap();
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/test.ts", "export const VERSION = '1.0';")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -559,7 +559,7 @@ mod tests {
     fn test_build_and_export_preserves_structure() {
         let temp_dir = TempDir::new().unwrap();
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/index.ts", "export {};")
             .add_file("/tools/create.ts", "export function create() {}")
             .add_file("/tools/update.ts", "export function update() {}")
@@ -583,7 +583,7 @@ mod tests {
     fn test_build_and_export_creates_parent_dirs() {
         let temp_dir = TempDir::new().unwrap();
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/deeply/nested/path/to/file.ts", "content")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -599,7 +599,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // First export
-        let vfs1 = VfsBuilder::new()
+        let vfs1 = FilesBuilder::new()
             .add_file("/test.ts", "original content")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -609,7 +609,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&file_path).unwrap(), "original content");
 
         // Second export with updated content
-        let vfs2 = VfsBuilder::new()
+        let vfs2 = FilesBuilder::new()
             .add_file("/test.ts", "updated content")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -622,7 +622,7 @@ mod tests {
     fn test_build_and_export_returns_vfs() {
         let temp_dir = TempDir::new().unwrap();
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/file1.ts", "content1")
             .add_file("/file2.ts", "content2")
             .build_and_export(temp_dir.path())
@@ -640,7 +640,7 @@ mod tests {
     fn test_build_and_export_with_invalid_path_in_vfs() {
         let temp_dir = TempDir::new().unwrap();
 
-        let result = VfsBuilder::new()
+        let result = FilesBuilder::new()
             .add_file("/valid.ts", "content")
             .add_file("invalid/relative", "content")
             .build_and_export(temp_dir.path());
@@ -661,7 +661,7 @@ mod tests {
             ("/manifest.json", r#"{"version": "1.0.0"}"#),
         ];
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_files(files)
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -677,7 +677,9 @@ mod tests {
     fn test_build_and_export_empty_vfs() {
         let temp_dir = TempDir::new().unwrap();
 
-        let vfs = VfsBuilder::new().build_and_export(temp_dir.path()).unwrap();
+        let vfs = FilesBuilder::new()
+            .build_and_export(temp_dir.path())
+            .unwrap();
 
         assert_eq!(vfs.file_count(), 0);
         // Directory should be created even if empty
@@ -754,7 +756,7 @@ mod tests {
             content: "export function create() {}".to_string(),
         });
 
-        let vfs = VfsBuilder::from_generated_code(code, "/github")
+        let vfs = FilesBuilder::from_generated_code(code, "/github")
             .build_and_export(temp_dir.path())
             .unwrap();
 
@@ -767,7 +769,7 @@ mod tests {
     fn test_build_and_export_unicode_content() {
         let temp_dir = TempDir::new().unwrap();
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/unicode.ts", "export const emoji = '🚀';")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -784,7 +786,7 @@ mod tests {
         // Create a large file (100KB)
         let large_content = "x".repeat(100_000);
 
-        let vfs = VfsBuilder::new()
+        let vfs = FilesBuilder::new()
             .add_file("/large.ts", &large_content)
             .build_and_export(temp_dir.path())
             .unwrap();

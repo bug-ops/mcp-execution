@@ -61,7 +61,7 @@ mcp-execution/
 │   ├── mcp-core/             # Foundation: types, traits, errors
 │   ├── mcp-introspector/     # MCP server analysis (rmcp)
 │   ├── mcp-codegen/          # TypeScript code generation
-│   ├── mcp-vfs/              # Virtual filesystem
+│   ├── mcp-files/              # Filesystem for code organization
 │   └── mcp-execution-cli/    # CLI application
 ├── examples/
 │   └── progressive-loading-usage.md  # Usage tutorial
@@ -79,13 +79,13 @@ graph TD
     CLI --> INTRO[mcp-introspector<br/>Server introspection]
     CLI --> CORE[mcp-core<br/>Foundation]
 
-    CODEGEN --> VFS[mcp-vfs<br/>Virtual filesystem]
+    CODEGEN --> FILES[mcp-files<br/>Filesystem]
     CODEGEN --> CORE
 
     INTRO --> RMCP[rmcp<br/>Official MCP SDK]
     INTRO --> CORE
 
-    VFS --> CORE
+    FILES --> CORE
 
     style CORE fill:#e1f5ff
     style RMCP fill:#e1ffe1
@@ -199,7 +199,7 @@ export interface CreateIssueResult {
    ↓ Generate index.ts (re-export all tools)
    ↓ Generate _runtime/mcp-bridge.ts (stub)
 
-5. VFS Export (mcp-vfs)
+5. Filesystem Export (mcp-files)
    ↓ Create in-memory file structure
    ↓ Organize by server-id/
 
@@ -315,9 +315,9 @@ required = false => "paramName?: type"
 required = true  => "paramName: type"
 ```
 
-### mcp-vfs
+### mcp-files
 
-**Purpose**: Virtual filesystem for code generation.
+**Purpose**: Filesystem for organizing and exporting generated code.
 
 **Key Operations**:
 ```rust

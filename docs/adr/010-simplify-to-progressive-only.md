@@ -102,7 +102,7 @@ Comparison:
    - Progressive loading code generation
    - MCP server introspection (`mcp-introspector`)
    - MCP proxy with caching (`mcp-bridge`)
-   - Virtual filesystem (`mcp-vfs`)
+   - Virtual filesystem (`mcp-files`)
    - CLI (`mcp-cli` with `generate` command)
 
 2. **Directory Structure**:

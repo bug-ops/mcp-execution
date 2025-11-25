@@ -10,8 +10,8 @@ use super::common::build_server_config;
 use anyhow::{Context, Result};
 use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::cli::{ExitCode, OutputFormat};
+use mcp_files::FilesBuilder;
 use mcp_introspector::Introspector;
-use mcp_vfs::VfsBuilder;
 use serde::Serialize;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -109,7 +109,7 @@ pub async fn run(
 
     // Build VFS with generated code
     let base_path = format!("/{}/", server_info.id.as_str());
-    let vfs = VfsBuilder::from_generated_code(generated_code, &base_path)
+    let vfs = FilesBuilder::from_generated_code(generated_code, &base_path)
         .build()
         .context("failed to build VFS")?;
 

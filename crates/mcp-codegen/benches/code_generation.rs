@@ -10,8 +10,8 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::{ServerId, ToolName};
+use mcp_files::FilesBuilder;
 use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
-use mcp_vfs::VfsBuilder;
 use serde_json::json;
 use std::hint::black_box;
 
@@ -218,7 +218,7 @@ fn bench_vfs_loading(c: &mut Criterion) {
         group.throughput(Throughput::Elements(count as u64));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _count| {
             b.iter(|| {
-                let vfs = VfsBuilder::from_generated_code(
+                let vfs = FilesBuilder::from_generated_code(
                     black_box(generated.clone()),
                     "/mcp-tools/servers/bench",
                 )
@@ -248,7 +248,7 @@ fn bench_end_to_end(c: &mut Criterion) {
                     .expect("Generation should succeed");
 
                 // Load into VFS
-                let vfs = VfsBuilder::from_generated_code(generated, "/mcp-tools/servers/bench")
+                let vfs = FilesBuilder::from_generated_code(generated, "/mcp-tools/servers/bench")
                     .build()
                     .expect("VFS build should succeed");
 

@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mcp_vfs::{Vfs, VfsBuilder};
+use mcp_files::{FileSystem, FilesBuilder};
 use std::hint::black_box;
 
 /// Benchmark `read_file` operation across different VFS sizes
@@ -66,7 +66,7 @@ fn bench_add_file(c: &mut Criterion) {
     for size in [10, 100, 1000] {
         group.bench_with_input(BenchmarkId::new("sequential", size), &size, |b, &size| {
             b.iter(|| {
-                let mut vfs = Vfs::new();
+                let mut vfs = FileSystem::new();
                 for i in 0..size {
                     vfs.add_file(
                         format!("/test_{i}.ts"),
@@ -82,7 +82,7 @@ fn bench_add_file(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `VfsBuilder` construction
+/// Benchmark `FilesBuilder` construction
 fn bench_builder(c: &mut Criterion) {
     let mut group = c.benchmark_group("builder");
 
@@ -97,7 +97,12 @@ fn bench_builder(c: &mut Criterion) {
             .collect();
 
         group.bench_with_input(BenchmarkId::new("build", size), &files, |b, files| {
-            b.iter(|| VfsBuilder::new().add_files(files.clone()).build().unwrap());
+            b.iter(|| {
+                FilesBuilder::new()
+                    .add_files(files.clone())
+                    .build()
+                    .unwrap()
+            });
         });
     }
 
@@ -106,7 +111,7 @@ fn bench_builder(c: &mut Criterion) {
 
 /// Benchmark path validation overhead
 fn bench_path_validation(c: &mut Criterion) {
-    use mcp_vfs::VfsPath;
+    use mcp_files::FilePath;
 
     let paths = vec![
         ("/simple.ts", "short"),
@@ -121,7 +126,7 @@ fn bench_path_validation(c: &mut Criterion) {
 
     for (path, label) in paths {
         group.bench_with_input(BenchmarkId::new("validate", label), &path, |b, path| {
-            b.iter(|| VfsPath::new(black_box(path)).unwrap());
+            b.iter(|| FilePath::new(black_box(path)).unwrap());
         });
     }
 
@@ -145,7 +150,10 @@ fn bench_typical_workflow(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("build_and_read", size), &size, |b, _| {
             b.iter(|| {
                 // Build VFS
-                let vfs = VfsBuilder::new().add_files(files.clone()).build().unwrap();
+                let vfs = FilesBuilder::new()
+                    .add_files(files.clone())
+                    .build()
+                    .unwrap();
 
                 // Perform typical operations
                 for i in 0..size.min(10) {
@@ -192,8 +200,8 @@ fn bench_all_paths(c: &mut Criterion) {
 }
 
 // Helper function to create VFS with specified number of files
-fn create_vfs_with_files(count: usize) -> Vfs {
-    let mut vfs = Vfs::new();
+fn create_vfs_with_files(count: usize) -> FileSystem {
+    let mut vfs = FileSystem::new();
     for i in 0..count {
         vfs.add_file(
             format!("/mcp-tools/servers/test/file_{i}.ts"),

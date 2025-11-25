@@ -22,7 +22,7 @@
 //! ```
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mcp_vfs::{ExportOptions, VfsBuilder};
+use mcp_files::{ExportOptions, FilesBuilder};
 use std::hint::black_box;
 use tempfile::TempDir;
 
@@ -35,7 +35,7 @@ fn bench_export_file_count(c: &mut Criterion) {
 
     // Test common scenarios
     for file_count in [1, 10, 30, 50, 100] {
-        let mut builder = VfsBuilder::new();
+        let mut builder = FilesBuilder::new();
 
         // Generate files similar to GitHub server tools
         for i in 0..file_count {
@@ -90,7 +90,7 @@ export type Result{i} = {{
 fn bench_export_atomic_vs_direct(c: &mut Criterion) {
     let mut group = c.benchmark_group("export_atomic_vs_direct");
 
-    let mut builder = VfsBuilder::new();
+    let mut builder = FilesBuilder::new();
     for i in 0..30 {
         builder = builder.add_file(format!("/tool{i}.ts"), format!("export const N = {i};"));
     }
@@ -135,7 +135,7 @@ fn bench_export_parallel_vs_sequential(c: &mut Criterion) {
     let mut group = c.benchmark_group("export_parallel_vs_sequential");
 
     for file_count in [50, 100, 200] {
-        let mut builder = VfsBuilder::new();
+        let mut builder = FilesBuilder::new();
         for i in 0..file_count {
             builder = builder.add_file(
                 format!("/tool{i}.ts"),
@@ -188,7 +188,7 @@ fn bench_export_directory_depth(c: &mut Criterion) {
     let mut group = c.benchmark_group("export_directory_depth");
 
     for depth in [1, 5, 10] {
-        let mut builder = VfsBuilder::new();
+        let mut builder = FilesBuilder::new();
 
         // Create 30 files at various depths
         for i in 0..30 {
@@ -222,7 +222,7 @@ fn bench_export_file_size(c: &mut Criterion) {
 
     for size_kb in [1, 10, 50, 100] {
         let content = "x".repeat(size_kb * 1024);
-        let mut builder = VfsBuilder::new();
+        let mut builder = FilesBuilder::new();
 
         // Create 10 files of given size
         for i in 0..10 {
@@ -251,7 +251,7 @@ fn bench_export_file_size(c: &mut Criterion) {
 /// This is the real-world scenario we're optimizing for.
 fn bench_export_github_scenario(c: &mut Criterion) {
     // Simulate GitHub server with 30 realistic tool files
-    let mut builder = VfsBuilder::new();
+    let mut builder = FilesBuilder::new();
 
     // Add index.ts
     let mut exports = Vec::new();
@@ -337,7 +337,7 @@ async function callMCPTool(server: string, tool: string, params: unknown): Promi
 fn bench_export_overwrite_behavior(c: &mut Criterion) {
     let mut group = c.benchmark_group("export_overwrite");
 
-    let mut builder = VfsBuilder::new();
+    let mut builder = FilesBuilder::new();
     for i in 0..30 {
         builder = builder.add_file(format!("/file{i}.ts"), format!("export const N = {i};"));
     }
@@ -390,7 +390,7 @@ fn bench_export_full_workflow(c: &mut Criterion) {
         b.iter_batched(
             || TempDir::new().unwrap(),
             |temp| {
-                let mut builder = VfsBuilder::new();
+                let mut builder = FilesBuilder::new();
                 for i in 0..30 {
                     builder = builder.add_file(
                         format!("/tool{i}.ts"),

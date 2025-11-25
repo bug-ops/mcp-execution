@@ -6,16 +6,16 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_vfs::{Vfs, VfsPath};
+//! use mcp_files::{Vfs, FilePath};
 //!
-//! let mut vfs = Vfs::new();
+//! let mut vfs = FileSystem::new();
 //! vfs.add_file("/mcp-tools/test.ts", "export const VERSION = '1.0';").unwrap();
 //!
 //! let content = vfs.read_file("/mcp-tools/test.ts").unwrap();
 //! assert_eq!(content, "export const VERSION = '1.0';");
 //! ```
 
-use crate::types::{Result, VfsError, VfsFile, VfsPath};
+use crate::types::{FileEntry, FilePath, FilesError, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -32,28 +32,28 @@ use std::path::Path;
 /// # Examples
 ///
 /// ```
-/// use mcp_vfs::Vfs;
+/// use mcp_files::FileSystem;
 ///
-/// let mut vfs = Vfs::new();
+/// let mut vfs = FileSystem::new();
 /// vfs.add_file("/mcp-tools/manifest.json", "{}").unwrap();
 ///
 /// assert!(vfs.exists("/mcp-tools/manifest.json"));
 /// assert_eq!(vfs.file_count(), 1);
 /// ```
 #[derive(Debug, Clone)]
-pub struct Vfs {
-    files: HashMap<VfsPath, VfsFile>,
+pub struct FileSystem {
+    files: HashMap<FilePath, FileEntry>,
 }
 
-impl Vfs {
+impl FileSystem {
     /// Creates a new empty virtual filesystem.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let vfs = Vfs::new();
+    /// let vfs = FileSystem::new();
     /// assert_eq!(vfs.file_count(), 0);
     /// ```
     #[must_use]
@@ -74,17 +74,17 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/mcp-tools/test.ts", "console.log('hello');").unwrap();
     ///
     /// assert!(vfs.exists("/mcp-tools/test.ts"));
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     pub fn add_file(&mut self, path: impl AsRef<Path>, content: impl Into<String>) -> Result<()> {
-        let vfs_path = VfsPath::new(path)?;
-        let file = VfsFile::new(content);
+        let vfs_path = FilePath::new(path)?;
+        let file = FileEntry::new(content);
         self.files.insert(vfs_path, file);
         Ok(())
     }
@@ -93,27 +93,27 @@ impl Vfs {
     ///
     /// # Errors
     ///
-    /// Returns `VfsError::FileNotFound` if the file does not exist.
-    /// Returns `VfsError::InvalidPath` if the path is invalid.
+    /// Returns `FilesError::FileNotFound` if the file does not exist.
+    /// Returns `FilesError::InvalidPath` if the path is invalid.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/test.ts", "export {}").unwrap();
     ///
     /// let content = vfs.read_file("/test.ts").unwrap();
     /// assert_eq!(content, "export {}");
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
     pub fn read_file(&self, path: impl AsRef<Path>) -> Result<&str> {
-        let vfs_path = VfsPath::new(path)?;
+        let vfs_path = FilePath::new(path)?;
         self.files
             .get(&vfs_path)
-            .map(super::types::VfsFile::content)
-            .ok_or_else(|| VfsError::FileNotFound {
+            .map(super::types::FileEntry::content)
+            .ok_or_else(|| FilesError::FileNotFound {
                 path: vfs_path.as_str().to_string(),
             })
     }
@@ -125,9 +125,9 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/exists.ts", "").unwrap();
     ///
     /// assert!(vfs.exists("/exists.ts"));
@@ -135,7 +135,7 @@ impl Vfs {
     /// ```
     #[must_use]
     pub fn exists(&self, path: impl AsRef<Path>) -> bool {
-        VfsPath::new(path)
+        FilePath::new(path)
             .ok()
             .and_then(|p| self.files.get(&p))
             .is_some()
@@ -147,29 +147,29 @@ impl Vfs {
     ///
     /// # Errors
     ///
-    /// Returns `VfsError::InvalidPath` if the path is invalid.
-    /// Returns `VfsError::NotADirectory` if the path points to a file.
+    /// Returns `FilesError::InvalidPath` if the path is invalid.
+    /// Returns `FilesError::NotADirectory` if the path points to a file.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/mcp-tools/servers/test1.ts", "").unwrap();
     /// vfs.add_file("/mcp-tools/servers/test2.ts", "").unwrap();
     ///
     /// let entries = vfs.list_dir("/mcp-tools/servers").unwrap();
     /// assert_eq!(entries.len(), 2);
-    /// # Ok::<(), mcp_vfs::VfsError>(())
+    /// # Ok::<(), mcp_files::FilesError>(())
     /// ```
-    pub fn list_dir(&self, path: impl AsRef<Path>) -> Result<Vec<VfsPath>> {
-        let vfs_path = VfsPath::new(path)?;
+    pub fn list_dir(&self, path: impl AsRef<Path>) -> Result<Vec<FilePath>> {
+        let vfs_path = FilePath::new(path)?;
         let path_str = vfs_path.as_str();
 
         // Check if the path itself is a file
         if self.files.contains_key(&vfs_path) {
-            return Err(VfsError::NotADirectory {
+            return Err(FilesError::NotADirectory {
                 path: path_str.to_string(),
             });
         }
@@ -195,7 +195,7 @@ impl Vfs {
                 } else if let Some(idx) = relative.find('/') {
                     // This is a subdirectory, add the directory path
                     let subdir = format!("{}{}", normalized_dir, &relative[..idx]);
-                    if let Ok(subdir_path) = VfsPath::new(subdir)
+                    if let Ok(subdir_path) = FilePath::new(subdir)
                         && !children.contains(&subdir_path)
                     {
                         children.push(subdir_path);
@@ -213,9 +213,9 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// assert_eq!(vfs.file_count(), 0);
     ///
     /// vfs.add_file("/test1.ts", "").unwrap();
@@ -234,9 +234,9 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/a.ts", "").unwrap();
     /// vfs.add_file("/b.ts", "").unwrap();
     ///
@@ -244,7 +244,7 @@ impl Vfs {
     /// assert_eq!(paths.len(), 2);
     /// ```
     #[must_use]
-    pub fn all_paths(&self) -> Vec<&VfsPath> {
+    pub fn all_paths(&self) -> Vec<&FilePath> {
         let mut paths: Vec<_> = self.files.keys().collect();
         paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         paths
@@ -252,21 +252,21 @@ impl Vfs {
 
     /// Returns an iterator over all files in the VFS.
     ///
-    /// Each item is a tuple of `(&VfsPath, &VfsFile)`.
+    /// Each item is a tuple of `(&FilePath, &FileEntry)`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/a.ts", "content a").unwrap();
     /// vfs.add_file("/b.ts", "content b").unwrap();
     ///
     /// let files: Vec<_> = vfs.files().collect();
     /// assert_eq!(files.len(), 2);
     /// ```
-    pub fn files(&self) -> impl Iterator<Item = (&VfsPath, &VfsFile)> {
+    pub fn files(&self) -> impl Iterator<Item = (&FilePath, &FileEntry)> {
         self.files.iter()
     }
 
@@ -275,9 +275,9 @@ impl Vfs {
     /// # Examples
     ///
     /// ```
-    /// use mcp_vfs::Vfs;
+    /// use mcp_files::FileSystem;
     ///
-    /// let mut vfs = Vfs::new();
+    /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/test.ts", "").unwrap();
     /// assert_eq!(vfs.file_count(), 1);
     ///
@@ -289,7 +289,7 @@ impl Vfs {
     }
 }
 
-impl Default for Vfs {
+impl Default for FileSystem {
     fn default() -> Self {
         Self::new()
     }
@@ -301,33 +301,33 @@ mod tests {
 
     #[test]
     fn test_vfs_new() {
-        let vfs = Vfs::new();
+        let vfs = FileSystem::new();
         assert_eq!(vfs.file_count(), 0);
     }
 
     #[test]
     fn test_vfs_default() {
-        let vfs = Vfs::default();
+        let vfs = FileSystem::default();
         assert_eq!(vfs.file_count(), 0);
     }
 
     #[test]
     fn test_add_file() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/test.ts", "content").unwrap();
         assert_eq!(vfs.file_count(), 1);
     }
 
     #[test]
     fn test_add_file_invalid_path() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         let result = vfs.add_file("relative/path", "content");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_read_file() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/test.ts", "hello world").unwrap();
 
         let content = vfs.read_file("/test.ts").unwrap();
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_read_file_not_found() {
-        let vfs = Vfs::new();
+        let vfs = FileSystem::new();
         let result = vfs.read_file("/missing.ts");
         assert!(result.is_err());
         assert!(result.unwrap_err().is_not_found());
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_exists() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/exists.ts", "").unwrap();
 
         assert!(vfs.exists("/exists.ts"));
@@ -353,13 +353,13 @@ mod tests {
 
     #[test]
     fn test_exists_invalid_path() {
-        let vfs = Vfs::new();
+        let vfs = FileSystem::new();
         assert!(!vfs.exists("relative/path"));
     }
 
     #[test]
     fn test_list_dir() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/mcp-tools/servers/test1.ts", "").unwrap();
         vfs.add_file("/mcp-tools/servers/test2.ts", "").unwrap();
 
@@ -369,14 +369,14 @@ mod tests {
 
     #[test]
     fn test_list_dir_empty() {
-        let vfs = Vfs::new();
+        let vfs = FileSystem::new();
         let entries = vfs.list_dir("/empty").unwrap();
         assert_eq!(entries.len(), 0);
     }
 
     #[test]
     fn test_list_dir_not_a_directory() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/file.ts", "").unwrap();
 
         let result = vfs.list_dir("/file.ts");
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_list_dir_subdirectories() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/mcp-tools/servers/test/file1.ts", "")
             .unwrap();
         vfs.add_file("/mcp-tools/servers/test/file2.ts", "")
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_file_count() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         assert_eq!(vfs.file_count(), 0);
 
         vfs.add_file("/test1.ts", "").unwrap();
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_all_paths() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/b.ts", "").unwrap();
         vfs.add_file("/a.ts", "").unwrap();
 
@@ -425,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/test1.ts", "").unwrap();
         vfs.add_file("/test2.ts", "").unwrap();
         assert_eq!(vfs.file_count(), 2);
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_replace_file() {
-        let mut vfs = Vfs::new();
+        let mut vfs = FileSystem::new();
         vfs.add_file("/test.ts", "original").unwrap();
         assert_eq!(vfs.read_file("/test.ts").unwrap(), "original");
 
@@ -450,7 +450,7 @@ mod tests {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}
 
-        assert_send::<Vfs>();
-        assert_sync::<Vfs>();
+        assert_send::<FileSystem>();
+        assert_sync::<FileSystem>();
     }
 }

@@ -1267,8 +1267,8 @@ dependencies = [
  "criterion",
  "handlebars",
  "mcp-core",
+ "mcp-files",
  "mcp-introspector",
- "mcp-vfs",
  "reqwest",
  "serde",
  "serde_json",
@@ -1309,8 +1309,8 @@ dependencies = [
  "dirs",
  "mcp-codegen",
  "mcp-core",
+ "mcp-files",
  "mcp-introspector",
- "mcp-vfs",
  "serde",
  "serde_json",
  "tempfile",
@@ -1319,6 +1319,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "which",
+]
+
+[[package]]
+name = "mcp-files"
+version = "0.4.0"
+dependencies = [
+ "criterion",
+ "dhat",
+ "dirs",
+ "mcp-codegen",
+ "rayon",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
@@ -1332,19 +1345,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "mcp-vfs"
-version = "0.4.0"
-dependencies = [
- "criterion",
- "dhat",
- "dirs",
- "mcp-codegen",
- "rayon",
- "tempfile",
- "thiserror",
 ]
 
 [[package]]

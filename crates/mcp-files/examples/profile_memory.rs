@@ -1,6 +1,6 @@
 #![allow(clippy::format_push_string)]
 
-use mcp_vfs::VfsBuilder;
+use mcp_files::FilesBuilder;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -42,7 +42,7 @@ fn main() {
 }
 
 fn scenario_typical() {
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_files((0..100).map(|i| {
             (
                 format!("/mcp-tools/servers/test/file_{i}.ts"),
@@ -92,7 +92,7 @@ fn scenario_typical() {
 }
 
 fn scenario_large() {
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_files((0..1000).map(|i| {
             (
                 format!("/mcp-tools/servers/test/file_{i}.ts"),
@@ -132,7 +132,7 @@ fn scenario_large() {
 fn scenario_stress() {
     println!("  - Building VFS with 10000 files...");
 
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_files((0..10000).map(|i| {
             (
                 format!("/mcp-tools/servers/test/file_{}.ts", i),

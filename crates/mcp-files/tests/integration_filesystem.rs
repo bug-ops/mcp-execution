@@ -4,7 +4,7 @@
 //! including real GitHub server structure simulation.
 
 use mcp_codegen::{GeneratedCode, GeneratedFile};
-use mcp_vfs::VfsBuilder;
+use mcp_files::FilesBuilder;
 use std::fs;
 use tempfile::TempDir;
 
@@ -14,7 +14,7 @@ fn test_export_and_verify_content() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create VFS with multiple files
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_file("/index.ts", "export { createIssue } from './createIssue';")
         .add_file(
             "/createIssue.ts",
@@ -109,7 +109,7 @@ fn test_export_github_server_structure() {
     });
 
     // Export to filesystem
-    let vfs = VfsBuilder::from_generated_code(code, "/github")
+    let vfs = FilesBuilder::from_generated_code(code, "/github")
         .build_and_export(temp_dir.path())
         .unwrap();
 
@@ -166,11 +166,11 @@ fn test_export_multiple_servers() {
     };
 
     // Export both servers
-    let github_vfs = VfsBuilder::from_generated_code(github_code, "/github")
+    let github_vfs = FilesBuilder::from_generated_code(github_code, "/github")
         .build_and_export(temp_dir.path())
         .unwrap();
 
-    let slack_vfs = VfsBuilder::from_generated_code(slack_code, "/slack")
+    let slack_vfs = FilesBuilder::from_generated_code(slack_code, "/slack")
         .build_and_export(temp_dir.path())
         .unwrap();
 
@@ -196,7 +196,7 @@ fn test_export_multiple_servers() {
 fn test_export_deep_hierarchy() {
     let temp_dir = TempDir::new().unwrap();
 
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_file(
             "/level1/level2/level3/level4/deep.ts",
             "export const DEEP = true;",
@@ -222,7 +222,7 @@ fn test_export_deep_hierarchy() {
 fn test_export_special_characters() {
     let temp_dir = TempDir::new().unwrap();
 
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_file("/tool-name.ts", "export {};")
         .add_file("/tool_name.ts", "export {};")
         .add_file("/tool.v2.ts", "export {};")
@@ -253,7 +253,7 @@ export function tool(params: Params): void {
 }
 ";
 
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_file("/complex.ts", original_content)
         .build_and_export(temp_dir.path())
         .unwrap();
@@ -269,7 +269,7 @@ export function tool(params: Params): void {
 fn test_export_empty_files() {
     let temp_dir = TempDir::new().unwrap();
 
-    let vfs = VfsBuilder::new()
+    let vfs = FilesBuilder::new()
         .add_file("/empty1.ts", "")
         .add_file("/empty2.ts", "")
         .build_and_export(temp_dir.path())
@@ -296,7 +296,7 @@ fn test_export_reexport_workflow() {
     let temp_dir = TempDir::new().unwrap();
 
     // First export
-    let vfs1 = VfsBuilder::new()
+    let vfs1 = FilesBuilder::new()
         .add_file("/version.ts", "export const VERSION = '1.0.0';")
         .build_and_export(temp_dir.path())
         .unwrap();
@@ -306,7 +306,7 @@ fn test_export_reexport_workflow() {
     assert_eq!(v1_content, "export const VERSION = '1.0.0';");
 
     // Second export with updated content
-    let vfs2 = VfsBuilder::new()
+    let vfs2 = FilesBuilder::new()
         .add_file("/version.ts", "export const VERSION = '2.0.0';")
         .build_and_export(temp_dir.path())
         .unwrap();
@@ -342,7 +342,7 @@ export function create(params: ToolParams) { return params.id; }"
             .to_string(),
     });
 
-    let vfs = VfsBuilder::from_generated_code(code, "/module")
+    let vfs = FilesBuilder::from_generated_code(code, "/module")
         .build_and_export(temp_dir.path())
         .unwrap();
 
@@ -368,7 +368,7 @@ mod unix_tests {
     fn test_unix_file_permissions() {
         let temp_dir = TempDir::new().unwrap();
 
-        let _vfs = VfsBuilder::new()
+        let _vfs = FilesBuilder::new()
             .add_file("/test.ts", "export {};")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -388,7 +388,7 @@ mod unix_tests {
     fn test_unix_directory_permissions() {
         let temp_dir = TempDir::new().unwrap();
 
-        let _vfs = VfsBuilder::new()
+        let _vfs = FilesBuilder::new()
             .add_file("/nested/deep/test.ts", "export {};")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -416,7 +416,7 @@ mod windows_tests {
     fn test_windows_path_separators() {
         let temp_dir = TempDir::new().unwrap();
 
-        let _vfs = VfsBuilder::new()
+        let _vfs = FilesBuilder::new()
             .add_file("/tools/create.ts", "export {};")
             .build_and_export(temp_dir.path())
             .unwrap();
@@ -447,7 +447,7 @@ mod windows_tests {
                 .join("/")
         );
 
-        let _vfs = VfsBuilder::new()
+        let _vfs = FilesBuilder::new()
             .add_file(&deep_path, "export {};")
             .build_and_export(temp_dir.path())
             .unwrap();

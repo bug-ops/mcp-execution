@@ -17,10 +17,10 @@
 //! ## Basic usage
 //!
 //! ```
-//! use mcp_vfs::{Vfs, VfsBuilder};
+//! use mcp_files::{Vfs, FilesBuilder};
 //!
 //! // Create VFS using builder
-//! let vfs = VfsBuilder::new()
+//! let vfs = FilesBuilder::new()
 //!     .add_file("/mcp-tools/manifest.json", "{}")
 //!     .add_file("/mcp-tools/types.ts", "export type Params = {};")
 //!     .build()
@@ -38,7 +38,7 @@
 //! ## Integration with code generation
 //!
 //! ```
-//! use mcp_vfs::VfsBuilder;
+//! use mcp_files::FilesBuilder;
 //! use mcp_codegen::{GeneratedCode, GeneratedFile};
 //!
 //! let mut code = GeneratedCode::new();
@@ -51,7 +51,7 @@
 //!     content: "export function sendMessage() {}".to_string(),
 //! });
 //!
-//! let vfs = VfsBuilder::from_generated_code(code, "/mcp-tools/servers/github")
+//! let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/github")
 //!     .build()
 //!     .unwrap();
 //!
@@ -62,9 +62,9 @@
 //! ## Directory operations
 //!
 //! ```
-//! use mcp_vfs::VfsBuilder;
+//! use mcp_files::FilesBuilder;
 //!
-//! let vfs = VfsBuilder::new()
+//! let vfs = FilesBuilder::new()
 //!     .add_file("/mcp-tools/servers/test/file1.ts", "")
 //!     .add_file("/mcp-tools/servers/test/file2.ts", "")
 //!     .build()
@@ -83,7 +83,7 @@ pub mod types;
 pub mod vfs;
 
 // Re-export main types
-pub use builder::VfsBuilder;
+pub use builder::FilesBuilder;
 pub use filesystem::ExportOptions;
-pub use types::{Result, VfsError, VfsFile, VfsPath};
-pub use vfs::Vfs;
+pub use types::{FileEntry, FilePath, FilesError, Result};
+pub use vfs::FileSystem;

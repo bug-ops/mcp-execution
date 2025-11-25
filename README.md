@@ -33,7 +33,7 @@ mcp-execution/
 │   ├── mcp-core/             # Foundation: types, traits, errors
 │   ├── mcp-introspector/     # Server analysis using rmcp SDK
 │   ├── mcp-codegen/          # TypeScript code generation (progressive loading)
-│   ├── mcp-vfs/              # Virtual filesystem
+│   ├── mcp-files/              # Filesystem for code organization
 │   └── mcp-cli/              # CLI application
 ├── examples/              # Progressive loading usage examples
 ├── tests/                 # Cross-crate tests
@@ -254,7 +254,7 @@ Run benchmarks:
 cargo bench --package mcp-codegen
 
 # VFS benchmarks
-cargo bench --package mcp-vfs
+cargo bench --package mcp-files
 ```
 
 ## Security
