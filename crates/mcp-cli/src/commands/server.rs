@@ -251,12 +251,22 @@ impl ServerManager {
     /// Introspects a server using mcp-introspector.
     async fn introspect_server(&self, server_name: &str) -> Result<mcp_introspector::ServerInfo> {
         let config = self.get_server_config(server_name)?;
-        let command_str = Self::build_command_string(&config);
 
         let mut introspector = Introspector::new();
         let server_id = ServerId::new(server_name);
 
-        let server_config = CoreServerConfig::builder().command(command_str).build();
+        // Build ServerConfig with proper args and env
+        let mut builder = CoreServerConfig::builder().command(config.command.clone());
+
+        if !config.args.is_empty() {
+            builder = builder.args(config.args.clone());
+        }
+
+        for (key, value) in &config.env {
+            builder = builder.env(key.clone(), value.clone());
+        }
+
+        let server_config = builder.build();
 
         introspector
             .discover_server(server_id, &server_config)
