@@ -20,8 +20,6 @@
 //! - `introspect` - Analyze MCP servers and display capabilities
 //! - `generate` - Generate progressive loading TypeScript files
 //! - `server` - Manage MCP server connections
-//! - `config` - Configuration management
-//! - `cache` - Manage internal cache
 //! - `completions` - Generate shell completions
 //!
 //! # Examples
@@ -45,7 +43,7 @@ mod actions;
 mod commands;
 pub mod formatters;
 
-use actions::{ConfigAction, ServerAction};
+use actions::ServerAction;
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -196,26 +194,6 @@ pub enum Commands {
         action: ServerAction,
     },
 
-    /// Configuration management.
-    ///
-    /// Initialize, view, and modify CLI configuration.
-    Config {
-        /// Configuration action
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
-
-    /// Manage internal cache.
-    ///
-    /// View, clear, and verify the internal cache directory (~/.mcp-execution/cache/).
-    /// The cache stores WASM modules, VFS files, and build metadata that can be
-    /// safely deleted and regenerated.
-    Cache {
-        /// Cache management action
-        #[command(subcommand)]
-        action: commands::cache::CacheCommand,
-    },
-
     /// Generate shell completions.
     ///
     /// Generates completion scripts for various shells that can be
@@ -326,11 +304,6 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             .await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
-        Commands::Config { action } => commands::config::run(action, output_format).await,
-        Commands::Cache { action } => {
-            commands::cache::handle(action)?;
-            Ok(ExitCode::SUCCESS)
-        }
         Commands::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
@@ -432,26 +405,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parsing_config_init() {
-        let cli = Cli::parse_from(["mcp-cli", "config", "init"]);
-        assert!(matches!(cli.command, Commands::Config { .. }));
-    }
-
-    #[test]
     fn test_cli_verbose_flag() {
-        let cli = Cli::parse_from(["mcp-cli", "--verbose", "config", "init"]);
+        let cli = Cli::parse_from(["mcp-cli", "--verbose", "introspect", "github"]);
         assert!(cli.verbose);
     }
 
     #[test]
     fn test_cli_output_format_default() {
-        let cli = Cli::parse_from(["mcp-cli", "config", "init"]);
+        let cli = Cli::parse_from(["mcp-cli", "introspect", "github"]);
         assert_eq!(cli.format, "pretty");
     }
 
     #[test]
     fn test_cli_output_format_custom() {
-        let cli = Cli::parse_from(["mcp-cli", "--format", "json", "config", "init"]);
+        let cli = Cli::parse_from(["mcp-cli", "--format", "json", "introspect", "github"]);
         assert_eq!(cli.format, "json");
     }
 

@@ -22,27 +22,3 @@ pub enum ServerAction {
         command: String,
     },
 }
-
-/// Configuration actions.
-#[derive(Subcommand, Debug)]
-pub enum ConfigAction {
-    /// Initialize configuration file
-    Init,
-
-    /// Show current configuration
-    Show,
-
-    /// Set a configuration value
-    Set {
-        /// Configuration key
-        key: String,
-        /// Configuration value
-        value: String,
-    },
-
-    /// Get a configuration value
-    Get {
-        /// Configuration key
-        key: String,
-    },
-}
