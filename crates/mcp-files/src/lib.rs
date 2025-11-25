@@ -80,10 +80,8 @@
 pub mod builder;
 pub mod filesystem;
 pub mod types;
-pub mod vfs;
 
 // Re-export main types
 pub use builder::FilesBuilder;
-pub use filesystem::ExportOptions;
+pub use filesystem::{ExportOptions, FileSystem};
 pub use types::{FileEntry, FilePath, FilesError, Result};
-pub use vfs::FileSystem;

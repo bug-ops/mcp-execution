@@ -17,8 +17,8 @@
 //! assert_eq!(vfs.file_count(), 2);
 //! ```
 
+use crate::filesystem::FileSystem;
 use crate::types::{FilesError, Result};
-use crate::vfs::FileSystem;
 use mcp_codegen::GeneratedCode;
 use std::fs;
 use std::path::{Path, PathBuf};
