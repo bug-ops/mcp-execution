@@ -12,7 +12,9 @@ use serde_json::json;
 
 /// Approximates token count using simple heuristic: words * 1.3
 fn count_tokens(text: &str) -> usize {
-    (text.split_whitespace().count() as f64 * 1.3) as usize
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    let tokens = (text.split_whitespace().count() as f64 * 1.3) as usize;
+    tokens
 }
 
 /// Creates a realistic GitHub-like server with 40 tools.
@@ -200,9 +202,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mono_total_tokens = mono_skill_tokens + mono_ref_tokens;
 
     println!("\n## Monolithic Implementation (Current)\n");
-    println!("SKILL.md: {} tokens", mono_skill_tokens);
-    println!("REFERENCE.md: {} tokens", mono_ref_tokens);
-    println!("Total per invocation: {} tokens\n", mono_total_tokens);
+    println!("SKILL.md: {mono_skill_tokens} tokens");
+    println!("REFERENCE.md: {mono_ref_tokens} tokens");
+    println!("Total per invocation: {mono_total_tokens} tokens\n");
 
     // TODO: Enable when categorized implementation is ready
     /*

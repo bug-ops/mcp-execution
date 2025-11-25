@@ -27,7 +27,9 @@ use std::hint::black_box;
 /// This matches the rough approximation used in design docs.
 /// For more accuracy, could use tiktoken, but this is sufficient for benchmarking.
 fn count_tokens(text: &str) -> usize {
-    (text.split_whitespace().count() as f64 * 1.3) as usize
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    let tokens = (text.split_whitespace().count() as f64 * 1.3) as usize;
+    tokens
 }
 
 /// Counts tokens in a skill bundle's SKILL.md
@@ -47,11 +49,11 @@ fn count_reference_md_tokens(reference_md: &str) -> usize {
 /// Creates a realistic GitHub-like server with 40 tools categorized by domain.
 ///
 /// Categories (matching design docs):
-/// - User operations: 5 tools (get_me, get_teams, search_users, etc.)
-/// - Repository operations: 12 tools (create_branch, list_commits, get_file_contents, etc.)
-/// - Issue operations: 8 tools (issue_read, issue_write, list_issues, etc.)
-/// - Pull request operations: 10 tools (pull_request_read, create_pull_request, etc.)
-/// - Search operations: 5 tools (search_code, search_repositories, etc.)
+/// - User operations: 5 tools (`get_me`, `get_teams`, `search_users`, etc.)
+/// - Repository operations: 12 tools (`create_branch`, `list_commits`, `get_file_contents`, etc.)
+/// - Issue operations: 8 tools (`issue_read`, `issue_write`, `list_issues`, etc.)
+/// - Pull request operations: 10 tools (`pull_request_read`, `create_pull_request`, etc.)
+/// - Search operations: 5 tools (`search_code`, `search_repositories`, etc.)
 fn create_github_server() -> ServerInfo {
     let mut tools = Vec::new();
 

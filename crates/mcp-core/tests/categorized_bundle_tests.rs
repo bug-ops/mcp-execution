@@ -1,4 +1,4 @@
-//! Comprehensive tests for CategorizedSkillBundle type.
+//! Comprehensive tests for `CategorizedSkillBundle` type.
 //!
 //! Tests cover bundle building, category management, and validation.
 
@@ -102,7 +102,7 @@ fn test_categorized_bundle_builder_chaining() {
         .unwrap()
         .skill_md("---\nname: github\n---")
         .manifest(manifest)
-        .add_category(repos.clone(), "# Repos\n...")
+        .add_category(repos, "# Repos\n...")
         .script(ScriptFile::new("tool1", "ts", "code1"))
         .script(ScriptFile::new("tool2", "ts", "code2"))
         .reference_md("# Reference")
@@ -222,7 +222,7 @@ fn test_categorized_bundle_manifest() {
     let bundle = CategorizedSkillBundle::builder("github")
         .unwrap()
         .skill_md("---")
-        .manifest(manifest.clone())
+        .manifest(manifest)
         .build();
 
     assert_eq!(bundle.manifest().tool_count(), 1);
@@ -341,8 +341,8 @@ fn test_categorized_bundle_categories_method() {
     let manifest = CategoryManifest::builder().build();
 
     let mut categories = HashMap::new();
-    categories.insert(repos.clone(), "# Repos".to_string());
-    categories.insert(issues.clone(), "# Issues".to_string());
+    categories.insert(repos, "# Repos".to_string());
+    categories.insert(issues, "# Issues".to_string());
 
     let bundle = CategorizedSkillBundle::builder("github")
         .unwrap()
@@ -491,7 +491,7 @@ fn test_categorized_bundle_clone() {
         .unwrap()
         .skill_md("# GitHub")
         .manifest(manifest)
-        .add_category(repos.clone(), "# Repos")
+        .add_category(repos, "# Repos")
         .script(ScriptFile::new("tool", "ts", "code"))
         .build();
 

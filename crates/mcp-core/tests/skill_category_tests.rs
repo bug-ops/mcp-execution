@@ -1,4 +1,4 @@
-//! Comprehensive tests for SkillCategory type.
+//! Comprehensive tests for `SkillCategory` type.
 //!
 //! Tests cover all validation logic, edge cases, and security scenarios.
 

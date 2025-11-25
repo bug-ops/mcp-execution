@@ -896,7 +896,7 @@ mod tests {
             .unwrap()
             .skill_md("---\nname: github\n---")
             .manifest(manifest)
-            .add_category(repos.clone(), "# Repos\n...")
+            .add_category(repos, "# Repos\n...")
             .script(ScriptFile::new("create_branch", "ts", "// code"))
             .build();
 

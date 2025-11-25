@@ -1,4 +1,4 @@
-//! Comprehensive tests for CategoryManifest type.
+//! Comprehensive tests for `CategoryManifest` type.
 //!
 //! Tests cover manifest building, tool-to-category mapping, and serialization.
 
