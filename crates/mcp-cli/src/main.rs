@@ -140,13 +140,51 @@ pub enum Commands {
     ///
     /// Introspects an MCP server and generates a Claude skill
     /// in the .claude/skills/ directory.
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Simple server
+    /// mcp-cli generate github-mcp-server --skill-name github
+    ///
+    /// # Docker container
+    /// mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
+    ///     --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
+    ///     --arg=ghcr.io/github/github-mcp-server \
+    ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx \
+    ///     --skill-name github
+    /// ```
     Generate {
-        /// MCP server name to introspect
-        server: String,
+        /// Server command (binary name or path)
+        ///
+        /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
+        /// Not required when using --http or --sse
+        #[arg(required_unless_present_any = ["http_url", "sse_url"])]
+        server: Option<String>,
 
-        /// MCP server command (defaults to server name)
-        #[arg(long)]
-        server_command: Option<String>,
+        /// Arguments to pass to the server command
+        #[arg(long = "arg", num_args = 1)]
+        server_args: Vec<String>,
+
+        /// Environment variables in KEY=VALUE format
+        #[arg(long = "env", num_args = 1)]
+        server_env: Vec<String>,
+
+        /// Working directory for the server process
+        #[arg(long = "cwd")]
+        server_cwd: Option<String>,
+
+        /// Use HTTP transport with specified URL
+        #[arg(long = "http", conflicts_with = "sse_url")]
+        http_url: Option<String>,
+
+        /// Use SSE transport with specified URL
+        #[arg(long = "sse", conflicts_with = "http_url")]
+        sse_url: Option<String>,
+
+        /// HTTP headers in KEY=VALUE format (for HTTP/SSE transport)
+        #[arg(long = "header", num_args = 1)]
+        server_headers: Vec<String>,
 
         /// Skill name (interactive prompt if not provided)
         #[arg(long)]
@@ -338,13 +376,23 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
         }
         Commands::Generate {
             server,
-            server_command,
+            server_args,
+            server_env,
+            server_cwd,
+            http_url,
+            sse_url,
+            server_headers,
             skill_name,
             skill_description,
         } => {
             commands::generate::run(
                 server,
-                server_command,
+                server_args,
+                server_env,
+                server_cwd,
+                http_url,
+                sse_url,
+                server_headers,
                 skill_name,
                 skill_description,
                 output_format,

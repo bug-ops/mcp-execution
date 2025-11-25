@@ -11,11 +11,12 @@ use anyhow::{Context, Result, bail};
 use mcp_codegen::TemplateEngine;
 use mcp_codegen::skills::claude::{render_reference_md, render_skill_md};
 use mcp_codegen::skills::converter::SkillConverter;
-use mcp_core::cli::{ExitCode, OutputFormat, ServerConnectionString};
-use mcp_core::{ServerConfig, ServerId, SkillDescription, SkillName};
+use mcp_core::cli::{ExitCode, OutputFormat};
+use mcp_core::{ServerConfig, ServerConfigBuilder, ServerId, SkillDescription, SkillName};
 use mcp_introspector::Introspector;
 use mcp_skill_store::SkillStore;
 use serde::Serialize;
+use std::path::PathBuf;
 use tracing::{info, warn};
 
 /// Result of Claude skill generation.
@@ -36,16 +37,22 @@ struct GenerationResult {
 /// Generates a Claude skill from an MCP server.
 ///
 /// This command performs the following steps:
-/// 1. Introspects the MCP server to discover tools
-/// 2. Prompts user for skill name and description (or uses CLI args)
-/// 3. Converts server info to `SkillData`
-/// 4. Renders `SKILL.md` and `REFERENCE.md` templates
-/// 5. Saves skill to `.claude/skills/` directory
+/// 1. Builds `ServerConfig` from CLI arguments
+/// 2. Introspects the MCP server to discover tools
+/// 3. Prompts user for skill name and description (or uses CLI args)
+/// 4. Converts server info to `SkillData`
+/// 5. Renders `SKILL.md` and `REFERENCE.md` templates
+/// 6. Saves skill to `.claude/skills/` directory
 ///
 /// # Arguments
 ///
-/// * `server_name` - MCP server name to introspect
-/// * `server_command` - Optional server command (defaults to `server_name`)
+/// * `server` - Server command (binary name or path), None for HTTP/SSE
+/// * `args` - Arguments to pass to the server command
+/// * `env` - Environment variables in KEY=VALUE format
+/// * `cwd` - Working directory for the server process
+/// * `http` - HTTP transport URL
+/// * `sse` - SSE transport URL
+/// * `headers` - HTTP headers in KEY=VALUE format
 /// * `skill_name` - Optional skill name (interactive if not provided)
 /// * `skill_description` - Optional skill description (interactive if not provided)
 /// * `output_format` - Output format (json, text, pretty)
@@ -53,6 +60,7 @@ struct GenerationResult {
 /// # Errors
 ///
 /// Returns an error if:
+/// - Server configuration is invalid
 /// - Server connection fails
 /// - Server has no tools
 /// - Skill name/description validation fails
@@ -67,59 +75,71 @@ struct GenerationResult {
 ///
 /// # async fn example() -> Result<(), anyhow::Error> {
 /// let result = generate::run(
-///     "github".to_string(),
+///     Some("github-mcp-server".to_string()),
+///     vec!["stdio".to_string()],
+///     vec![],
 ///     None,
+///     None,
+///     None,
+///     vec![],
 ///     Some("github".to_string()),
-///     Some("VK Teams bot integration".to_string()),
+///     Some("GitHub integration".to_string()),
 ///     OutputFormat::Pretty,
 /// ).await?;
 /// assert_eq!(result, ExitCode::SUCCESS);
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    server_name: String,
-    server_command: Option<String>,
+    server: Option<String>,
+    args: Vec<String>,
+    env: Vec<String>,
+    cwd: Option<String>,
+    http: Option<String>,
+    sse: Option<String>,
+    headers: Vec<String>,
     skill_name_input: Option<String>,
     skill_description_input: Option<String>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    info!("Generating Claude skill for server: {}", server_name);
+    // Build ServerConfig from CLI arguments
+    let (server_id, config) = build_server_config(server, args, env, cwd, http, sse, headers)?;
+
+    info!("Generating Claude skill for server: {}", server_id);
+    info!("Transport: {:?}", config.transport());
 
     // Step 1: Introspect MCP server
-    let server_conn =
-        ServerConnectionString::new(&server_name).context("invalid server connection string")?;
-
-    let server_id = ServerId::new(server_conn.as_str());
     let mut introspector = Introspector::new();
 
-    let server_cmd = server_command.as_deref().unwrap_or(server_conn.as_str());
-    let config = ServerConfig::builder()
-        .command(server_cmd.to_string())
-        .build();
     let server_info = introspector
-        .discover_server(server_id, &config)
+        .discover_server(server_id.clone(), &config)
         .await
-        .context("failed to introspect MCP server")?;
+        .with_context(|| {
+            format!(
+                "failed to introspect MCP server '{server_id}' - ensure the server is accessible"
+            )
+        })?;
 
     if server_info.tools.is_empty() {
-        warn!("Server '{server_name}' has no tools");
-        bail!("no tools found on server '{server_name}'");
+        warn!("Server '{server_id}' has no tools");
+        bail!("no tools found on server '{server_id}'");
     }
 
     info!("Discovered {} tools from server", server_info.tools.len());
 
     // Step 2: Get skill metadata (interactive or from CLI args)
+    let server_name = server_id.as_str();
     let skill_name = if let Some(name) = skill_name_input {
         SkillName::new(&name).context("invalid skill name")?
     } else {
-        prompt_skill_name(&server_name)?
+        prompt_skill_name(server_name)?
     };
 
     let skill_description = if let Some(desc) = skill_description_input {
         SkillDescription::new(&desc).context("invalid skill description")?
     } else {
-        prompt_skill_description(&server_name, &server_info)?
+        prompt_skill_description(server_name, &server_info)?
     };
 
     info!("Creating skill: {}", skill_name.as_str());
@@ -165,6 +185,80 @@ pub async fn run(
     );
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Builds `ServerConfig` from CLI arguments.
+///
+/// Parses CLI arguments into a `ServerConfig` for connecting to an MCP server.
+fn build_server_config(
+    server: Option<String>,
+    args: Vec<String>,
+    env: Vec<String>,
+    cwd: Option<String>,
+    http: Option<String>,
+    sse: Option<String>,
+    headers: Vec<String>,
+) -> Result<(ServerId, ServerConfig)> {
+    // Parse environment variables
+    let parse_key_value = |s: &str, kind: &str| -> Result<(String, String)> {
+        let parts: Vec<&str> = s.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            bail!("invalid {kind} format: '{s}' (expected KEY=VALUE)");
+        }
+        Ok((parts[0].to_string(), parts[1].to_string()))
+    };
+
+    // Build config based on transport type
+    let (server_id, config) = if let Some(url) = http {
+        // HTTP transport
+        let mut builder = ServerConfig::builder().http_transport(url.clone());
+
+        // Add headers
+        for header in headers {
+            let (key, value) = parse_key_value(&header, "header")?;
+            builder = builder.header(key, value);
+        }
+
+        let id = ServerId::new(&url);
+        (id, builder.build())
+    } else if let Some(url) = sse {
+        // SSE transport
+        let mut builder = ServerConfig::builder().sse_transport(url.clone());
+
+        // Add headers
+        for header in headers {
+            let (key, value) = parse_key_value(&header, "header")?;
+            builder = builder.header(key, value);
+        }
+
+        let id = ServerId::new(&url);
+        (id, builder.build())
+    } else {
+        // Stdio transport (default)
+        let command = server.expect("server is required for stdio transport");
+        let mut builder: ServerConfigBuilder = ServerConfig::builder().command(command.clone());
+
+        // Add arguments
+        if !args.is_empty() {
+            builder = builder.args(args);
+        }
+
+        // Add environment variables
+        for env_var in env {
+            let (key, value) = parse_key_value(&env_var, "environment variable")?;
+            builder = builder.env(key, value);
+        }
+
+        // Add working directory
+        if let Some(dir) = cwd {
+            builder = builder.cwd(PathBuf::from(dir));
+        }
+
+        let id = ServerId::new(&command);
+        (id, builder.build())
+    };
+
+    Ok((server_id, config))
 }
 
 /// Prompts user for skill name interactively.
@@ -274,16 +368,43 @@ mod tests {
     }
 
     #[test]
-    fn test_server_connection_string_validation() {
-        // Valid connection strings
-        assert!(ServerConnectionString::new("test-server").is_ok());
-        assert!(ServerConnectionString::new("github").is_ok());
-        assert!(ServerConnectionString::new("/path/to/server").is_ok());
+    fn test_build_server_config_stdio() {
+        let (id, config) = build_server_config(
+            Some("github-mcp-server".to_string()),
+            vec!["stdio".to_string()],
+            vec!["TOKEN=abc123".to_string()],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
 
-        // Invalid connection strings
-        assert!(ServerConnectionString::new("").is_err());
-        assert!(ServerConnectionString::new("server with spaces").is_err());
-        assert!(ServerConnectionString::new("server && rm -rf /").is_err());
+        assert_eq!(id.as_str(), "github-mcp-server");
+        assert_eq!(config.command(), "github-mcp-server");
+        assert_eq!(config.args(), &["stdio"]);
+        assert_eq!(config.env().get("TOKEN"), Some(&"abc123".to_string()));
+    }
+
+    #[test]
+    fn test_build_server_config_invalid_env() {
+        let result = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec!["INVALID_FORMAT".to_string()],
+            None,
+            None,
+            None,
+            vec![],
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected KEY=VALUE")
+        );
     }
 
     #[test]
