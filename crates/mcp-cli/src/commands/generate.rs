@@ -9,9 +9,7 @@
 
 use super::common::build_server_config;
 use anyhow::{Context, Result, bail};
-use mcp_codegen::TemplateEngine;
-use mcp_codegen::skills::claude::{render_reference_md, render_skill_md};
-use mcp_codegen::skills::converter::SkillConverter;
+use mcp_codegen::skills::SkillOrchestrator;
 use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_core::{SkillDescription, SkillName};
 use mcp_introspector::Introspector;
@@ -144,24 +142,27 @@ pub async fn run(
 
     info!("Creating skill: {}", skill_name.as_str());
 
-    // Step 3: Convert to SkillData
-    let skill_data = SkillConverter::convert(&server_info, &skill_name, &skill_description)
-        .context("failed to convert server info to skill data")?;
+    // Step 3: Generate skill bundle with orchestrator
+    let orchestrator = SkillOrchestrator::new().context("failed to create skill orchestrator")?;
 
-    // Step 4: Render templates
-    let engine = TemplateEngine::new().context("failed to create template engine")?;
-    let skill_md = render_skill_md(&engine, &skill_data).context("failed to render SKILL.md")?;
-    let reference_md =
-        render_reference_md(&engine, &skill_data).context("failed to render REFERENCE.md")?;
+    let bundle = orchestrator
+        .generate_bundle(&server_info, &skill_name, &skill_description)
+        .context("failed to generate skill bundle")?;
 
-    info!("Generated SKILL.md ({} bytes)", skill_md.len());
-    info!("Generated REFERENCE.md ({} bytes)", reference_md.len());
+    info!(
+        "Generated skill bundle with {} scripts",
+        bundle.scripts().len()
+    );
+    info!("SKILL.md: {} bytes", bundle.skill_md().len());
+    if let Some(ref_md) = bundle.reference_md() {
+        info!("REFERENCE.md: {} bytes", ref_md.len());
+    }
 
-    // Step 5: Save to .claude/skills/
+    // Step 4: Save bundle to .claude/skills/
     let store = SkillStore::new_claude().context("failed to initialize skill store")?;
     store
-        .save_claude_skill(&skill_name, &skill_md, &reference_md, &skill_data)
-        .context("failed to save Claude skill")?;
+        .save_bundle(&bundle)
+        .context("failed to save skill bundle")?;
 
     // Get skill path from HOME/.claude/skills/skill-name
     let home = dirs::home_dir().context("failed to get home directory")?;

@@ -145,6 +145,28 @@ impl<'a> TemplateEngine<'a> {
                 source: None,
             })?;
 
+        // Multi-file skill template: generates SKILL.md that references scripts/
+        handlebars
+            .register_template_string(
+                "skill_md_multifile",
+                include_str!("../templates/skills/skill_multifile.md.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register skill_md_multifile template: {}", e),
+                source: None,
+            })?;
+
+        // Reference MD template (reuse existing claude_reference as reference_md alias)
+        handlebars
+            .register_template_string(
+                "reference_md",
+                include_str!("../templates/claude/reference.md.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register reference_md template: {}", e),
+                source: None,
+            })?;
+
         Ok(())
     }
 
