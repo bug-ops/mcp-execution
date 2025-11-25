@@ -43,19 +43,6 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    /// Code execution error.
-    ///
-    /// Occurs when WASM code execution fails, times out, or produces
-    /// an error during runtime.
-    #[error("Execution error: {message}")]
-    ExecutionError {
-        /// Human-readable description of the execution failure
-        message: String,
-        /// Optional underlying error
-        #[source]
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
-    },
-
     /// Security policy violation.
     ///
     /// Raised when an operation violates configured security policies,
@@ -110,33 +97,6 @@ pub enum Error {
         source: Option<serde_json::Error>,
     },
 
-    /// WASM runtime error.
-    ///
-    /// Specific errors from the WebAssembly runtime (Wasmtime).
-    #[error("WASM runtime error: {message}")]
-    WasmError {
-        /// Description of the WASM runtime failure
-        message: String,
-    },
-
-    /// Cache operation error.
-    ///
-    /// Errors related to cache reads, writes, or invalidation.
-    #[error("Cache error: {message}")]
-    CacheError {
-        /// Description of the cache operation failure
-        message: String,
-    },
-
-    /// State storage error.
-    ///
-    /// Errors related to persistent state storage operations.
-    #[error("State storage error: {message}")]
-    StateError {
-        /// Description of the state storage failure
-        message: String,
-    },
-
     /// Invalid argument error.
     ///
     /// Raised when CLI arguments or function parameters are invalid.
@@ -155,18 +115,6 @@ pub enum Error {
         reason: String,
     },
 
-    /// Reserved word detected in skill name.
-    ///
-    /// Raised when a skill name contains forbidden reserved words
-    /// like "anthropic" or "claude" (case-insensitive).
-    #[error("Reserved word '{reserved_word}' detected in skill name: {name}")]
-    ReservedWord {
-        /// The attempted skill name
-        name: String,
-        /// The reserved word that was detected
-        reserved_word: String,
-    },
-
     /// Script generation failed.
     ///
     /// Raised when generating TypeScript scripts from tool schemas fails.
@@ -181,23 +129,6 @@ pub enum Error {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
-    /// Skill bundle is incomplete.
-    ///
-    /// Raised when attempting to build or save a skill bundle that is missing required components.
-    #[error("Skill bundle incomplete: {message}")]
-    IncompleteBundleError {
-        /// Description of what is missing or incomplete
-        message: String,
-    },
-
-    /// Script file not found in bundle.
-    ///
-    /// Raised when attempting to access a script file that does not exist in the bundle.
-    #[error("Script file not found: {filename}")]
-    ScriptNotFound {
-        /// The filename that was not found
-        filename: String,
-    },
 }
 
 impl Error {
@@ -234,24 +165,6 @@ impl Error {
     #[must_use]
     pub const fn is_security_error(&self) -> bool {
         matches!(self, Self::SecurityViolation { .. })
-    }
-
-    /// Returns `true` if this is an execution error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_core::Error;
-    ///
-    /// let err = Error::ExecutionError {
-    ///     message: "Runtime panic".to_string(),
-    ///     source: None,
-    /// };
-    /// assert!(err.is_execution_error());
-    /// ```
-    #[must_use]
-    pub const fn is_execution_error(&self) -> bool {
-        matches!(self, Self::ExecutionError { .. })
     }
 
     /// Returns `true` if this is a resource not found error.
@@ -306,23 +219,6 @@ impl Error {
         matches!(self, Self::Timeout { .. })
     }
 
-    /// Returns `true` if this is a WASM runtime error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_core::Error;
-    ///
-    /// let err = Error::WasmError {
-    ///     message: "Module instantiation failed".to_string(),
-    /// };
-    /// assert!(err.is_wasm_error());
-    /// ```
-    #[must_use]
-    pub const fn is_wasm_error(&self) -> bool {
-        matches!(self, Self::WasmError { .. })
-    }
-
     /// Returns `true` if this is a validation error.
     ///
     /// # Examples
@@ -339,24 +235,6 @@ impl Error {
     #[must_use]
     pub const fn is_validation_error(&self) -> bool {
         matches!(self, Self::ValidationError { .. })
-    }
-
-    /// Returns `true` if this is a reserved word error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_core::Error;
-    ///
-    /// let err = Error::ReservedWord {
-    ///     name: "anthropic-skill".to_string(),
-    ///     reserved_word: "anthropic".to_string(),
-    /// };
-    /// assert!(err.is_reserved_word_error());
-    /// ```
-    #[must_use]
-    pub const fn is_reserved_word_error(&self) -> bool {
-        matches!(self, Self::ReservedWord { .. })
     }
 
     /// Returns `true` if this is a script generation error.
@@ -378,39 +256,6 @@ impl Error {
         matches!(self, Self::ScriptGenerationError { .. })
     }
 
-    /// Returns `true` if this is an incomplete bundle error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_core::Error;
-    ///
-    /// let err = Error::IncompleteBundleError {
-    ///     message: "skill_md is required".to_string(),
-    /// };
-    /// assert!(err.is_incomplete_bundle_error());
-    /// ```
-    #[must_use]
-    pub const fn is_incomplete_bundle_error(&self) -> bool {
-        matches!(self, Self::IncompleteBundleError { .. })
-    }
-
-    /// Returns `true` if this is a script not found error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_core::Error;
-    ///
-    /// let err = Error::ScriptNotFound {
-    ///     filename: "tool.ts".to_string(),
-    /// };
-    /// assert!(err.is_script_not_found());
-    /// ```
-    #[must_use]
-    pub const fn is_script_not_found(&self) -> bool {
-        matches!(self, Self::ScriptNotFound { .. })
-    }
 }
 
 /// Result type alias for MCP operations.
@@ -461,16 +306,6 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_error_detection() {
-        let err = Error::ExecutionError {
-            message: "Runtime error".to_string(),
-            source: None,
-        };
-        assert!(err.is_execution_error());
-        assert!(!err.is_config_error());
-    }
-
-    #[test]
     fn test_not_found_error_detection() {
         let err = Error::ResourceNotFound {
             resource: "missing-tool".to_string(),
@@ -485,7 +320,7 @@ mod tests {
             message: "Invalid configuration".to_string(),
         };
         assert!(err.is_config_error());
-        assert!(!err.is_wasm_error());
+        assert!(!err.is_timeout());
     }
 
     #[test]
@@ -495,15 +330,6 @@ mod tests {
             duration_secs: 60,
         };
         assert!(err.is_timeout());
-        assert!(!err.is_execution_error());
-    }
-
-    #[test]
-    fn test_wasm_error_detection() {
-        let err = Error::WasmError {
-            message: "Module load failed".to_string(),
-        };
-        assert!(err.is_wasm_error());
         assert!(!err.is_not_found());
     }
 
