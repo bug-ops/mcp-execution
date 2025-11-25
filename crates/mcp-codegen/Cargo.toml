@@ -13,7 +13,8 @@ workspace = true
 default = ["wasm"]
 wasm = []
 skills = []
-all = ["wasm", "skills"]
+progressive = []
+all = ["wasm", "skills", "progressive"]
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }

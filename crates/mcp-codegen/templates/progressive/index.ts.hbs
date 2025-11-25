@@ -1,0 +1,33 @@
+/**
+ * {{server_name}} - MCP Server Tools
+ *
+ * Generated from MCP server introspection.
+ * Version: {{server_version}}
+ *
+ * ## Available Tools
+ *
+ * This server provides {{tool_count}} tools:
+{{#each tools}}
+ * - `{{typescript_name}}`: {{description}}
+{{/each}}
+ *
+ * ## Usage
+ *
+ * Import individual tools as needed for progressive loading:
+ *
+ * ```typescript
+ * import { {{#if tools}}{{tools.[0].typescript_name}}{{/if}} } from './{{#if tools}}{{tools.[0].typescript_name}}{{/if}}.js';
+ *
+ * const result = await {{#if tools}}{{tools.[0].typescript_name}}{{/if}}({ /* params */ });
+ * ```
+ *
+ * @packageDocumentation
+ */
+
+// Re-export all tools
+{{#each tools}}
+export { {{typescript_name}}, type {{typescript_name}}Params, type {{typescript_name}}Result } from './{{typescript_name}}.js';
+{{/each}}
+
+// Re-export runtime bridge
+export { callMCPTool } from './_runtime/mcp-bridge.js';

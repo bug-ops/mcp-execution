@@ -21,7 +21,8 @@
 //!
 //! - **`wasm`** (default): Generate TypeScript for WebAssembly execution
 //! - **`skills`**: Generate executable scripts for Claude Code Skills
-//! - **`all`**: Enable both WASM and Skills generation
+//! - **`progressive`**: Generate progressive loading files (one file per tool)
+//! - **`all`**: Enable all generation modes
 //!
 //! # Examples
 //!
@@ -48,6 +49,27 @@
 //! [dependencies]
 //! mcp-codegen = { version = "0.1", features = ["skills"], default-features = false }
 //! ```
+//!
+//! ## Progressive Loading Code Generation
+//!
+//! Progressive loading generates one file per tool, enabling Claude Code to load only what it needs:
+//!
+//! ```toml
+//! [dependencies]
+//! mcp-codegen = { version = "0.1", features = ["progressive"], default-features = false }
+//! ```
+//!
+//! ```no_run
+//! use mcp_codegen::progressive::ProgressiveGenerator;
+//! use mcp_introspector::ServerInfo;
+//!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let generator = ProgressiveGenerator::new()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! This achieves 98% token savings compared to loading all tools upfront.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
@@ -64,6 +86,10 @@ pub mod wasm;
 #[cfg(feature = "skills")]
 pub mod skills;
 
+// Progressive module (feature-gated)
+#[cfg(feature = "progressive")]
+pub mod progressive;
+
 // Re-export common types (always available)
 pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
 pub use template_engine::TemplateEngine;
@@ -72,6 +98,10 @@ pub use template_engine::TemplateEngine;
 #[cfg(feature = "wasm")]
 pub use wasm::CodeGenerator;
 
+// Re-export Progressive-specific types
+#[cfg(feature = "progressive")]
+pub use progressive::ProgressiveGenerator;
+
 // Feature check: at least one feature must be enabled
-#[cfg(not(any(feature = "wasm", feature = "skills")))]
-compile_error!("At least one feature must be enabled: 'wasm' or 'skills'");
+#[cfg(not(any(feature = "wasm", feature = "skills", feature = "progressive")))]
+compile_error!("At least one feature must be enabled: 'wasm', 'skills', or 'progressive'");

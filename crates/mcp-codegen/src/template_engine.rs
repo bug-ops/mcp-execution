@@ -66,6 +66,7 @@ impl<'a> TemplateEngine<'a> {
     /// Templates are registered based on enabled features:
     /// - `wasm` feature: WASM-specific templates from templates/wasm/
     /// - `skills` feature: Skills-specific templates from templates/skills/
+    /// - `progressive` feature: Progressive loading templates from templates/progressive/
     #[allow(unused_variables)]
     fn register_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
         // Register WASM templates if feature enabled
@@ -75,6 +76,10 @@ impl<'a> TemplateEngine<'a> {
         // Register Skills templates if feature enabled
         #[cfg(feature = "skills")]
         Self::register_skills_templates(handlebars)?;
+
+        // Register Progressive templates if feature enabled
+        #[cfg(feature = "progressive")]
+        Self::register_progressive_templates(handlebars)?;
 
         Ok(())
     }
@@ -195,6 +200,48 @@ impl<'a> TemplateEngine<'a> {
             )
             .map_err(|e| Error::SerializationError {
                 message: format!("Failed to register manifest_yaml template: {}", e),
+                source: None,
+            })?;
+
+        Ok(())
+    }
+
+    /// Registers Progressive loading templates.
+    #[cfg(feature = "progressive")]
+    fn register_progressive_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
+        // Tool template: generates a single tool function (progressive loading)
+        handlebars
+            .register_template_string(
+                "progressive/tool",
+                include_str!("../templates/progressive/tool.ts.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register progressive tool template: {}", e),
+                source: None,
+            })?;
+
+        // Index template: generates index.ts with re-exports (progressive loading)
+        handlebars
+            .register_template_string(
+                "progressive/index",
+                include_str!("../templates/progressive/index.ts.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register progressive index template: {}", e),
+                source: None,
+            })?;
+
+        // Runtime bridge template: generates runtime helper for MCP calls
+        handlebars
+            .register_template_string(
+                "progressive/runtime-bridge",
+                include_str!("../templates/progressive/runtime-bridge.ts.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!(
+                    "Failed to register progressive runtime-bridge template: {}",
+                    e
+                ),
                 source: None,
             })?;
 
