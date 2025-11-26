@@ -1,459 +1,146 @@
 ---
 name: mcp-progressive-loading
-description: Generate TypeScript files for MCP tools using progressive loading pattern. Achieves 98% token savings by loading only the tools you need instead of all tools at once.
+description: Generates TypeScript files for MCP server tools with progressive loading (98% token savings). Use when setting up MCP tools, configuring servers, or executing MCP operations autonomously via Node.js CLI.
 ---
 
-# MCP Progressive Loading Skill
+# MCP Progressive Loading
 
-Generate and use MCP server tools with progressive loading - load only what you need, when you need it.
+Generates TypeScript tool definitions from MCP servers with progressive loading (load only what you need).
 
-## What This Skill Does
-
-This skill helps you:
-1. **Generate** TypeScript files for any MCP server's tools
-2. **Configure** progressive loading for optimal token usage
-3. **Use** MCP tools with 98% token savings (30,000 → 500 tokens per tool)
+**Key capabilities:**
+- Generate tools from any MCP server (GitHub, Google Drive, Slack, etc.)
+- Execute tools autonomously via Node.js
+- 98% token savings: ~500 tokens/tool vs ~30,000 for all tools
 
 ## Quick Start
 
-### Generate Tools for a Server
-
-**Recommended: Load from mcp.json**
-
-Ask Claude Code to generate progressive loading files:
-
-```
-"Generate progressive loading files for the GitHub MCP server"
-```
-
-Claude will run:
+**1. Generate tools** (loads config from `~/.claude/mcp.json`):
 ```bash
 mcp-execution-cli generate --from-config github
 ```
 
-Output: `~/.claude/servers/github/*.ts`
-
-**Alternative: Manual configuration**
-
+**2. Use tools** (autonomous execution via Node.js):
 ```bash
-mcp-execution-cli generate docker \
-  --arg=run --arg=-i --arg=--rm \
-  --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
-  --arg=ghcr.io/github/github-mcp-server \
-  --env=GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_YOUR_TOKEN \
-  --name=github
+node ~/.claude/servers/github/createIssue.ts '{"owner":"...", "repo":"...", "title":"Bug fix"}'
 ```
 
-### Use Generated Tools
+Natural language examples:
+- "Generate progressive loading for GitHub server"
+- "Create an issue in myorg/myrepo about the login bug"
+- "List all available GitHub tools"
 
-Once generated, ask Claude Code to use specific tools:
+## How It Works
 
-```
-"Use the GitHub createIssue tool to report a bug"
-"List all available GitHub tools"
-"Show me what parameters createPullRequest needs"
-```
+**Traditional:** Load all 40 tools = 30,000 tokens
+**Progressive:** Load 1 tool = 500 tokens (98% savings)
 
-## How Progressive Loading Works
-
-### Traditional Approach (Without Progressive Loading)
-```
-Load all 40 tools → 30,000 tokens → Every request
-```
-
-### Progressive Loading Approach
-```
-Load 1 specific tool → 500 tokens → 98% savings
-```
-
-### Directory Structure
-
-```
-~/.claude/servers/github/
-├── index.ts                    # Re-exports all tools
-├── createIssue.ts              # Individual tool (loaded on-demand)
-├── createPullRequest.ts        # Individual tool (loaded on-demand)
-├── getAuthenticatedUser.ts     # Individual tool (loaded on-demand)
-└── _runtime/
-    └── mcp-bridge.ts           # Runtime helper for MCP calls
-```
+Each tool is a separate `.ts` file in `~/.claude/servers/{server}/`:
+- `createIssue.ts` - Individual tool (load on demand)
+- `_runtime/mcp-bridge.ts` - Runtime bridge to MCP server
+- `index.ts` - Exports all tools (optional)
 
 ## Common Tasks
 
-### 0. Setup Runtime Environment
-
-Before first use, validate the runtime environment:
-
-```
-"Setup the MCP execution environment"
-```
-
-Result:
+### Setup (first time only)
+Validates Node.js 18+ and MCP configuration:
 ```bash
 mcp-execution-cli setup
-
-# Output:
-# Checking runtime environment...
-# ✓ Node.js v20.10.0 detected
-# ✓ MCP configuration found
-# ✓ Runtime setup complete
 ```
 
-### 1. Generate from mcp.json (Recommended)
-
-```
-"Generate progressive loading for GitHub server"
-```
-
-Result:
-```bash
-mcp-execution-cli generate --from-config github
-```
-
-This automatically loads server configuration from `~/.claude/mcp.json`.
-
-### 2. Generate for Local MCP Server
-
-```
-"Generate progressive loading for my local server at ./server.js"
-```
-
-Result:
-```bash
-mcp-execution-cli generate node --arg=./server.js --name=my-server
-```
-
-### 3. Generate for Docker-based Server
-
-```
-"Generate progressive loading for the Google Drive MCP server"
-```
-
-Result:
-```bash
-mcp-execution-cli generate docker \
-  --arg=run --arg=-i --arg=--rm \
-  --arg=mcp/gdrive \
-  --name=gdrive
-```
-
-### 4. Generate with Custom Output Directory
-
-```
-"Generate GitHub tools to /tmp/test-github"
-```
-
-Result:
-```bash
-mcp-execution-cli generate docker \
-  --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-server \
-  --name=github \
-  --progressive-output=/tmp/test-github
-```
-
-### 5. List Available Tools
-
-```
-"Show me all available GitHub tools"
-```
-
-Claude will:
-```bash
-ls ~/.claude/servers/github/*.ts
-```
-
-### 6. Inspect Tool Parameters
-
-```
-"What parameters does createIssue need?"
-```
-
-Claude will:
-```bash
-cat ~/.claude/servers/github/createIssue.ts
-```
-
-### 7. Execute MCP Tools
-
-```
-"Create a GitHub issue titled 'Fix login bug'"
-```
-
-Claude will:
-```bash
-# Step 1: Read tool definition (500 tokens - progressive loading!)
-cat ~/.claude/servers/github/createIssue.ts
-
-# Step 2: Execute with parameters
-node ~/.claude/servers/github/createIssue.ts '{
-  "owner": "myorg",
-  "repo": "myapp",
-  "title": "Fix login bug",
-  "body": "Login form validation is broken"
-}'
-
-# Step 3: Get JSON result
-{
-  "number": 456,
-  "url": "https://github.com/myorg/myapp/issues/456",
-  "state": "open"
-}
-```
-
-## Configuration
-
-### MCP Server Configuration
-
-After generating tools, configure your MCP server in `~/.claude/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "github": {
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
-        "ghcr.io/github/github-mcp-server"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_YOUR_TOKEN_HERE"
-      }
-    }
-  }
-}
-```
-
-### Supported MCP Servers
-
-Any MCP-compliant server:
-- **GitHub** - Repository management, issues, PRs, code search
-- **Google Drive** - File operations, search, sharing
-- **Slack** - Messaging, channels, users
-- **PostgreSQL** - Database queries and management
-- **Custom servers** - Any server implementing MCP protocol
-
-## Command Reference
-
-### Generate Command
-
-```bash
-mcp-execution-cli generate [OPTIONS] [SERVER]
-
-Configuration Modes:
-  1. From mcp.json (recommended):
-     --from-config <NAME>    Load server config from ~/.claude/mcp.json
-
-  2. Manual configuration:
-     <SERVER>                Server command (e.g., "docker", "node", "npx")
-
-Options:
-  --arg <ARGS>              Server arguments (repeatable)
-  --env <KEY=VALUE>         Environment variables
-  --name <NAME>             Custom server name for directory
-  --progressive-output <DIR> Custom output directory
-  --http <URL>              Use HTTP transport
-  --sse <URL>               Use SSE transport
-  --format <FORMAT>         Output format (json|text|pretty)
-```
-
-### Examples
+### Generate Tools
 
 **From mcp.json (recommended):**
 ```bash
 mcp-execution-cli generate --from-config github
 ```
 
-**Simple Node.js server:**
+**Manual configuration:**
 ```bash
-mcp-execution-cli generate node --arg=./server.js --name=my-server
+mcp-execution-cli generate docker --arg=... --name=my-server
 ```
 
-**Docker container with environment:**
+### Discover Tools
 ```bash
-mcp-execution-cli generate docker \
-  --arg=run --arg=-i --arg=--rm \
-  --arg=-e --arg=DATABASE_URL \
-  --arg=postgres-mcp-server \
-  --env=DATABASE_URL=postgresql://localhost/mydb \
-  --name=postgres
+ls ~/.claude/servers/github/*.ts          # List all tools
+cat ~/.claude/servers/github/createIssue.ts  # Inspect parameters
 ```
 
-**HTTP transport:**
-```bash
-mcp-execution-cli generate \
-  --http=https://api.example.com/mcp \
-  --header=Authorization=Bearer_TOKEN \
-  --name=api-server
+### Execute Tools
+Natural language works automatically:
+- "Create a GitHub issue titled 'Fix login bug'"
+- "Search for pull requests in myorg/myrepo"
+- "Get my GitHub profile"
+
+Claude will:
+1. Read tool definition (~500 tokens)
+2. Execute via Node.js: `node tool.ts '{"params":"..."}'`
+3. Return JSON result
+
+## Configuration
+
+Required: `~/.claude/mcp.json` with server definitions:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+               "ghcr.io/github/github-mcp-server"],
+      "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_..."}
+    }
+  }
+}
 ```
 
-## File Structure
+Works with any MCP server: GitHub, Google Drive, Slack, PostgreSQL, custom servers.
 
-Each generated tool file contains:
+## Command Reference
 
-```typescript
-/**
- * Create a new issue in a GitHub repository
- *
- * @param params - Issue creation parameters
- * @returns Promise resolving to created issue details
- */
-export async function createIssue(params: CreateIssueParams): Promise<CreateIssueResult> {
-  // Type-safe parameter validation
-  // Automatic MCP connection
-  // Error handling
-}
+```bash
+# From mcp.json (recommended)
+mcp-execution-cli generate --from-config <NAME>
 
-export interface CreateIssueParams {
-  owner: string;
-  repo: string;
-  title: string;
-  body?: string;
-  labels?: string[];
-  assignees?: string[];
-}
+# Manual configuration
+mcp-execution-cli generate <COMMAND> --arg=... --env=KEY=VALUE --name=<NAME>
 
-export interface CreateIssueResult {
-  number: number;
-  url: string;
-  state: string;
-}
+# Common options
+--progressive-output <DIR>  # Custom output directory (default: ~/.claude/servers/)
+--http <URL>                # Use HTTP transport
+--format json|text|pretty   # Output format
+```
+
+**Examples:**
+```bash
+mcp-execution-cli generate --from-config github
+mcp-execution-cli generate node --arg=./server.js --name=local
+mcp-execution-cli generate docker --arg=run --arg=-i --name=gdrive
 ```
 
 ## Benefits
 
-### Token Savings
-- **Before**: Load all 40 tools = 30,000 tokens per request
-- **After**: Load 1 tool = 500 tokens per request
-- **Savings**: 98% reduction in token usage
-
-### Performance
-- **Generation**: ~3ms per tool
-- **Loading**: Only load what you need
-- **Type Safety**: Full TypeScript types from JSON schemas
-
-### Developer Experience
-- **Discovery**: `ls ~/.claude/servers/` shows all servers
-- **Exploration**: `cat tool.ts` shows tool details
-- **Documentation**: JSDoc comments in every file
-- **IDE Support**: Full autocomplete and type checking
+- **98% token savings**: 500 tokens/tool vs 30,000 for all tools
+- **Type safety**: Full TypeScript interfaces from MCP schemas
+- **Autonomous execution**: Works via Node.js CLI
+- **Zero dependencies**: Uses Node.js built-ins only
+- **IDE support**: Full autocomplete and type checking
 
 ## Troubleshooting
 
-### "No tools generated"
-- Check server is running: `docker ps` or `node server.js`
-- Verify server responds to MCP protocol
-- Check logs with `--verbose` flag
+**Tools not generated?**
+- Verify server running: `docker ps` or check logs with `--verbose`
+- Ensure MCP protocol compliance
 
-### "Cannot find module"
-- Ensure `~/.claude/servers/` exists
-- Run generation command again
-- Check file permissions
+**Module not found?**
+- Re-run generation: `mcp-execution-cli generate --from-config <server>`
+- Check `~/.claude/servers/` exists
 
-### "Authentication failed"
-- Verify environment variables in `~/.claude/mcp.json`
-- Check API tokens are valid
-- Ensure server has network access
+**Authentication errors?**
+- Validate tokens in `~/.claude/mcp.json`
+- Check network access to server
 
-## Advanced Usage
+## Reference
 
-### Custom Output Directory
-
-```bash
-mcp-execution-cli generate github \
-  --progressive-output=/custom/path
-```
-
-Result: `/custom/path/github/*.ts`
-
-### Multiple Servers
-
-Generate for multiple servers:
-
-```bash
-# GitHub
-mcp-execution-cli generate docker --arg=... --name=github
-
-# Google Drive
-mcp-execution-cli generate docker --arg=... --name=gdrive
-
-# Slack
-mcp-execution-cli generate docker --arg=... --name=slack
-```
-
-All available at:
-```
-~/.claude/servers/
-├── github/
-├── gdrive/
-└── slack/
-```
-
-### Server Introspection
-
-Inspect server capabilities without generating:
-
-```bash
-mcp-execution-cli introspect docker \
-  --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-server \
-  --detailed
-```
-
-## See Also
-
-- [Progressive Loading Usage Guide](./progressive-loading-usage.md) - Complete usage guide
-- [MCP Specification](https://github.com/modelcontextprotocol/specification) - Protocol details
-- [rmcp SDK](https://docs.rs/rmcp) - Rust MCP implementation
-- [Project README](../README.md) - Project overview
-
-## Tips
-
-1. **Generate once, use many times** - Generated files are cached locally
-2. **Use `--name` for clarity** - `--name=github` is better than `docker`
-3. **Check `index.ts`** - Lists all available tools with descriptions
-4. **Update regularly** - Re-run generate when server adds new tools
-5. **Version control** - Consider committing generated files for team sharing
-
-## Example Session
-
-```
-User: "Set up GitHub progressive loading"
-
-Claude: I'll generate progressive loading files for the GitHub MCP server.
-
-[Runs generation command]
-
-✓ Successfully generated progressive loading files
-  Server: GitHub (github)
-  Tools: 40
-  Location: ~/.claude/servers/github
-
-User: "What can I do with GitHub now?"
-
-Claude: You have 40 GitHub tools available. Here are the main categories:
-
-[Lists: createIssue, createPullRequest, searchCode, etc.]
-
-User: "Create an issue in myorg/myrepo about fixing the login bug"
-
-Claude: I'll use the createIssue tool.
-
-[Loads only createIssue.ts (~500 tokens)]
-[Creates the issue]
-
-✓ Issue created: #123 "Fix login bug"
-```
-
-## Performance Metrics
-
-- **Generation Time**: 2-3ms per tool
-- **Token Usage**: 500-1,500 tokens per tool (vs 30,000 for all)
-- **Token Savings**: 98%
-- **File Size**: ~2-5KB per tool file
-- **Type Safety**: 100% (full TypeScript types)
-
----
-
-**Ready to use progressive loading?** Ask Claude Code to generate tools for your MCP server!
+- [Complete Usage Guide](./progressive-loading-usage.md)
+- [MCP Specification](https://github.com/modelcontextprotocol/specification)
+- [Project Documentation](../README.md)
