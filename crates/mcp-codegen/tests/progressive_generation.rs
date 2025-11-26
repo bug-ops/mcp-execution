@@ -300,7 +300,7 @@ fn test_progressive_runtime_bridge_structure() {
         "Missing toolName parameter"
     );
     assert!(
-        content.contains("params: unknown"),
+        content.contains("params: Record<string, unknown>"),
         "Missing params parameter"
     );
 
