@@ -588,9 +588,6 @@ impl ServerConfigBuilder {
     }
 }
 
-// Ensure ServerConfig implements Send + Sync
-static_assertions::assert_impl_all!(ServerConfig: Send, Sync, std::fmt::Debug);
-
 #[cfg(test)]
 mod tests {
     use super::*;

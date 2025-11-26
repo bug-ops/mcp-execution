@@ -6,66 +6,45 @@
 //! # Architecture
 //!
 //! The core consists of:
-//! - Strong domain types (`ServerId`, `ToolName`, `SessionId`, `MemoryLimit`, `CacheKey`)
+//! - Strong domain types (`ServerId`, `ToolName`)
 //! - Error hierarchy with contextual information
-//! - Core traits for execution, caching, and state storage
-//! - Configuration types with security policies
+//! - Server configuration with security validation
+//! - Command validation utilities
 //!
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{RuntimeConfig, SecurityPolicy, MemoryLimit};
-//! use std::time::Duration;
+//! use mcp_core::{ServerConfig, ServerId};
 //!
-//! // Create a runtime configuration
-//! let config = RuntimeConfig::builder()
-//!     .memory_limit(MemoryLimit::from_mb(512).unwrap())
-//!     .execution_timeout(Duration::from_secs(60))
-//!     .enable_cache(true)
-//!     .security(SecurityPolicy::strict())
+//! // Create a server configuration
+//! let config = ServerConfig::builder()
+//!     .command("docker".to_string())
+//!     .arg("run".to_string())
+//!     .env("LOG_LEVEL".to_string(), "debug".to_string())
 //!     .build();
 //!
-//! // Validate configuration
-//! assert!(config.validate().is_ok());
+//! // Server ID
+//! let server_id = ServerId::new("github");
 //! ```
 
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-mod cache_manager;
 mod command;
-mod config;
 mod error;
 mod server_config;
-mod skill_bundle;
 mod types;
 
 pub mod cli;
-pub mod stats;
-pub mod traits;
 
 // Re-export error types
 pub use error::{Error, Result};
 
 // Re-export domain types
-pub use types::{
-    CacheKey, MemoryLimit, ServerId, SessionId, SkillDescription, SkillName, ToolName,
-};
-
-// Re-export configuration types
-pub use config::{RuntimeConfig, RuntimeConfigBuilder, SecurityPolicy};
+pub use types::{ServerId, ToolName};
 
 // Re-export server configuration types
 pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
 
-// Re-export traits for convenience
-pub use traits::{CacheProvider, CodeExecutor, StateStorage};
-
 // Re-export command validation
 pub use command::validate_server_config;
-
-// Re-export cache management
-pub use cache_manager::{BuildMetadata, CacheManager, CacheStats};
-
-// Re-export skill bundle types
-pub use skill_bundle::{ScriptFile, ScriptReference, SkillBundle, SkillBundleBuilder};

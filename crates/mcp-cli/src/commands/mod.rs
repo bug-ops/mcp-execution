@@ -4,14 +4,9 @@
 //! Each command module is responsible for parsing its arguments, executing the
 //! operation, and formatting output according to the requested format.
 
-pub mod cache;
 pub mod common;
 pub mod completions;
-pub mod config;
-pub mod debug;
-pub mod execute;
 pub mod generate;
 pub mod introspect;
 pub mod server;
-pub mod skill;
-pub mod stats;
+pub mod setup;

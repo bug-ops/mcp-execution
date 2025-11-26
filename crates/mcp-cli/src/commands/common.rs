@@ -2,9 +2,95 @@
 //!
 //! Provides shared functionality for building server configurations from CLI arguments.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use mcp_core::{ServerConfig, ServerConfigBuilder, ServerId};
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// MCP configuration file structure (~/.claude/mcp.json)
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpConfig {
+    mcp_servers: HashMap<String, McpServerConfig>,
+}
+
+/// Individual MCP server configuration
+#[derive(Debug, Deserialize)]
+struct McpServerConfig {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+}
+
+/// Loads MCP configuration from ~/.claude/mcp.json
+///
+/// # Errors
+///
+/// Returns error if:
+/// - Home directory cannot be determined
+/// - Config file cannot be read
+/// - JSON is malformed
+fn load_mcp_config() -> Result<McpConfig> {
+    let home = dirs::home_dir().context("failed to get home directory")?;
+    let config_path = home.join(".claude").join("mcp.json");
+
+    let content = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read MCP config from {}", config_path.display()))?;
+
+    let config: McpConfig =
+        serde_json::from_str(&content).context("failed to parse MCP config JSON")?;
+
+    Ok(config)
+}
+
+/// Loads server configuration from ~/.claude/mcp.json by server name.
+///
+/// # Arguments
+///
+/// * `name` - Server name from mcp.json (e.g., "github")
+///
+/// # Returns
+///
+/// Returns `(ServerId, ServerConfig)` if server is found in config.
+///
+/// # Errors
+///
+/// Returns error if:
+/// - Config file doesn't exist or is malformed
+/// - Server name not found in config
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::commands::common::load_server_from_config;
+///
+/// let (id, config) = load_server_from_config("github").unwrap();
+/// assert_eq!(id.as_str(), "github");
+/// ```
+pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
+    let config = load_mcp_config()?;
+
+    let server_config = config.mcp_servers.get(name).with_context(|| {
+        let available: Vec<_> = config.mcp_servers.keys().collect();
+        format!("server '{name}' not found in MCP config\nAvailable servers: {available:?}")
+    })?;
+
+    let id = ServerId::new(name);
+    let mut builder = ServerConfig::builder().command(server_config.command.clone());
+
+    if !server_config.args.is_empty() {
+        builder = builder.args(server_config.args.clone());
+    }
+
+    for (key, value) in &server_config.env {
+        builder = builder.env(key.clone(), value.clone());
+    }
+
+    Ok((id, builder.build()))
+}
 
 /// Builds `ServerConfig` from CLI arguments.
 ///
@@ -528,5 +614,31 @@ mod tests {
                 .to_string()
                 .contains("key cannot be empty")
         );
+    }
+
+    #[test]
+    fn test_load_server_from_config_not_found() {
+        // Test with non-existent server name
+        let result = load_server_from_config("nonexistent");
+
+        // Should fail because either config doesn't exist or server not in it
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_mcp_config_no_file() {
+        // Should fail gracefully when config file doesn't exist
+        let result = load_mcp_config();
+
+        // Can fail either because home dir not found or config file missing
+        // Both are acceptable error states
+        if let Err(error) = result {
+            let error = error.to_string();
+            assert!(
+                error.contains("failed to read MCP config")
+                    || error.contains("failed to get home directory"),
+                "Expected config read error or home dir error, got: {error}"
+            );
+        }
     }
 }

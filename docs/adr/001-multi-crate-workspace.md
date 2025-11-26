@@ -25,14 +25,14 @@ We will use a **multi-crate workspace** with 8 separate crates:
 3. **mcp-introspector** - Server analysis and discovery
 4. **mcp-codegen** - Code generation from schemas
 5. **mcp-bridge** - MCP proxy with caching and pooling
-6. **mcp-vfs** - Virtual filesystem
+6. **mcp-files** - Virtual filesystem
 7. **mcp-wasm-runtime** - WASM sandbox execution
 8. **mcp-cli** - CLI application binary
 
 Dependency graph ensures no circular dependencies:
 
 ```text
-mcp-cli → mcp-wasm-runtime → {mcp-bridge, mcp-vfs, mcp-codegen} → mcp-protocol → mcp-core
+mcp-cli → mcp-wasm-runtime → {mcp-bridge, mcp-files, mcp-codegen} → mcp-protocol → mcp-core
                            └→ mcp-introspector → mcp-protocol
 ```
 

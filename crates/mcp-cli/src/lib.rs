@@ -16,4 +16,4 @@ pub mod commands;
 pub mod formatters;
 
 // Re-export action types for convenience
-pub use actions::{ConfigAction, DebugAction, ServerAction};
+pub use actions::ServerAction;

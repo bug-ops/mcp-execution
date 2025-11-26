@@ -10,13 +10,9 @@ publish.workspace = true
 workspace = true
 
 [features]
-default = ["wasm"]
-wasm = []
-skills = []
-all = ["wasm", "skills"]
+default = []
 
 [dependencies]
-chrono = { workspace = true, features = ["serde"] }
 handlebars.workspace = true
 mcp-core.workspace = true
 mcp-introspector.workspace = true
@@ -26,12 +22,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-mcp-vfs.workspace = true
+mcp-files.workspace = true
 
 [[bench]]
 name = "code_generation"
-harness = false
-
-[[bench]]
-name = "multi_file_generation"
 harness = false

@@ -1,0 +1,37 @@
+[package]
+name = "mcp-files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+dirs.workspace = true
+dhat = { workspace = true, optional = true }
+mcp-codegen.workspace = true
+rayon = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion = { workspace = true, features = ["html_reports"] }
+tempfile.workspace = true
+
+[features]
+dhat-heap = ["dhat"]
+parallel = ["dep:rayon"]
+
+[[bench]]
+name = "vfs_benchmarks"
+harness = false
+
+[[bench]]
+name = "filesystem_export"
+harness = false
+
+[[example]]
+name = "profile_memory"
+required-features = ["dhat-heap"]

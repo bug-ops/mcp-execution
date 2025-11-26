@@ -45,7 +45,7 @@ mcp-execution/
 │   ├── mcp-codegen/       - Code generation (wasm/skills features)
 │   ├── mcp-bridge/        - WASM ↔ MCP proxy (rmcp client)
 │   ├── mcp-wasm-runtime/  - Wasmtime sandbox (v39.0)
-│   ├── mcp-vfs/           - Virtual filesystem
+│   ├── mcp-files/           - Virtual filesystem
 │   ├── mcp-cli/           - CLI application
 │   ├── mcp-skill-store/   - Skill management
 │   ├── mcp-skill-generator/ - Skill generation
@@ -292,7 +292,7 @@ async fn process() {
 **CRITICAL**: No circular dependencies allowed.
 
 ```
-mcp-cli → mcp-wasm-runtime → {mcp-bridge, mcp-vfs, mcp-codegen}
+mcp-cli → mcp-wasm-runtime → {mcp-bridge, mcp-files, mcp-codegen}
                            ↘ mcp-core
 
 mcp-bridge → rmcp (official SDK)

@@ -18,24 +18,18 @@
 //!
 //! The CLI is organized around subcommands:
 //! - `introspect` - Analyze MCP servers and display capabilities
-//! - `generate` - Generate code from MCP server tools
-//! - `execute` - Execute WASM modules in sandbox
+//! - `generate` - Generate progressive loading TypeScript files
 //! - `server` - Manage MCP server connections
-//! - `stats` - Display runtime statistics
-//! - `debug` - Debug utilities and diagnostics
-//! - `config` - Configuration management
+//! - `completions` - Generate shell completions
 //!
 //! # Examples
 //!
 //! ```bash
 //! # Introspect a server
-//! mcp-cli introspect github
+//! mcp-execution-cli introspect github-mcp-server
 //!
-//! # Generate code
-//! mcp-cli generate github --output ./generated
-//!
-//! # Execute WASM module
-//! mcp-cli execute module.wasm --entry main
+//! # Generate progressive loading files
+//! mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
 //! ```
 
 use anyhow::Result;
@@ -49,7 +43,7 @@ mod actions;
 mod commands;
 pub mod formatters;
 
-use actions::{ConfigAction, DebugAction, ServerAction};
+use actions::ServerAction;
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -136,30 +130,64 @@ pub enum Commands {
         detailed: bool,
     },
 
-    /// Generate Claude skill from MCP server.
+    /// Generate progressive loading code from MCP server.
     ///
-    /// Introspects an MCP server and generates a Claude skill
-    /// in the .claude/skills/ directory.
+    /// Introspects an MCP server and generates TypeScript files
+    /// for progressive tool loading.
+    ///
+    /// # Configuration Modes
+    ///
+    /// 1. Load from ~/.claude/mcp.json (recommended):
+    ///    ```bash
+    ///    mcp-cli generate --from-config github
+    ///    ```
+    ///
+    /// 2. Manual configuration:
+    ///    ```bash
+    ///    mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
+    ///        --arg=ghcr.io/github/github-mcp-server \
+    ///        --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx \
+    ///        --name=github
+    ///    ```
     ///
     /// # Examples
     ///
     /// ```bash
-    /// # Simple server
-    /// mcp-cli generate github-mcp-server --skill-name github
+    /// # Load GitHub server config from mcp.json
+    /// mcp-cli generate --from-config github
     ///
-    /// # Docker container
+    /// # Manual Docker container
     /// mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
     ///     --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
     ///     --arg=ghcr.io/github/github-mcp-server \
-    ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx \
-    ///     --skill-name github
+    ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
     /// ```
     Generate {
+        /// Load server configuration from ~/.claude/mcp.json by name
+        ///
+        /// When specified, all other server configuration options are ignored.
+        /// The server must be defined in ~/.claude/mcp.json with matching name.
+        ///
+        /// Example mcp.json:
+        /// ```json
+        /// {
+        ///   "mcpServers": {
+        ///     "github": {
+        ///       "command": "docker",
+        ///       "args": ["run", "-i", "--rm", "..."],
+        ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
+        ///     }
+        ///   }
+        /// }
+        /// ```
+        #[arg(long = "from-config", conflicts_with_all = ["server", "server_args", "server_env", "server_cwd", "http_url", "sse_url"])]
+        from_config: Option<String>,
+
         /// Server command (binary name or path)
         ///
         /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
-        /// Not required when using --http or --sse
-        #[arg(required_unless_present_any = ["http_url", "sse_url"])]
+        /// Not required when using --from-config, --http, or --sse
+        #[arg(required_unless_present_any = ["from_config", "http_url", "sse_url"])]
         server: Option<String>,
 
         /// Arguments to pass to the server command
@@ -186,50 +214,15 @@ pub enum Commands {
         #[arg(long = "header", num_args = 1)]
         server_headers: Vec<String>,
 
-        /// Skill name (interactive prompt if not provided)
+        /// Custom server name for directory (e.g., 'github' instead of 'docker')
+        /// (default: uses server command name)
         #[arg(long)]
-        skill_name: Option<String>,
+        name: Option<String>,
 
-        /// Skill description (interactive prompt if not provided)
+        /// Custom output directory for progressive loading files
+        /// (default: ~/.claude/servers/)
         #[arg(long)]
-        skill_description: Option<String>,
-    },
-
-    /// Execute a WASM module in the secure sandbox.
-    ///
-    /// Runs a WebAssembly module with security policies and resource limits.
-    Execute {
-        /// Path to WASM module file
-        module: PathBuf,
-
-        /// Entry point function name
-        #[arg(short, long, default_value = "main")]
-        entry: String,
-
-        /// Function arguments in format "type:value" (e.g., "i32:42", "f64:3.14")
-        #[arg(short, long = "arg")]
-        args: Vec<String>,
-
-        /// List available exports without executing
-        #[arg(short, long)]
-        list_exports: bool,
-
-        /// Security profile (strict, moderate, permissive)
-        ///
-        /// Overrides individual security settings with predefined profiles:
-        /// - strict: Maximum security (128MB, 30s timeout, no network)
-        /// - moderate: Balanced security (256MB, 60s timeout, no network)
-        /// - permissive: Relaxed security (512MB, 120s timeout, network enabled)
-        #[arg(short, long, value_enum)]
-        profile: Option<mcp_wasm_runtime::SecurityProfile>,
-
-        /// Memory limit in MB (overrides config file and profile)
-        #[arg(short, long)]
-        memory_limit: Option<u64>,
-
-        /// Execution timeout in seconds (overrides config file and profile)
-        #[arg(short, long)]
-        timeout: Option<u64>,
+        progressive_output: Option<PathBuf>,
     },
 
     /// Manage MCP server connections.
@@ -241,52 +234,25 @@ pub enum Commands {
         action: ServerAction,
     },
 
-    /// Show runtime statistics.
+    /// Validate runtime environment for MCP tool execution.
     ///
-    /// Display cache statistics, execution metrics, and performance data.
-    Stats {
-        /// Statistics category (cache, runtime, all)
-        #[arg(default_value = "all")]
-        category: String,
-    },
-
-    /// Debug utilities and diagnostics.
+    /// Checks that the system is ready to execute generated MCP tools:
+    /// - Verifies Node.js 18+ is installed
+    /// - Checks MCP configuration exists
+    /// - Makes TypeScript files executable (Unix only)
     ///
-    /// Display system information, runtime metrics, and debugging data.
-    Debug {
-        /// Debug command
-        #[command(subcommand)]
-        action: DebugAction,
-    },
-
-    /// Configuration management.
+    /// # Examples
     ///
-    /// Initialize, view, and modify CLI configuration.
-    Config {
-        /// Configuration action
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
-
-    /// Manage saved skills.
+    /// ```bash
+    /// # Validate environment
+    /// mcp-execution-cli setup
     ///
-    /// Save, load, list, and manage skills stored on disk.
-    Skill {
-        /// Skill management action
-        #[command(subcommand)]
-        action: commands::skill::SkillAction,
-    },
-
-    /// Manage internal cache.
-    ///
-    /// View, clear, and verify the internal cache directory (~/.mcp-execution/cache/).
-    /// The cache stores WASM modules, VFS files, and build metadata that can be
-    /// safely deleted and regenerated.
-    Cache {
-        /// Cache management action
-        #[command(subcommand)]
-        action: commands::cache::CacheCommand,
-    },
+    /// # Output:
+    /// # ✓ Node.js v20.10.0 detected
+    /// # ✓ MCP configuration found
+    /// # ✓ Runtime setup complete
+    /// ```
+    Setup,
 
     /// Generate shell completions.
     ///
@@ -375,6 +341,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             .await
         }
         Commands::Generate {
+            from_config,
             server,
             server_args,
             server_env,
@@ -382,10 +349,11 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             http_url,
             sse_url,
             server_headers,
-            skill_name,
-            skill_description,
+            name,
+            progressive_output,
         } => {
             commands::generate::run(
+                from_config,
                 server,
                 server_args,
                 server_env,
@@ -393,42 +361,14 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 http_url,
                 sse_url,
                 server_headers,
-                skill_name,
-                skill_description,
-                output_format,
-            )
-            .await
-        }
-        Commands::Execute {
-            module,
-            entry,
-            args,
-            list_exports,
-            profile,
-            memory_limit,
-            timeout,
-        } => {
-            commands::execute::run(
-                module,
-                entry,
-                args,
-                list_exports,
-                profile,
-                memory_limit,
-                timeout,
+                name,
+                progressive_output,
                 output_format,
             )
             .await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
-        Commands::Stats { category } => commands::stats::run(category, output_format).await,
-        Commands::Debug { action } => commands::debug::run(action, output_format).await,
-        Commands::Config { action } => commands::config::run(action, output_format).await,
-        Commands::Skill { action } => commands::skill::run(action, output_format).await,
-        Commands::Cache { action } => {
-            commands::cache::handle(action)?;
-            Ok(ExitCode::SUCCESS)
-        }
+        Commands::Setup => commands::setup::run().await,
         Commands::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
@@ -505,36 +445,22 @@ mod tests {
         let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
         assert!(matches!(cli.command, Commands::Generate { .. }));
 
-        // Test with skill name
-        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--skill-name", "my-skill"]);
-        if let Commands::Generate { skill_name, .. } = cli.command {
-            assert_eq!(skill_name, Some("my-skill".to_string()));
-        } else {
-            panic!("Expected Generate command");
-        }
-
-        // Test with skill description
+        // Test with progressive output
         let cli = Cli::parse_from([
             "mcp-cli",
             "generate",
             "server",
-            "--skill-description",
-            "Test description",
+            "--progressive-output",
+            "/tmp/output",
         ]);
         if let Commands::Generate {
-            skill_description, ..
+            progressive_output, ..
         } = cli.command
         {
-            assert_eq!(skill_description, Some("Test description".to_string()));
+            assert_eq!(progressive_output, Some(PathBuf::from("/tmp/output")));
         } else {
             panic!("Expected Generate command");
         }
-    }
-
-    #[test]
-    fn test_cli_parsing_execute() {
-        let cli = Cli::parse_from(["mcp-cli", "execute", "module.wasm"]);
-        assert!(matches!(cli.command, Commands::Execute { .. }));
     }
 
     #[test]
@@ -544,44 +470,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parsing_stats() {
-        let cli = Cli::parse_from(["mcp-cli", "stats"]);
-        assert!(matches!(cli.command, Commands::Stats { .. }));
-    }
-
-    #[test]
-    fn test_cli_parsing_debug_cache() {
-        let cli = Cli::parse_from(["mcp-cli", "debug", "cache"]);
-        assert!(matches!(cli.command, Commands::Debug { .. }));
-    }
-
-    #[test]
-    fn test_cli_parsing_debug_system() {
-        let cli = Cli::parse_from(["mcp-cli", "debug", "system"]);
-        assert!(matches!(cli.command, Commands::Debug { .. }));
-    }
-
-    #[test]
-    fn test_cli_parsing_config_init() {
-        let cli = Cli::parse_from(["mcp-cli", "config", "init"]);
-        assert!(matches!(cli.command, Commands::Config { .. }));
-    }
-
-    #[test]
     fn test_cli_verbose_flag() {
-        let cli = Cli::parse_from(["mcp-cli", "--verbose", "stats"]);
+        let cli = Cli::parse_from(["mcp-cli", "--verbose", "introspect", "github"]);
         assert!(cli.verbose);
     }
 
     #[test]
     fn test_cli_output_format_default() {
-        let cli = Cli::parse_from(["mcp-cli", "stats"]);
+        let cli = Cli::parse_from(["mcp-cli", "introspect", "github"]);
         assert_eq!(cli.format, "pretty");
     }
 
     #[test]
     fn test_cli_output_format_custom() {
-        let cli = Cli::parse_from(["mcp-cli", "--format", "json", "stats"]);
+        let cli = Cli::parse_from(["mcp-cli", "--format", "json", "introspect", "github"]);
         assert_eq!(cli.format, "json");
     }
 

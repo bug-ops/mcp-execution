@@ -1,0 +1,26 @@
+{
+  "name": "mcp-execution-runtime",
+  "version": "0.4.0",
+  "description": "Runtime bridge for MCP tool execution",
+  "type": "module",
+  "main": "mcp-bridge.ts",
+  "exports": {
+    ".": "./mcp-bridge.ts"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "runtime",
+    "bridge"
+  ],
+  "author": "MCP Execution Team",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bug-ops/mcp-execution.git",
+    "directory": "runtime"
+  }
+}

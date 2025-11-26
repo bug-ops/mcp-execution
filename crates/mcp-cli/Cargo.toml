@@ -8,7 +8,7 @@ license.workspace = true
 publish.workspace = true
 description = "Command-line interface for MCP Code Execution"
 homepage = "https://github.com/bug-ops/mcp-execution"
-keywords = ["mcp", "cli", "execution", "wasm", "tools"]
+keywords = ["mcp", "cli", "execution", "codegen", "tools"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 
@@ -21,27 +21,22 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
 clap = { workspace = true, features = ["derive", "env", "cargo", "color"] }
 clap_complete.workspace = true
 colored.workspace = true
 dialoguer.workspace = true
 dirs.workspace = true
-mcp-bridge.workspace = true
-mcp-codegen = { workspace = true, features = ["skills"] }
+mcp-codegen.workspace = true
 mcp-core.workspace = true
 mcp-introspector.workspace = true
-mcp-skill-store.workspace = true
-mcp-wasm-runtime = { workspace = true, features = ["cli"] }
+mcp-files.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
-wasmtime.workspace = true
 which.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-wat.workspace = true

@@ -472,7 +472,7 @@ plugins/
   - mcp-codegen - Code generation
   - mcp-bridge - WASM ↔ MCP proxy
   - mcp-wasm-runtime - WASM execution
-  - mcp-vfs - Virtual filesystem
+  - mcp-files - Virtual filesystem
   - mcp-examples - Examples and integration tests
   - mcp-cli - CLI application (minimal)
 
@@ -491,7 +491,7 @@ plugins/
   - `CacheProvider` - Caching abstraction
   - `StateStorage` - Persistent state management
 
-#### mcp-vfs crate
+#### mcp-files crate
 - Virtual filesystem for progressive tool discovery
   - `/mcp-tools/servers/{server-name}/` structure
   - Lazy loading of tool definitions
@@ -600,7 +600,7 @@ Core dependencies configured:
 | mcp-codegen | 69 | - | - | 69 | ✅ |
 | mcp-bridge | 10 | 17 | - | 27 | ✅ |
 | mcp-wasm-runtime | 57 | - | - | 57 | ✅ |
-| mcp-vfs | 42 | - | - | 42 | ✅ |
+| mcp-files | 42 | - | - | 42 | ✅ |
 | mcp-examples | 19 | 21 | 21 | 61 | ✅ |
 | **TOTAL** | **282** | **38** | **21** | **314** | ✅ **100% Pass** |
 

@@ -1,7 +1,13 @@
 # ADR-006: Skill Persistence Design
 
 **Date**: 2025-11-21
-**Status**: Accepted (Implemented in Phase 8.1)
+**Status**: **Superseded** by ADR-010 (2025-01-25)
+
+This ADR described skill persistence using `mcp-skill-store`, which has been deleted. The concept of caching VFS exports remains valid and is used for progressive loading in `~/.mcp-execution/cache/`, but WASM module persistence is no longer relevant.
+
+---
+
+**Original Status**: Accepted (Implemented in Phase 8.1)
 **Deciders**: MCP Execution Team
 **Related**: Phase 8.1 Skill Persistence Implementation
 
