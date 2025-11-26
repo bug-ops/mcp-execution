@@ -9,3 +9,4 @@ pub mod completions;
 pub mod generate;
 pub mod introspect;
 pub mod server;
+pub mod setup;

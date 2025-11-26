@@ -72,6 +72,25 @@ Load 1 specific tool → 500 tokens → 98% savings
 
 ## Common Tasks
 
+### 0. Setup Runtime Environment
+
+Before first use, validate the runtime environment:
+
+```
+"Setup the MCP execution environment"
+```
+
+Result:
+```bash
+mcp-execution-cli setup
+
+# Output:
+# Checking runtime environment...
+# ✓ Node.js v20.10.0 detected
+# ✓ MCP configuration found
+# ✓ Runtime setup complete
+```
+
 ### 1. Generate for Local MCP Server
 
 ```
@@ -132,6 +151,33 @@ ls ~/.claude/servers/github/*.ts
 Claude will:
 ```bash
 cat ~/.claude/servers/github/createIssue.ts
+```
+
+### 6. Execute MCP Tools
+
+```
+"Create a GitHub issue titled 'Fix login bug'"
+```
+
+Claude will:
+```bash
+# Step 1: Read tool definition (500 tokens - progressive loading!)
+cat ~/.claude/servers/github/createIssue.ts
+
+# Step 2: Execute with parameters
+node ~/.claude/servers/github/createIssue.ts '{
+  "owner": "myorg",
+  "repo": "myapp",
+  "title": "Fix login bug",
+  "body": "Login form validation is broken"
+}'
+
+# Step 3: Get JSON result
+{
+  "number": 456,
+  "url": "https://github.com/myorg/myapp/issues/456",
+  "state": "open"
+}
 ```
 
 ## Configuration

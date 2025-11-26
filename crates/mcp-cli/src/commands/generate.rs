@@ -97,6 +97,16 @@ pub async fn run(
         return Ok(ExitCode::SUCCESS);
     }
 
+    // Override server_info.id with custom name if provided
+    // This ensures generated code uses the correct server_id that matches mcp.json
+    let mut server_info = server_info;
+    if let Some(ref custom_name) = name {
+        server_info.id = mcp_core::ServerId::new(custom_name);
+    }
+
+    // Determine server directory name (use custom name if provided, otherwise server_id)
+    let server_dir_name = server_info.id.to_string();
+
     // Generate progressive loading files
     let generator = ProgressiveGenerator::new().context("failed to create code generator")?;
 
@@ -108,9 +118,6 @@ pub async fn run(
         "Generated {} files for progressive loading",
         generated_code.file_count()
     );
-
-    // Determine server directory name (use custom name if provided, otherwise server_id)
-    let server_dir_name = name.unwrap_or_else(|| server_info.id.to_string());
 
     // Build VFS with generated code
     // Note: base_path should be "/" because generated files already have flat structure

@@ -199,6 +199,26 @@ pub enum Commands {
         action: ServerAction,
     },
 
+    /// Validate runtime environment for MCP tool execution.
+    ///
+    /// Checks that the system is ready to execute generated MCP tools:
+    /// - Verifies Node.js 18+ is installed
+    /// - Checks MCP configuration exists
+    /// - Makes TypeScript files executable (Unix only)
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Validate environment
+    /// mcp-execution-cli setup
+    ///
+    /// # Output:
+    /// # ✓ Node.js v20.10.0 detected
+    /// # ✓ MCP configuration found
+    /// # ✓ Runtime setup complete
+    /// ```
+    Setup,
+
     /// Generate shell completions.
     ///
     /// Generates completion scripts for various shells that can be
@@ -311,6 +331,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             .await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
+        Commands::Setup => commands::setup::run().await,
         Commands::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
