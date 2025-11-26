@@ -2,7 +2,7 @@
 //!
 //! Provides shared functionality for building server configurations from CLI arguments.
 
-use anyhow::{Result, bail, Context};
+use anyhow::{Context, Result, bail};
 use mcp_core::{ServerConfig, ServerConfigBuilder, ServerId};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -40,8 +40,8 @@ fn load_mcp_config() -> Result<McpConfig> {
     let content = std::fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read MCP config from {}", config_path.display()))?;
 
-    let config: McpConfig = serde_json::from_str(&content)
-        .context("failed to parse MCP config JSON")?;
+    let config: McpConfig =
+        serde_json::from_str(&content).context("failed to parse MCP config JSON")?;
 
     Ok(config)
 }
@@ -73,16 +73,13 @@ fn load_mcp_config() -> Result<McpConfig> {
 pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
     let config = load_mcp_config()?;
 
-    let server_config = config
-        .mcp_servers
-        .get(name)
-        .with_context(|| {
-            let available: Vec<_> = config.mcp_servers.keys().collect();
-            format!(
-                "server '{}' not found in MCP config\nAvailable servers: {:?}",
-                name, available
-            )
-        })?;
+    let server_config = config.mcp_servers.get(name).with_context(|| {
+        let available: Vec<_> = config.mcp_servers.keys().collect();
+        format!(
+            "server '{}' not found in MCP config\nAvailable servers: {:?}",
+            name, available
+        )
+    })?;
 
     let id = ServerId::new(name);
     let mut builder = ServerConfig::builder().command(server_config.command.clone());
@@ -642,7 +639,7 @@ mod tests {
             let error = result.unwrap_err().to_string();
             assert!(
                 error.contains("failed to read MCP config")
-                || error.contains("failed to get home directory"),
+                    || error.contains("failed to get home directory"),
                 "Expected config read error or home dir error, got: {}",
                 error
             );

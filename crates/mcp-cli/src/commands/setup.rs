@@ -90,7 +90,7 @@ async fn check_node_version() -> Result<()> {
              \n\
              Or use a version manager:\n\
              - nvm: https://github.com/nvm-sh/nvm\n\
-             - fnm: https://github.com/Schniz/fnm"
+             - fnm: https://github.com/Schniz/fnm",
         )?;
 
     if !output.status.success() {

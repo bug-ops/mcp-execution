@@ -78,7 +78,10 @@ pub async fn run(
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
     let (server_id, server_config) = if let Some(config_name) = from_config {
-        info!("Loading server configuration from ~/.claude/mcp.json: {}", config_name);
+        info!(
+            "Loading server configuration from ~/.claude/mcp.json: {}",
+            config_name
+        );
         load_server_from_config(&config_name)?
     } else {
         build_server_config(server, args, env, cwd, http, sse, headers)?
