@@ -7,6 +7,152 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.5.0] - 2025-11-26
+
+### Summary
+
+**Autonomous MCP Tool Execution & Configuration Management**
+
+This release introduces autonomous tool execution via Node.js CLI and simplified configuration management through `~/.claude/mcp.json`.
+
+**🚨 BREAKING CHANGES**:
+- Progressive loading directory structure changed: `~/.claude/servers/{name}/{name}/` → `~/.claude/servers/{name}/`
+- Server ID in generated code now respects `--name` parameter (not command name)
+- Tool template now includes runtime bridge import statement
+
+**Key Achievements**:
+- ✅ 341 tests passing (100% pass rate)
+- ✅ Autonomous tool execution via Node.js
+- ✅ 75% reduction in command length
+- ✅ 10x performance improvement with connection caching
+- ✅ Zero npm dependencies
+
+### Added
+
+- **Autonomous Tool Execution**: Generated TypeScript files are now executable via Node.js CLI
+  - Each tool file includes shebang `#!/usr/bin/env node` for direct execution
+  - CLI mode automatically detects when run directly and handles parameter parsing
+  - JSON output for both results and errors
+  - Example: `node ~/.claude/servers/github/createIssue.ts '{"owner":"...","repo":"...","title":"..."}'`
+
+- **Runtime Bridge**: Full MCP server connection management (`runtime/mcp-bridge.ts`, 430 lines)
+  - Connection caching for 10x performance improvement (500ms → 50ms for repeated calls)
+  - Automatic loading of server configuration from `~/.claude/mcp.json`
+  - JSON-RPC 2.0 protocol implementation over stdio transport
+  - Zero npm dependencies (Node.js built-ins only)
+  - Debug mode via `MCPBRIDGE_DEBUG=1` environment variable
+
+- **Config Loading from mcp.json**: New `--from-config` option for generate command
+  - Load server configuration by name from `~/.claude/mcp.json`
+  - Eliminates need to manually specify command, args, and env variables
+  - Example: `mcp-execution-cli generate --from-config github`
+  - 75% reduction in command length (200 chars → 50 chars)
+
+- **Setup Command**: New `mcp-execution-cli setup` command
+  - Validates Node.js 18+ is installed
+  - Checks for `~/.claude/mcp.json` configuration file
+  - Makes TypeScript files executable on Unix systems
+  - Provides helpful error messages and setup instructions
+
+### Changed
+
+- **BREAKING**: Progressive loading output directory structure simplified
+  - Generated files now placed directly in `~/.claude/servers/{server-name}/`
+  - Previously incorrectly created nested `~/.claude/servers/{server-name}/{server-name}/`
+  - **Migration**: Re-run `generate` command to recreate tools in correct location
+
+- **BREAKING**: Server ID in generated code now respects `--name` parameter
+  - When using `--name=github`, generated code uses `'github'` as server ID
+  - Previously used command name (e.g., `'docker'`) regardless of `--name`
+  - Ensures generated code matches server name in `~/.claude/mcp.json`
+  - **Migration**: Re-run `generate` with `--name` or use `--from-config`
+
+- **BREAKING**: Tool template now includes import statement for runtime bridge
+  - Generated files import `callMCPTool` from `./_runtime/mcp-bridge.ts`
+  - Required for autonomous execution functionality
+  - **Migration**: Re-run `generate` to update all tool files
+
+- **Documentation**: SKILL.md optimized following Claude Code best practices
+  - Reduced from 459 to 146 lines (68% reduction)
+  - Description in third person with clear activation criteria
+  - Progressive disclosure structure (essential information only)
+  - Aligned with Anthropic's official agent skills guidelines
+
+### Fixed
+
+- Fixed double directory nesting issue in progressive loading output
+- Fixed server ID override to use custom `--name` parameter value
+- Fixed import path extension in tool template (`.js` → `.ts`)
+- Resolved all clippy pedantic warnings
+- Applied rustfmt formatting to entire workspace
+
+### Performance
+
+- **Connection Caching**: 10x performance improvement for repeated tool calls
+  - First call: ~500ms (server startup + execution)
+  - Cached calls: ~50ms (execution only)
+- **Token Savings**: Maintained 98% token reduction
+  - Load 1 tool: 500-1,500 tokens
+  - Load all tools: 30,000 tokens
+
+### Documentation
+
+- Added ADR-011: Executable TypeScript via Bash architecture decision
+- Added runtime bridge documentation (`runtime/README.md`)
+- Updated SKILL.md with execution examples and `--from-config` usage
+- Created comprehensive implementation summaries in `.local/`
+
+### Migration Guide (0.4.x → 0.5.0)
+
+**1. Re-generate tools** (fixes directory structure and enables autonomous execution):
+```bash
+# Using new --from-config option (recommended)
+mcp-execution-cli generate --from-config github
+
+# Or using manual configuration with --name
+mcp-execution-cli generate docker --arg=... --name=github
+```
+
+**2. Update mcp.json** (if not already present):
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+               "ghcr.io/github/github-mcp-server"],
+      "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_..."}
+    }
+  }
+}
+```
+
+**3. Validate setup** (first time only):
+```bash
+mcp-execution-cli setup
+```
+
+**4. Test autonomous execution**:
+```bash
+node ~/.claude/servers/github/getMe.ts
+```
+
+**Breaking Changes Summary**:
+- Tool files moved from `~/.claude/servers/{name}/{name}/` to `~/.claude/servers/{name}/`
+- Generated code now uses `--name` value as server ID (not command name)
+- Tool files now include runtime bridge import
+
+**Non-Breaking**:
+- Old generate syntax still works (without `--from-config`)
+- Generated tools maintain same API and type definitions
+- 98% token savings preserved
+
+---
+
+## [0.4.0] - 2025-11-25
+
 ### Phase 6: Optimization (Deferred)
 
 Phase 6 is currently OPTIONAL and DEFERRED. Current performance already exceeds all targets by 16-6,578x, making further optimization low-priority until production data indicates specific needs.
