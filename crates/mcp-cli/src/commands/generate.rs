@@ -6,7 +6,7 @@
 //! 2. Generates TypeScript files for progressive loading (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
-use super::common::build_server_config;
+use super::common::{build_server_config, load_server_from_config};
 use anyhow::{Context, Result};
 use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::cli::{ExitCode, OutputFormat};
@@ -34,13 +34,14 @@ struct GenerationResult {
 /// Generates progressive loading TypeScript files from an MCP server.
 ///
 /// This command performs the following steps:
-/// 1. Builds `ServerConfig` from CLI arguments
+/// 1. Builds `ServerConfig` from CLI arguments or loads from ~/.claude/mcp.json
 /// 2. Introspects the MCP server to discover tools
 /// 3. Generates TypeScript files (one per tool) using progressive loading pattern
 /// 4. Exports VFS to `~/.claude/servers/{server-id}/` directory
 ///
 /// # Arguments
 ///
+/// * `from_config` - Load server config from ~/.claude/mcp.json by name
 /// * `server` - Server command (binary name or path), None for HTTP/SSE
 /// * `args` - Arguments to pass to the server command
 /// * `env` - Environment variables in KEY=VALUE format
@@ -56,12 +57,14 @@ struct GenerationResult {
 ///
 /// Returns an error if:
 /// - Server configuration is invalid
+/// - Server not found in mcp.json (when using --from-config)
 /// - Server connection fails
 /// - Tool introspection fails
 /// - Code generation fails
 /// - File export fails
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
+    from_config: Option<String>,
     server: Option<String>,
     args: Vec<String>,
     env: Vec<String>,
@@ -73,9 +76,13 @@ pub async fn run(
     output_dir: Option<PathBuf>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    // Build server config
-    let (server_id, server_config) =
-        build_server_config(server, args, env, cwd, http, sse, headers)?;
+    // Build server config: either from mcp.json or from CLI arguments
+    let (server_id, server_config) = if let Some(config_name) = from_config {
+        info!("Loading server configuration from ~/.claude/mcp.json: {}", config_name);
+        load_server_from_config(&config_name)?
+    } else {
+        build_server_config(server, args, env, cwd, http, sse, headers)?
+    };
 
     info!("Connecting to MCP server: {}", server_id);
 

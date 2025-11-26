@@ -135,24 +135,57 @@ pub enum Commands {
     /// Introspects an MCP server and generates TypeScript files
     /// for progressive tool loading.
     ///
+    /// # Configuration Modes
+    ///
+    /// 1. Load from ~/.claude/mcp.json (recommended):
+    ///    ```bash
+    ///    mcp-cli generate --from-config github
+    ///    ```
+    ///
+    /// 2. Manual configuration:
+    ///    ```bash
+    ///    mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
+    ///        --arg=ghcr.io/github/github-mcp-server \
+    ///        --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx \
+    ///        --name=github
+    ///    ```
+    ///
     /// # Examples
     ///
     /// ```bash
-    /// # Simple server
-    /// mcp-cli generate github-mcp-server
+    /// # Load GitHub server config from mcp.json
+    /// mcp-cli generate --from-config github
     ///
-    /// # Docker container
+    /// # Manual Docker container
     /// mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
     ///     --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
     ///     --arg=ghcr.io/github/github-mcp-server \
     ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
     /// ```
     Generate {
+        /// Load server configuration from ~/.claude/mcp.json by name
+        ///
+        /// When specified, all other server configuration options are ignored.
+        /// The server must be defined in ~/.claude/mcp.json with matching name.
+        ///
+        /// Example mcp.json:
+        /// {
+        ///   "mcpServers": {
+        ///     "github": {
+        ///       "command": "docker",
+        ///       "args": ["run", "-i", "--rm", "..."],
+        ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
+        ///     }
+        ///   }
+        /// }
+        #[arg(long = "from-config", conflicts_with_all = ["server", "server_args", "server_env", "server_cwd", "http_url", "sse_url"])]
+        from_config: Option<String>,
+
         /// Server command (binary name or path)
         ///
         /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
-        /// Not required when using --http or --sse
-        #[arg(required_unless_present_any = ["http_url", "sse_url"])]
+        /// Not required when using --from-config, --http, or --sse
+        #[arg(required_unless_present_any = ["from_config", "http_url", "sse_url"])]
         server: Option<String>,
 
         /// Arguments to pass to the server command
@@ -306,6 +339,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             .await
         }
         Commands::Generate {
+            from_config,
             server,
             server_args,
             server_env,
@@ -317,6 +351,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             progressive_output,
         } => {
             commands::generate::run(
+                from_config,
                 server,
                 server_args,
                 server_env,

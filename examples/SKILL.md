@@ -18,6 +18,8 @@ This skill helps you:
 
 ### Generate Tools for a Server
 
+**Recommended: Load from mcp.json**
+
 Ask Claude Code to generate progressive loading files:
 
 ```
@@ -26,6 +28,14 @@ Ask Claude Code to generate progressive loading files:
 
 Claude will run:
 ```bash
+mcp-execution-cli generate --from-config github
+```
+
+Output: `~/.claude/servers/github/*.ts`
+
+**Alternative: Manual configuration**
+
+```bash
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
   --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
@@ -33,8 +43,6 @@ mcp-execution-cli generate docker \
   --env=GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_YOUR_TOKEN \
   --name=github
 ```
-
-Output: `~/.claude/servers/github/*.ts`
 
 ### Use Generated Tools
 
@@ -91,7 +99,20 @@ mcp-execution-cli setup
 # ✓ Runtime setup complete
 ```
 
-### 1. Generate for Local MCP Server
+### 1. Generate from mcp.json (Recommended)
+
+```
+"Generate progressive loading for GitHub server"
+```
+
+Result:
+```bash
+mcp-execution-cli generate --from-config github
+```
+
+This automatically loads server configuration from `~/.claude/mcp.json`.
+
+### 2. Generate for Local MCP Server
 
 ```
 "Generate progressive loading for my local server at ./server.js"
@@ -102,7 +123,7 @@ Result:
 mcp-execution-cli generate node --arg=./server.js --name=my-server
 ```
 
-### 2. Generate for Docker-based Server
+### 3. Generate for Docker-based Server
 
 ```
 "Generate progressive loading for the Google Drive MCP server"
@@ -116,7 +137,7 @@ mcp-execution-cli generate docker \
   --name=gdrive
 ```
 
-### 3. Generate with Custom Output Directory
+### 4. Generate with Custom Output Directory
 
 ```
 "Generate GitHub tools to /tmp/test-github"
@@ -131,7 +152,7 @@ mcp-execution-cli generate docker \
   --progressive-output=/tmp/test-github
 ```
 
-### 4. List Available Tools
+### 5. List Available Tools
 
 ```
 "Show me all available GitHub tools"
@@ -142,7 +163,7 @@ Claude will:
 ls ~/.claude/servers/github/*.ts
 ```
 
-### 5. Inspect Tool Parameters
+### 6. Inspect Tool Parameters
 
 ```
 "What parameters does createIssue need?"
@@ -153,7 +174,7 @@ Claude will:
 cat ~/.claude/servers/github/createIssue.ts
 ```
 
-### 6. Execute MCP Tools
+### 7. Execute MCP Tools
 
 ```
 "Create a GitHub issue titled 'Fix login bug'"
@@ -218,10 +239,14 @@ Any MCP-compliant server:
 ### Generate Command
 
 ```bash
-mcp-execution-cli generate [OPTIONS] <SERVER>
+mcp-execution-cli generate [OPTIONS] [SERVER]
 
-Arguments:
-  <SERVER>  Server command (e.g., "docker", "node", "npx")
+Configuration Modes:
+  1. From mcp.json (recommended):
+     --from-config <NAME>    Load server config from ~/.claude/mcp.json
+
+  2. Manual configuration:
+     <SERVER>                Server command (e.g., "docker", "node", "npx")
 
 Options:
   --arg <ARGS>              Server arguments (repeatable)
@@ -235,9 +260,14 @@ Options:
 
 ### Examples
 
+**From mcp.json (recommended):**
+```bash
+mcp-execution-cli generate --from-config github
+```
+
 **Simple Node.js server:**
 ```bash
-mcp-execution-cli generate node --arg=./server.js
+mcp-execution-cli generate node --arg=./server.js --name=my-server
 ```
 
 **Docker container with environment:**
