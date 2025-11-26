@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-codegen"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "handlebars",
@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -962,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-files"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "dhat",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-introspector"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "mcp-core",
@@ -2246,18 +2246,18 @@ checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.29"
+version = "0.8.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7a46b351402ada3508ec7d8b210e5643085b30692a09e921b07c902f8aded21"
+checksum = "4ea879c944afe8a2b25fef16bb4ba234f47c694565e97383b36f3a878219065c"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.29"
+version = "0.8.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e999748819ddfe1ad621c3c277f9e4814321defdc0e6a7dd31772eb31ad3d2b"
+checksum = "cf955aa904d6040f70dc8e9384444cb1030aed272ba3cb09bbc4ab9e7c1f34f5"
 dependencies = [
  "proc-macro2",
  "quote",

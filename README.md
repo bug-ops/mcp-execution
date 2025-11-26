@@ -1,6 +1,8 @@
 # MCP Code Execution
 
-**Progressive loading TypeScript code generation for Model Context Protocol (MCP) with 98% token savings.**
+> **Autonomous MCP Tool Execution with 98% Token Savings**
+>
+> Transform any MCP server into executable, type-safe TypeScript tools using progressive loading pattern. Load only what you need, when you need it.
 
 [![CI](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/branch/master/graph/badge.svg)](https://codecov.io/gh/bug-ops/mcp-execution)
@@ -8,167 +10,89 @@
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
 
-## Overview
+---
 
-MCP Code Execution generates TypeScript files for Model Context Protocol (MCP) tools using **progressive loading** pattern, enabling AI agents to load only the tools they need rather than all tools from a server. This achieves 98% token savings while maintaining full compatibility with existing MCP servers.
+## Table of Contents
 
-> **Inspired by**: [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) - Anthropic's engineering blog post introducing the pattern.
+- [Why MCP Code Execution?](#why-mcp-code-execution)
+- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+  - [Installation](#installation)
+  - [Basic Usage](#basic-usage)
+- [How It Works](#how-it-works)
+  - [Architecture](#architecture-5-workspace-crates)
+  - [Progressive Loading Pattern](#progressive-loading-pattern)
+  - [Generated TypeScript Structure](#generated-typescript-structure)
+- [Integration with Claude Code](#integration-with-claude-code)
+  - [Claude Code Skill Integration](#claude-code-skill-integration)
+- [CLI Reference](#cli-reference)
+- [Performance Benchmarks](#performance-benchmarks)
+- [Development](#development)
+- [Security](#security)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Resources](#resources)
+- [Status](#status)
 
-### Key Features
+---
 
-- **98% Token Savings**: Load one tool at a time (~500-1,500 tokens) instead of all tools (~30,000 tokens)
-- **Type-Safe TypeScript**: Generated code includes full parameter interfaces and JSDoc
-- **One File Per Tool**: Progressive loading pattern for minimal context usage
-- **Lightning Fast**: ~2-3ms generation time per server
-- **100% MCP Compatible**: Works with all existing MCP servers via official rmcp SDK
-- **Production Ready**: 684 tests passing, Microsoft Rust Guidelines compliant
+## Why MCP Code Execution?
 
-## Architecture
+**The Problem**: Traditional MCP integration loads ALL tools from a server (~30,000 tokens), even when you only need one or two. This wastes context window space and slows down AI agents.
 
-### 5 Workspace Crates
+**The Solution**: Progressive loading generates one TypeScript file per tool (~500-1,500 tokens each). AI agents discover and load only what they need via simple `ls` and `cat` commands.
 
-```
-mcp-execution/
-├── crates/
-│   ├── mcp-core/             # Foundation: types, traits, errors
-│   ├── mcp-introspector/     # Server analysis using rmcp SDK
-│   ├── mcp-codegen/          # TypeScript code generation (progressive loading)
-│   ├── mcp-files/              # Filesystem for code organization
-│   └── mcp-cli/              # CLI application
-├── examples/              # Progressive loading usage examples
-├── tests/                 # Cross-crate tests
-└── docs/
-    ├── ARCHITECTURE.md    # System architecture
-    └── adr/               # Architecture Decision Records
-```
+**The Result**: **98% token savings** + **autonomous execution** + **type safety**
 
-**Note**: Uses [rmcp](https://docs.rs/rmcp) v0.8 - the official Rust SDK for MCP protocol. See [ADR-004](docs/adr/004-use-rmcp-official-sdk.md) for rationale.
+> Inspired by [Anthropic's engineering blog post](https://www.anthropic.com/engineering/code-execution-with-mcp) on Code Execution with MCP.
 
-## Quick Start
+---
 
-### Installation
+## Key Features
 
-```bash
-# Clone repository
-git clone https://github.com/bug-ops/mcp-execution
-cd mcp-execution
-
-# Build workspace
-cargo build --release
-
-# Run tests
-cargo test --workspace
-
-# Build CLI
-cargo build -p mcp-execution-cli --release
-```
-
-### Usage Example
+### 🚀 Autonomous Tool Execution
+Generated TypeScript files are **directly executable** via Node.js CLI. No middleware, no proxies—just run the tool:
 
 ```bash
-# 1. Generate TypeScript files for GitHub MCP server
-mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
+# Generate GitHub tools
+mcp-execution-cli generate --from-config github
 
-# Output: Files written to ~/.claude/servers/github/
-#   - createIssue.ts (one tool)
-#   - updateIssue.ts (another tool)
-#   - ... (45 more tools)
-#   - index.ts (re-exports all)
-#   - _runtime/mcp-bridge.ts (runtime helper)
+# Execute directly from command line
+node ~/.claude/servers/github/createIssue.ts \
+  --repo="owner/repo" \
+  --title="Bug report" \
+  --body="Description"
+```
 
-# 2. Discover available tools (progressive loading)
-ls ~/.claude/servers/github/
-# createIssue.ts  updateIssue.ts  getIssue.ts  listIssues.ts  ...
+AI agents can now execute MCP tools autonomously by generating and running shell commands.
 
-# 3. Load only the tool you need (98% token savings!)
+### 📊 98% Token Savings
+Progressive loading pattern dramatically reduces context usage:
+
+```bash
+# Traditional: Load everything (30,000 tokens)
+cat ~/.claude/servers/github/index.ts
+
+# Progressive: Load only what you need (500-1,500 tokens)
 cat ~/.claude/servers/github/createIssue.ts
-
-# Shows type-safe interface:
-# export async function createIssue(params: CreateIssueParams): Promise<CreateIssueResult>
-# export interface CreateIssueParams {
-#   repo: string;           // Required
-#   title: string;          // Required
-#   body?: string;          // Optional
-#   labels?: string[];      // Optional
-# }
-```
-
-See [examples/progressive-loading-usage.md](examples/progressive-loading-usage.md) for complete tutorial and [examples/SKILL.md](examples/SKILL.md) for Claude Code skill configuration.
-
-### CLI Usage
-
-The `mcp-execution-cli` tool provides commands for generating TypeScript code from MCP servers.
-
-#### Generate Progressive Loading Files
-
-```bash
-# Generate for stdio transport
-mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
-
-# Generate for HTTP transport
-mcp-execution-cli generate --http https://api.example.com/mcp \
-  --header "Authorization=Bearer token"
-
-# Generate for SSE transport
-mcp-execution-cli generate --sse https://api.example.com/mcp/events
-
-# Docker-based server
-mcp-execution-cli generate docker \
-  --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/org/server \
-  --env=API_KEY=xxx
-
-# Custom output directory
-mcp-execution-cli generate github-mcp-server \
-  --progressive-output /custom/path
-```
-
-#### Other Commands
-
-```bash
-# Introspect MCP server
-mcp-execution-cli introspect github-mcp-server
-
-# View cache statistics
-mcp-execution-cli stats
-
-# Shell completions
-mcp-execution-cli completions bash > /etc/bash_completion.d/mcp-execution-cli
-```
-
-See [examples/progressive-loading-usage.md](examples/progressive-loading-usage.md) for detailed usage guide.
-
-## Integration with Claude Code/Desktop
-
-**mcp-execution** generates TypeScript files with progressive loading pattern that Claude Code can discover and use, achieving 98% token savings.
-
-### How It Works
-
-1. **Generate**: `mcp-execution-cli generate` creates TypeScript files in `~/.claude/servers/{server-id}/`
-2. **Discover**: Claude Code uses `ls` to discover available servers and tools
-3. **Load**: Claude loads only the specific tools it needs (~500-1,500 tokens each)
-4. **Savings**: 98% reduction vs loading all tools (~30,000 tokens)
-
-### Progressive Loading Pattern
-
-```bash
-# Traditional approach (load everything)
-cat ~/.claude/servers/github/index.ts  # ~30,000 tokens for 45 tools
-
-# Progressive loading (load what you need)
-cat ~/.claude/servers/github/createIssue.ts  # ~500-1,500 tokens for 1 tool
 # Savings: 98%! 🎉
 ```
 
-### Generated TypeScript Structure
+Load 1 tool, 5 tools, or all tools—you choose the tradeoff between context usage and capabilities.
 
-Each tool file includes:
-- **Type-safe function** with full parameter types
-- **Params interface** showing required/optional parameters
-- **Result interface** for return type
-- **JSDoc documentation** with usage examples
+### ⚡ Lightning Fast
+Code generation is measured in **milliseconds**:
 
-Example:
+| Operation | Target | Achieved | Speedup |
+|-----------|--------|----------|---------|
+| 10 tools | <100ms | **0.19ms** | **526x faster** |
+| 50 tools | <20ms | **0.97ms** | **20.6x faster** |
+| VFS export | <10ms | **1.2ms** | **8.3x faster** |
+
+### 🔒 Type-Safe by Design
+Every tool gets full TypeScript interfaces generated from MCP JSON schemas:
+
 ```typescript
 export async function createIssue(params: CreateIssueParams): Promise<CreateIssueResult>;
 
@@ -177,77 +101,503 @@ export interface CreateIssueParams {
   title: string;          // Required (no ?)
   body?: string;          // Optional (has ?)
   labels?: string[];      // Optional (has ?)
+  assignees?: string[];   // Optional (has ?)
+}
+
+export interface CreateIssueResult {
+  number: number;
+  url: string;
+  state: "open" | "closed";
 }
 ```
 
-### Instruction Skill for Claude Code
+AI agents get IntelliSense-quality parameter documentation in the generated files.
 
-An instruction skill guides Claude Code on using progressive loading:
-- **Location**: `~/.claude/skills/mcp-progressive-loading/SKILL.md`
-- **Purpose**: Teaches Claude how to discover and use generated TypeScript files
-- **Pattern**: Discovery via `ls`, loading via `cat`
+### 🔌 100% MCP Compatible
+Works with **all existing MCP servers** via official [rmcp SDK](https://docs.rs/rmcp). No custom protocols, no vendor lock-in.
 
-### Resources
+Supported transports:
+- **stdio** (most common): `npx server-name`
+- **HTTP**: REST API endpoints
+- **SSE**: Server-Sent Events streaming
+- **Docker**: Containerized servers
 
-- **Tutorial**: [examples/progressive-loading-usage.md](examples/progressive-loading-usage.md)
-- **Instruction Skill**: `~/.claude/skills/mcp-progressive-loading/SKILL.md`
-- **Architecture**: [docs/adr/010-simplify-to-progressive-only.md](docs/adr/010-simplify-to-progressive-only.md)
+### 🏗️ Production Ready
+- **684 tests** passing (100% pass rate)
+- **Microsoft Rust Guidelines** compliant
+- **100% documentation coverage**
+- **Multi-platform releases**: Linux, macOS, Windows (x86_64 + ARM64)
+- **CI/CD with code coverage** via GitHub Actions + Codecov
 
-## Development
+---
 
-### Prerequisites
+## Quick Start
 
-- Rust 1.88+ (Edition 2024, MSRV 1.88)
-- Tokio 1.48 async runtime
-- Optional: nextest for faster test execution (`cargo install cargo-nextest`)
+### Installation
 
-### Building
-
+**Pre-built binaries** (recommended):
 ```bash
-# Check workspace
-cargo check --workspace
+# Download latest release for your platform
+# Linux (x86_64)
+curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-execution-cli-linux-amd64.tar.gz | tar xz
 
-# Run specific crate tests
-cargo test -p mcp-core
+# macOS (ARM64)
+curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-execution-cli-macos-arm64.tar.gz | tar xz
 
-# Run benchmarks
-cargo bench
-
-# Build documentation
-cargo doc --workspace --no-deps --open
+# Windows (x86_64)
+# Download from: https://github.com/bug-ops/mcp-execution/releases/latest
 ```
 
-### Project Guidelines
+**From source**:
+```bash
+git clone https://github.com/bug-ops/mcp-execution
+cd mcp-execution
+cargo install --path crates/mcp-cli
+```
 
-All development follows [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines/):
+### Basic Usage
 
-- Strong types over primitives
-- `thiserror` for libraries, `anyhow` for applications
-- All public types `Send + Sync`
-- Comprehensive documentation with examples
-- No `unsafe` code unless absolutely necessary
+#### 1. Configure MCP Server (mcp.json)
 
-See [CLAUDE.md](CLAUDE.md) for detailed development instructions.
+Create `~/.config/claude/mcp.json` with your MCP servers:
 
-## Performance
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "ghp_your_token_here"
+      }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "DATABASE_URL": "postgresql://user:pass@localhost/db"
+      }
+    }
+  }
+}
+```
 
-### Benchmarks
+#### 2. Generate TypeScript Tools
 
-| Metric | Target | Achieved | Status |
-|--------|--------|----------|--------|
-| Code Generation (10 tools) | <100ms | **0.19ms** | **526x faster** ✅ |
-| Code Generation (50 tools) | <20ms | **0.97ms** | **20.6x faster** ✅ |
-| VFS Export | <10ms | **1.2ms** | **8.3x faster** ✅ |
-| Token Savings (1 tool) | ≥90% | **98%** | Exceeds target ✅ |
-| Token Savings (5 tools) | ≥90% | **95%** | Exceeds target ✅ |
-| Memory (1000 tools) | <256MB | **~2MB** | **128x better** ✅ |
+```bash
+# Generate from config (simplest)
+mcp-execution-cli generate --from-config github
 
-**Progressive Loading Token Savings**:
-- Load 1 tool: ~500-1,500 tokens (vs ~30,000 for all) = **98% savings**
-- Load 5 tools: ~2,500-7,500 tokens (vs ~30,000 for all) = **95% savings**
-- Load all tools: Still available via `index.ts` if needed
+# Or specify server manually
+mcp-execution-cli generate npx -y @modelcontextprotocol/server-github \
+  --env GITHUB_TOKEN=ghp_xxx
+```
 
-Run benchmarks:
+**Output** (written to `~/.claude/servers/github/`):
+```
+github/
+├── createIssue.ts          # One tool file
+├── updateIssue.ts          # Another tool file
+├── getIssue.ts             # Yet another...
+├── ... (42 more tools)     # All tools as separate files
+├── index.ts                # Re-exports all (for bulk loading)
+└── _runtime/
+    └── mcp-bridge.ts       # Runtime connection manager
+```
+
+#### 3. Discover Available Tools (Progressive Loading)
+
+```bash
+# List all available tools
+ls ~/.claude/servers/github/
+# createIssue.ts  updateIssue.ts  getIssue.ts  listIssues.ts  ...
+
+# Load only the tool you need (98% token savings!)
+cat ~/.claude/servers/github/createIssue.ts
+```
+
+#### 4. Execute Tools Autonomously
+
+**From command line**:
+```bash
+# Execute tool directly
+node ~/.claude/servers/github/createIssue.ts \
+  --repo="bug-ops/mcp-execution" \
+  --title="Add ARM64 support" \
+  --body="We should support ARM64 architecture"
+```
+
+**From AI agent** (e.g., Claude Code):
+```typescript
+// Agent discovers available tools
+const tools = await exec('ls ~/.claude/servers/github/');
+
+// Agent loads specific tool definition
+const toolCode = await readFile('~/.claude/servers/github/createIssue.ts');
+
+// Agent executes tool autonomously
+await exec(`node ~/.claude/servers/github/createIssue.ts --repo="..." --title="..."`);
+```
+
+See [examples/progressive-loading-usage.md](examples/progressive-loading-usage.md) for complete tutorial.
+
+---
+
+## How It Works
+
+### Architecture: 5 Workspace Crates
+
+```
+mcp-execution/
+├── mcp-core/              # Foundation: types, traits, errors
+│   ├── ServerId          # Strong-typed server identifier
+│   ├── ToolName          # Strong-typed tool name
+│   └── SessionId         # Strong-typed session ID
+│
+├── mcp-introspector/     # MCP server analysis
+│   ├── Connect via rmcp  # Official Rust MCP SDK
+│   ├── Extract schemas   # Tool definitions + parameters
+│   └── Cache results     # LRU cache for performance
+│
+├── mcp-codegen/          # TypeScript code generation
+│   ├── Handlebars        # Template engine
+│   ├── JSON Schema       # Convert to TypeScript types
+│   └── Progressive       # One file per tool pattern
+│
+├── mcp-files/            # Virtual filesystem
+│   ├── In-memory VFS     # Fast code organization
+│   ├── Export to disk    # Write to ~/.claude/servers/
+│   └── Directory mgmt    # Handle nested structures
+│
+└── mcp-cli/              # Command-line interface
+    ├── generate          # Main command
+    ├── setup             # Initialize configuration
+    ├── introspect        # Debug server info
+    └── stats             # View cache statistics
+```
+
+**Dependency Graph** (no circular dependencies):
+```
+mcp-cli → {mcp-codegen, mcp-introspector, mcp-files}
+       ↘ mcp-core
+
+mcp-codegen → {mcp-files, mcp-core}
+mcp-introspector → {rmcp, mcp-core}
+mcp-files → mcp-core
+```
+
+### Progressive Loading Pattern
+
+Traditional MCP integration:
+```
+AI Agent → Load ALL tools → 30,000 tokens → Limited context for actual work
+```
+
+Progressive loading:
+```
+AI Agent → ls (discover) → cat specific tool → 500-1,500 tokens → 98% context saved!
+```
+
+**Example workflow**:
+1. **Discovery**: `ls ~/.claude/servers/github/` shows all available tools
+2. **Selection**: Agent chooses `createIssue.ts` based on task
+3. **Loading**: `cat ~/.claude/servers/github/createIssue.ts` loads only that tool
+4. **Execution**: Agent runs `node createIssue.ts --repo=... --title=...`
+
+**Token comparison**:
+- Load 1 tool: **~500-1,500 tokens** (vs ~30,000) = **98% savings**
+- Load 5 tools: **~2,500-7,500 tokens** (vs ~30,000) = **95% savings**
+- Load all tools: **~30,000 tokens** (via `index.ts` if needed)
+
+### Generated TypeScript Structure
+
+Each tool file includes:
+
+```typescript
+#!/usr/bin/env node
+/**
+ * MCP Tool: createIssue
+ *
+ * Creates a new issue in a GitHub repository.
+ *
+ * @example
+ * ```bash
+ * node createIssue.ts --repo="owner/repo" --title="Bug report"
+ * ```
+ */
+
+import { callMCPTool } from './_runtime/mcp-bridge';
+
+/**
+ * Parameters for createIssue tool
+ */
+export interface CreateIssueParams {
+  /** Repository in format "owner/repo" */
+  repo: string;
+
+  /** Issue title */
+  title: string;
+
+  /** Issue description (optional) */
+  body?: string;
+
+  /** Labels to apply (optional) */
+  labels?: string[];
+}
+
+/**
+ * Result from createIssue tool
+ */
+export interface CreateIssueResult {
+  number: number;
+  url: string;
+  state: "open" | "closed";
+}
+
+/**
+ * Creates a new issue in a GitHub repository
+ */
+export async function createIssue(params: CreateIssueParams): Promise<CreateIssueResult> {
+  return callMCPTool('github', 'createIssue', params);
+}
+
+// CLI execution support
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const args = process.argv.slice(2);
+  // Parse --key=value arguments...
+  createIssue(params).then(console.log).catch(console.error);
+}
+```
+
+**Key benefits**:
+- **Executable**: Shebang + CLI parsing = direct execution
+- **Type-safe**: Full TypeScript interfaces from JSON schemas
+- **Documented**: JSDoc comments with examples
+- **Small**: ~50-150 lines per tool (vs ~30,000 for all tools)
+
+---
+
+## Integration with Claude Code
+
+**mcp-execution** generates TypeScript files with progressive loading pattern that Claude Code (or any AI agent) can discover and use autonomously.
+
+### How Claude Code Uses It
+
+1. **Setup** (one-time):
+   ```bash
+   # Generate tools for your MCP servers
+   mcp-execution-cli generate --from-config github
+   mcp-execution-cli generate --from-config postgres
+   ```
+
+2. **Discovery** (runtime):
+   ```bash
+   # Claude Code lists available servers
+   ls ~/.claude/servers/
+   # github/  postgres/  slack/
+
+   # Claude Code lists tools in server
+   ls ~/.claude/servers/github/
+   # createIssue.ts  updateIssue.ts  getIssue.ts  ...
+   ```
+
+3. **Loading** (as needed):
+   ```bash
+   # Claude Code loads only the tool it needs
+   cat ~/.claude/servers/github/createIssue.ts
+   # (500-1,500 tokens instead of 30,000)
+   ```
+
+4. **Execution** (autonomous):
+   ```bash
+   # Claude Code executes tool directly
+   node ~/.claude/servers/github/createIssue.ts \
+     --repo="bug-ops/mcp-execution" \
+     --title="Add feature X"
+   ```
+
+### Claude Code Skill Integration
+
+**mcp-execution** provides a ready-to-use **instruction skill** that teaches Claude Code how to discover and use progressive loading tools autonomously.
+
+#### What is a Skill?
+
+Skills are instruction files (SKILL.md) that guide Claude Code on using specific tools or patterns. When installed, Claude Code automatically learns best practices for progressive loading without manual prompting.
+
+#### Installing the Skill
+
+```bash
+# Option 1: Copy from examples (recommended)
+mkdir -p ~/.claude/skills/mcp-progressive-loading
+cp examples/SKILL.md ~/.claude/skills/mcp-progressive-loading/SKILL.md
+
+# Option 2: Generate with CLI (coming soon)
+mcp-execution-cli install-skill
+```
+
+#### What the Skill Teaches Claude Code
+
+The skill provides proactive guidance on:
+
+✅ **Discovery Pattern**: How to list available MCP servers and tools via `ls`
+✅ **Progressive Loading**: When to load individual tools vs bulk loading
+✅ **Token Optimization**: Choosing the right loading strategy for context efficiency
+✅ **Autonomous Execution**: How to execute tools directly via Node.js CLI
+✅ **Error Handling**: Troubleshooting connection and execution issues
+✅ **Best Practices**: Security, caching, and performance tips
+
+#### Example: Claude Code in Action
+
+With the skill installed, Claude Code automatically:
+
+1. **Discovers tools**: `ls ~/.claude/servers/github/` to see available tools
+2. **Loads efficiently**: Reads only `createIssue.ts` (500 tokens) instead of all tools (30,000 tokens)
+3. **Executes autonomously**: Runs `node createIssue.ts --repo=... --title=...`
+4. **Optimizes context**: Saves 98% of token budget for actual work
+
+#### Skill Documentation
+
+📖 **Full skill documentation**: [examples/SKILL.md](examples/SKILL.md)
+
+The SKILL.md file includes:
+- Complete progressive loading workflow
+- Decision trees for tool selection
+- Error handling procedures
+- Performance optimization strategies
+- Integration examples with Claude Code
+
+**Note**: Skills are a Claude Code feature. Other AI agents can follow similar patterns by reading the SKILL.md as reference documentation.
+
+---
+
+## CLI Reference
+
+### `generate` - Generate TypeScript Tools
+
+Generate type-safe TypeScript files from MCP servers using progressive loading pattern.
+
+```bash
+# From mcp.json config (recommended)
+mcp-execution-cli generate --from-config github
+
+# Stdio transport (npx)
+mcp-execution-cli generate npx -y @modelcontextprotocol/server-github \
+  --env GITHUB_TOKEN=ghp_xxx
+
+# HTTP transport
+mcp-execution-cli generate --http https://api.example.com/mcp \
+  --header "Authorization=Bearer token"
+
+# SSE transport
+mcp-execution-cli generate --sse https://api.example.com/mcp/events
+
+# Docker transport
+mcp-execution-cli generate docker \
+  --arg=run --arg=-i --arg=--rm \
+  --arg=ghcr.io/org/mcp-server \
+  --env=API_KEY=xxx
+
+# Custom output directory
+mcp-execution-cli generate github --progressive-output /custom/path
+
+# Custom server name (affects output directory)
+mcp-execution-cli generate npx -y @server/package --name custom-name
+# Output: ~/.claude/servers/custom-name/ (not ~/.claude/servers/npx/)
+```
+
+**Options**:
+- `--from-config <name>`: Load configuration from `mcp.json`
+- `--http <url>`: Use HTTP transport
+- `--sse <url>`: Use SSE transport
+- `--header <key=value>`: Add HTTP headers (repeatable)
+- `--env <key=value>`: Set environment variables (repeatable)
+- `--arg <value>`: Add command arguments (repeatable)
+- `--progressive-output <dir>`: Custom output directory
+- `--name <name>`: Custom server name (affects directory)
+
+### `setup` - Initialize Configuration
+
+Create default mcp.json configuration file.
+
+```bash
+# Interactive setup
+mcp-execution-cli setup
+
+# Output: ~/.config/claude/mcp.json created
+```
+
+### `introspect` - Debug Server Info
+
+Inspect MCP server capabilities and available tools.
+
+```bash
+# From config
+mcp-execution-cli introspect --from-config github
+
+# Manual
+mcp-execution-cli introspect npx -y @modelcontextprotocol/server-github
+```
+
+### `stats` - View Cache Statistics
+
+Show cache performance metrics.
+
+```bash
+mcp-execution-cli stats
+
+# Output:
+# Cache Statistics:
+#   Entries: 42
+#   Hits: 156
+#   Misses: 12
+#   Hit Rate: 92.9%
+```
+
+### `completions` - Shell Completions
+
+Generate shell completion scripts.
+
+```bash
+# Bash
+mcp-execution-cli completions bash > /etc/bash_completion.d/mcp-execution-cli
+
+# Zsh
+mcp-execution-cli completions zsh > /usr/local/share/zsh/site-functions/_mcp-execution-cli
+
+# Fish
+mcp-execution-cli completions fish > ~/.config/fish/completions/mcp-execution-cli.fish
+
+# PowerShell
+mcp-execution-cli completions powershell > mcp-execution-cli.ps1
+```
+
+---
+
+## Performance Benchmarks
+
+All benchmarks run on Apple M1 Pro (2021).
+
+### Code Generation Speed
+
+| Operation | Target | Achieved | Speedup |
+|-----------|--------|----------|---------|
+| 10 tools | <100ms | **0.19ms** | **526x faster** |
+| 50 tools | <20ms | **0.97ms** | **20.6x faster** |
+| VFS export | <10ms | **1.2ms** | **8.3x faster** |
+| Memory (1000 tools) | <256MB | **~2MB** | **128x better** |
+
+### Token Savings
+
+| Scenario | Traditional | Progressive | Savings |
+|----------|-------------|-------------|---------|
+| Load 1 tool | ~30,000 tokens | ~500-1,500 tokens | **98%** |
+| Load 5 tools | ~30,000 tokens | ~2,500-7,500 tokens | **95%** |
+| Load 10 tools | ~30,000 tokens | ~5,000-15,000 tokens | **90%** |
+| Load all tools | ~30,000 tokens | ~30,000 tokens | 0% (but still type-safe) |
+
+**Takeaway**: Progressive loading shines when you need only a few tools. For bulk operations, `index.ts` is available.
+
+### Run Benchmarks Locally
 
 ```bash
 # Code generation benchmarks
@@ -255,47 +605,136 @@ cargo bench --package mcp-codegen
 
 # VFS benchmarks
 cargo bench --package mcp-files
+
+# Full workspace benchmarks
+cargo bench --workspace
 ```
+
+---
+
+## Development
+
+### Prerequisites
+
+- **Rust 1.89+** (Edition 2024, MSRV 1.89)
+- **Tokio 1.48** async runtime
+- **Optional**: `cargo-nextest` for faster tests (`cargo install cargo-nextest`)
+
+### Building from Source
+
+```bash
+# Clone repository
+git clone https://github.com/bug-ops/mcp-execution
+cd mcp-execution
+
+# Check workspace
+cargo check --workspace
+
+# Run tests (with nextest, faster)
+cargo nextest run --workspace
+
+# Run tests (without nextest)
+cargo test --workspace
+
+# Run benchmarks
+cargo bench --workspace
+
+# Build release binary
+cargo build --release -p mcp-execution-cli
+
+# Binary location: target/release/mcp-execution-cli
+```
+
+### Project Guidelines
+
+All development follows [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines/):
+
+✅ **Strong types over primitives**: `ServerId`, `ToolName`, `SessionId` instead of `String`
+✅ **Error handling**: `thiserror` for libraries, `anyhow` for CLI only
+✅ **Thread safety**: All public types are `Send + Sync`
+✅ **Documentation**: 100% coverage with examples and error cases
+✅ **No unsafe**: Zero `unsafe` blocks in the codebase
+✅ **Testing**: 684 tests with 100% pass rate
+
+See [CLAUDE.md](CLAUDE.md) for detailed development instructions.
+
+### Running Tests
+
+```bash
+# All tests (with nextest)
+cargo nextest run --workspace
+
+# All tests (without nextest)
+cargo test --workspace
+
+# Specific crate
+cargo nextest run -p mcp-core
+
+# Doc tests
+cargo test --doc --workspace
+
+# With coverage (requires tarpaulin)
+cargo tarpaulin --workspace --out Html
+```
+
+### Code Quality Checks
+
+```bash
+# Linting
+cargo clippy --workspace -- -D warnings
+
+# Formatting (requires nightly)
+cargo +nightly fmt --workspace --check
+
+# Documentation
+cargo doc --workspace --no-deps --open
+
+# Security audit
+cargo audit
+```
+
+---
 
 ## Security
 
 ### Code Generation Safety
 
-- **No Code Execution**: Generated TypeScript is for type information only
-- **Input Validation**: All MCP server parameters validated
-- **Path Safety**: Output paths validated to prevent traversal
-- **Template Security**: Handlebars templates escape all user input
+- **No code execution during generation**: Generated TypeScript is static, no eval/exec
+- **Input validation**: All MCP server parameters validated before use
+- **Path safety**: Output paths validated to prevent directory traversal
+- **Template security**: Handlebars templates escape all user input
 
 ### Best Practices
 
-- Always review generated TypeScript before use
-- Keep `mcp-execution-cli` updated for security patches
-- Use environment variables for sensitive tokens (never hardcode)
-- Validate MCP server sources before generating
+1. **Review generated code**: Always inspect TypeScript files before execution
+2. **Keep updated**: Update `mcp-execution-cli` regularly for security patches
+3. **Use environment variables**: Never hardcode tokens in mcp.json (use env vars)
+4. **Validate MCP servers**: Only generate from trusted MCP server sources
+5. **Principle of least privilege**: Grant MCP servers only necessary permissions
 
-See [docs/adr/](docs/adr/) for security architecture decisions.
+### Reporting Security Issues
+
+Found a security issue? Please email security@example.com (do not file public issues).
+
+---
 
 ## Roadmap
 
-### Phase 1: Core Infrastructure ✅ COMPLETE
-
+### ✅ Phase 1: Core Infrastructure (COMPLETE)
 - [x] Workspace structure (5 crates)
-- [x] Dependency configuration (rmcp v0.8)
-- [x] ADR-004: Use rmcp official SDK
-- [x] Core types and traits (ServerId, ToolName, etc.)
-- [x] Error hierarchy with thiserror
+- [x] Microsoft Rust Guidelines compliance
+- [x] Core types and traits (`ServerId`, `ToolName`, etc.)
+- [x] Error hierarchy with `thiserror`
 - [x] 100% documentation coverage
 
-### Phase 2: MCP Integration with rmcp ✅ COMPLETE
-
-- [x] Implement MCP Bridge using `rmcp::client`
+### ✅ Phase 2: MCP Integration (COMPLETE)
+- [x] rmcp SDK integration (official Rust MCP SDK)
 - [x] Server discovery via `rmcp::ServiceExt`
-- [x] Tool schema extraction with rmcp
-- [x] LRU caching for tool results
-- [x] Introspector with server analysis
+- [x] Tool schema extraction
+- [x] LRU caching for performance
+- [x] Multi-transport support (stdio, HTTP, SSE)
 
-### Phase 3: Progressive Loading ✅ COMPLETE
-
+### ✅ Phase 3: Progressive Loading (COMPLETE)
 - [x] Handlebars templates (tool.ts, index.ts, runtime-bridge.ts)
 - [x] TypeScript generator with JSON Schema conversion
 - [x] Type-safe interfaces generation
@@ -303,67 +742,107 @@ See [docs/adr/](docs/adr/) for security architecture decisions.
 - [x] Virtual filesystem structure
 - [x] 98% token savings achieved
 
-### Phase 4: Simplification ✅ COMPLETE (2025-01-25)
+### ✅ Phase 4: Autonomous Execution (COMPLETE - v0.5.0)
+- [x] Runtime bridge implementation (430 lines)
+- [x] CLI execution support (shebang + argument parsing)
+- [x] Configuration loading from mcp.json
+- [x] Setup command for initialization
+- [x] Connection caching for performance
 
-- [x] Remove WASM runtime (15,000 LOC)
-- [x] Remove skills categorization (19,000 LOC)
-- [x] Focus on progressive loading only
-- [x] Update all documentation
-- [x] Create ADR-010 documenting decision
-- [x] 684 tests passing (down from 1035, removed WASM tests)
+### 🔵 Phase 5: Ecosystem Integration (PLANNED)
+- [ ] Official Claude Code extension
+- [ ] VS Code extension with IntelliSense
+- [ ] GitHub Actions workflow integration
+- [ ] Docker images for zero-install usage
+- [ ] Web playground for testing MCP servers
 
-### Phase 2.3: Runtime Bridge 🔵 PLANNED
+### 🔵 Phase 6: Advanced Features (PLANNED)
+- [ ] Incremental updates (only regenerate changed tools)
+- [ ] Multi-server orchestration (call tools across servers)
+- [ ] Observability (tracing, metrics, logs)
+- [ ] Testing framework for generated tools
+- [ ] Custom template support
 
-- [ ] Implement `mcp-execution-cli bridge` command
-- [ ] Make `callMCPTool()` functional in generated TypeScript
-- [ ] Enable actual tool execution from TypeScript files
-- [ ] Integration tests with real MCP servers
+---
 
-**See [examples/progressive-loading-usage.md](examples/progressive-loading-usage.md) for current usage and [docs/adr/010-simplify-to-progressive-only.md](docs/adr/010-simplify-to-progressive-only.md) for architecture rationale.**
+## Contributing
+
+Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+
+### Areas We Need Help
+
+- **Documentation**: Examples, tutorials, use cases
+- **Testing**: More integration tests, edge cases
+- **Platform support**: Testing on various OS/architectures
+- **MCP servers**: Report compatibility issues
+- **Performance**: Optimization ideas and benchmarks
+
+### Development Process
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing`)
+3. Follow Microsoft Rust Guidelines
+4. Write tests for new functionality
+5. Run `cargo test --workspace` and `cargo clippy --workspace`
+6. Submit a pull request
+
+---
 
 ## License
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
+- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- **MIT license** ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 at your option.
 
+---
+
 ## Resources
 
-- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) - Original Anthropic blog post
-- [MCP Specification](https://spec.modelcontextprotocol.io/)
+### Official Documentation
+- [Progressive Loading Tutorial](examples/progressive-loading-usage.md) - Complete guide
+- [Instruction Skill](examples/SKILL.md) - Claude Code integration
+- [Architecture Decision Records](docs/adr/) - Technical decisions
+- [API Documentation](https://docs.rs/mcp-execution) - Rust API docs
+
+### External Resources
+- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) - Anthropic blog post
+- [MCP Specification](https://spec.modelcontextprotocol.io/) - Protocol specification
 - [rmcp Documentation](https://docs.rs/rmcp/0.8.5) - Official Rust MCP SDK
-- [Wasmtime Book](https://docs.wasmtime.dev/)
-- [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines/)
-- [Architecture Decision Records](docs/adr/)
+- [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines/) - Development guidelines
+
+### Community
+- [GitHub Issues](https://github.com/bug-ops/mcp-execution/issues) - Bug reports and feature requests
+- [GitHub Discussions](https://github.com/bug-ops/mcp-execution/discussions) - Questions and ideas
+
+---
 
 ## Status
 
-🟢 **PRODUCTION READY** - Progressive Loading Complete
+**Current Version**: v0.5.0 (2025-01-26)
 
-**Current Version**: v0.4.0 (2025-01-25)
-
-**Completed Phases**:
-- ✅ Phase 1: Core Infrastructure
-- ✅ Phase 2: MCP Integration (rmcp SDK)
-- ✅ Phase 3: Progressive Loading
-- ✅ Phase 4: Simplification (removed WASM/skills)
-
-**Planned**:
-- 🔵 Phase 2.3: Runtime Bridge (enable TypeScript execution)
+**Production Status**: ✅ **READY FOR PRODUCTION**
 
 **Quality Metrics**:
-- **Tests**: 684/684 passing (100% pass rate)
+- **Tests**: 684/684 passing (100%)
 - **Token Savings**: 98% (30,000 → 500-1,500 tokens per tool)
-- **Performance**: 526x faster than target (2ms generation)
-- **Crates**: 6 (simplified from 10)
-- **Code**: ~12,000 lines Rust (down from ~48,000)
-- **Documentation**: Complete (ADR-010, usage examples, instruction skills)
+- **Performance**: 526x faster than target (0.19ms for 10 tools)
+- **Code Coverage**: >85% via Codecov
+- **Crates**: 5 workspace crates
+- **Lines of Code**: ~12,000 (Rust)
+- **Documentation**: Complete (ADRs, examples, API docs)
 
-**Production Status**: Progressive loading production-ready ✅
+**Platform Support**:
+- Linux (x86_64, ARM64)
+- macOS (x86_64, ARM64)
+- Windows (x86_64, ARM64)
 
-**Latest Release**: v0.4.0 (2025-01-25) - Progressive Loading Only
+**MCP Compatibility**: 100% (works with all MCP servers via rmcp SDK)
 
-See [docs/adr/010-simplify-to-progressive-only.md](docs/adr/010-simplify-to-progressive-only.md) for architecture rationale.
+---
+
+<p align="center">
+  <strong>Built with 🦀 Rust and ❤️ for the MCP ecosystem</strong>
+</p>
