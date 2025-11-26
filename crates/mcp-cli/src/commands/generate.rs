@@ -113,27 +113,29 @@ pub async fn run(
     let server_dir_name = name.unwrap_or_else(|| server_info.id.to_string());
 
     // Build VFS with generated code
-    let base_path = format!("/{server_dir_name}/");
-    let vfs = FilesBuilder::from_generated_code(generated_code, &base_path)
+    // Note: base_path should be "/" because generated files already have flat structure
+    // The server_dir_name will be used when exporting to filesystem
+    let vfs = FilesBuilder::from_generated_code(generated_code, "/")
         .build()
         .context("failed to build VFS")?;
 
     // Determine output directory
-    let output_path = if let Some(custom_dir) = output_dir {
+    // Always append server_dir_name to ensure proper structure
+    let base_dir = if let Some(custom_dir) = output_dir {
         custom_dir
     } else {
         dirs::home_dir()
             .context("failed to get home directory")?
             .join(".claude")
             .join("servers")
-            .join(&server_dir_name)
     };
+
+    let output_path = base_dir.join(&server_dir_name);
 
     info!("Exporting files to: {}", output_path.display());
 
     // Create output directory if it doesn't exist
-    std::fs::create_dir_all(&output_path)
-        .context("failed to create output directory")?;
+    std::fs::create_dir_all(&output_path).context("failed to create output directory")?;
 
     // Export VFS to filesystem
     vfs.export_to_filesystem(&output_path)

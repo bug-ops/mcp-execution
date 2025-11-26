@@ -128,7 +128,6 @@ pub enum Error {
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-
 }
 
 impl Error {
@@ -255,7 +254,6 @@ impl Error {
     pub const fn is_script_generation_error(&self) -> bool {
         matches!(self, Self::ScriptGenerationError { .. })
     }
-
 }
 
 /// Result type alias for MCP operations.

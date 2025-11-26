@@ -194,7 +194,6 @@ impl From<&str> for ToolName {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

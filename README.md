@@ -93,7 +93,7 @@ cat ~/.claude/servers/github/createIssue.ts
 # }
 ```
 
-See [examples/progressive-loading-usage.md](examples/progressive-loading-usage.md) for complete tutorial and [~/.claude/skills/mcp-progressive-loading/SKILL.md](~/.claude/skills/mcp-progressive-loading/SKILL.md) for Claude Code instructions.
+See [examples/progressive-loading-usage.md](examples/progressive-loading-usage.md) for complete tutorial and [examples/SKILL.md](examples/SKILL.md) for Claude Code skill configuration.
 
 ### CLI Usage
 

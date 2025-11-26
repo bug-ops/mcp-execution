@@ -63,8 +63,8 @@ Load only the tools you need:
 
 ```typescript
 // Load only the specific tools needed
-import { createIssue } from '~/.claude/servers/github/github/createIssue.js';
-import { listIssues } from '~/.claude/servers/github/github/listIssues.js';
+import { createIssue } from '~/.claude/servers/github/createIssue.js';
+import { listIssues } from '~/.claude/servers/github/listIssues.js';
 
 // Call tools with type-safe parameters
 const issue = await createIssue({
@@ -81,14 +81,13 @@ console.log(`Created issue #${issue.number}`);
 
 ```
 ~/.claude/servers/github/
-└── github/
-    ├── _runtime/
-    │   └── mcp-bridge.ts       # Runtime bridge for MCP communication
-    ├── index.ts                 # Re-exports all tools (not recommended)
-    ├── createIssue.ts          # Individual tool (500 tokens)
-    ├── updateIssue.ts          # Individual tool (500 tokens)
-    ├── listIssues.ts           # Individual tool (500 tokens)
-    └── ...                      # 37 more tools
+├── _runtime/
+│   └── mcp-bridge.ts       # Runtime bridge for MCP communication
+├── index.ts                 # Re-exports all tools (not recommended)
+├── createIssue.ts          # Individual tool (500 tokens)
+├── updateIssue.ts          # Individual tool (500 tokens)
+├── listIssues.ts           # Individual tool (500 tokens)
+└── ...                      # 37 more tools
 ```
 
 ## Best Practices
@@ -97,14 +96,14 @@ console.log(`Created issue #${issue.number}`);
 
 ```typescript
 // GOOD: Load only what you need (500 tokens)
-import { createIssue } from '~/.claude/servers/github/github/createIssue.js';
+import { createIssue } from '~/.claude/servers/github/createIssue.js';
 ```
 
 ### ❌ DON'T: Load All Tools
 
 ```typescript
 // BAD: Loads everything (30,000 tokens)
-import * as github from '~/.claude/servers/github/github/index.js';
+import * as github from '~/.claude/servers/github/index.js';
 ```
 
 ## Token Savings Comparison
@@ -209,7 +208,7 @@ process.on('SIGINT', async () => {
 ### Create GitHub Issue
 
 ```typescript
-import { createIssue } from '~/.claude/servers/github/github/createIssue.js';
+import { createIssue } from '~/.claude/servers/github/createIssue.js';
 
 const issue = await createIssue({
   owner: 'modelcontextprotocol',
@@ -225,7 +224,7 @@ console.log(`Issue created: ${issue.html_url}`);
 ### List Pull Requests
 
 ```typescript
-import { listPullRequests } from '~/.claude/servers/github/github/listPullRequests.js';
+import { listPullRequests } from '~/.claude/servers/github/listPullRequests.js';
 
 const prs = await listPullRequests({
   owner: 'modelcontextprotocol',
@@ -242,7 +241,7 @@ prs.forEach(pr => {
 ### Search Code
 
 ```typescript
-import { searchCode } from '~/.claude/servers/github/github/searchCode.js';
+import { searchCode } from '~/.claude/servers/github/searchCode.js';
 
 const results = await searchCode({
   query: 'language:rust progressive loading',
