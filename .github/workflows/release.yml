@@ -40,6 +40,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_name: mcp-execution-cli.exe
             asset_name: mcp-execution-cli-windows-amd64.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: mcp-execution-cli.exe
+            asset_name: mcp-execution-cli-windows-arm64.exe
 
     steps:
       - uses: actions/checkout@v6
