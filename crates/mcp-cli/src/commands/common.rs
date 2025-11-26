@@ -75,10 +75,7 @@ pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
 
     let server_config = config.mcp_servers.get(name).with_context(|| {
         let available: Vec<_> = config.mcp_servers.keys().collect();
-        format!(
-            "server '{}' not found in MCP config\nAvailable servers: {:?}",
-            name, available
-        )
+        format!("server '{name}' not found in MCP config\nAvailable servers: {available:?}")
     })?;
 
     let id = ServerId::new(name);
@@ -635,13 +632,12 @@ mod tests {
 
         // Can fail either because home dir not found or config file missing
         // Both are acceptable error states
-        if result.is_err() {
-            let error = result.unwrap_err().to_string();
+        if let Err(error) = result {
+            let error = error.to_string();
             assert!(
                 error.contains("failed to read MCP config")
                     || error.contains("failed to get home directory"),
-                "Expected config read error or home dir error, got: {}",
-                error
+                "Expected config read error or home dir error, got: {error}"
             );
         }
     }

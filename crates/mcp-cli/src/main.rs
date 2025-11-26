@@ -169,6 +169,7 @@ pub enum Commands {
         /// The server must be defined in ~/.claude/mcp.json with matching name.
         ///
         /// Example mcp.json:
+        /// ```json
         /// {
         ///   "mcpServers": {
         ///     "github": {
@@ -178,6 +179,7 @@ pub enum Commands {
         ///     }
         ///   }
         /// }
+        /// ```
         #[arg(long = "from-config", conflicts_with_all = ["server", "server_args", "server_env", "server_cwd", "http_url", "sse_url"])]
         from_config: Option<String>,
 

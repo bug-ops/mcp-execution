@@ -110,20 +110,18 @@ async fn check_node_version() -> Result<()> {
 
     if major_version < 18 {
         anyhow::bail!(
-            "Node.js version {} is too old.\n\
+            "Node.js version {version_str} is too old.\n\
              \n\
              Required: Node.js 18.0.0 or higher\n\
-             Current:  Node.js {}\n\
+             Current:  Node.js {version_str}\n\
              \n\
              Please upgrade Node.js:\n\
              - Download: https://nodejs.org\n\
-             - Or use nvm: nvm install 18",
-            version_str,
-            version_str
+             - Or use nvm: nvm install 18"
         );
     }
 
-    println!("✓ Node.js v{} detected", version_str);
+    println!("✓ Node.js v{version_str} detected");
     Ok(())
 }
 
@@ -216,7 +214,7 @@ async fn make_files_executable() -> Result<()> {
     }
 
     if count > 0 {
-        println!("✓ Made {} TypeScript files executable", count);
+        println!("✓ Made {count} TypeScript files executable");
     }
 
     Ok(())
@@ -250,8 +248,7 @@ mod tests {
             let error_msg = e.to_string();
             assert!(
                 error_msg.contains("Node.js") || error_msg.contains("version"),
-                "Error message should be helpful: {}",
-                error_msg
+                "Error message should be helpful: {error_msg}"
             );
         }
     }
