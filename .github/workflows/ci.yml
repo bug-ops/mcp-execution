@@ -104,16 +104,6 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
-      # Setup sccache for faster compilation
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Configure sccache
-        shell: bash
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -133,9 +123,6 @@ jobs:
 
       - name: Run doctests
         run: cargo test --doc --all-features --workspace
-
-      - name: sccache stats
-        run: sccache --show-stats
 
   # Code coverage (Linux only for speed)
   coverage:
@@ -228,14 +215,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Configure sccache
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -243,9 +222,6 @@ jobs:
 
       - name: Build benchmarks (no run)
         run: cargo bench --no-run --profile bench-fast --workspace
-
-      - name: sccache stats
-        run: sccache --show-stats
 
   # Release build check
   release:
@@ -260,14 +236,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Configure sccache
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -284,9 +252,6 @@ jobs:
           echo ""
           echo "Target directory size:"
           du -sh target/release/
-
-      - name: sccache stats
-        run: sccache --show-stats
 
   # All checks passed
   ci-success:
