@@ -30,6 +30,7 @@ mcp-files = { path = "crates/mcp-files" }
 mcp-introspector = { path = "crates/mcp-introspector" }
 mcp-server = { path = "crates/mcp-server" }
 rayon = "1.11"
+regex = "1.12"
 rmcp = "0.10"
 schemars = "1.1.0"
 serde = "1.0"

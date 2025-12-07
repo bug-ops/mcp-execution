@@ -5,16 +5,19 @@
 //! 2. `save_categorized_tools` - Generate TypeScript files with categorization
 //! 3. `list_generated_servers` - List all servers with generated files
 
+use crate::skill::{build_skill_context, scan_tools_directory};
 use crate::state::StateManager;
 use crate::types::{
-    CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
-    ListGeneratedServersParams, ListGeneratedServersResult, PendingGeneration,
-    SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolMetadata,
+    CategorizedTool, GenerateSkillParams, GeneratedServerInfo, IntrospectServerParams,
+    IntrospectServerResult, ListGeneratedServersParams, ListGeneratedServersResult,
+    PendingGeneration, SaveCategorizedToolsParams, SaveCategorizedToolsResult, SaveSkillParams,
+    SaveSkillResult, SkillMetadata, ToolMetadata,
 };
 use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::{ServerConfig, ServerId};
 use mcp_files::FilesBuilder;
 use mcp_introspector::Introspector;
+use regex::Regex;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -24,8 +27,22 @@ use rmcp::model::{
 use rmcp::{ErrorData as McpError, tool, tool_handler, tool_router};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
+
+// Pre-compiled regexes for performance (compiled once, reused)
+static FRONTMATTER_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---").expect("valid regex"));
+static NAME_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"name:\s*(.+)").expect("valid regex"));
+static DESC_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"description:\s*(.+)").expect("valid regex"));
+
+/// Maximum `server_id` length (denial-of-service protection).
+const MAX_SERVER_ID_LENGTH: usize = 64;
+
+/// Maximum SKILL.md content size in bytes (100KB).
+const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
 
 /// MCP server for progressive loading generation.
 ///
@@ -355,13 +372,212 @@ impl GeneratorService {
             })?,
         )]))
     }
+
+    /// Generate context for creating a Claude Code skill.
+    ///
+    /// Analyzes generated TypeScript files and returns structured context
+    /// that Claude uses to generate an optimal SKILL.md file.
+    ///
+    /// # Workflow
+    ///
+    /// 1. Call `generate_skill` with `server_id`
+    /// 2. Claude receives context and `generation_prompt`
+    /// 3. Claude generates SKILL.md content
+    /// 4. Call `save_skill` with the generated content
+    #[tool(
+        description = "Analyze generated TypeScript files and return context for Claude to create a SKILL.md file. Returns tool metadata, categories, and a generation prompt."
+    )]
+    async fn generate_skill(
+        &self,
+        Parameters(params): Parameters<GenerateSkillParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate server_id format and length
+        if params.server_id.len() > MAX_SERVER_ID_LENGTH {
+            return Err(McpError::invalid_params(
+                format!(
+                    "server_id too long: {} chars exceeds {} limit",
+                    params.server_id.len(),
+                    MAX_SERVER_ID_LENGTH
+                ),
+                None,
+            ));
+        }
+        if !params
+            .server_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(McpError::invalid_params(
+                "server_id must contain only lowercase letters, digits, and hyphens",
+                None,
+            ));
+        }
+
+        // Determine servers directory
+        let servers_dir = params.servers_dir.unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".claude")
+                .join("servers")
+        });
+
+        let server_dir = servers_dir.join(&params.server_id);
+
+        // Check if server directory exists
+        if !server_dir.exists() {
+            return Err(McpError::invalid_params(
+                format!(
+                    "Server directory not found: {}. Run generate first.",
+                    server_dir.display()
+                ),
+                None,
+            ));
+        }
+
+        // Scan and parse tool files
+        let tools = scan_tools_directory(&server_dir).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to scan tools directory: {e}"), None)
+        })?;
+
+        if tools.is_empty() {
+            return Err(McpError::invalid_params(
+                format!(
+                    "No tool files found in {}. Run generate first.",
+                    server_dir.display()
+                ),
+                None,
+            ));
+        }
+
+        // Build context
+        let mut result =
+            build_skill_context(&params.server_id, &tools, params.use_case_hints.as_deref());
+
+        // Override skill name if provided
+        if let Some(name) = params.skill_name {
+            result.skill_name = name;
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).map_err(|e| {
+                McpError::internal_error(format!("Failed to serialize result: {e}"), None)
+            })?,
+        )]))
+    }
+
+    /// Save a generated skill to the filesystem.
+    ///
+    /// Writes SKILL.md content to `~/.claude/skills/{server_id}/SKILL.md`.
+    /// Validates that the content contains required YAML frontmatter.
+    #[tool(
+        description = "Save generated SKILL.md content to ~/.claude/skills/{server_id}/. Use after Claude generates skill content from generate_skill context."
+    )]
+    async fn save_skill(
+        &self,
+        Parameters(params): Parameters<SaveSkillParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate server_id length (DoS protection)
+        if params.server_id.len() > MAX_SERVER_ID_LENGTH {
+            return Err(McpError::invalid_params(
+                format!(
+                    "server_id too long: {} chars exceeds {} limit",
+                    params.server_id.len(),
+                    MAX_SERVER_ID_LENGTH
+                ),
+                None,
+            ));
+        }
+
+        // Validate server_id format
+        if !params
+            .server_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(McpError::invalid_params(
+                "server_id must contain only lowercase letters, digits, and hyphens",
+                None,
+            ));
+        }
+
+        // Validate content size (DoS protection)
+        if params.content.len() > MAX_SKILL_CONTENT_SIZE {
+            return Err(McpError::invalid_params(
+                format!(
+                    "content too large: {} bytes exceeds {} limit",
+                    params.content.len(),
+                    MAX_SKILL_CONTENT_SIZE
+                ),
+                None,
+            ));
+        }
+
+        // Validate content has YAML frontmatter
+        if !params.content.starts_with("---") {
+            return Err(McpError::invalid_params(
+                "Content must start with YAML frontmatter (---)",
+                None,
+            ));
+        }
+
+        // Extract metadata from frontmatter
+        let metadata = extract_skill_metadata(&params.content)
+            .map_err(|e| McpError::invalid_params(format!("Invalid SKILL.md format: {e}"), None))?;
+
+        // Determine output path
+        let output_path = params.output_path.unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".claude")
+                .join("skills")
+                .join(&params.server_id)
+                .join("SKILL.md")
+        });
+
+        // Check if file exists
+        let overwritten = output_path.exists();
+        if overwritten && !params.overwrite {
+            return Err(McpError::invalid_params(
+                format!(
+                    "Skill file already exists: {}. Use overwrite=true to replace.",
+                    output_path.display()
+                ),
+                None,
+            ));
+        }
+
+        // Create parent directory
+        if let Some(parent) = output_path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                McpError::internal_error(format!("Failed to create directory: {e}"), None)
+            })?;
+        }
+
+        // Write file
+        tokio::fs::write(&output_path, &params.content)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to write file: {e}"), None))?;
+
+        let result = SaveSkillResult {
+            success: true,
+            output_path: output_path.display().to_string(),
+            overwritten,
+            metadata,
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).map_err(|e| {
+                McpError::internal_error(format!("Failed to serialize result: {e}"), None)
+            })?,
+        )]))
+    }
 }
 
 #[tool_handler]
 impl ServerHandler for GeneratorService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
+            protocol_version: ProtocolVersion::V_2025_06_18,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
@@ -414,6 +630,43 @@ fn generate_with_categorization(
         .collect();
 
     generator.generate_with_categories(server_info, &categorizations)
+}
+
+/// Extract skill metadata from SKILL.md content.
+fn extract_skill_metadata(content: &str) -> Result<SkillMetadata, String> {
+    // Extract YAML frontmatter (using pre-compiled regex)
+    let frontmatter = FRONTMATTER_REGEX
+        .captures(content)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str())
+        .ok_or("YAML frontmatter not found")?;
+
+    // Extract name (using pre-compiled regex)
+    let name = NAME_REGEX
+        .captures(frontmatter)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .ok_or("'name' field not found in frontmatter")?;
+
+    // Extract description (using pre-compiled regex)
+    let description = DESC_REGEX
+        .captures(frontmatter)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .ok_or("'description' field not found in frontmatter")?;
+
+    // Count sections (H2 headers)
+    let section_count = content.lines().filter(|l| l.starts_with("## ")).count();
+
+    // Count words (approximate)
+    let word_count = content.split_whitespace().count();
+
+    Ok(SkillMetadata {
+        name,
+        description,
+        section_count,
+        word_count,
+    })
 }
 
 #[cfg(test)]
@@ -624,7 +877,7 @@ mod tests {
         let service = GeneratorService::new();
         let info = service.get_info();
 
-        assert_eq!(info.protocol_version, ProtocolVersion::V_2024_11_05);
+        assert_eq!(info.protocol_version, ProtocolVersion::V_2025_06_18);
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
     }
@@ -882,5 +1135,367 @@ mod tests {
 
         // Should succeed even if directory doesn't exist
         assert!(result.is_ok());
+    }
+
+    // ========================================================================
+    // generate_skill Error Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_generate_skill_invalid_server_id_uppercase() {
+        let service = GeneratorService::new();
+
+        let params = GenerateSkillParams {
+            server_id: "GitHub".to_string(), // Invalid: uppercase
+            skill_name: None,
+            use_case_hints: None,
+            servers_dir: None,
+        };
+
+        let result = service.generate_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("lowercase"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_skill_invalid_server_id_special_chars() {
+        let service = GeneratorService::new();
+
+        let params = GenerateSkillParams {
+            server_id: "git@hub".to_string(), // Invalid: special chars
+            skill_name: None,
+            use_case_hints: None,
+            servers_dir: None,
+        };
+
+        let result = service.generate_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_generate_skill_server_directory_not_found() {
+        let service = GeneratorService::new();
+
+        let params = GenerateSkillParams {
+            server_id: "nonexistent-server".to_string(),
+            skill_name: None,
+            use_case_hints: None,
+            servers_dir: Some(PathBuf::from("/nonexistent/path")),
+        };
+
+        let result = service.generate_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_skill_empty_directory() {
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+
+        // Create server directory but no tool files
+        let target_dir = base_dir.join("test-server");
+        tokio::fs::create_dir_all(&target_dir).await.unwrap();
+
+        let params = GenerateSkillParams {
+            server_id: "test-server".to_string(),
+            skill_name: None,
+            use_case_hints: None,
+            servers_dir: Some(base_dir),
+        };
+
+        let result = service.generate_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("No tool files found"));
+    }
+
+    // ========================================================================
+    // save_skill Error Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_save_skill_invalid_server_id() {
+        let service = GeneratorService::new();
+
+        let params = SaveSkillParams {
+            server_id: "Invalid_Server".to_string(), // Invalid: uppercase and underscore
+            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
+            output_path: None,
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("lowercase"));
+    }
+
+    #[tokio::test]
+    async fn test_save_skill_missing_yaml_frontmatter() {
+        let service = GeneratorService::new();
+
+        let params = SaveSkillParams {
+            server_id: "test".to_string(),
+            content: "# Test Skill\n\nNo YAML frontmatter here.".to_string(),
+            output_path: None,
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("YAML frontmatter"));
+    }
+
+    #[tokio::test]
+    async fn test_save_skill_invalid_frontmatter_no_name() {
+        let service = GeneratorService::new();
+
+        let params = SaveSkillParams {
+            server_id: "test".to_string(),
+            content: "---\ndescription: test\n---\n# Test".to_string(),
+            output_path: None,
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("Invalid SKILL.md format"));
+    }
+
+    #[tokio::test]
+    async fn test_save_skill_invalid_frontmatter_no_description() {
+        let service = GeneratorService::new();
+
+        let params = SaveSkillParams {
+            server_id: "test".to_string(),
+            content: "---\nname: test-skill\n---\n# Test".to_string(),
+            output_path: None,
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("Invalid SKILL.md format"));
+    }
+
+    #[tokio::test]
+    async fn test_save_skill_file_exists_no_overwrite() {
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("SKILL.md");
+
+        // Create existing file
+        tokio::fs::write(&output_path, "existing content")
+            .await
+            .unwrap();
+
+        let params = SaveSkillParams {
+            server_id: "test".to_string(),
+            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
+            output_path: Some(output_path),
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("already exists"));
+        assert!(err.message.contains("overwrite=true"));
+    }
+
+    #[tokio::test]
+    async fn test_save_skill_file_exists_with_overwrite() {
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("SKILL.md");
+
+        // Create existing file
+        tokio::fs::write(&output_path, "existing content")
+            .await
+            .unwrap();
+
+        let params = SaveSkillParams {
+            server_id: "test".to_string(),
+            content: "---\nname: test\ndescription: test skill\n---\n# Test".to_string(),
+            output_path: Some(output_path.clone()),
+            overwrite: true,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text = content.content[0].as_text().unwrap();
+        let parsed: SaveSkillResult = serde_json::from_str(&text.text).unwrap();
+
+        assert!(parsed.success);
+        assert!(parsed.overwritten);
+        assert_eq!(parsed.metadata.name, "test");
+        assert_eq!(parsed.metadata.description, "test skill");
+    }
+
+    #[tokio::test]
+    async fn test_save_skill_valid_content() {
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("SKILL.md");
+
+        let params = SaveSkillParams {
+            server_id: "test".to_string(),
+            content: "---\nname: test-skill\ndescription: A test skill\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
+            output_path: Some(output_path.clone()),
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text = content.content[0].as_text().unwrap();
+        let parsed: SaveSkillResult = serde_json::from_str(&text.text).unwrap();
+
+        assert!(parsed.success);
+        assert!(!parsed.overwritten);
+        assert_eq!(parsed.metadata.name, "test-skill");
+        assert_eq!(parsed.metadata.description, "A test skill");
+        assert!(parsed.metadata.section_count >= 1);
+        assert!(parsed.metadata.word_count > 0);
+
+        // Verify file was written
+        assert!(output_path.exists());
+    }
+
+    // ========================================================================
+    // extract_skill_metadata Tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_skill_metadata_valid() {
+        let content = r"---
+name: github-progressive
+description: GitHub MCP server operations
+---
+
+# GitHub Progressive
+
+## Quick Start
+
+Content here.
+
+## Common Tasks
+
+More content.
+";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.name, "github-progressive");
+        assert_eq!(metadata.description, "GitHub MCP server operations");
+        assert_eq!(metadata.section_count, 2);
+        assert!(metadata.word_count > 0);
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_no_frontmatter() {
+        let content = "# Test\n\nNo frontmatter";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("YAML frontmatter not found"));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_missing_name() {
+        let content = "---\ndescription: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("'name' field not found"));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_missing_description() {
+        let content = "---\nname: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("'description' field not found")
+        );
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_with_extra_fields() {
+        let content = r"---
+name: test-skill
+description: Test description
+version: 1.0.0
+author: Test Author
+---
+
+# Test
+";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.name, "test-skill");
+        assert_eq!(metadata.description, "Test description");
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_multiline_description() {
+        let content = r"---
+name: test
+description: This is a long description that contains multiple words
+---
+
+# Test
+";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert!(metadata.description.contains("multiple words"));
     }
 }

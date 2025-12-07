@@ -1,0 +1,56 @@
+Generate a minimal SKILL.md for "{{server_id}}" MCP server ({{tool_count}} tools).
+
+## Goal
+Create a **token-efficient** skill that teaches progressive loading via bash commands.
+
+## Required Structure
+
+```markdown
+---
+name: {{skill_name}}
+description: [One sentence about {{server_id}} tools]
+---
+
+# {{skill_name}}
+
+[One sentence: what this does]
+
+## Usage
+
+**Discover tools:**
+```bash
+ls ~/.claude/servers/{{server_id}}/
+```
+
+**Load a tool:**
+```bash
+cat ~/.claude/servers/{{server_id}}/<tool>.ts
+```
+
+**Execute:**
+```bash
+node ~/.claude/servers/{{server_id}}/<tool>.ts '<json params>'
+```
+
+**Search by keyword:**
+```bash
+grep -l "<keyword>" ~/.claude/servers/{{server_id}}/*.ts
+```
+
+## Tools by Category
+
+{{#each categories}}
+### {{display_name}}
+{{#each tools}}- `{{typescript_name}}` - {{description}}
+{{/each}}
+{{/each}}
+```
+
+## Rules
+
+1. **Be minimal** - skill should be <500 tokens
+2. **Focus on bash commands** - ls, cat, grep, node
+3. **No verbose descriptions** - just tool names and one-liner descriptions
+4. **No troubleshooting section** - keep it short
+
+Output ONLY the SKILL.md content starting with `---`.
