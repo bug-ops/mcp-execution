@@ -375,16 +375,20 @@ fn extract_parameter_names(schema: &serde_json::Value) -> Vec<String> {
 
 /// Generates code with categorization metadata.
 ///
-/// This is a temporary implementation until we enhance `mcp-codegen` with
-/// `generate_with_categorization` method.
+/// Converts the categorization map to the format expected by the generator
+/// and calls `generate_with_categories`.
 fn generate_with_categorization(
     generator: &ProgressiveGenerator,
     server_info: &mcp_introspector::ServerInfo,
-    _categorization: &HashMap<String, &CategorizedTool>,
+    categorization: &HashMap<String, &CategorizedTool>,
 ) -> mcp_core::Result<mcp_codegen::GeneratedCode> {
-    // TODO: Once mcp-codegen is enhanced with categorization support,
-    // this will pass categorization metadata to the generator
-    generator.generate(server_info)
+    // Convert CategorizedTool map to simple tool_name -> category map
+    let categories: HashMap<String, String> = categorization
+        .iter()
+        .map(|(tool_name, cat_tool)| (tool_name.clone(), cat_tool.category.clone()))
+        .collect();
+
+    generator.generate_with_categories(server_info, &categories)
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 ///     description: "Creates a new issue".to_string(),
 ///     input_schema: json!({"type": "object"}),
 ///     properties: vec![],
+///     category: Some("issues".to_string()),
 /// };
 ///
 /// assert_eq!(context.server_id, "github");
@@ -41,6 +42,8 @@ pub struct ToolContext {
     pub input_schema: serde_json::Value,
     /// Extracted properties for template rendering
     pub properties: Vec<PropertyInfo>,
+    /// Optional category for tool grouping
+    pub category: Option<String>,
 }
 
 /// Information about a single parameter property.
@@ -88,6 +91,7 @@ pub struct PropertyInfo {
 ///     server_version: "1.0.0".to_string(),
 ///     tool_count: 30,
 ///     tools: vec![],
+///     categories: None,
 /// };
 ///
 /// assert_eq!(context.tool_count, 30);
@@ -102,6 +106,9 @@ pub struct IndexContext {
     pub tool_count: usize,
     /// List of tool summaries
     pub tools: Vec<ToolSummary>,
+    /// Tools grouped by category (optional, for categorized generation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<CategoryInfo>>,
 }
 
 /// Summary of a tool for index file generation.
@@ -117,6 +124,7 @@ pub struct IndexContext {
 /// let summary = ToolSummary {
 ///     typescript_name: "createIssue".to_string(),
 ///     description: "Creates a new issue".to_string(),
+///     category: Some("issues".to_string()),
 /// };
 ///
 /// assert_eq!(summary.typescript_name, "createIssue");
@@ -127,6 +135,38 @@ pub struct ToolSummary {
     pub typescript_name: String,
     /// Human-readable description
     pub description: String,
+    /// Optional category for tool grouping
+    pub category: Option<String>,
+}
+
+/// Category information for grouped tool display in index.
+///
+/// Groups tools by category for organized documentation.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_codegen::progressive::{CategoryInfo, ToolSummary};
+///
+/// let category = CategoryInfo {
+///     name: "issues".to_string(),
+///     tools: vec![
+///         ToolSummary {
+///             typescript_name: "createIssue".to_string(),
+///             description: "Creates a new issue".to_string(),
+///             category: Some("issues".to_string()),
+///         },
+///     ],
+/// };
+///
+/// assert_eq!(category.name, "issues");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryInfo {
+    /// Category name
+    pub name: String,
+    /// Tools in this category
+    pub tools: Vec<ToolSummary>,
 }
 
 /// Context for rendering the runtime bridge template.
@@ -161,11 +201,13 @@ mod tests {
             description: "Creates an issue".to_string(),
             input_schema: json!({"type": "object"}),
             properties: vec![],
+            category: Some("issues".to_string()),
         };
 
         assert_eq!(context.server_id, "github");
         assert_eq!(context.name, "create_issue");
         assert_eq!(context.typescript_name, "createIssue");
+        assert_eq!(context.category, Some("issues".to_string()));
     }
 
     #[test]
@@ -189,10 +231,12 @@ mod tests {
             server_version: "1.0.0".to_string(),
             tool_count: 5,
             tools: vec![],
+            categories: None,
         };
 
         assert_eq!(context.server_name, "GitHub");
         assert_eq!(context.tool_count, 5);
+        assert!(context.categories.is_none());
     }
 
     #[test]
@@ -200,9 +244,11 @@ mod tests {
         let summary = ToolSummary {
             typescript_name: "createIssue".to_string(),
             description: "Creates an issue".to_string(),
+            category: Some("issues".to_string()),
         };
 
         assert_eq!(summary.typescript_name, "createIssue");
+        assert_eq!(summary.category, Some("issues".to_string()));
     }
 
     #[test]

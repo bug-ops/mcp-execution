@@ -96,4 +96,6 @@ pub mod types;
 
 // Re-export main types
 pub use generator::ProgressiveGenerator;
-pub use types::{BridgeContext, IndexContext, PropertyInfo, ToolContext, ToolSummary};
+pub use types::{
+    BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolContext, ToolSummary,
+};

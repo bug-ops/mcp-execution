@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+/**
+ * @tool {{name}}
+ * @server {{server_id}}
+{{#if category}}
+ * @category {{category}}
+{{/if}}
+ */
 import { callMCPTool } from './_runtime/mcp-bridge.ts';
 
 /**
@@ -6,6 +13,10 @@ import { callMCPTool } from './_runtime/mcp-bridge.ts';
 {{#if input_schema.description}}
  *
  * {{input_schema.description}}
+{{/if}}
+{{#if category}}
+ *
+ * @category {{category}}
 {{/if}}
  *
  * @param params - Tool parameters
