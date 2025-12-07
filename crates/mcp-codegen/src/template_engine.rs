@@ -796,13 +796,13 @@ mod tests {
         let mut engine = TemplateEngine::new().unwrap();
 
         engine
-            .register_template_string("numbers", "Count: {{count}}, Pi: {{pi}}")
+            .register_template_string("numbers", "Count: {{count}}, Ratio: {{ratio}}")
             .unwrap();
 
-        let context = json!({"count": 42, "pi": 3.14159});
+        let context = json!({"count": 42, "ratio": 1.618});
         let result = engine.render("numbers", &context).unwrap();
         assert!(result.contains("42"));
-        assert!(result.contains("3.14159"));
+        assert!(result.contains("1.618"));
     }
 
     // ========================================================================

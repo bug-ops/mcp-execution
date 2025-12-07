@@ -158,7 +158,8 @@ pub struct ToolSummary {
 
 /// Context for rendering the index.ts template.
 ///
-/// Contains exports and server information.
+/// Type alias for [`ServerContext`] since both templates use identical data.
+/// This allows future divergence if needed while keeping the types unified.
 ///
 /// # Examples
 ///
@@ -175,19 +176,7 @@ pub struct ToolSummary {
 ///
 /// assert_eq!(context.tool_count, 30);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexContext {
-    /// Server name for documentation
-    pub server_name: String,
-    /// Variable name for server (camelCase)
-    pub server_variable_name: String,
-    /// Server version
-    pub server_version: String,
-    /// Total number of tools
-    pub tool_count: usize,
-    /// List of tool summaries
-    pub tools: Vec<ToolSummary>,
-}
+pub type IndexContext = ServerContext;
 
 #[cfg(test)]
 mod tests {

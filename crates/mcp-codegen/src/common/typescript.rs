@@ -35,7 +35,7 @@ use serde_json::Value;
 /// ```
 #[must_use]
 pub fn to_camel_case(snake_case: &str) -> String {
-    let mut result = String::new();
+    let mut result = String::with_capacity(snake_case.len());
     let mut capitalize_next = false;
 
     for ch in snake_case.chars() {
@@ -144,7 +144,7 @@ pub fn json_schema_to_typescript(schema: &Value) -> String {
                         .unwrap_or_default();
 
                     if let Some(props) = properties {
-                        let mut fields = Vec::new();
+                        let mut fields = Vec::with_capacity(props.len());
                         for (key, value) in props {
                             let is_required = required.contains(&key.as_str());
                             let optional_marker = if is_required { "" } else { "?" };
@@ -201,7 +201,14 @@ pub fn json_schema_to_typescript(schema: &Value) -> String {
 /// ```
 #[must_use]
 pub fn extract_properties(schema: &Value) -> Vec<serde_json::Value> {
-    let mut properties = Vec::new();
+    // Pre-calculate capacity if possible
+    let capacity = schema
+        .as_object()
+        .and_then(|obj| obj.get("properties"))
+        .and_then(|v| v.as_object())
+        .map_or(0, serde_json::Map::len);
+
+    let mut properties = Vec::with_capacity(capacity);
 
     if let Some(obj) = schema.as_object()
         && let Some(props) = obj.get("properties").and_then(|v| v.as_object())

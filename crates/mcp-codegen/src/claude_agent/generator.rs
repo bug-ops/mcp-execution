@@ -131,6 +131,7 @@ impl<'a> ClaudeAgentGenerator<'a> {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use = "generated code should be saved or used"]
     pub fn generate(&self, server_info: &ServerInfo) -> Result<GeneratedCode> {
         tracing::info!(
             "Generating Claude Agent SDK code for server: {}",
@@ -192,18 +193,10 @@ impl<'a> ClaudeAgentGenerator<'a> {
         let typescript_name = to_camel_case(tool.name.as_str());
         let pascal_name = to_pascal_case(tool.name.as_str());
 
-        // Extract properties with Zod types
-        let zod_props = extract_zod_properties(&tool.input_schema);
-
-        let properties: Vec<PropertyInfo> = zod_props
+        // Extract properties with Zod types and convert to PropertyInfo
+        let properties: Vec<PropertyInfo> = extract_zod_properties(&tool.input_schema)
             .into_iter()
-            .map(|prop| PropertyInfo {
-                name: prop.name,
-                zod_type: prop.zod_type,
-                zod_modifiers: prop.zod_modifiers,
-                description: prop.description,
-                required: prop.required,
-            })
+            .map(PropertyInfo::from)
             .collect();
 
         Ok(ToolContext {

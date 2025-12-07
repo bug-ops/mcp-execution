@@ -68,13 +68,15 @@ pub fn json_type_to_zod(schema: &Value) -> (String, Vec<String>) {
 
                 // Check for string constraints
                 if let Some(min_length) = obj.get("minLength").and_then(serde_json::Value::as_u64) {
-                    modifiers.push(format!(".min({})", min_length));
+                    modifiers.push(format!(".min({min_length})"));
                 }
                 if let Some(max_length) = obj.get("maxLength").and_then(serde_json::Value::as_u64) {
-                    modifiers.push(format!(".max({})", max_length));
+                    modifiers.push(format!(".max({max_length})"));
                 }
                 if let Some(pattern) = obj.get("pattern").and_then(|v| v.as_str()) {
-                    modifiers.push(format!(".regex(/{}/)", pattern));
+                    // Escape forward slashes in the pattern for JavaScript regex
+                    let escaped_pattern = pattern.replace('/', "\\/");
+                    modifiers.push(format!(".regex(/{escaped_pattern}/)"));
                 }
             }
 
@@ -96,22 +98,23 @@ pub fn json_type_to_zod(schema: &Value) -> (String, Vec<String>) {
                 "number" => {
                     // Check for number constraints
                     if let Some(minimum) = obj.get("minimum").and_then(serde_json::Value::as_f64) {
-                        modifiers.push(format!(".min({})", minimum));
+                        modifiers.push(format!(".min({minimum})"));
                     }
                     if let Some(maximum) = obj.get("maximum").and_then(serde_json::Value::as_f64) {
-                        modifiers.push(format!(".max({})", maximum));
+                        modifiers.push(format!(".max({maximum})"));
                     }
                     "number".to_string()
                 }
                 "integer" => {
-                    modifiers.insert(0, ".int()".to_string());
-                    // Check for integer constraints
+                    // Collect constraints first, then prepend .int()
+                    let mut int_modifiers = vec![".int()".to_string()];
                     if let Some(minimum) = obj.get("minimum").and_then(serde_json::Value::as_i64) {
-                        modifiers.push(format!(".min({})", minimum));
+                        int_modifiers.push(format!(".min({minimum})"));
                     }
                     if let Some(maximum) = obj.get("maximum").and_then(serde_json::Value::as_i64) {
-                        modifiers.push(format!(".max({})", maximum));
+                        int_modifiers.push(format!(".max({maximum})"));
                     }
+                    modifiers = int_modifiers;
                     "number".to_string()
                 }
                 "boolean" => "boolean".to_string(),
@@ -206,28 +209,17 @@ pub fn format_zod_type(base_type: &str, modifiers: &[String]) -> String {
 /// Extracts property information from JSON Schema for Zod generation.
 ///
 /// Returns property details including Zod type and modifiers.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_codegen::claude_agent::zod::extract_zod_properties;
-/// use serde_json::json;
-///
-/// let schema = json!({
-///     "type": "object",
-///     "properties": {
-///         "email": {"type": "string", "format": "email"},
-///         "age": {"type": "integer", "minimum": 0}
-///     },
-///     "required": ["email"]
-/// });
-///
-/// let props = extract_zod_properties(&schema);
-/// assert_eq!(props.len(), 2);
-/// ```
+/// This is an internal function used by [`ClaudeAgentGenerator`](crate::claude_agent::ClaudeAgentGenerator).
 #[must_use]
-pub fn extract_zod_properties(schema: &Value) -> Vec<ZodPropertyInfo> {
-    let mut properties = Vec::new();
+pub(crate) fn extract_zod_properties(schema: &Value) -> Vec<ZodPropertyInfo> {
+    // Pre-calculate capacity if possible
+    let capacity = schema
+        .as_object()
+        .and_then(|obj| obj.get("properties"))
+        .and_then(|v| v.as_object())
+        .map_or(0, serde_json::Map::len);
+
+    let mut properties = Vec::with_capacity(capacity);
 
     if let Some(obj) = schema.as_object()
         && let Some(props) = obj.get("properties").and_then(|v| v.as_object())
@@ -270,8 +262,12 @@ pub fn extract_zod_properties(schema: &Value) -> Vec<ZodPropertyInfo> {
 }
 
 /// Information about a property with Zod type details.
+///
+/// This is an internal type used during JSON Schema extraction.
+/// It gets converted to [`PropertyInfo`](crate::claude_agent::PropertyInfo)
+/// for template rendering.
 #[derive(Debug, Clone)]
-pub struct ZodPropertyInfo {
+pub(crate) struct ZodPropertyInfo {
     /// Property name
     pub name: String,
     /// Base Zod type (e.g., "string", "number")
@@ -284,11 +280,15 @@ pub struct ZodPropertyInfo {
     pub required: bool,
 }
 
-impl ZodPropertyInfo {
-    /// Returns the full Zod expression for this property.
-    #[must_use]
-    pub fn full_zod_expression(&self) -> String {
-        format_zod_type(&self.zod_type, &self.zod_modifiers)
+impl From<ZodPropertyInfo> for crate::claude_agent::types::PropertyInfo {
+    fn from(zod: ZodPropertyInfo) -> Self {
+        Self {
+            name: zod.name,
+            zod_type: zod.zod_type,
+            zod_modifiers: zod.zod_modifiers,
+            description: zod.description,
+            required: zod.required,
+        }
     }
 }
 
@@ -432,15 +432,33 @@ mod tests {
     }
 
     #[test]
-    fn test_zod_property_info_full_expression() {
-        let prop = ZodPropertyInfo {
+    fn test_zod_property_info_to_property_info() {
+        use crate::claude_agent::types::PropertyInfo;
+
+        let zod_prop = ZodPropertyInfo {
             name: "email".to_string(),
             zod_type: "string".to_string(),
             zod_modifiers: vec![".email()".to_string()],
-            description: None,
+            description: Some("User email".to_string()),
             required: true,
         };
 
-        assert_eq!(prop.full_zod_expression(), "string().email()");
+        let prop: PropertyInfo = zod_prop.into();
+
+        assert_eq!(prop.name, "email");
+        assert_eq!(prop.zod_type, "string");
+        assert_eq!(prop.zod_modifiers, vec![".email()".to_string()]);
+        assert_eq!(prop.description, Some("User email".to_string()));
+        assert!(prop.required);
+    }
+
+    #[test]
+    fn test_regex_pattern_escaping() {
+        let (_, mods) = json_type_to_zod(&json!({
+            "type": "string",
+            "pattern": "^https?://[a-z]+.com/path$"
+        }));
+        // Forward slashes in pattern should be escaped
+        assert!(mods.iter().any(|m| m.contains("\\/") || !m.contains('/')));
     }
 }
