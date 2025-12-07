@@ -19,7 +19,7 @@ chrono = "0.4"
 clap = "4.5"
 clap_complete = "4.5"
 colored = "3.0"
-criterion = "0.7"
+criterion = "0.8"
 dhat = "0.3"
 dialoguer = "0.12"
 dirs = "6.0"
@@ -29,7 +29,7 @@ mcp-core = { path = "crates/mcp-core" }
 mcp-introspector = { path = "crates/mcp-introspector" }
 mcp-files = { path = "crates/mcp-files" }
 rayon = "1.11"
-rmcp = "0.9"
+rmcp = "0.10"
 serde = "1.0"
 serde_json = "1.0"
 static_assertions = "1.1"
@@ -39,7 +39,7 @@ tokio = "1.48"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-uuid = "1.11"
+uuid = "1.19"
 which = "8.0"
 
 [workspace.lints.rust]
