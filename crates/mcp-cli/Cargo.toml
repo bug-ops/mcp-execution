@@ -20,23 +20,25 @@ name = "mcp-execution-cli"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
+anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "env", "cargo", "color"] }
 clap_complete.workspace = true
-colored.workspace = true
-dialoguer.workspace = true
-dirs.workspace = true
-mcp-codegen.workspace = true
-mcp-core.workspace = true
-mcp-introspector.workspace = true
-mcp-files.workspace = true
+colored = { workspace = true }
+criterion = { workspace = true }
+dhat = { workspace = true }
+dialoguer = { workspace = true }
+dirs = { workspace = true }
+mcp-codegen = { workspace = true }
+mcp-core = { workspace = true }
+mcp-introspector = { workspace = true }
+mcp-files = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
-toml.workspace = true
-tracing.workspace = true
+toml = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
-which.workspace = true
+which = { workspace = true }
 
 [dev-dependencies]
-tempfile.workspace = true
+tempfile = { workspace = true }
