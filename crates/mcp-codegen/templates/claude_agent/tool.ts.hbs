@@ -3,6 +3,19 @@ import { z } from "zod";
 
 /**
  * {{description}}
+ *
+ * @remarks
+ * This is a generated stub. Replace the implementation below with your actual tool logic.
+ * The Zod schema provides type-safe argument validation.
+ *
+ * @example
+ * ```typescript
+ * // Example implementation connecting to an API:
+ * async (args) => {
+ *   const result = await yourApi.{{typescript_name}}(args);
+ *   return { content: [{ type: "text", text: JSON.stringify(result) }] };
+ * }
+ * ```
  */
 export const {{typescript_name}} = tool(
   "{{name}}",
@@ -13,14 +26,9 @@ export const {{typescript_name}} = tool(
 {{/each}}
   },
   async (args) => {
-    // TODO: Implement tool logic
-    // This is a stub - actual implementation depends on MCP bridge
-    return {
-      content: [{
-        type: "text" as const,
-        text: JSON.stringify({ tool: "{{name}}", args })
-      }]
-    };
+    // Stub implementation - replace with your actual tool logic
+    // See JSDoc above for example implementation patterns
+    throw new Error("Tool '{{name}}' not implemented. Replace this stub with your implementation.");
   }
 );
 
