@@ -123,7 +123,7 @@ Supported transports:
 - **Docker**: Containerized servers
 
 ### 🏗️ Production Ready
-- **684 tests** passing (100% pass rate)
+- **486 tests** passing (100% pass rate)
 - **Microsoft Rust Guidelines** compliant
 - **100% documentation coverage**
 - **Multi-platform releases**: Linux, macOS, Windows (x86_64 + ARM64)
@@ -245,7 +245,7 @@ See [examples/progressive-loading-usage.md](examples/progressive-loading-usage.m
 
 ## How It Works
 
-### Architecture: 5 Workspace Crates
+### Architecture: 6 Workspace Crates
 
 ```
 mcp-execution/
@@ -269,6 +269,11 @@ mcp-execution/
 │   ├── Export to disk    # Write to ~/.claude/servers/
 │   └── Directory mgmt    # Handle nested structures
 │
+├── mcp-server/           # MCP server for generation
+│   ├── introspect_server # Discover tools from MCP server
+│   ├── save_categorized  # Generate with categorization
+│   └── list_generated    # List generated servers
+│
 └── mcp-cli/              # Command-line interface
     ├── generate          # Main command
     ├── setup             # Initialize configuration
@@ -278,9 +283,8 @@ mcp-execution/
 
 **Dependency Graph** (no circular dependencies):
 ```
-mcp-cli → {mcp-codegen, mcp-introspector, mcp-files}
-       ↘ mcp-core
-
+mcp-cli → {mcp-codegen, mcp-introspector, mcp-files, mcp-core}
+mcp-server → {mcp-codegen, mcp-introspector, mcp-files, mcp-core}
 mcp-codegen → {mcp-files, mcp-core}
 mcp-introspector → {rmcp, mcp-core}
 mcp-files → mcp-core
@@ -821,16 +825,16 @@ at your option.
 
 ## Status
 
-**Current Version**: v0.5.0 (2025-01-26)
+**Current Version**: v0.6.0 (2025-12-07)
 
 **Production Status**: ✅ **READY FOR PRODUCTION**
 
 **Quality Metrics**:
-- **Tests**: 684/684 passing (100%)
+- **Tests**: 486/486 passing (100%)
 - **Token Savings**: 98% (30,000 → 500-1,500 tokens per tool)
 - **Performance**: 526x faster than target (0.19ms for 10 tools)
 - **Code Coverage**: >85% via Codecov
-- **Crates**: 5 workspace crates
+- **Crates**: 6 workspace crates
 - **Lines of Code**: ~12,000 (Rust)
 - **Documentation**: Complete (ADRs, examples, API docs)
 

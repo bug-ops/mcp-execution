@@ -1,7 +1,7 @@
 # MCP Code Execution - Architecture
 
-**Last Updated**: 2025-01-25
-**Version**: 0.4.0 (Progressive Loading Only)
+**Last Updated**: 2025-12-07
+**Version**: 0.6.0 (Progressive Loading + MCP Server)
 **Rust Edition**: 2024
 **MSRV**: 1.89
 
@@ -12,11 +12,11 @@
 **Status**: Focused architecture achieving 98% token savings through progressive loading pattern.
 
 **Key Metrics**:
-- ✅ 684 tests passing (100% pass rate)
+- ✅ 486 tests passing (100% pass rate)
 - ✅ 98% token savings (30,000 → 500-1,500 tokens per tool)
 - ✅ 526x faster than target (2ms generation)
-- ✅ 5 crates (simplified from 10)
-- ✅ ~12,000 lines Rust (down from ~48,000)
+- ✅ 6 crates
+- ✅ ~12,000 lines Rust
 
 ## Executive Summary
 
@@ -61,8 +61,9 @@ mcp-execution/
 │   ├── mcp-core/             # Foundation: types, traits, errors
 │   ├── mcp-introspector/     # MCP server analysis (rmcp)
 │   ├── mcp-codegen/          # TypeScript code generation
-│   ├── mcp-files/              # Filesystem for code organization
-│   └── mcp-execution-cli/    # CLI application
+│   ├── mcp-files/            # Filesystem for code organization
+│   ├── mcp-server/           # MCP server for generation
+│   └── mcp-cli/              # CLI application
 ├── examples/
 │   └── progressive-loading-usage.md  # Usage tutorial
 ├── docs/
@@ -75,9 +76,13 @@ mcp-execution/
 
 ```mermaid
 graph TD
-    CLI[mcp-execution-cli<br/>CLI application] --> CODEGEN[mcp-codegen<br/>Code generation]
+    CLI[mcp-cli<br/>CLI application] --> CODEGEN[mcp-codegen<br/>Code generation]
     CLI --> INTRO[mcp-introspector<br/>Server introspection]
     CLI --> CORE[mcp-core<br/>Foundation]
+
+    SERVER[mcp-server<br/>MCP Generation Server] --> CODEGEN
+    SERVER --> INTRO
+    SERVER --> CORE
 
     CODEGEN --> FILES[mcp-files<br/>Filesystem]
     CODEGEN --> CORE
@@ -89,6 +94,7 @@ graph TD
 
     style CORE fill:#e1f5ff
     style RMCP fill:#e1ffe1
+    style SERVER fill:#ffe1e1
 ```
 
 **Dependency Discipline**: Zero circular dependencies. Clean hierarchy ensures fast incremental compilation.
@@ -334,7 +340,36 @@ impl VirtualFilesystem {
 
 **Usage**: In-memory file structure before disk writes.
 
-### mcp-execution-cli
+### mcp-server
+
+**Purpose**: MCP server for progressive loading generation with Claude-powered categorization.
+
+**Key Functions**:
+```rust
+pub struct GeneratorService {
+    state: Arc<StateManager>,
+    introspector: Arc<Mutex<Introspector>>,
+}
+
+impl GeneratorService {
+    // Introspect an MCP server and prepare for categorization
+    async fn introspect_server(&self, params: IntrospectServerParams) -> Result<CallToolResult>;
+
+    // Generate TypeScript files using Claude's categorization
+    async fn save_categorized_tools(&self, params: SaveCategorizedToolsParams) -> Result<CallToolResult>;
+
+    // List all servers with generated files
+    async fn list_generated_servers(&self, params: ListGeneratedServersParams) -> Result<CallToolResult>;
+}
+```
+
+**Features**:
+- Session-based workflow (30-minute timeout)
+- Claude provides categorization (category, keywords, short_description)
+- Generates TypeScript with JSDoc tags for discovery
+- Defense-in-depth path traversal protection
+
+### mcp-cli
 
 **Purpose**: Command-line interface.
 
@@ -511,9 +546,9 @@ All architectural decisions documented:
 ✅ **Focused**: One clear purpose - progressive loading TypeScript generation
 ✅ **Fast**: 526x faster than target (2ms per server)
 ✅ **Effective**: 98% token savings achieved
-✅ **Simple**: 5 crates, 12,000 LOC, clear architecture
-✅ **Maintainable**: Simple codebase, no LLM dependencies
-✅ **Production Ready**: 684 tests passing, all targets exceeded
+✅ **Simple**: 6 crates, 12,000 LOC, clear architecture
+✅ **Maintainable**: Simple codebase, Claude-powered categorization
+✅ **Production Ready**: 486 tests passing, all targets exceeded
 
 **Result**: A simple, focused tool that solves the token efficiency problem without over-engineering.
 

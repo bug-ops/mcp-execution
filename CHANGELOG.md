@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] - 2025-12-07
+
+### Summary
+
+**MCP Generation Server & Enhanced Categorization**
+
+This release introduces `mcp-server` crate - an MCP server that enables progressive loading generation directly from Claude Code, with Claude-powered tool categorization.
+
+**Key Achievements**:
+- ✅ New `mcp-server` crate with 3 MCP tools
+- ✅ Claude-powered categorization (category, keywords, short_description)
+- ✅ 486 tests passing (100% pass rate)
+- ✅ ~85% test coverage for mcp-server
+- ✅ Simplified CI (removed sccache)
+
+### Added
+
+- **mcp-server crate**: MCP server for progressive loading generation
+  - `introspect_server` - Connect to MCP server and discover tools
+  - `save_categorized_tools` - Generate TypeScript with Claude's categorization
+  - `list_generated_servers` - List all servers with generated files
+  - Session-based workflow with 30-minute timeout
+  - Defense-in-depth path traversal protection
+
+- **Categorization Support**: Enhanced TypeScript generation with metadata
+  - `category` - Tool grouping (e.g., "issues", "repositories")
+  - `keywords` - Comma-separated discovery keywords
+  - `short_description` - Concise description for JSDoc headers
+  - JSDoc tags (`@category`, `@keywords`) for AI agent discovery
+
+- **Binary**: `mcp-execution` binary for running the MCP server
+  ```bash
+  mcp-execution  # Starts MCP server on stdio
+  ```
+
+### Changed
+
+- **CI/CD**: Removed sccache, keeping only Swatinem/rust-cache
+  - Simplified caching strategy
+  - 44 lines removed from workflows
+  - Still provides 60-80% build time reduction
+
+- **Test Coverage**: Significantly improved mcp-server coverage
+  - service.rs: 10% → 85% line coverage
+  - state.rs: 99% coverage
+  - types.rs: 100% coverage
+  - Added 31 new tests (unit + integration)
+
+### Performance
+
+- **Clone Elimination**: Consume params directly instead of cloning
+- **HashMap Pre-allocation**: Use `with_capacity()` for known sizes
+- **Single-pass Iteration**: Combined double iteration into one loop
+
+### Documentation
+
+- Updated README.md with 6 crates architecture
+- Updated CLAUDE.md with mcp-server details
+- Updated docs/ARCHITECTURE.md with mcp-server section
+- Added mcp-server to dependency graphs
+
+---
+
 ## [0.5.0] - 2025-11-26
 
 ### Summary
@@ -808,5 +871,5 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2025-11-13
-**Version**: 0.1.0 (Production Ready)
+**Last Updated**: 2025-12-07
+**Version**: 0.6.0 (Production Ready)
