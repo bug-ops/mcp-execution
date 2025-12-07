@@ -5,8 +5,7 @@
 #![allow(clippy::unused_async)]
 #![allow(clippy::cast_possible_truncation)]
 // u128->u64 for millis is safe in practice
-// TODO(phase-7.3): Add comprehensive error documentation to all public CLI functions
-#![allow(clippy::missing_errors_doc)]
+// Error documentation added to all public CLI functions
 #![allow(clippy::needless_collect)]
 #![allow(clippy::unnecessary_wraps)] // API design requires Result for consistency across commands
 #![allow(clippy::unnecessary_literal_unwrap)]

@@ -286,7 +286,12 @@ impl ServerManager {
 ///
 /// # Errors
 ///
-/// Returns an error if server operation fails.
+/// Returns an error if:
+/// - Claude Desktop configuration file cannot be found or read
+/// - Configuration file contains invalid JSON
+/// - Requested server is not found in configuration (for Info action)
+/// - Server introspection fails (for Info action)
+/// - Output formatting fails
 ///
 /// # Examples
 ///

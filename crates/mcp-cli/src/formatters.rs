@@ -55,12 +55,20 @@ pub mod json {
     /// Format data as JSON.
     ///
     /// Uses pretty-printing with 2-space indentation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         let json = serde_json::to_string_pretty(data)?;
         Ok(json)
     }
 
     /// Format data as compact JSON (no formatting).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
     pub fn format_compact<T: Serialize>(data: &T) -> Result<String> {
         let json = serde_json::to_string(data)?;
         Ok(json)
@@ -75,6 +83,10 @@ pub mod text {
     ///
     /// Uses JSON representation but without colors or fancy formatting.
     /// Suitable for piping to other commands or scripts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         // For text mode, use JSON without pretty printing
         json::format_compact(data)
@@ -88,6 +100,10 @@ pub mod pretty {
     /// Format data as colorized, human-readable output.
     ///
     /// Uses colors and formatting for better terminal readability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         // Convert to JSON value first for inspection
         let value = serde_json::to_value(data)?;

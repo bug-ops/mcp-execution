@@ -108,12 +108,9 @@ pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
 ///
 /// # Errors
 ///
-/// Returns an error if environment variables or headers are not in KEY=VALUE format.
-///
-/// # Panics
-///
-/// Panics if `server` is `None` when using stdio transport (i.e., when neither
-/// `http` nor `sse` is provided). This is enforced by CLI argument validation.
+/// Returns an error if:
+/// - Environment variables or headers are not in KEY=VALUE format
+/// - `server` is `None` when using stdio transport (neither `http` nor `sse` provided)
 ///
 /// # Examples
 ///
@@ -180,7 +177,8 @@ pub fn build_server_config(
         (id, builder.build())
     } else {
         // Stdio transport (default)
-        let command = server.expect("server is required for stdio transport");
+        let command = server
+            .ok_or_else(|| anyhow::anyhow!("server command is required for stdio transport"))?;
         let id = ServerId::new(&command);
         let mut builder: ServerConfigBuilder = ServerConfig::builder().command(command);
 
