@@ -33,7 +33,8 @@
 use crate::common::types::{GeneratedCode, GeneratedFile};
 use crate::common::typescript::{extract_properties, to_camel_case};
 use crate::progressive::types::{
-    BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolContext, ToolSummary,
+    BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolCategorization, ToolContext,
+    ToolSummary,
 };
 use crate::template_engine::TemplateEngine;
 use mcp_core::{Error, Result};
@@ -191,20 +192,20 @@ impl<'a> ProgressiveGenerator<'a> {
         Ok(code)
     }
 
-    /// Generates progressive loading files with category metadata.
+    /// Generates progressive loading files with categorization metadata.
     ///
-    /// Like `generate`, but includes category information from Claude's
-    /// categorization. Categories are displayed in the index file and
-    /// included in individual tool file headers.
+    /// Like `generate`, but includes full categorization information from Claude's
+    /// analysis. Categories, keywords, and short descriptions are displayed in
+    /// the index file and included in individual tool file headers.
     ///
     /// # Arguments
     ///
     /// * `server_info` - MCP server introspection data
-    /// * `categories` - Map of tool name to category name
+    /// * `categorizations` - Map of tool name to categorization metadata
     ///
     /// # Returns
     ///
-    /// Generated code with category metadata included.
+    /// Generated code with categorization metadata included.
     ///
     /// # Errors
     ///
@@ -213,7 +214,7 @@ impl<'a> ProgressiveGenerator<'a> {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_codegen::progressive::ProgressiveGenerator;
+    /// use mcp_codegen::progressive::{ProgressiveGenerator, ToolCategorization};
     /// use mcp_introspector::{ServerInfo, ServerCapabilities};
     /// use mcp_core::ServerId;
     /// use std::collections::HashMap;
@@ -233,33 +234,35 @@ impl<'a> ProgressiveGenerator<'a> {
     ///     },
     /// };
     ///
-    /// let mut categories = HashMap::new();
-    /// categories.insert("create_issue".to_string(), "issues".to_string());
-    /// categories.insert("list_issues".to_string(), "issues".to_string());
-    /// categories.insert("create_pr".to_string(), "pull-requests".to_string());
+    /// let mut categorizations = HashMap::new();
+    /// categorizations.insert("create_issue".to_string(), ToolCategorization {
+    ///     category: "issues".to_string(),
+    ///     keywords: "create,issue,new,bug".to_string(),
+    ///     short_description: "Create a new issue".to_string(),
+    /// });
     ///
-    /// let code = generator.generate_with_categories(&info, &categories)?;
+    /// let code = generator.generate_with_categories(&info, &categorizations)?;
     /// # Ok(())
     /// # }
     /// ```
     pub fn generate_with_categories(
         &self,
         server_info: &ServerInfo,
-        categories: &HashMap<String, String>,
+        categorizations: &HashMap<String, ToolCategorization>,
     ) -> Result<GeneratedCode> {
         tracing::info!(
-            "Generating progressive loading code with categories for server: {}",
+            "Generating progressive loading code with categorizations for server: {}",
             server_info.name
         );
 
         let mut code = GeneratedCode::new();
         let server_id = server_info.id.as_str();
 
-        // Generate tool files (one per tool) with category metadata
+        // Generate tool files (one per tool) with categorization metadata
         for tool in &server_info.tools {
             let tool_name = tool.name.as_str();
-            let category = categories.get(tool_name).map(String::as_str);
-            let tool_context = self.create_tool_context(server_id, tool, category)?;
+            let categorization = categorizations.get(tool_name);
+            let tool_context = self.create_tool_context(server_id, tool, categorization)?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
             code.add_file(GeneratedFile {
@@ -270,12 +273,12 @@ impl<'a> ProgressiveGenerator<'a> {
             tracing::debug!(
                 "Generated tool file: {}.ts (category: {:?})",
                 tool_context.typescript_name,
-                category
+                categorization.map(|c| &c.category)
             );
         }
 
         // Generate index.ts with category grouping
-        let index_context = self.create_index_context(server_info, Some(categories))?;
+        let index_context = self.create_index_context(server_info, Some(categorizations))?;
         let index_code = self.engine.render("progressive/index", &index_context)?;
 
         code.add_file(GeneratedFile {
@@ -283,7 +286,10 @@ impl<'a> ProgressiveGenerator<'a> {
             content: index_code,
         });
 
-        tracing::debug!("Generated index.ts with {} categories", categories.len());
+        tracing::debug!(
+            "Generated index.ts with {} categorizations",
+            categorizations.len()
+        );
 
         // Generate runtime bridge (same as non-categorized)
         let bridge_context = BridgeContext::default();
@@ -299,7 +305,7 @@ impl<'a> ProgressiveGenerator<'a> {
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
 
         tracing::info!(
-            "Successfully generated {} files for {} with categories (progressive loading)",
+            "Successfully generated {} files for {} with categorizations (progressive loading)",
             code.file_count(),
             server_info.name
         );
@@ -318,7 +324,7 @@ impl<'a> ProgressiveGenerator<'a> {
         &self,
         server_id: &str,
         tool: &mcp_introspector::ToolInfo,
-        category: Option<&str>,
+        categorization: Option<&ToolCategorization>,
     ) -> Result<ToolContext> {
         let typescript_name = to_camel_case(tool.name.as_str());
 
@@ -332,7 +338,9 @@ impl<'a> ProgressiveGenerator<'a> {
             description: tool.description.clone(),
             input_schema: tool.input_schema.clone(),
             properties,
-            category: category.map(String::from),
+            category: categorization.map(|c| c.category.clone()),
+            keywords: categorization.map(|c| c.keywords.clone()),
+            short_description: categorization.map(|c| c.short_description.clone()),
         })
     }
 
@@ -340,24 +348,26 @@ impl<'a> ProgressiveGenerator<'a> {
     fn create_index_context(
         &self,
         server_info: &ServerInfo,
-        categories: Option<&HashMap<String, String>>,
+        categorizations: Option<&HashMap<String, ToolCategorization>>,
     ) -> Result<IndexContext> {
         let tools: Vec<ToolSummary> = server_info
             .tools
             .iter()
             .map(|tool| {
                 let tool_name = tool.name.as_str();
-                let category = categories.and_then(|c| c.get(tool_name)).cloned();
+                let cat = categorizations.and_then(|c| c.get(tool_name));
                 ToolSummary {
                     typescript_name: to_camel_case(tool_name),
                     description: tool.description.clone(),
-                    category,
+                    category: cat.map(|c| c.category.clone()),
+                    keywords: cat.map(|c| c.keywords.clone()),
+                    short_description: cat.map(|c| c.short_description.clone()),
                 }
             })
             .collect();
 
-        // Build category groups if categories are provided
-        let category_groups = categories.map(|_| {
+        // Build category groups if categorizations are provided
+        let category_groups = categorizations.map(|_| {
             let mut groups: HashMap<String, Vec<ToolSummary>> = HashMap::new();
 
             for tool in &tools {
@@ -551,8 +561,13 @@ mod tests {
             output_schema: None,
         };
 
+        let categorization = ToolCategorization {
+            category: "messaging".to_string(),
+            keywords: "send,message,chat".to_string(),
+            short_description: "Send a message".to_string(),
+        };
         let context = generator
-            .create_tool_context("test-server", &tool, Some("messaging"))
+            .create_tool_context("test-server", &tool, Some(&categorization))
             .unwrap();
 
         assert_eq!(context.server_id, "test-server");
@@ -562,6 +577,11 @@ mod tests {
         assert_eq!(context.properties.len(), 1);
         assert_eq!(context.properties[0].name, "text");
         assert_eq!(context.category, Some("messaging".to_string()));
+        assert_eq!(context.keywords, Some("send,message,chat".to_string()));
+        assert_eq!(
+            context.short_description,
+            Some("Send a message".to_string())
+        );
     }
 
     #[test]

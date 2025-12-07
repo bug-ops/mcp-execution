@@ -12,12 +12,12 @@
  *
  * ### {{name}}
 {{#each tools}}
- * - `{{typescript_name}}`: {{description}}
+ * - `{{typescript_name}}`: {{#if short_description}}{{short_description}}{{else}}{{description}}{{/if}}{{#if keywords}} [{{keywords}}]{{/if}}
 {{/each}}
 {{/each}}
 {{else}}
 {{#each tools}}
- * - `{{typescript_name}}`: {{description}}
+ * - `{{typescript_name}}`: {{#if short_description}}{{short_description}}{{else}}{{description}}{{/if}}{{#if keywords}} [{{keywords}}]{{/if}}
 {{/each}}
 {{/if}}
  *

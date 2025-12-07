@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 ///     input_schema: json!({"type": "object"}),
 ///     properties: vec![],
 ///     category: Some("issues".to_string()),
+///     keywords: Some("create,issue,new,bug".to_string()),
+///     short_description: Some("Create a new issue".to_string()),
 /// };
 ///
 /// assert_eq!(context.server_id, "github");
@@ -44,6 +46,10 @@ pub struct ToolContext {
     pub properties: Vec<PropertyInfo>,
     /// Optional category for tool grouping
     pub category: Option<String>,
+    /// Optional keywords for discovery via grep/search
+    pub keywords: Option<String>,
+    /// Optional short description for header comment
+    pub short_description: Option<String>,
 }
 
 /// Information about a single parameter property.
@@ -125,6 +131,8 @@ pub struct IndexContext {
 ///     typescript_name: "createIssue".to_string(),
 ///     description: "Creates a new issue".to_string(),
 ///     category: Some("issues".to_string()),
+///     keywords: Some("create,issue,new".to_string()),
+///     short_description: Some("Create a new issue".to_string()),
 /// };
 ///
 /// assert_eq!(summary.typescript_name, "createIssue");
@@ -137,6 +145,37 @@ pub struct ToolSummary {
     pub description: String,
     /// Optional category for tool grouping
     pub category: Option<String>,
+    /// Optional keywords for discovery via grep/search
+    pub keywords: Option<String>,
+    /// Optional short description for header comment
+    pub short_description: Option<String>,
+}
+
+/// Categorization metadata for a single tool.
+///
+/// Contains all categorization data from Claude's analysis.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_codegen::progressive::ToolCategorization;
+///
+/// let cat = ToolCategorization {
+///     category: "issues".to_string(),
+///     keywords: "create,issue,new,bug".to_string(),
+///     short_description: "Create a new issue in a repository".to_string(),
+/// };
+///
+/// assert_eq!(cat.category, "issues");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCategorization {
+    /// Category for tool grouping
+    pub category: String,
+    /// Comma-separated keywords for discovery
+    pub keywords: String,
+    /// Concise description for header comment
+    pub short_description: String,
 }
 
 /// Category information for grouped tool display in index.
@@ -155,6 +194,8 @@ pub struct ToolSummary {
 ///             typescript_name: "createIssue".to_string(),
 ///             description: "Creates a new issue".to_string(),
 ///             category: Some("issues".to_string()),
+///             keywords: Some("create,issue".to_string()),
+///             short_description: Some("Create issue".to_string()),
 ///         },
 ///     ],
 /// };
@@ -202,12 +243,15 @@ mod tests {
             input_schema: json!({"type": "object"}),
             properties: vec![],
             category: Some("issues".to_string()),
+            keywords: Some("create,issue,new".to_string()),
+            short_description: Some("Create a new issue".to_string()),
         };
 
         assert_eq!(context.server_id, "github");
         assert_eq!(context.name, "create_issue");
         assert_eq!(context.typescript_name, "createIssue");
         assert_eq!(context.category, Some("issues".to_string()));
+        assert_eq!(context.keywords, Some("create,issue,new".to_string()));
     }
 
     #[test]
@@ -245,10 +289,13 @@ mod tests {
             typescript_name: "createIssue".to_string(),
             description: "Creates an issue".to_string(),
             category: Some("issues".to_string()),
+            keywords: Some("create,issue".to_string()),
+            short_description: Some("Create issue".to_string()),
         };
 
         assert_eq!(summary.typescript_name, "createIssue");
         assert_eq!(summary.category, Some("issues".to_string()));
+        assert_eq!(summary.keywords, Some("create,issue".to_string()));
     }
 
     #[test]

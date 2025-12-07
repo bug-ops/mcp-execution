@@ -382,13 +382,24 @@ fn generate_with_categorization(
     server_info: &mcp_introspector::ServerInfo,
     categorization: &HashMap<String, &CategorizedTool>,
 ) -> mcp_core::Result<mcp_codegen::GeneratedCode> {
-    // Convert CategorizedTool map to simple tool_name -> category map
-    let categories: HashMap<String, String> = categorization
+    use mcp_codegen::progressive::ToolCategorization;
+
+    // Convert CategorizedTool map to ToolCategorization map
+    let categorizations: HashMap<String, ToolCategorization> = categorization
         .iter()
-        .map(|(tool_name, cat_tool)| (tool_name.clone(), cat_tool.category.clone()))
+        .map(|(tool_name, cat_tool)| {
+            (
+                tool_name.clone(),
+                ToolCategorization {
+                    category: cat_tool.category.clone(),
+                    keywords: cat_tool.keywords.clone(),
+                    short_description: cat_tool.short_description.clone(),
+                },
+            )
+        })
         .collect();
 
-    generator.generate_with_categories(server_info, &categories)
+    generator.generate_with_categories(server_info, &categorizations)
 }
 
 #[cfg(test)]
