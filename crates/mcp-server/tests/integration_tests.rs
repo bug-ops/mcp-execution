@@ -23,7 +23,7 @@ fn test_service_info_has_correct_capabilities() {
     // Verify protocol version
     assert_eq!(
         info.protocol_version,
-        rmcp::model::ProtocolVersion::V_2024_11_05
+        rmcp::model::ProtocolVersion::V_2025_06_18
     );
 
     // Verify tools are enabled

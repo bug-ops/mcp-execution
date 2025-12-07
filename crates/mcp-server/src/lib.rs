@@ -50,13 +50,16 @@
 //! - **Discoverable**: grep-friendly headers for tool discovery
 
 pub mod service;
+pub mod skill;
 pub mod state;
 pub mod types;
 
 pub use service::GeneratorService;
 pub use state::StateManager;
 pub use types::{
-    CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
-    ListGeneratedServersParams, ListGeneratedServersResult, PendingGeneration,
-    SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolGenerationError, ToolMetadata,
+    CategorizedTool, GenerateSkillParams, GenerateSkillResult, GeneratedServerInfo,
+    IntrospectServerParams, IntrospectServerResult, ListGeneratedServersParams,
+    ListGeneratedServersResult, PendingGeneration, SaveCategorizedToolsParams,
+    SaveCategorizedToolsResult, SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata,
+    SkillTool, ToolExample, ToolGenerationError, ToolMetadata,
 };

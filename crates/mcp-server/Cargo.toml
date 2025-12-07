@@ -17,10 +17,12 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 dirs = { workspace = true }
+handlebars = { workspace = true }
 mcp-codegen = { workspace = true }
 mcp-core = { workspace = true }
 mcp-files = { workspace = true }
 mcp-introspector = { workspace = true }
+regex = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-io", "macros"] }
 schemars = { workspace = true, features = ["uuid1", "chrono04"] }
 serde = { workspace = true, features = ["derive"] }
