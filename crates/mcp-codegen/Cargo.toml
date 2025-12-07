@@ -13,16 +13,16 @@ workspace = true
 default = []
 
 [dependencies]
-handlebars.workspace = true
-mcp-core.workspace = true
-mcp-introspector.workspace = true
+handlebars = { workspace = true }
+mcp-core = { workspace = true }
+mcp-introspector = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-tracing.workspace = true
+serde_json = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-criterion.workspace = true
-mcp-files.workspace = true
+criterion = { workspace = true }
+mcp-files = { workspace = true }
 
 [[bench]]
 name = "code_generation"

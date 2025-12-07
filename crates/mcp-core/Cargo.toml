@@ -10,15 +10,15 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
+async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-dirs.workspace = true
+dirs = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-tempfile.workspace = true
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

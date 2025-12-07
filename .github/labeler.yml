@@ -1,0 +1,134 @@
+# Labeler configuration for mcp-execution project
+# Documentation: https://github.com/actions/labeler
+
+# Crate-specific labels
+'crate: mcp-core':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-core/**/*'
+      - 'crates/mcp-core/*'
+
+'crate: mcp-introspector':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-introspector/**/*'
+      - 'crates/mcp-introspector/*'
+
+'crate: mcp-codegen':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-codegen/**/*'
+      - 'crates/mcp-codegen/*'
+
+'crate: mcp-files':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-files/**/*'
+      - 'crates/mcp-files/*'
+
+'crate: mcp-cli':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-cli/**/*'
+      - 'crates/mcp-cli/*'
+
+# Type labels
+'type: documentation':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'docs/**/*'
+      - '**/*.md'
+      - 'LICENSE'
+      - 'CHANGELOG.md'
+      - 'CLAUDE.md'
+
+'type: ci':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '.github/**/*'
+      - '.github/workflows/**/*'
+      - 'deny.toml'
+      - 'codecov.yml'
+      - 'rust-toolchain.toml'
+
+'type: dependencies':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**/*'
+
+'type: tests':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'tests/**/*'
+      - '**/*_test.rs'
+      - '**/tests.rs'
+      - '**/test_*.rs'
+
+'type: benchmarks':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'benches/**/*'
+      - '**/*_bench.rs'
+      - '**/bench_*.rs'
+
+'type: examples':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'examples/**/*'
+
+# Architecture Decision Records
+'adr':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'docs/adr/**/*'
+
+# Build configuration
+'build':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'Cargo.toml'
+      - 'build.rs'
+      - '**/build.rs'
+      - 'rust-toolchain.toml'
+
+# Security
+'security':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'deny.toml'
+      - 'SECURITY.md'
+
+# Multiple crates (workspace-wide changes)
+'workspace':
+  - changed-files:
+    - all-globs-to-all-files:
+      - 'crates/*/Cargo.toml'
+    - any-glob-to-any-file:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+# Breaking changes detection (based on file patterns)
+'breaking change':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/*/src/lib.rs'
+      - 'crates/*/src/types.rs'
+      - 'crates/*/src/error.rs'
+      - 'CHANGELOG.md'
+  - head-branch:
+    - '^breaking/.*'
+    - '^major/.*'
+
+# Release preparation
+'release':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'CHANGELOG.md'
+      - 'Cargo.toml'
+    - all-globs-to-all-files:
+      - 'crates/*/Cargo.toml'
+  - head-branch:
+    - '^release/.*'
+    - '^v[0-9]+\.[0-9]+\.[0-9]+.*'

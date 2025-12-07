@@ -7,9 +7,19 @@
  * ## Available Tools
  *
  * This server provides {{tool_count}} tools:
+{{#if categories}}
+{{#each categories}}
+ *
+ * ### {{name}}
 {{#each tools}}
- * - `{{typescript_name}}`: {{description}}
+ * - `{{typescript_name}}`: {{#if short_description}}{{short_description}}{{else}}{{description}}{{/if}}{{#if keywords}} [{{keywords}}]{{/if}}
 {{/each}}
+{{/each}}
+{{else}}
+{{#each tools}}
+ * - `{{typescript_name}}`: {{#if short_description}}{{short_description}}{{else}}{{description}}{{/if}}{{#if keywords}} [{{keywords}}]{{/if}}
+{{/each}}
+{{/if}}
  *
  * ## Usage
  *
@@ -25,9 +35,19 @@
  */
 
 // Re-export all tools
+{{#if categories}}
+{{#each categories}}
+// --- {{name}} ---
 {{#each tools}}
 export { {{typescript_name}}, type {{typescript_name}}Params, type {{typescript_name}}Result } from './{{typescript_name}}.js';
 {{/each}}
+
+{{/each}}
+{{else}}
+{{#each tools}}
+export { {{typescript_name}}, type {{typescript_name}}Params, type {{typescript_name}}Result } from './{{typescript_name}}.js';
+{{/each}}
+{{/if}}
 
 // Re-export runtime bridge
 export { callMCPTool } from './_runtime/mcp-bridge.js';
