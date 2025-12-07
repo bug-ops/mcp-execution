@@ -54,11 +54,13 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 // Core modules (always available)
+pub mod claude_agent;
 pub mod common;
 pub mod progressive;
 pub mod template_engine;
 
 // Re-export main types
+pub use claude_agent::ClaudeAgentGenerator;
 pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
 pub use progressive::ProgressiveGenerator;
 pub use template_engine::TemplateEngine;

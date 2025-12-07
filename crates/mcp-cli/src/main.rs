@@ -36,6 +36,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 use mcp_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_cli::GeneratorFormat;
 use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -219,10 +220,16 @@ pub enum Commands {
         #[arg(long)]
         name: Option<String>,
 
-        /// Custom output directory for progressive loading files
-        /// (default: ~/.claude/servers/)
-        #[arg(long)]
-        progressive_output: Option<PathBuf>,
+        /// Custom output directory for generated files
+        /// (default: ~/.claude/servers/ for progressive, ~/.claude/agent-sdk/ for claude-agent)
+        #[arg(long = "output")]
+        output_dir: Option<PathBuf>,
+
+        /// Code generation format
+        /// (progressive = one file per tool for Claude Code,
+        ///  claude-agent = Zod schemas for Claude Agent SDK)
+        #[arg(long, value_enum, default_value_t = GeneratorFormat::Progressive)]
+        generator: GeneratorFormat,
     },
 
     /// Manage MCP server connections.
@@ -350,7 +357,8 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             sse_url,
             server_headers,
             name,
-            progressive_output,
+            output_dir,
+            generator,
         } => {
             commands::generate::run(
                 from_config,
@@ -362,7 +370,8 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
                 sse_url,
                 server_headers,
                 name,
-                progressive_output,
+                output_dir,
+                generator,
                 output_format,
             )
             .await
@@ -445,19 +454,35 @@ mod tests {
         let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
         assert!(matches!(cli.command, Commands::Generate { .. }));
 
-        // Test with progressive output
+        // Test with output dir
+        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--output", "/tmp/output"]);
+        if let Commands::Generate { output_dir, .. } = cli.command {
+            assert_eq!(output_dir, Some(PathBuf::from("/tmp/output")));
+        } else {
+            panic!("Expected Generate command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_with_generator_format() {
+        // Test default (progressive)
+        let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
+        if let Commands::Generate { generator, .. } = cli.command {
+            assert_eq!(generator, GeneratorFormat::Progressive);
+        } else {
+            panic!("Expected Generate command");
+        }
+
+        // Test claude-agent format
         let cli = Cli::parse_from([
             "mcp-cli",
             "generate",
             "server",
-            "--progressive-output",
-            "/tmp/output",
+            "--generator",
+            "claude-agent",
         ]);
-        if let Commands::Generate {
-            progressive_output, ..
-        } = cli.command
-        {
-            assert_eq!(progressive_output, Some(PathBuf::from("/tmp/output")));
+        if let Commands::Generate { generator, .. } = cli.command {
+            assert_eq!(generator, GeneratorFormat::ClaudeAgent);
         } else {
             panic!("Expected Generate command");
         }

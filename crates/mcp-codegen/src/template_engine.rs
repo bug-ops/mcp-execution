@@ -58,6 +58,9 @@ impl<'a> TemplateEngine<'a> {
         // Register progressive loading templates
         Self::register_progressive_templates(&mut handlebars)?;
 
+        // Register Claude Agent SDK templates
+        Self::register_claude_agent_templates(&mut handlebars)?;
+
         Ok(Self { handlebars })
     }
 
@@ -96,6 +99,46 @@ impl<'a> TemplateEngine<'a> {
             )
             .map_err(|e| Error::SerializationError {
                 message: format!("Failed to register progressive runtime-bridge template: {e}"),
+                source: None,
+            })?;
+
+        Ok(())
+    }
+
+    /// Registers Claude Agent SDK templates.
+    ///
+    /// Registers templates for Claude Agent SDK format with Zod schemas.
+    fn register_claude_agent_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
+        // Tool template: generates a single tool with Zod schema
+        handlebars
+            .register_template_string(
+                "claude_agent/tool",
+                include_str!("../templates/claude_agent/tool.ts.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register claude_agent tool template: {e}"),
+                source: None,
+            })?;
+
+        // Server template: generates MCP server with createSdkMcpServer
+        handlebars
+            .register_template_string(
+                "claude_agent/server",
+                include_str!("../templates/claude_agent/server.ts.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register claude_agent server template: {e}"),
+                source: None,
+            })?;
+
+        // Index template: entry point with exports
+        handlebars
+            .register_template_string(
+                "claude_agent/index",
+                include_str!("../templates/claude_agent/index.ts.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register claude_agent index template: {e}"),
                 source: None,
             })?;
 

@@ -1,0 +1,26 @@
+import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+{{#each tools}}
+import { {{typescript_name}} } from "./tools/{{typescript_name}}";
+{{/each}}
+
+/**
+ * {{server_name}} MCP Server
+ *
+ * Generated automatically from MCP server introspection.
+ *
+ * @version {{server_version}}
+ */
+export const {{server_variable_name}}Server = createSdkMcpServer({
+  name: "{{server_name}}",
+  version: "{{server_version}}",
+  tools: [
+{{#each tools}}
+    {{typescript_name}},
+{{/each}}
+  ]
+});
+
+/**
+ * Default export for convenience.
+ */
+export default {{server_variable_name}}Server;

@@ -1,0 +1,31 @@
+/**
+ * {{server_name}} - Claude Agent SDK Integration
+ *
+ * This package provides type-safe MCP tools for the Claude Agent SDK.
+ *
+ * @version {{server_version}}
+ * @packageDocumentation
+ */
+
+// Export the MCP server
+export { {{server_variable_name}}Server, {{server_variable_name}}Server as default } from "./server";
+
+// Export individual tools for selective use
+{{#each tools}}
+export { {{typescript_name}} } from "./tools/{{typescript_name}}";
+export type { {{typescript_name}}Args } from "./tools/{{typescript_name}}";
+{{/each}}
+
+/**
+ * Server information
+ */
+export const serverInfo = {
+  name: "{{server_name}}",
+  version: "{{server_version}}",
+  toolCount: {{tool_count}},
+  tools: [
+{{#each tools}}
+    "{{typescript_name}}",
+{{/each}}
+  ] as const
+} as const;

@@ -1,13 +1,19 @@
 //! Generate command implementation.
 //!
-//! Generates progressive loading TypeScript files from MCP server tool definitions.
+//! Generates TypeScript files from MCP server tool definitions.
+//! Supports two output formats:
+//! - Progressive loading (one file per tool, for Claude Code)
+//! - Claude Agent SDK (Zod schemas, for SDK integration)
+//!
 //! This command:
 //! 1. Introspects the server to discover tools and schemas
-//! 2. Generates TypeScript files for progressive loading (one file per tool)
-//! 3. Saves files to `~/.claude/servers/{server-id}/` directory
+//! 2. Generates TypeScript files in the selected format
+//! 3. Saves files to the appropriate directory
 
 use super::common::{build_server_config, load_server_from_config};
+use crate::GeneratorFormat;
 use anyhow::{Context, Result};
+use mcp_codegen::claude_agent::ClaudeAgentGenerator;
 use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_files::FilesBuilder;
@@ -16,7 +22,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-/// Result of progressive loading code generation.
+/// Result of code generation.
 #[derive(Debug, Serialize)]
 struct GenerationResult {
     /// Server ID
@@ -27,17 +33,19 @@ struct GenerationResult {
     tool_count: usize,
     /// Path where files were saved
     output_path: String,
+    /// Generator format used
+    format: String,
 }
 
 /// Runs the generate command.
 ///
-/// Generates progressive loading TypeScript files from an MCP server.
+/// Generates TypeScript files from an MCP server.
 ///
 /// This command performs the following steps:
 /// 1. Builds `ServerConfig` from CLI arguments or loads from ~/.claude/mcp.json
 /// 2. Introspects the MCP server to discover tools
-/// 3. Generates TypeScript files (one per tool) using progressive loading pattern
-/// 4. Exports VFS to `~/.claude/servers/{server-id}/` directory
+/// 3. Generates TypeScript files in the selected format
+/// 4. Exports files to the appropriate directory
 ///
 /// # Arguments
 ///
@@ -50,7 +58,8 @@ struct GenerationResult {
 /// * `sse` - SSE transport URL
 /// * `headers` - HTTP headers in KEY=VALUE format
 /// * `name` - Custom server name for directory (default: `server_id`)
-/// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
+/// * `output_dir` - Custom output directory
+/// * `generator_format` - Code generation format (progressive or claude-agent)
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -74,6 +83,7 @@ pub async fn run(
     headers: Vec<String>,
     name: Option<String>,
     output_dir: Option<PathBuf>,
+    generator_format: GeneratorFormat,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
@@ -117,17 +127,30 @@ pub async fn run(
     // Determine server directory name (use custom name if provided, otherwise server_id)
     let server_dir_name = server_info.id.to_string();
 
-    // Generate progressive loading files
-    let generator = ProgressiveGenerator::new().context("failed to create code generator")?;
-
-    let generated_code = generator
-        .generate(&server_info)
-        .context("failed to generate TypeScript code")?;
-
-    info!(
-        "Generated {} files for progressive loading",
-        generated_code.file_count()
-    );
+    // Generate code based on selected format
+    let (generated_code, format_name, default_subdir) = match generator_format {
+        GeneratorFormat::Progressive => {
+            let generator =
+                ProgressiveGenerator::new().context("failed to create progressive generator")?;
+            let code = generator
+                .generate(&server_info)
+                .context("failed to generate progressive TypeScript code")?;
+            info!(
+                "Generated {} files for progressive loading",
+                code.file_count()
+            );
+            (code, "progressive", "servers")
+        }
+        GeneratorFormat::ClaudeAgent => {
+            let generator = ClaudeAgentGenerator::new()
+                .context("failed to create Claude Agent SDK generator")?;
+            let code = generator
+                .generate(&server_info)
+                .context("failed to generate Claude Agent SDK code")?;
+            info!("Generated {} files for Claude Agent SDK", code.file_count());
+            (code, "claude-agent", "agent-sdk")
+        }
+    };
 
     // Build VFS with generated code
     // Note: base_path should be "/" because generated files already have flat structure
@@ -144,7 +167,7 @@ pub async fn run(
         dirs::home_dir()
             .context("failed to get home directory")?
             .join(".claude")
-            .join("servers")
+            .join(default_subdir)
     };
 
     let output_path = base_dir.join(&server_dir_name);
@@ -164,6 +187,7 @@ pub async fn run(
         server_name: server_info.name.clone(),
         tool_count: server_info.tools.len(),
         output_path: output_path.display().to_string(),
+        format: format_name.to_string(),
     };
 
     // Output result
@@ -173,11 +197,16 @@ pub async fn run(
         }
         OutputFormat::Text => {
             println!("Server: {} ({})", result.server_name, result.server_id);
+            println!("Format: {}", result.format);
             println!("Generated {} tool files", result.tool_count);
             println!("Output: {}", result.output_path);
         }
         OutputFormat::Pretty => {
-            println!("✓ Successfully generated progressive loading files");
+            let format_desc = match generator_format {
+                GeneratorFormat::Progressive => "progressive loading",
+                GeneratorFormat::ClaudeAgent => "Claude Agent SDK",
+            };
+            println!("✓ Successfully generated {format_desc} files");
             println!("  Server: {} ({})", result.server_name, result.server_id);
             println!("  Tools: {}", result.tool_count);
             println!("  Location: {}", result.output_path);
@@ -225,11 +254,13 @@ mod tests {
             server_name: "Test Server".to_string(),
             tool_count: 5,
             output_path: "/path/to/output".to_string(),
+            format: "progressive".to_string(),
         };
 
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"server_id\":\"test\""));
         assert!(json.contains("\"tool_count\":5"));
+        assert!(json.contains("\"format\":\"progressive\""));
     }
 
     #[test]
@@ -248,5 +279,29 @@ mod tests {
 
         let code = result.unwrap();
         assert!(code.file_count() > 0);
+    }
+
+    #[test]
+    fn test_claude_agent_generator_creation() {
+        let generator = ClaudeAgentGenerator::new();
+        assert!(generator.is_ok());
+    }
+
+    #[test]
+    fn test_claude_agent_code_generation() {
+        let generator = ClaudeAgentGenerator::new().unwrap();
+        let server_info = create_mock_server_info();
+
+        let result = generator.generate(&server_info);
+        assert!(result.is_ok());
+
+        let code = result.unwrap();
+        assert!(code.file_count() > 0);
+
+        // Check that expected files are generated
+        let paths: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"index.ts"));
+        assert!(paths.contains(&"server.ts"));
+        assert!(paths.iter().any(|p| p.starts_with("tools/")));
     }
 }

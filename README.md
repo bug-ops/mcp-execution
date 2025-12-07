@@ -474,12 +474,79 @@ The SKILL.md file includes:
 
 ### `generate` - Generate TypeScript Tools
 
-Generate type-safe TypeScript files from MCP servers using progressive loading pattern.
+Generate type-safe TypeScript files from MCP servers. Supports two output formats:
+
+#### Output Formats
+
+| Format | Use Case | Output Location |
+|--------|----------|-----------------|
+| `progressive` (default) | Claude Code integration | `~/.claude/servers/` |
+| `claude-agent` | Claude Agent SDK integration | `~/.claude/agent-sdk/` |
+
+#### Progressive Format (Default)
+
+Progressive loading pattern with one file per tool for 98% token savings:
 
 ```bash
 # From mcp.json config (recommended)
 mcp-execution-cli generate --from-config github
 
+# Explicit format
+mcp-execution-cli generate --from-config github --generator progressive
+```
+
+**Generated Structure** (`~/.claude/servers/github/`):
+```
+github/
+├── createIssue.ts          # One tool file (500-1,500 tokens)
+├── updateIssue.ts
+├── index.ts                # Re-exports all tools
+└── _runtime/
+    └── mcp-bridge.ts       # Runtime connection manager
+```
+
+#### Claude Agent SDK Format
+
+Zod schemas for [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/typescript) integration:
+
+```bash
+# Generate Claude Agent SDK format
+mcp-execution-cli generate --from-config github --generator claude-agent
+```
+
+**Generated Structure** (`~/.claude/agent-sdk/github/`):
+```
+github/
+├── index.ts                # Entry point with exports
+├── server.ts               # createSdkMcpServer() definition
+└── tools/
+    ├── createIssue.ts      # Tool with Zod schema
+    └── updateIssue.ts
+```
+
+**Example Generated Tool** (`tools/createIssue.ts`):
+```typescript
+import { tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
+
+export const createIssue = tool(
+  "create_issue",
+  "Creates a new issue",
+  {
+    repo: z.string().describe("Repository in owner/repo format"),
+    title: z.string().describe("Issue title"),
+    body: z.string().optional().describe("Issue body")
+  },
+  async (args) => {
+    // Tool implementation
+    return { content: [{ type: "text", text: JSON.stringify(args) }] };
+  }
+);
+```
+
+#### Common Options
+
+```bash
 # Stdio transport (npx)
 mcp-execution-cli generate npx -y @modelcontextprotocol/server-github \
   --env GITHUB_TOKEN=ghp_xxx
@@ -498,21 +565,21 @@ mcp-execution-cli generate docker \
   --env=API_KEY=xxx
 
 # Custom output directory
-mcp-execution-cli generate github --progressive-output /custom/path
+mcp-execution-cli generate github --output /custom/path
 
 # Custom server name (affects output directory)
 mcp-execution-cli generate npx -y @server/package --name custom-name
-# Output: ~/.claude/servers/custom-name/ (not ~/.claude/servers/npx/)
 ```
 
 **Options**:
 - `--from-config <name>`: Load configuration from `mcp.json`
+- `--generator <format>`: Output format (`progressive` or `claude-agent`)
 - `--http <url>`: Use HTTP transport
 - `--sse <url>`: Use SSE transport
 - `--header <key=value>`: Add HTTP headers (repeatable)
 - `--env <key=value>`: Set environment variables (repeatable)
 - `--arg <value>`: Add command arguments (repeatable)
-- `--progressive-output <dir>`: Custom output directory
+- `--output <dir>`: Custom output directory
 - `--name <name>`: Custom server name (affects directory)
 
 ### `setup` - Initialize Configuration
