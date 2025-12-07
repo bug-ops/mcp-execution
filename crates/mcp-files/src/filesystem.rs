@@ -532,9 +532,21 @@ impl FileSystem {
     /// Converts VFS path to disk path.
     ///
     /// Strips leading '/' and joins with base path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if path contains `..` (path traversal attempt).
+    /// This is defense-in-depth since `FilePath::new()` also validates.
     fn vfs_to_disk_path(vfs_path: &str, base: &Path) -> PathBuf {
         // Strip leading '/' from VFS path
         let relative = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
+
+        // Defense-in-depth: reject path traversal attempts
+        // Primary validation is in FilePath::new(), this is a safety net
+        assert!(
+            !relative.contains(".."),
+            "SECURITY: Path traversal attempt detected in VFS path: {vfs_path}"
+        );
 
         // Convert forward slashes to platform-specific separators
         let relative_path = if cfg!(target_os = "windows") {

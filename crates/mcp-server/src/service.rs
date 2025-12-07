@@ -237,13 +237,21 @@ impl GeneratorService {
             .build()
             .map_err(|e| McpError::internal_error(format!("Failed to build VFS: {e}"), None))?;
 
-        // Ensure output directory exists
-        std::fs::create_dir_all(&pending.output_dir).map_err(|e| {
-            McpError::internal_error(format!("Failed to create output directory: {e}"), None)
-        })?;
+        // Capture file count before moving vfs
+        let files_generated = vfs.file_count();
 
-        // Export to filesystem
-        vfs.export_to_filesystem(&pending.output_dir)
+        // Ensure output directory exists (async)
+        tokio::fs::create_dir_all(&pending.output_dir)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to create output directory: {e}"), None)
+            })?;
+
+        // Export to filesystem (blocking operation wrapped in spawn_blocking)
+        let output_dir = pending.output_dir.clone();
+        tokio::task::spawn_blocking(move || vfs.export_to_filesystem(&output_dir))
+            .await
+            .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?
             .map_err(|e| McpError::internal_error(format!("Failed to export files: {e}"), None))?;
 
         // Build result with category stats
@@ -254,7 +262,7 @@ impl GeneratorService {
 
         let result = SaveCategorizedToolsResult {
             success: true,
-            files_generated: vfs.file_count(),
+            files_generated,
             output_dir: pending.output_dir.display().to_string(),
             categories,
             errors: vec![],
@@ -288,47 +296,53 @@ impl GeneratorService {
             PathBuf::from,
         );
 
-        let mut servers = Vec::new();
+        // Scan directories (blocking operation wrapped in spawn_blocking)
+        let servers = tokio::task::spawn_blocking(move || {
+            let mut servers = Vec::new();
 
-        if base_dir.exists()
-            && base_dir.is_dir()
-            && let Ok(entries) = std::fs::read_dir(&base_dir)
-        {
-            for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    let id = entry.file_name().to_string_lossy().to_string();
+            if base_dir.exists()
+                && base_dir.is_dir()
+                && let Ok(entries) = std::fs::read_dir(&base_dir)
+            {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        let id = entry.file_name().to_string_lossy().to_string();
 
-                    // Count .ts files (excluding _runtime and starting with _)
-                    let tool_count = std::fs::read_dir(entry.path())
-                        .map(|e| {
-                            e.flatten()
-                                .filter(|f| {
-                                    let name = f.file_name();
-                                    let name = name.to_string_lossy();
-                                    name.ends_with(".ts") && !name.starts_with('_')
-                                })
-                                .count()
-                        })
-                        .unwrap_or(0);
+                        // Count .ts files (excluding _runtime and starting with _)
+                        let tool_count = std::fs::read_dir(entry.path())
+                            .map(|e| {
+                                e.flatten()
+                                    .filter(|f| {
+                                        let name = f.file_name();
+                                        let name = name.to_string_lossy();
+                                        name.ends_with(".ts") && !name.starts_with('_')
+                                    })
+                                    .count()
+                            })
+                            .unwrap_or(0);
 
-                    // Get modification time
-                    let generated_at = entry
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .map(chrono::DateTime::<chrono::Utc>::from);
+                        // Get modification time
+                        let generated_at = entry
+                            .metadata()
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .map(chrono::DateTime::<chrono::Utc>::from);
 
-                    servers.push(GeneratedServerInfo {
-                        id,
-                        tool_count,
-                        generated_at,
-                        output_dir: entry.path().display().to_string(),
-                    });
+                        servers.push(GeneratedServerInfo {
+                            id,
+                            tool_count,
+                            generated_at,
+                            output_dir: entry.path().display().to_string(),
+                        });
+                    }
                 }
             }
-        }
 
-        servers.sort_by(|a, b| a.id.cmp(&b.id));
+            servers.sort_by(|a, b| a.id.cmp(&b.id));
+            servers
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
 
         let result = ListGeneratedServersResult {
             total_servers: servers.len(),
