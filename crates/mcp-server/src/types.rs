@@ -194,7 +194,7 @@ pub struct ListGeneratedServersParams {
 }
 
 /// Result from listing generated servers.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListGeneratedServersResult {
     /// List of servers with generated files
     pub servers: Vec<GeneratedServerInfo>,
@@ -204,7 +204,7 @@ pub struct ListGeneratedServersResult {
 }
 
 /// Information about a server with generated progressive loading files.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GeneratedServerInfo {
     /// Server identifier
     pub id: String,

@@ -419,6 +419,15 @@ fn generate_with_categorization(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use mcp_core::ToolName;
+    use mcp_introspector::{ServerCapabilities, ToolInfo};
+    use rmcp::model::ErrorCode;
+    use uuid::Uuid;
+
+    // ========================================================================
+    // Helper Functions Tests
+    // ========================================================================
 
     #[test]
     fn test_extract_parameter_names() {
@@ -444,5 +453,436 @@ mod tests {
 
         let params = extract_parameter_names(&schema);
         assert_eq!(params.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_parameter_names_no_properties() {
+        let schema = serde_json::json!({
+            "type": "string"
+        });
+
+        let params = extract_parameter_names(&schema);
+        assert_eq!(params.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_parameter_names_nested_object() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "user": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" }
+                    }
+                },
+                "age": { "type": "number" }
+            }
+        });
+
+        let params = extract_parameter_names(&schema);
+        assert_eq!(params.len(), 2);
+        assert!(params.contains(&"user".to_string()));
+        assert!(params.contains(&"age".to_string()));
+    }
+
+    #[test]
+    fn test_generate_with_categorization() {
+        let generator = ProgressiveGenerator::new().unwrap();
+
+        let server_id = ServerId::new("test");
+        let server_info = mcp_introspector::ServerInfo {
+            id: server_id.clone(),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new("test_tool"),
+                description: "Test tool description".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "param1": { "type": "string" }
+                    }
+                }),
+                output_schema: None,
+            }],
+        };
+
+        let categorized_tool = CategorizedTool {
+            name: "test_tool".to_string(),
+            category: "testing".to_string(),
+            keywords: "test,tool".to_string(),
+            short_description: "Test tool for testing".to_string(),
+        };
+
+        let mut categorization = HashMap::new();
+        categorization.insert("test_tool".to_string(), &categorized_tool);
+
+        let result = generate_with_categorization(&generator, &server_info, &categorization);
+        assert!(result.is_ok());
+
+        let code = result.unwrap();
+        assert!(code.file_count() > 0, "Should generate at least one file");
+    }
+
+    #[test]
+    fn test_generate_with_categorization_multiple_tools() {
+        let generator = ProgressiveGenerator::new().unwrap();
+
+        let server_id = ServerId::new("test");
+        let server_info = mcp_introspector::ServerInfo {
+            id: server_id.clone(),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![
+                ToolInfo {
+                    name: ToolName::new("tool1"),
+                    description: "First tool".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    output_schema: None,
+                },
+                ToolInfo {
+                    name: ToolName::new("tool2"),
+                    description: "Second tool".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    output_schema: None,
+                },
+            ],
+        };
+
+        let tool1 = CategorizedTool {
+            name: "tool1".to_string(),
+            category: "category1".to_string(),
+            keywords: "test".to_string(),
+            short_description: "Tool 1".to_string(),
+        };
+
+        let tool2 = CategorizedTool {
+            name: "tool2".to_string(),
+            category: "category2".to_string(),
+            keywords: "test".to_string(),
+            short_description: "Tool 2".to_string(),
+        };
+
+        let mut categorization = HashMap::new();
+        categorization.insert("tool1".to_string(), &tool1);
+        categorization.insert("tool2".to_string(), &tool2);
+
+        let result = generate_with_categorization(&generator, &server_info, &categorization);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_generate_with_categorization_empty_tools() {
+        let generator = ProgressiveGenerator::new().unwrap();
+
+        let server_id = ServerId::new("test");
+        let server_info = mcp_introspector::ServerInfo {
+            id: server_id,
+            name: "Empty Server".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![],
+        };
+
+        let categorization = HashMap::new();
+
+        let result = generate_with_categorization(&generator, &server_info, &categorization);
+        assert!(result.is_ok());
+    }
+
+    // ========================================================================
+    // Service Tests
+    // ========================================================================
+
+    #[test]
+    fn test_generator_service_new() {
+        let service = GeneratorService::new();
+        assert!(service.introspector.try_lock().is_ok());
+    }
+
+    #[test]
+    fn test_generator_service_default() {
+        let service = GeneratorService::default();
+        assert!(service.introspector.try_lock().is_ok());
+    }
+
+    #[test]
+    fn test_get_info() {
+        let service = GeneratorService::new();
+        let info = service.get_info();
+
+        assert_eq!(info.protocol_version, ProtocolVersion::V_2024_11_05);
+        assert!(info.capabilities.tools.is_some());
+        assert!(info.instructions.is_some());
+    }
+
+    // ========================================================================
+    // Input Validation Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_introspect_server_invalid_server_id_uppercase() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "GitHub".to_string(), // Invalid: contains uppercase
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+        };
+
+        let result = service.introspect_server(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS); // Invalid params error code
+    }
+
+    #[tokio::test]
+    async fn test_introspect_server_invalid_server_id_underscore() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "git_hub".to_string(), // Invalid: contains underscore
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+        };
+
+        let result = service.introspect_server(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_introspect_server_invalid_server_id_special_chars() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "git@hub".to_string(), // Invalid: contains @
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+        };
+
+        let result = service.introspect_server(Parameters(params)).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_introspect_server_valid_server_id_with_hyphens() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "git-hub-server".to_string(), // Valid
+            command: "echo".to_string(),
+            args: vec!["test".to_string()],
+            env: HashMap::new(),
+            output_dir: None,
+        };
+
+        // This will fail because echo is not an MCP server, but validation should pass
+        let result = service.introspect_server(Parameters(params)).await;
+
+        // Should fail with internal error (connection), not invalid params
+        if let Err(err) = result {
+            assert_ne!(
+                err.code,
+                ErrorCode::INVALID_PARAMS,
+                "Should not be invalid params error"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_introspect_server_valid_server_id_digits() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "server123".to_string(), // Valid: lowercase + digits
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+        };
+
+        let result = service.introspect_server(Parameters(params)).await;
+
+        // Should fail with internal error (connection), not invalid params
+        if let Err(err) = result {
+            assert_ne!(err.code, ErrorCode::INVALID_PARAMS);
+        }
+    }
+
+    // ========================================================================
+    // save_categorized_tools Error Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_invalid_session() {
+        let service = GeneratorService::new();
+
+        let params = SaveCategorizedToolsParams {
+            session_id: Uuid::new_v4(), // Random UUID not in state
+            categorized_tools: vec![],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS); // Invalid params
+        assert!(err.message.contains("Session not found"));
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_tool_mismatch() {
+        let service = GeneratorService::new();
+
+        // Create a pending generation with tool1
+        let server_id = ServerId::new("test");
+        let server_info = mcp_introspector::ServerInfo {
+            id: server_id.clone(),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new("tool1"),
+                description: "Tool 1".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }],
+        };
+
+        let pending = PendingGeneration::new(
+            server_id,
+            server_info,
+            ServerConfig::builder().command("echo".to_string()).build(),
+            PathBuf::from("/tmp/test"),
+        );
+
+        let session_id = service.state.store(pending).await;
+
+        // Try to save with tool2 (doesn't exist)
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![CategorizedTool {
+                name: "tool2".to_string(), // Mismatch!
+                category: "test".to_string(),
+                keywords: "test".to_string(),
+                short_description: "Test".to_string(),
+            }],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("not found in introspected tools"));
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_expired_session() {
+        use chrono::Duration;
+
+        let service = GeneratorService::new();
+
+        // Create an expired pending generation
+        let server_id = ServerId::new("test");
+        let server_info = mcp_introspector::ServerInfo {
+            id: server_id.clone(),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![],
+        };
+
+        let mut pending = PendingGeneration::new(
+            server_id,
+            server_info,
+            ServerConfig::builder().command("echo".to_string()).build(),
+            PathBuf::from("/tmp/test"),
+        );
+
+        // Manually expire it
+        pending.expires_at = Utc::now() - Duration::hours(1);
+
+        let session_id = service.state.store(pending).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    // ========================================================================
+    // list_generated_servers Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_list_generated_servers_nonexistent_dir() {
+        let service = GeneratorService::new();
+
+        let params = ListGeneratedServersParams {
+            base_dir: Some("/nonexistent/path/that/does/not/exist".to_string()),
+        };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text_content = content.content[0].as_text().unwrap();
+        let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
+
+        assert_eq!(parsed.total_servers, 0);
+        assert_eq!(parsed.servers.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_list_generated_servers_default_dir() {
+        let service = GeneratorService::new();
+
+        let params = ListGeneratedServersParams { base_dir: None };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        // Should succeed even if directory doesn't exist
+        assert!(result.is_ok());
     }
 }
