@@ -10,7 +10,7 @@ keywords = ["mcp", "server", "codegen", "progressive-loading"]
 categories = ["development-tools"]
 
 [[bin]]
-name = "mcp-execution-server"
+name = "mcp-execution"
 path = "src/main.rs"
 
 [dependencies]
