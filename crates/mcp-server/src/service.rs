@@ -107,29 +107,31 @@ impl GeneratorService {
             ));
         }
 
-        let server_id = ServerId::new(&params.server_id);
+        // Extract server_id before consuming params
+        let server_id_str = params.server_id;
+        let server_id = ServerId::new(&server_id_str);
 
-        // Build server config
-        let mut config_builder = ServerConfig::builder().command(params.command);
-
-        for arg in &params.args {
-            config_builder = config_builder.arg(arg.clone());
-        }
-
-        for (key, value) in &params.env {
-            config_builder = config_builder.env(key.clone(), value.clone());
-        }
-
-        let config = config_builder.build();
-
-        // Determine output directory
+        // Determine output directory (needs server_id_str)
         let output_dir = params.output_dir.unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".claude")
                 .join("servers")
-                .join(&params.server_id)
+                .join(&server_id_str)
         });
+
+        // Build server config (consume args and env to avoid clones)
+        let mut config_builder = ServerConfig::builder().command(params.command);
+
+        for arg in params.args {
+            config_builder = config_builder.arg(arg);
+        }
+
+        for (key, value) in params.env {
+            config_builder = config_builder.env(key, value);
+        }
+
+        let config = config_builder.build();
 
         // Connect and introspect
         let server_info = {
@@ -165,7 +167,7 @@ impl GeneratorService {
 
         // Build result
         let result = IntrospectServerResult {
-            server_id: params.server_id,
+            server_id: server_id_str,
             server_name: server_info.name,
             tools_found: tools.len(),
             tools,
@@ -217,12 +219,16 @@ impl GeneratorService {
             }
         }
 
-        // Create categorization map
-        let categorization: HashMap<String, &CategorizedTool> = params
-            .categorized_tools
-            .iter()
-            .map(|t| (t.name.clone(), t))
-            .collect();
+        // Build categorization map and category stats in single pass (avoid double iteration)
+        let tool_count = params.categorized_tools.len();
+        let mut categorization: HashMap<String, &CategorizedTool> =
+            HashMap::with_capacity(tool_count);
+        let mut categories: HashMap<String, usize> = HashMap::with_capacity(tool_count);
+
+        for tool in &params.categorized_tools {
+            categorization.insert(tool.name.clone(), tool);
+            *categories.entry(tool.category.clone()).or_default() += 1;
+        }
 
         // Generate code with categorization
         let generator = ProgressiveGenerator::new().map_err(|e| {
@@ -253,12 +259,6 @@ impl GeneratorService {
             .await
             .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?
             .map_err(|e| McpError::internal_error(format!("Failed to export files: {e}"), None))?;
-
-        // Build result with category stats
-        let mut categories: HashMap<String, usize> = HashMap::new();
-        for cat_tool in &params.categorized_tools {
-            *categories.entry(cat_tool.category.clone()).or_default() += 1;
-        }
 
         let result = SaveCategorizedToolsResult {
             success: true,
