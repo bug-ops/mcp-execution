@@ -224,19 +224,6 @@ export interface CreateIssueResult {
 }
 ```
 
-## Current Limitations
-
-⚠️ **Runtime Bridge Not Implemented**: The `callMCPTool()` function in `_runtime/mcp-bridge.ts` is currently a stub. Implementation planned for Phase 2.3.
-
-**What Works**:
-- ✅ TypeScript code generation
-- ✅ Type-safe interfaces
-- ✅ 98% token savings
-- ✅ Tool discovery pattern
-
-**Planned**:
-- 🔵 `mcp-execution-cli bridge` command for actual execution
-
 ## Performance
 
 - **Generation**: ~2-3ms per server

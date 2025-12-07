@@ -6,7 +6,6 @@ Complete examples and guides for using MCP Code Execution with progressive loadi
 
 | Document | Description | Best For |
 |----------|-------------|----------|
-| [SKILL.md](./SKILL.md) | Claude Code skill configuration | Setting up progressive loading in Claude Code |
 | [progressive-loading-usage.md](./progressive-loading-usage.md) | Complete usage tutorial | Learning how progressive loading works |
 | [mcp.json.example](./mcp.json.example) | MCP server configurations | Configuring your MCP servers |
 
@@ -14,17 +13,17 @@ Complete examples and guides for using MCP Code Execution with progressive loadi
 
 ### 1. For Claude Code Users
 
-If you're using Claude Code, start with [SKILL.md](./SKILL.md) to configure progressive loading:
+Skills can be generated dynamically using the `mcp-server` MCP tools:
 
 ```bash
-# Copy skill to Claude Code directory
-cp examples/SKILL.md ~/.claude/skills/mcp-progressive-loading/
+# Start the mcp-server and use generate_skill/save_skill tools
+mcp-execution
+
+# Or use the mcp-execution-cli to generate files first
+mcp-execution-cli generate --from-config github
 ```
 
-Then ask Claude Code:
-```
-"Generate progressive loading files for the GitHub MCP server"
-```
+Then ask Claude Code to execute MCP tools autonomously.
 
 ### 2. For CLI Users
 
@@ -122,6 +121,52 @@ mcp-execution-cli introspect docker \
 # Shows all available tools, their parameters, and schemas
 ```
 
+### Workflow 4: Using MCP Server Tools
+
+The `mcp-execution` binary provides an MCP server with 5 tools for progressive loading generation:
+
+```bash
+# Add to your mcp.json
+{
+  "mcpServers": {
+    "mcp-execution": {
+      "command": "mcp-execution"
+    }
+  }
+}
+```
+
+**Available MCP Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `introspect_server` | Connect to MCP server and discover tools |
+| `save_categorized_tools` | Generate TypeScript files with categorization |
+| `list_generated_servers` | List all servers with generated files |
+| `generate_skill` | Scan tools directory and generate skill content |
+| `save_skill` | Save generated skill to `~/.claude/skills/` |
+
+**Example: Generate GitHub Tools via MCP**
+
+```
+User: "Generate progressive loading files for GitHub"
+
+Claude uses:
+1. introspect_server(server_id: "github") → Discovers 40 tools
+2. save_categorized_tools(session_id: "...", categorizations: [...]) → Writes files
+3. generate_skill(server_id: "github") → Creates skill context
+4. save_skill(server_id: "github", content: "...") → Saves SKILL.md
+```
+
+**Example: List Generated Servers**
+
+```
+User: "What MCP servers have I generated?"
+
+Claude uses:
+1. list_generated_servers() → Returns list of servers in ~/.claude/servers/
+```
+
 ## Supported MCP Servers
 
 Progressive loading works with any MCP-compliant server:
@@ -192,9 +237,8 @@ Savings:        29,500 tokens (98%)
 ### Getting Help
 
 1. Check [progressive-loading-usage.md](./progressive-loading-usage.md) for detailed guide
-2. Review [SKILL.md](./SKILL.md) for Claude Code integration
-3. See [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for technical details
-4. Open an issue on GitHub
+2. See [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for technical details
+3. Open an issue on GitHub
 
 ## Contributing Examples
 

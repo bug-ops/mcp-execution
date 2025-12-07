@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.1] - 2025-12-08
+
+### Summary
+
+**Skill Generator & Security Hardening**
+
+This patch release adds skill generation capabilities to `mcp-server` and improves security with DoS protection limits.
+
+**Key Achievements**:
+- ✅ 2 new MCP tools: `generate_skill`, `save_skill`
+- ✅ Security limits for denial-of-service protection
+- ✅ 550 tests passing (100% pass rate)
+- ✅ Documentation cleanup (removed roadmap)
+
+### Added
+
+- **Skill Generator Tools**: Generate Claude Code skills from TypeScript tool files
+  - `generate_skill` - Scan tools directory and generate SKILL.md content
+  - `save_skill` - Save generated skill to `~/.claude/skills/` directory
+  - Template-based generation with Handlebars
+  - JSDoc tag parsing for tool metadata (`@tool`, `@server`, `@category`, `@keywords`)
+  - Automatic category grouping and keyword extraction
+
+- **Security Limits**: DoS protection for tool scanning
+  - `MAX_TOOL_FILES` (500) - Maximum files to scan per directory
+  - `MAX_FILE_SIZE` (1MB) - Maximum size per tool file
+  - `MAX_SERVER_ID_LENGTH` (64) - Maximum server ID length
+  - `MAX_SKILL_CONTENT_SIZE` (100KB) - Maximum generated skill size
+
+### Changed
+
+- **README.md**: Removed roadmap section, updated test count (550), added skill generator tools
+- **mcp-cli/README.md**: Removed outdated "Current Limitations" section
+- **mcp-codegen/README.md**: Removed outdated "Current Limitations" section, updated version
+
+### Fixed
+
+- Fixed ~30 stable clippy pedantic warnings across workspace
+- Fixed `similar_names` warning by renaming confusing variables
+- Fixed `needless_raw_string_hashes` by simplifying raw strings
+- Fixed `redundant_closure` by using method references
+
+### Performance
+
+- **LazyLock regexes**: Compiled once at startup for tool file parsing
+- **Security limits**: Early bailout prevents resource exhaustion
+
+---
+
 ## [0.6.0] - 2025-12-07
 
 ### Summary
@@ -871,5 +920,5 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2025-12-07
-**Version**: 0.6.0 (Production Ready)
+**Last Updated**: 2025-12-08
+**Version**: 0.6.1 (Production Ready)

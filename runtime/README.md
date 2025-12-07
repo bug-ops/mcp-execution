@@ -192,5 +192,4 @@ Check that:
 ## See Also
 
 - [Progressive Loading Usage Guide](../examples/progressive-loading-usage.md)
-- [SKILL.md](../examples/SKILL.md) - Claude Code integration
 - [ADR-011](../docs/adr/011-executable-typescript-via-bash.md) - Architecture decision

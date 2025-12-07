@@ -29,11 +29,9 @@
 - [Performance Benchmarks](#performance-benchmarks)
 - [Development](#development)
 - [Security](#security)
-- [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
 - [Resources](#resources)
-- [Status](#status)
 
 ---
 
@@ -123,7 +121,7 @@ Supported transports:
 - **Docker**: Containerized servers
 
 ### 🏗️ Production Ready
-- **486 tests** passing (100% pass rate)
+- **550 tests** passing (100% pass rate)
 - **Microsoft Rust Guidelines** compliant
 - **100% documentation coverage**
 - **Multi-platform releases**: Linux, macOS, Windows (x86_64 + ARM64)
@@ -272,7 +270,9 @@ mcp-execution/
 ├── mcp-server/           # MCP server for generation
 │   ├── introspect_server # Discover tools from MCP server
 │   ├── save_categorized  # Generate with categorization
-│   └── list_generated    # List generated servers
+│   ├── list_generated    # List generated servers
+│   ├── generate_skill    # Generate skill from tool files
+│   └── save_skill        # Save generated skill to file
 │
 └── mcp-cli/              # Command-line interface
     ├── generate          # Main command
@@ -422,55 +422,54 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
 ### Claude Code Skill Integration
 
-**mcp-execution** provides a ready-to-use **instruction skill** that teaches Claude Code how to discover and use progressive loading tools autonomously.
+**mcp-execution** can generate **instruction skills** that teach Claude Code how to discover and use progressive loading tools autonomously.
 
 #### What is a Skill?
 
-Skills are instruction files (SKILL.md) that guide Claude Code on using specific tools or patterns. When installed, Claude Code automatically learns best practices for progressive loading without manual prompting.
+Skills are instruction files (SKILL.md) that guide Claude Code on using specific tools or patterns. Skills are generated dynamically based on your actual MCP server tools.
 
-#### Installing the Skill
+#### Generating Skills
+
+Use the `mcp-server` MCP tools to generate skills:
 
 ```bash
-# Option 1: Copy from examples (recommended)
-mkdir -p ~/.claude/skills/mcp-progressive-loading
-cp examples/SKILL.md ~/.claude/skills/mcp-progressive-loading/SKILL.md
+# 1. Start the MCP server
+mcp-execution
 
-# Option 2: Generate with CLI (coming soon)
-mcp-execution-cli install-skill
+# 2. Claude uses generate_skill tool to scan TypeScript files
+# 3. Claude uses save_skill tool to write SKILL.md
 ```
 
-#### What the Skill Teaches Claude Code
+Or generate TypeScript files first, then create skills:
 
-The skill provides proactive guidance on:
+```bash
+# Generate TypeScript tool files
+mcp-execution-cli generate --from-config github
+
+# Skills are created in ~/.claude/skills/{server_id}/SKILL.md
+```
+
+#### What Generated Skills Include
+
+Each skill provides guidance on:
 
 ✅ **Discovery Pattern**: How to list available MCP servers and tools via `ls`
 ✅ **Progressive Loading**: When to load individual tools vs bulk loading
 ✅ **Token Optimization**: Choosing the right loading strategy for context efficiency
 ✅ **Autonomous Execution**: How to execute tools directly via Node.js CLI
-✅ **Error Handling**: Troubleshooting connection and execution issues
-✅ **Best Practices**: Security, caching, and performance tips
+✅ **Category Organization**: Tools grouped by function (e.g., issues, repos)
+✅ **Keyword Search**: Find tools by keyword using `grep`
 
 #### Example: Claude Code in Action
 
-With the skill installed, Claude Code automatically:
+With skills installed, Claude Code automatically:
 
 1. **Discovers tools**: `ls ~/.claude/servers/github/` to see available tools
 2. **Loads efficiently**: Reads only `createIssue.ts` (500 tokens) instead of all tools (30,000 tokens)
 3. **Executes autonomously**: Runs `node createIssue.ts --repo=... --title=...`
 4. **Optimizes context**: Saves 98% of token budget for actual work
 
-#### Skill Documentation
-
-📖 **Full skill documentation**: [examples/SKILL.md](examples/SKILL.md)
-
-The SKILL.md file includes:
-- Complete progressive loading workflow
-- Decision trees for tool selection
-- Error handling procedures
-- Performance optimization strategies
-- Integration examples with Claude Code
-
-**Note**: Skills are a Claude Code feature. Other AI agents can follow similar patterns by reading the SKILL.md as reference documentation.
+**Note**: Skills are a Claude Code feature. Other AI agents can follow similar patterns using the progressive loading documentation.
 
 ---
 
@@ -658,7 +657,7 @@ All development follows [Microsoft Rust Guidelines](https://microsoft.github.io/
 ✅ **Thread safety**: All public types are `Send + Sync`
 ✅ **Documentation**: 100% coverage with examples and error cases
 ✅ **No unsafe**: Zero `unsafe` blocks in the codebase
-✅ **Testing**: 684 tests with 100% pass rate
+✅ **Testing**: 550 tests with 100% pass rate
 
 See [CLAUDE.md](CLAUDE.md) for detailed development instructions.
 
@@ -722,60 +721,6 @@ Found a security issue? Please email security@example.com (do not file public is
 
 ---
 
-## Roadmap
-
-### ✅ Phase 1: Core Infrastructure (COMPLETE)
-- [x] Workspace structure (5 crates)
-- [x] Microsoft Rust Guidelines compliance
-- [x] Core types and traits (`ServerId`, `ToolName`, etc.)
-- [x] Error hierarchy with `thiserror`
-- [x] 100% documentation coverage
-
-### ✅ Phase 2: MCP Integration (COMPLETE)
-- [x] rmcp SDK integration (official Rust MCP SDK)
-- [x] Server discovery via `rmcp::ServiceExt`
-- [x] Tool schema extraction
-- [x] LRU caching for performance
-- [x] Multi-transport support (stdio, HTTP, SSE)
-
-### ✅ Phase 3: Progressive Loading (COMPLETE)
-- [x] Handlebars templates (tool.ts, index.ts, runtime-bridge.ts)
-- [x] TypeScript generator with JSON Schema conversion
-- [x] Type-safe interfaces generation
-- [x] One file per tool pattern
-- [x] Virtual filesystem structure
-- [x] 98% token savings achieved
-
-### ✅ Phase 4: Autonomous Execution (COMPLETE - v0.5.0)
-- [x] Runtime bridge implementation (430 lines)
-- [x] CLI execution support (shebang + argument parsing)
-- [x] Configuration loading from mcp.json
-- [x] Setup command for initialization
-- [x] Connection caching for performance
-
-### ✅ Phase 4.5: MCP Generation Server (COMPLETE - v0.6.0)
-- [x] mcp-server crate with 3 MCP tools
-- [x] Claude-powered categorization (category, keywords, short_description)
-- [x] Session-based workflow with 30-minute timeout
-- [x] JSDoc tags for AI agent discovery
-- [x] 85% test coverage
-
-### 🔵 Phase 5: Ecosystem Integration (PLANNED)
-- [ ] Official Claude Code extension
-- [ ] VS Code extension with IntelliSense
-- [ ] GitHub Actions workflow integration
-- [ ] Docker images for zero-install usage
-- [ ] Web playground for testing MCP servers
-
-### 🔵 Phase 6: Advanced Features (PLANNED)
-- [ ] Incremental updates (only regenerate changed tools)
-- [ ] Multi-server orchestration (call tools across servers)
-- [ ] Observability (tracing, metrics, logs)
-- [ ] Testing framework for generated tools
-- [ ] Custom template support
-
----
-
 ## Contributing
 
 Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
@@ -814,7 +759,6 @@ at your option.
 
 ### Official Documentation
 - [Progressive Loading Tutorial](examples/progressive-loading-usage.md) - Complete guide
-- [Instruction Skill](examples/SKILL.md) - Claude Code integration
 - [Architecture Decision Records](docs/adr/) - Technical decisions
 - [API Documentation](https://docs.rs/mcp-execution) - Rust API docs
 
@@ -827,30 +771,6 @@ at your option.
 ### Community
 - [GitHub Issues](https://github.com/bug-ops/mcp-execution/issues) - Bug reports and feature requests
 - [GitHub Discussions](https://github.com/bug-ops/mcp-execution/discussions) - Questions and ideas
-
----
-
-## Status
-
-**Current Version**: v0.6.0 (2025-12-07)
-
-**Production Status**: ✅ **READY FOR PRODUCTION**
-
-**Quality Metrics**:
-- **Tests**: 486/486 passing (100%)
-- **Token Savings**: 98% (30,000 → 500-1,500 tokens per tool)
-- **Performance**: 526x faster than target (0.19ms for 10 tools)
-- **Code Coverage**: >85% via Codecov
-- **Crates**: 6 workspace crates
-- **Lines of Code**: ~12,000 (Rust)
-- **Documentation**: Complete (ADRs, examples, API docs)
-
-**Platform Support**:
-- Linux (x86_64, ARM64)
-- macOS (x86_64, ARM64)
-- Windows (x86_64, ARM64)
-
-**MCP Compatibility**: 100% (works with all MCP servers via rmcp SDK)
 
 ---
 

@@ -16,7 +16,7 @@ Transforms MCP tool schemas into TypeScript files using the progressive loading 
 
 ```toml
 [dependencies]
-mcp-codegen = "0.4"
+mcp-codegen = "0.6"
 ```
 
 ## Usage
@@ -172,19 +172,6 @@ for (path, content) in code.files() {
     fs::write(file_path, content)?;
 }
 ```
-
-## Current Limitations
-
-⚠️ **Runtime Bridge Not Implemented**: The `callMCPTool()` function in `_runtime/mcp-bridge.ts` is currently a stub. Implementation planned for Phase 2.3.
-
-**What Works**:
-- ✅ Type-safe interface generation
-- ✅ JSDoc documentation
-- ✅ 98% token savings
-- ✅ Progressive loading pattern
-
-**Planned**:
-- 🔵 Functional `callMCPTool()` via `mcp-execution-cli bridge` command
 
 ## Performance
 

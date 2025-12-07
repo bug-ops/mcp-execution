@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-codegen"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "criterion",
  "handlebars",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-files"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "criterion",
  "dhat",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-introspector"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "criterion",
  "mcp-core",
@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-server"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "chrono",
