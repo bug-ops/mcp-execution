@@ -490,9 +490,8 @@ mod tests {
     fn test_generate_with_categorization() {
         let generator = ProgressiveGenerator::new().unwrap();
 
-        let server_id = ServerId::new("test");
         let server_info = mcp_introspector::ServerInfo {
-            id: server_id.clone(),
+            id: ServerId::new("test"),
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             capabilities: ServerCapabilities {
@@ -534,9 +533,8 @@ mod tests {
     fn test_generate_with_categorization_multiple_tools() {
         let generator = ProgressiveGenerator::new().unwrap();
 
-        let server_id = ServerId::new("test");
         let server_info = mcp_introspector::ServerInfo {
-            id: server_id.clone(),
+            id: ServerId::new("test"),
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             capabilities: ServerCapabilities {
