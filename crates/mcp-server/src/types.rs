@@ -369,9 +369,7 @@ mod tests {
                 output_schema: None,
             }],
         };
-        let config = ServerConfig::builder()
-            .command("echo".to_string())
-            .build();
+        let config = ServerConfig::builder().command("echo".to_string()).build();
         let output_dir = PathBuf::from("/tmp/test");
 
         PendingGeneration::new(server_id, server_info, config, output_dir)

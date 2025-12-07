@@ -26,9 +26,9 @@
 
 use anyhow::Result;
 use mcp_server::service::GeneratorService;
-use rmcp::transport::stdio;
 use rmcp::ServiceExt;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use rmcp::transport::stdio;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {

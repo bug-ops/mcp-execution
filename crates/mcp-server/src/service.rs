@@ -15,13 +15,13 @@ use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::{ServerConfig, ServerId};
 use mcp_files::FilesBuilder;
 use mcp_introspector::Introspector;
+use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
 };
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError};
+use rmcp::{ErrorData as McpError, tool, tool_handler, tool_router};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,7 +88,9 @@ impl GeneratorService {
     /// Connects to the target MCP server, discovers its tools, and returns
     /// metadata for Claude to categorize. Returns a session ID for use with
     /// `save_categorized_tools`.
-    #[tool(description = "Connect to an MCP server, discover its tools, and return metadata for categorization. Returns a session ID for use with save_categorized_tools.")]
+    #[tool(
+        description = "Connect to an MCP server, discover its tools, and return metadata for categorization. Returns a session ID for use with save_categorized_tools."
+    )]
     async fn introspect_server(
         &self,
         Parameters(params): Parameters<IntrospectServerParams>,
@@ -156,12 +158,8 @@ impl GeneratorService {
             .collect();
 
         // Store pending generation
-        let pending = PendingGeneration::new(
-            server_id,
-            server_info.clone(),
-            config,
-            output_dir.clone(),
-        );
+        let pending =
+            PendingGeneration::new(server_id, server_info.clone(), config, output_dir.clone());
 
         let session_id = self.state.store(pending.clone()).await;
 
@@ -187,7 +185,9 @@ impl GeneratorService {
     /// Generates progressive loading TypeScript files using Claude's
     /// categorization. Requires `session_id` from a previous `introspect_server`
     /// call.
-    #[tool(description = "Generate progressive loading TypeScript files using Claude's categorization. Requires session_id from a previous introspect_server call.")]
+    #[tool(
+        description = "Generate progressive loading TypeScript files using Claude's categorization. Requires session_id from a previous introspect_server call."
+    )]
     async fn save_categorized_tools(
         &self,
         Parameters(params): Parameters<SaveCategorizedToolsParams>,
@@ -230,16 +230,12 @@ impl GeneratorService {
         })?;
 
         let code = generate_with_categorization(&generator, &pending.server_info, &categorization)
-            .map_err(|e| {
-                McpError::internal_error(format!("Failed to generate code: {e}"), None)
-            })?;
+            .map_err(|e| McpError::internal_error(format!("Failed to generate code: {e}"), None))?;
 
         // Build virtual filesystem
         let vfs = FilesBuilder::from_generated_code(code, "/")
             .build()
-            .map_err(|e| {
-                McpError::internal_error(format!("Failed to build VFS: {e}"), None)
-            })?;
+            .map_err(|e| McpError::internal_error(format!("Failed to build VFS: {e}"), None))?;
 
         // Ensure output directory exists
         std::fs::create_dir_all(&pending.output_dir).map_err(|e| {
@@ -275,7 +271,9 @@ impl GeneratorService {
     ///
     /// Scans the output directory (default: `~/.claude/servers`) for servers
     /// that have generated TypeScript files.
-    #[tool(description = "List all MCP servers that have generated progressive loading files in ~/.claude/servers/")]
+    #[tool(
+        description = "List all MCP servers that have generated progressive loading files in ~/.claude/servers/"
+    )]
     async fn list_generated_servers(
         &self,
         Parameters(params): Parameters<ListGeneratedServersParams>,
@@ -292,7 +290,10 @@ impl GeneratorService {
 
         let mut servers = Vec::new();
 
-        if base_dir.exists() && base_dir.is_dir() && let Ok(entries) = std::fs::read_dir(&base_dir) {
+        if base_dir.exists()
+            && base_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&base_dir)
+        {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     let id = entry.file_name().to_string_lossy().to_string();
