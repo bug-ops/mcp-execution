@@ -11,11 +11,11 @@
  * @module mcp-bridge
  */
 
-import { spawn, ChildProcess } from 'child_process';
-import { readFile } from 'fs/promises';
-import { homedir } from 'os';
-import { join } from 'path';
-import { Readable } from 'stream';
+import { spawn, ChildProcess } from "child_process";
+import { readFile } from "fs/promises";
+import { homedir } from "os";
+import { join } from "path";
+import { Readable } from "stream";
 
 /**
  * Configuration for an MCP server
@@ -35,9 +35,9 @@ interface ServerConfig {
  * JSON-RPC 2.0 request for tool invocation
  */
 interface MCPToolCallRequest {
-  jsonrpc: '2.0';
+  jsonrpc: "2.0";
   id: number;
-  method: 'tools/call';
+  method: "tools/call";
   params: {
     name: string;
     arguments: Record<string, unknown>;
@@ -48,7 +48,7 @@ interface MCPToolCallRequest {
  * JSON-RPC 2.0 response from tool invocation
  */
 interface MCPToolCallResponse {
-  jsonrpc: '2.0';
+  jsonrpc: "2.0";
   id: number;
   result?: {
     content: Array<{
@@ -69,9 +69,9 @@ interface MCPToolCallResponse {
  * Initialize request sent to MCP server
  */
 interface MCPInitializeRequest {
-  jsonrpc: '2.0';
+  jsonrpc: "2.0";
   id: number;
-  method: 'initialize';
+  method: "initialize";
   params: {
     protocolVersion: string;
     capabilities: {
@@ -98,14 +98,14 @@ let requestIdCounter = 1;
 /**
  * Debug mode flag (set via MCPBRIDGE_DEBUG environment variable)
  */
-const DEBUG = process.env.MCPBRIDGE_DEBUG === '1';
+const DEBUG = process.env.MCPBRIDGE_DEBUG === "1";
 
 /**
  * Log debug message if debug mode is enabled
  */
 function debug(...args: unknown[]): void {
   if (DEBUG) {
-    console.error('[mcp-bridge]', ...args);
+    console.error("[mcp-bridge]", ...args);
   }
 }
 
@@ -119,27 +119,27 @@ function debug(...args: unknown[]): void {
  * @throws {Error} If config file not found or serverId not in config
  */
 async function loadServerConfig(serverId: string): Promise<ServerConfig> {
-  const configPath = join(homedir(), '.claude', 'mcp.json');
+  const configPath = join(homedir(), ".claude", "mcp.json");
 
   try {
-    const content = await readFile(configPath, 'utf-8');
+    const content = await readFile(configPath, "utf-8");
     const config = JSON.parse(content);
 
     if (!config.mcpServers || !config.mcpServers[serverId]) {
       throw new Error(
         `Server '${serverId}' not found in config.\n` +
-        `Available servers: ${Object.keys(config.mcpServers || {}).join(', ')}\n` +
-        `Config file: ${configPath}`
+          `Available servers: ${Object.keys(config.mcpServers || {}).join(", ")}\n` +
+          `Config file: ${configPath}`,
       );
     }
 
     return config.mcpServers[serverId];
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
         `MCP configuration file not found: ${configPath}\n` +
-        `Create it with server configurations under 'mcpServers' key.\n` +
-        `See examples/mcp.json.example for reference.`
+          `Create it with server configurations under 'mcpServers' key.\n` +
+          `See examples/mcp.json.example for reference.`,
       );
     }
     throw error;
@@ -152,15 +152,17 @@ async function loadServerConfig(serverId: string): Promise<ServerConfig> {
  * @param stream - Readable stream (typically stdout from MCP server)
  * @returns Parsed JSON-RPC response
  */
-async function readJsonRpcMessage(stream: Readable): Promise<MCPToolCallResponse> {
+async function readJsonRpcMessage(
+  stream: Readable,
+): Promise<MCPToolCallResponse> {
   return new Promise((resolve, reject) => {
-    let buffer = '';
+    let buffer = "";
 
     const onData = (chunk: Buffer): void => {
       buffer += chunk.toString();
 
       // Try to parse complete JSON messages
-      const lines = buffer.split('\n');
+      const lines = buffer.split("\n");
 
       for (let i = 0; i < lines.length - 1; i++) {
         const line = lines[i].trim();
@@ -170,15 +172,15 @@ async function readJsonRpcMessage(stream: Readable): Promise<MCPToolCallResponse
           const message = JSON.parse(line) as MCPToolCallResponse;
 
           // Only process responses, ignore notifications
-          if ('id' in message) {
-            stream.off('data', onData);
-            stream.off('error', onError);
+          if ("id" in message) {
+            stream.off("data", onData);
+            stream.off("error", onError);
             resolve(message);
             return;
           }
         } catch (e) {
           // Incomplete JSON, wait for more data
-          debug('Failed to parse JSON (waiting for more data):', line);
+          debug("Failed to parse JSON (waiting for more data):", line);
         }
       }
 
@@ -187,13 +189,13 @@ async function readJsonRpcMessage(stream: Readable): Promise<MCPToolCallResponse
     };
 
     const onError = (error: Error): void => {
-      stream.off('data', onData);
-      stream.off('error', onError);
+      stream.off("data", onData);
+      stream.off("error", onError);
       reject(error);
     };
 
-    stream.on('data', onData);
-    stream.on('error', onError);
+    stream.on("data", onData);
+    stream.on("error", onError);
   });
 }
 
@@ -227,49 +229,51 @@ async function getConnection(serverId: string): Promise<ChildProcess> {
   const config = await loadServerConfig(serverId);
 
   const serverProcess = spawn(config.command, config.args, {
-    stdio: ['pipe', 'pipe', 'inherit'],
+    stdio: ["pipe", "pipe", "inherit"],
     env: { ...process.env, ...config.env },
-    cwd: config.cwd
+    cwd: config.cwd,
   });
 
   // Handle process errors
-  serverProcess.on('error', (error) => {
+  serverProcess.on("error", (error) => {
     debug(`Server process error for ${serverId}:`, error);
     serverConnections.delete(serverId);
   });
 
-  serverProcess.on('exit', (code, signal) => {
+  serverProcess.on("exit", (code, signal) => {
     debug(`Server ${serverId} exited with code ${code}, signal ${signal}`);
     serverConnections.delete(serverId);
   });
 
   // Send initialize request
   const initRequest: MCPInitializeRequest = {
-    jsonrpc: '2.0',
+    jsonrpc: "2.0",
     id: requestIdCounter++,
-    method: 'initialize',
+    method: "initialize",
     params: {
-      protocolVersion: '2024-11-05',
+      protocolVersion: "2025-11-25",
       capabilities: {
-        tools: {}
+        tools: {},
       },
       clientInfo: {
-        name: 'mcp-execution-bridge',
-        version: '0.4.0'
-      }
-    }
+        name: "mcp-execution-bridge",
+        version: "0.6.0",
+      },
+    },
   };
 
-  debug('Sending initialize request:', JSON.stringify(initRequest));
-  serverProcess.stdin!.write(JSON.stringify(initRequest) + '\n');
+  debug("Sending initialize request:", JSON.stringify(initRequest));
+  serverProcess.stdin!.write(JSON.stringify(initRequest) + "\n");
 
   // Wait for initialize response
   try {
     const initResponse = await readJsonRpcMessage(serverProcess.stdout!);
-    debug('Received initialize response:', JSON.stringify(initResponse));
+    debug("Received initialize response:", JSON.stringify(initResponse));
 
     if (initResponse.error) {
-      throw new Error(`Server initialization failed: ${initResponse.error.message}`);
+      throw new Error(
+        `Server initialization failed: ${initResponse.error.message}`,
+      );
     }
   } catch (error) {
     serverProcess.kill();
@@ -311,35 +315,35 @@ async function getConnection(serverId: string): Promise<ChildProcess> {
 export async function callMCPTool(
   serverId: string,
   toolName: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
 ): Promise<unknown> {
   debug(`Calling tool: ${serverId}.${toolName}`, params);
 
   const serverProcess = await getConnection(serverId);
 
   const request: MCPToolCallRequest = {
-    jsonrpc: '2.0',
+    jsonrpc: "2.0",
     id: requestIdCounter++,
-    method: 'tools/call',
+    method: "tools/call",
     params: {
       name: toolName,
-      arguments: params
-    }
+      arguments: params,
+    },
   };
 
-  debug('Sending tool call request:', JSON.stringify(request));
-  serverProcess.stdin!.write(JSON.stringify(request) + '\n');
+  debug("Sending tool call request:", JSON.stringify(request));
+  serverProcess.stdin!.write(JSON.stringify(request) + "\n");
 
   // Wait for response
   const response = await readJsonRpcMessage(serverProcess.stdout!);
-  debug('Received tool call response:', JSON.stringify(response));
+  debug("Received tool call response:", JSON.stringify(response));
 
   // Handle errors
   if (response.error) {
     throw new Error(
       `Tool execution failed: ${response.error.message}\n` +
-      `Tool: ${serverId}.${toolName}\n` +
-      `Error code: ${response.error.code}`
+        `Tool: ${serverId}.${toolName}\n` +
+        `Error code: ${response.error.code}`,
     );
   }
 
@@ -351,16 +355,19 @@ export async function callMCPTool(
   // Handle error flag in result
   if (response.result.isError) {
     const errorContent = response.result.content[0];
-    const errorMessage = errorContent.text || 'Unknown error';
+    const errorMessage = errorContent.text || "Unknown error";
     throw new Error(`Tool returned error: ${errorMessage}`);
   }
 
   // Extract content from response
   const content = response.result.content[0];
 
-  if (content.type === 'text' && content.text) {
+  if (content.type === "text" && content.text) {
     // Try to parse as JSON if it looks like JSON
-    if (content.text.trim().startsWith('{') || content.text.trim().startsWith('[')) {
+    if (
+      content.text.trim().startsWith("{") ||
+      content.text.trim().startsWith("[")
+    ) {
       try {
         return JSON.parse(content.text);
       } catch {
@@ -390,30 +397,30 @@ export async function callMCPTool(
  * ```
  */
 export async function closeAllConnections(): Promise<void> {
-  debug('Closing all connections');
+  debug("Closing all connections");
 
   for (const [serverId, serverProcess] of serverConnections) {
     debug(`Closing connection to: ${serverId}`);
-    serverProcess.kill('SIGTERM');
+    serverProcess.kill("SIGTERM");
   }
 
   serverConnections.clear();
 }
 
 // Cleanup on process exit
-process.on('exit', () => {
+process.on("exit", () => {
   for (const [_, serverProcess] of serverConnections) {
     if (!serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
+      serverProcess.kill("SIGTERM");
     }
   }
 });
 
 // Graceful shutdown on SIGINT/SIGTERM
-process.on('SIGINT', () => {
+process.on("SIGINT", () => {
   closeAllConnections().then(() => process.exit(0));
 });
 
-process.on('SIGTERM', () => {
+process.on("SIGTERM", () => {
   closeAllConnections().then(() => process.exit(0));
 });

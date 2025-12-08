@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/bug-ops/mcp-execution/discussions
+    about: Ask questions, share ideas, and discuss the project with the community
+  - name: Security Vulnerability
+    url: https://github.com/bug-ops/mcp-execution/security/advisories/new
+    about: Report security vulnerabilities privately (DO NOT create public issues for security issues)
+  - name: Microsoft Rust Guidelines
+    url: https://microsoft.github.io/rust-guidelines/agents/all.txt
+    about: Review the Rust coding guidelines we follow
+  - name: MCP Specification
+    url: https://spec.modelcontextprotocol.io/
+    about: Learn about the Model Context Protocol specification

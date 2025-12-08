@@ -230,10 +230,6 @@ export interface CreateIssueResult {
    - Read CreateIssueParams interface
    - Identify required vs optional (? suffix)
    - Read JSDoc documentation
-
-4. Current Limitations
-   - Type information: ✅ Available
-   - Actual execution: ⏳ Pending Phase 2.3
 ```
 
 ## Crate Architecture
@@ -558,4 +554,3 @@ All architectural decisions documented:
 - [README.md](../README.md) - Project overview
 - [CLAUDE.md](../CLAUDE.md) - Development instructions
 - [examples/progressive-loading-usage.md](../examples/progressive-loading-usage.md) - Usage tutorial
-- [ADR-010](adr/010-simplify-to-progressive-only.md) - Simplification rationale

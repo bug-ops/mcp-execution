@@ -363,4 +363,3 @@ mcp-execution-cli generate docker \
 - [MCP Specification](https://github.com/modelcontextprotocol/specification)
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
 - [GitHub MCP Server](https://github.com/github/github-mcp-server)
-- [Progressive Loading ADR](../docs/adr/010-simplify-to-progressive-only.md)

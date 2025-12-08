@@ -1,0 +1,149 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Please fill out the form below to help us understand your proposal.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Feature Summary
+      description: A clear and concise description of the feature you'd like to see.
+      placeholder: Briefly describe the feature in 1-2 sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? What is the use case?
+      placeholder: |
+        As a [type of user], I want [something] so that [benefit].
+
+        Currently, I have to [workaround], which is [pain point].
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How would you like this feature to work?
+      placeholder: |
+        Describe your proposed solution in detail:
+        - What would the API/CLI interface look like?
+        - How would users interact with this feature?
+        - What would the expected behavior be?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What alternative solutions or features have you considered?
+      placeholder: |
+        Have you considered:
+        - Alternative approaches?
+        - Existing tools or workarounds?
+        - Different implementations?
+    validations:
+      required: false
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Usage Examples
+      description: Provide concrete examples of how this feature would be used.
+      placeholder: |
+        ```bash
+        # Example 1: Basic usage
+        mcp-execution-cli new-feature --option value
+
+        # Example 2: Advanced usage
+        mcp-execution-cli new-feature --advanced
+        ```
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which Component?
+      description: Which part of the project is this feature related to?
+      options:
+        - CLI (mcp-cli)
+        - Code Generation (mcp-codegen)
+        - MCP Server (mcp-server)
+        - Introspection (mcp-introspector)
+        - Core Types (mcp-core)
+        - Virtual Filesystem (mcp-files)
+        - Documentation
+        - Other / Multiple components
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - Critical (blocking my work)
+        - High (significantly improves my workflow)
+        - Medium (nice to have)
+        - Low (minor improvement)
+    validations:
+      required: true
+
+  - type: textarea
+    id: breaking
+    attributes:
+      label: Breaking Changes
+      description: Would this feature require breaking changes to the API or CLI?
+      placeholder: Describe any potential breaking changes and migration strategies.
+    validations:
+      required: false
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Ideas
+      description: Do you have ideas about how this could be implemented?
+      placeholder: |
+        If you're familiar with the codebase, share your thoughts on:
+        - Which modules would need changes?
+        - What new types or traits might be needed?
+        - Any performance or security considerations?
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or references?
+      placeholder: Links to related issues, similar features in other projects, etc.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      description: Please confirm the following before submitting.
+      options:
+        - label: I have searched existing issues and discussions to ensure this is not a duplicate.
+          required: true
+        - label: I have clearly described the problem this feature solves.
+          required: true
+        - label: I have considered the impact on existing users and backwards compatibility.
+          required: false
+        - label: I am willing to help implement this feature (if accepted).
+          required: false

@@ -659,8 +659,6 @@ All development follows [Microsoft Rust Guidelines](https://microsoft.github.io/
 ✅ **No unsafe**: Zero `unsafe` blocks in the codebase
 ✅ **Testing**: 550 tests with 100% pass rate
 
-See [CLAUDE.md](CLAUDE.md) for detailed development instructions.
-
 ### Running Tests
 
 ```bash
@@ -715,10 +713,6 @@ cargo audit
 4. **Validate MCP servers**: Only generate from trusted MCP server sources
 5. **Principle of least privilege**: Grant MCP servers only necessary permissions
 
-### Reporting Security Issues
-
-Found a security issue? Please email security@example.com (do not file public issues).
-
 ---
 
 ## Contributing
@@ -759,7 +753,6 @@ at your option.
 
 ### Official Documentation
 - [Progressive Loading Tutorial](examples/progressive-loading-usage.md) - Complete guide
-- [Architecture Decision Records](docs/adr/) - Technical decisions
 - [API Documentation](https://docs.rs/mcp-execution) - Rust API docs
 
 ### External Resources
@@ -771,9 +764,3 @@ at your option.
 ### Community
 - [GitHub Issues](https://github.com/bug-ops/mcp-execution/issues) - Bug reports and feature requests
 - [GitHub Discussions](https://github.com/bug-ops/mcp-execution/discussions) - Questions and ideas
-
----
-
-<p align="center">
-  <strong>Built with 🦀 Rust and ❤️ for the MCP ecosystem</strong>
-</p>

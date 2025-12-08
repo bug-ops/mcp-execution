@@ -192,4 +192,3 @@ Check that:
 ## See Also
 
 - [Progressive Loading Usage Guide](../examples/progressive-loading-usage.md)
-- [ADR-011](../docs/adr/011-executable-typescript-via-bash.md) - Architecture decision

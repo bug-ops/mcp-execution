@@ -1,0 +1,147 @@
+name: Documentation Improvement
+description: Suggest improvements to documentation
+title: "[Docs]: "
+labels: ["documentation", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve our documentation! Clear docs make the project accessible to everyone.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Documentation Issue Summary
+      description: What documentation needs improvement?
+      placeholder: Briefly describe the documentation issue or gap.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: doc_type
+    attributes:
+      label: Documentation Type
+      description: What type of documentation needs improvement?
+      options:
+        - README.md (main project documentation)
+        - CONTRIBUTING.md (contributor guide)
+        - API documentation (rustdoc comments)
+        - Examples (code examples)
+        - Architecture Decision Records (ADRs)
+        - CLI help text (--help output)
+        - Error messages
+        - Code comments
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: location
+    attributes:
+      label: Documentation Location
+      description: Where is this documentation located?
+      placeholder: |
+        File path(s), function names, or URLs:
+        - README.md, section "Quick Start"
+        - crates/mcp-codegen/src/generator.rs, line 42
+        - https://github.com/bug-ops/mcp-execution/...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Issue Type
+      description: What kind of documentation issue is this?
+      options:
+        - Missing documentation (no docs where there should be)
+        - Unclear / confusing (docs exist but are hard to understand)
+        - Incorrect / outdated (docs are wrong or out of date)
+        - Incomplete (docs are partial or missing details)
+        - Typo / grammar (spelling or language issues)
+        - Better examples needed (examples are missing or inadequate)
+        - Broken links
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current Documentation
+      description: What does the current documentation say (if any)?
+      placeholder: Quote or describe the current documentation.
+      render: markdown
+    validations:
+      required: false
+
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested Improvement
+      description: What should the documentation say instead?
+      placeholder: |
+        Provide your suggested documentation improvement:
+        - For missing docs: write the documentation you'd like to see
+        - For unclear docs: suggest clearer wording
+        - For incorrect docs: provide the correct information
+        - For examples: write example code
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why This Matters
+      description: Why is this documentation improvement important?
+      placeholder: |
+        Explain the impact:
+        - Who does this affect? (new users, contributors, specific use cases)
+        - What confusion or problems does it cause?
+        - How will the improvement help?
+    validations:
+      required: false
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example Code
+      description: If suggesting code examples, provide them here.
+      placeholder: |
+        ```rust
+        // Example code here
+        use mcp_codegen::Generator;
+
+        let gen = Generator::new();
+        ```
+      render: rust
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or references?
+      placeholder: |
+        - Links to related documentation
+        - Screenshots of confusing output
+        - References to similar projects with good docs
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      description: Please confirm the following before submitting.
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate.
+          required: true
+        - label: I have identified the specific location of the documentation issue.
+          required: true
+        - label: I have provided a suggested improvement.
+          required: true
+        - label: I am willing to submit a PR with this documentation improvement (if accepted).
+          required: false

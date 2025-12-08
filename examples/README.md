@@ -253,5 +253,4 @@ Have a useful example or workflow? Contributions welcome:
 
 - [Project README](../README.md) - Project overview and installation
 - [Architecture](../docs/ARCHITECTURE.md) - System architecture and design
-- [ADRs](../docs/adr/) - Architecture decision records
 - [MCP Specification](https://github.com/modelcontextprotocol/specification) - Protocol specification
