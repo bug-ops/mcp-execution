@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.2] - 2025-12-08
+
+### Summary
+
+**Documentation Restructuring**
+
+This patch release refactors documentation by reducing the main README size and adding individual README files for each crate.
+
+### Changed
+
+- **README.md**: Reduced from ~766 to ~169 lines (78% reduction)
+  - Kept essential overview, quick start, and feature summary
+  - Added workspace crates table with links to individual READMEs
+  - Moved detailed documentation to crate-specific READMEs
+
+### Added
+
+- **crates/mcp-core/README.md**: Foundation types, traits, and error handling documentation
+- **crates/mcp-files/README.md**: Virtual filesystem usage and API documentation
+- **crates/mcp-introspector/README.md**: MCP server analysis and rmcp SDK usage
+
+---
+
 ## [0.6.1] - 2025-12-08
 
 ### Summary
@@ -921,4 +944,4 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 ---
 
 **Last Updated**: 2025-12-08
-**Version**: 0.6.1 (Production Ready)
+**Version**: 0.6.2 (Production Ready)
