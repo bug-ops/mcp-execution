@@ -1,13 +1,14 @@
 # MCP Code Execution
 
-> **Autonomous MCP Tool Execution with 98% Token Savings**
->
-> Transform any MCP server into executable, type-safe TypeScript tools using progressive loading pattern. Load only what you need, when you need it.
-
 [![CI](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/branch/master/graph/badge.svg)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://blog.rust-lang.org/2025/01/23/Rust-1.89.0.html)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE.md)
+
+Transform any MCP server into executable, type-safe TypeScript tools using progressive loading pattern. Achieve **98% token savings** by loading only what you need.
+
+> [!TIP]
+> Inspired by [Anthropic's engineering blog post](https://www.anthropic.com/engineering/code-execution-with-mcp) on Code Execution with MCP.
 
 ## The Problem
 
@@ -19,19 +20,35 @@ Progressive loading generates one TypeScript file per tool (~500-1,500 tokens ea
 
 **Result**: **98% token savings** + **autonomous execution** + **type safety**
 
-> Inspired by [Anthropic's engineering blog post](https://www.anthropic.com/engineering/code-execution-with-mcp) on Code Execution with MCP.
+## Installation
 
-## Quick Start
+### Pre-built binaries
 
-### Installation
+Download from [GitHub Releases](https://github.com/bug-ops/mcp-execution/releases/latest):
 
 ```bash
-# Pre-built binaries
+# macOS (Apple Silicon)
 curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-execution-cli-macos-arm64.tar.gz | tar xz
 
-# From source
+# macOS (Intel)
+curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-execution-cli-macos-amd64.tar.gz | tar xz
+
+# Linux (x86_64)
+curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-execution-cli-linux-amd64.tar.gz | tar xz
+```
+
+### From source
+
+```bash
+git clone https://github.com/bug-ops/mcp-execution
+cd mcp-execution
 cargo install --path crates/mcp-cli
 ```
+
+> [!IMPORTANT]
+> Requires Rust 1.89 or later.
+
+## Usage
 
 ### Generate TypeScript Tools
 
@@ -46,7 +63,7 @@ mcp-execution-cli generate --from-config github
 #   - ... (one file per tool)
 ```
 
-### Use Progressive Loading
+### Progressive Loading
 
 ```bash
 # List available tools
@@ -58,6 +75,9 @@ cat ~/.claude/servers/github/createIssue.ts
 # Execute autonomously
 node ~/.claude/servers/github/createIssue.ts --repo="owner/repo" --title="Bug"
 ```
+
+> [!NOTE]
+> Each tool file is self-contained with full TypeScript interfaces and JSDoc documentation.
 
 ## Key Features
 
@@ -80,8 +100,9 @@ node ~/.claude/servers/github/createIssue.ts --repo="owner/repo" --title="Bug"
 | [mcp-server](crates/mcp-server) | MCP server for progressive loading generation |
 | [mcp-cli](crates/mcp-cli) | Command-line interface |
 
-**Dependency Graph** (no circular dependencies):
-```
+**Dependency Graph**:
+
+```text
 mcp-cli → {mcp-codegen, mcp-introspector, mcp-files, mcp-core}
 mcp-server → {mcp-codegen, mcp-introspector, mcp-files, mcp-core}
 mcp-codegen → {mcp-files, mcp-core}
@@ -121,48 +142,25 @@ mcp-execution-cli completions bash
 - [Progressive Loading Tutorial](examples/progressive-loading-usage.md) - Complete guide
 - [Claude Code Integration](examples/SKILL.md) - Skill setup
 - [Architecture Decisions](docs/adr/) - ADRs explaining design choices
-- [API Documentation](https://docs.rs/mcp-execution) - Rust API docs
 
 ## Development
 
 ```bash
-# Build
-cargo build --workspace
-
-# Test
-cargo nextest run --workspace
-
-# Lint
-cargo clippy --workspace -- -D warnings
-
-# Format
-cargo +nightly fmt --workspace
+cargo build --workspace        # Build
+cargo nextest run --workspace  # Test
+cargo clippy --workspace       # Lint
+cargo +nightly fmt --workspace # Format
 ```
 
-All development follows [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines/).
+> [!NOTE]
+> All development follows [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines/).
 
-## Security
+## MSRV Policy
 
-- **No code execution during generation**: Generated TypeScript is static
-- **Input validation**: All parameters validated before use
-- **Path safety**: Validated to prevent directory traversal
-- **Template security**: Handlebars escapes all user input
+Minimum Supported Rust Version: **1.89**
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+MSRV increases are considered minor version bumps.
 
 ## License
 
-Licensed under either of:
-
-- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE))
-- **MIT license** ([LICENSE-MIT](LICENSE))
-
-at your option.
-
-## Resources
-
-- [MCP Specification](https://spec.modelcontextprotocol.io/) - Protocol specification
-- [rmcp Documentation](https://docs.rs/rmcp) - Official Rust MCP SDK
-- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) - Original inspiration
+Licensed under either of [Apache License 2.0](LICENSE.md) or [MIT license](LICENSE.md) at your option.

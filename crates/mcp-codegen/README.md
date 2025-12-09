@@ -1,16 +1,11 @@
 # mcp-codegen
 
-Progressive loading TypeScript code generation for MCP (Model Context Protocol) tools.
+[![Crates.io](https://img.shields.io/crates/v/mcp-codegen.svg)](https://crates.io/crates/mcp-codegen)
+[![docs.rs](https://img.shields.io/docsrs/mcp-codegen)](https://docs.rs/mcp-codegen)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
-Transforms MCP tool schemas into TypeScript files using the progressive loading pattern, achieving 98% token savings by generating one file per tool.
-
-## Features
-
-- **One File Per Tool**: Separate TypeScript file for each MCP tool
-- **Type-Safe Interfaces**: Full TypeScript parameter and result types
-- **JSDoc Documentation**: Complete documentation from MCP schemas
-- **98% Token Savings**: Load only the tools you need
-- **Virtual Filesystem**: Optional VFS integration for in-memory generation
+Progressive loading TypeScript code generation for MCP tools. Achieves **98% token savings** by generating one file per tool.
 
 ## Installation
 
@@ -19,13 +14,22 @@ Transforms MCP tool schemas into TypeScript files using the progressive loading 
 mcp-codegen = "0.6"
 ```
 
+Or with cargo-add:
+
+```bash
+cargo add mcp-codegen
+```
+
+> [!IMPORTANT]
+> Requires Rust 1.89 or later.
+
 ## Usage
 
 ### Progressive Loading Generation
 
 ```rust
 use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_introspector::{Introspector, ServerInfo};
+use mcp_introspector::Introspector;
 use mcp_core::{ServerId, ServerConfig};
 
 #[tokio::main]
@@ -42,35 +46,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let generator = ProgressiveGenerator::new()?;
     let code = generator.generate(&info)?;
 
-    // Files generated:
-    // - createIssue.ts (one tool)
-    // - updateIssue.ts (another tool)
-    // - index.ts (re-exports all)
-    // - _runtime/mcp-bridge.ts (runtime helper)
-
     println!("Generated {} files", code.file_count());
     Ok(())
 }
 ```
 
-### Token Savings Example
+> [!TIP]
+> Generated files include: one `.ts` file per tool, `index.ts` re-exports, and `_runtime/mcp-bridge.ts` helper.
 
-**Traditional approach** (load all tools):
-```typescript
-// index.ts - contains all 45 tools
-// Token cost: ~30,000 tokens
-```
+### Token Savings
 
-**Progressive loading** (load one tool):
-```typescript
-// createIssue.ts - one tool only
-// Token cost: ~500-1,500 tokens
-// Savings: 98%! 🎉
-```
+| Approach | Tokens | Savings |
+|----------|--------|---------|
+| Traditional (all tools) | ~30,000 | - |
+| Progressive (1 tool) | ~500-1,500 | **98%** |
 
 ## Generated TypeScript Structure
 
-Each tool file includes:
+Each tool file includes full TypeScript interfaces:
 
 ```typescript
 /**
@@ -84,48 +77,25 @@ export async function createIssue(
   return await callMCPTool('github', 'create_issue', params);
 }
 
-/** Parameters for createIssue tool */
 export interface CreateIssueParams {
   /** Repository in format "owner/repo" */
   repo: string;
-
   /** Issue title */
   title: string;
-
   /** Issue body (optional) */
   body?: string;
-
-  /** Labels to apply (optional) */
-  labels?: string[];
-}
-
-/** Result type for createIssue tool */
-export interface CreateIssueResult {
-  [key: string]: unknown;
 }
 ```
 
-## Architecture
+## Features
 
-### Code Generation Pipeline
+- **One File Per Tool**: Separate TypeScript file for each MCP tool
+- **Type-Safe Interfaces**: Full TypeScript parameter and result types
+- **JSDoc Documentation**: Complete documentation from MCP schemas
+- **98% Token Savings**: Load only the tools you need
+- **Handlebars Templates**: Customizable code generation
 
-1. **Introspection**: MCP server analysis using `mcp-introspector`
-2. **Template Rendering**: Handlebars templates for each tool
-3. **Type Conversion**: JSON Schema → TypeScript interfaces
-4. **File Generation**: One `.ts` file per tool + index + runtime
-5. **Output**: VFS structure or disk files
-
-### Template System
-
-```
-templates/
-└── progressive/              # Progressive loading templates
-    ├── tool.ts.hbs          # Individual tool template
-    ├── index.ts.hbs         # Re-exports all tools
-    └── runtime-bridge.ts.hbs # Runtime helper (stub)
-```
-
-### Type Conversion
+## Type Conversion
 
 JSON Schema types are converted to TypeScript:
 
@@ -137,56 +107,31 @@ JSON Schema types are converted to TypeScript:
 | `array` | `T[]` |
 | `object` | `{ [key: string]: T }` |
 
-Optional parameters use `?` suffix in TypeScript interfaces.
-
-## Integration
-
-### With Virtual Filesystem
-
-```rust
-use mcp_vfs::VirtualFilesystem;
-use mcp_codegen::progressive::ProgressiveGenerator;
-
-let generator = ProgressiveGenerator::new()?;
-let code = generator.generate(&server_info)?;
-
-// Export to VFS
-let mut vfs = VirtualFilesystem::new();
-vfs.add_directory("github")?;
-for (path, content) in code.files() {
-    vfs.add_file(&format!("github/{}", path), content)?;
-}
-```
-
-### Output to Disk
-
-```rust
-use std::fs;
-use std::path::Path;
-
-let output_dir = Path::new("~/.claude/servers/github");
-fs::create_dir_all(output_dir)?;
-
-for (path, content) in code.files() {
-    let file_path = output_dir.join(path);
-    fs::write(file_path, content)?;
-}
-```
+> [!NOTE]
+> Optional parameters use `?` suffix in TypeScript interfaces.
 
 ## Performance
 
-From benchmarks (M1 MacBook Pro):
+| Metric | Target | Achieved |
+|--------|--------|----------|
+| 10 tools | <100ms | **0.19ms** (526x faster) |
+| 50 tools | <20ms | **0.97ms** (20.6x faster) |
+| VFS export | <10ms | **1.2ms** (8.3x faster) |
 
-| Metric | Target | Achieved | Status |
-|--------|--------|----------|--------|
-| Generate 10 tools | <100ms | **0.19ms** | ✅ 526x faster |
-| Generate 50 tools | <20ms | **0.97ms** | ✅ 20.6x faster |
-| VFS export | <10ms | **1.2ms** | ✅ 8.3x faster |
+## Related Crates
 
-## Examples
+This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-See [examples/progressive-loading-usage.md](../../examples/progressive-loading-usage.md) for complete tutorial.
+- [`mcp-core`](../mcp-core) - Foundation types
+- [`mcp-introspector`](../mcp-introspector) - MCP server analysis
+- [`mcp-files`](../mcp-files) - Virtual filesystem for output
+
+## MSRV Policy
+
+Minimum Supported Rust Version: **1.89**
+
+MSRV increases are considered minor version bumps.
 
 ## License
 
-See workspace LICENSE file.
+Licensed under either of [Apache License 2.0](../../LICENSE.md) or [MIT license](../../LICENSE.md) at your option.

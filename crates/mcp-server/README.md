@@ -1,29 +1,23 @@
 # mcp-server
 
-[![CI](https://img.shields.io/github/actions/workflow/status/bug-ops/mcp-execution/ci.yml?branch=master)](https://github.com/bug-ops/mcp-execution/actions)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue)](https://github.com/bug-ops/mcp-execution)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/mcp-server.svg)](https://crates.io/crates/mcp-server)
+[![docs.rs](https://img.shields.io/docsrs/mcp-server)](https://docs.rs/mcp-server)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
-MCP server for generating progressive loading TypeScript files. Achieves 98% token savings (30,000 → 500-1,500 tokens per tool) by leveraging Claude's natural language understanding for tool categorization.
-
-## Features
-
-- **5 MCP Tools**: Complete workflow from introspection to skill generation
-- **No LLM API Required**: Claude (the conversation LLM) handles categorization
-- **98% Token Savings**: Progressive loading pattern reduces context usage dramatically
-- **Type-Safe**: Full TypeScript types generated from MCP JSON schemas
-- **Session Management**: Automatic 30-minute session expiry with lazy cleanup
+MCP server for generating progressive loading TypeScript files. Achieves **98% token savings** by leveraging Claude's natural language understanding for tool categorization.
 
 ## Installation
-
-This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace.
 
 ```bash
 # Build from workspace root
 cargo build --release -p mcp-server
 
-# Binary will be at target/release/mcp-execution
+# Binary: target/release/mcp-execution
 ```
+
+> [!IMPORTANT]
+> Requires Rust 1.89 or later.
 
 ## Usage
 
@@ -50,6 +44,9 @@ Add to `~/.config/claude/mcp.json`:
   }
 }
 ```
+
+> [!TIP]
+> The server exposes 5 MCP tools for the complete workflow from introspection to skill generation.
 
 ### Programmatic Usage
 
@@ -81,8 +78,6 @@ Connect to an MCP server and discover its tools.
 }
 ```
 
-Returns tool metadata for Claude to categorize and a `session_id` for the next step.
-
 ### `save_categorized_tools`
 
 Generate TypeScript files using Claude's categorization.
@@ -105,77 +100,38 @@ Generate TypeScript files using Claude's categorization.
 
 List all servers with generated progressive loading files.
 
-```json
-{
-  "base_dir": "~/.claude/servers"
-}
-```
-
 ### `generate_skill`
 
 Analyze generated files and return context for SKILL.md generation.
-
-```json
-{
-  "server_id": "github",
-  "skill_name": "github-progressive",
-  "use_case_hints": ["repository management", "issue tracking"]
-}
-```
 
 ### `save_skill`
 
 Save generated SKILL.md content to the filesystem.
 
-```json
-{
-  "server_id": "github",
-  "content": "---\nname: github\ndescription: ...\n---\n...",
-  "overwrite": false
-}
-```
+> [!NOTE]
+> Sessions expire automatically after 30 minutes with lazy cleanup.
 
 ## Workflow
 
-```mermaid
-flowchart LR
-    subgraph Code Generation
-        A[introspect_server] --> B[Claude analyzes\nand categorizes]
-        B --> C[save_categorized_tools]
-        C --> D[TypeScript files\ngenerated]
-    end
-
-    subgraph Skill Generation
-        D --> E[generate_skill]
-        E --> F[save_skill]
-        F --> G[SKILL.md]
-    end
+```text
+introspect_server → Claude categorizes → save_categorized_tools → TypeScript files
+                                                                        ↓
+                                        SKILL.md ← save_skill ← generate_skill
 ```
 
-## Architecture
+## Features
 
-### Modules
-
-| Module | Description |
-|--------|-------------|
-| `service` | MCP server implementation with tool handlers |
-| `types` | Parameter and result types for all tools |
-| `state` | Session state management with LRU cache |
-| `skill` | SKILL.md generation context builder |
-
-### Dependencies
-
-- **rmcp** - Official Rust MCP SDK
-- **mcp-core** - Foundation types and traits
-- **mcp-codegen** - TypeScript code generation
-- **mcp-files** - Virtual filesystem for output
-- **mcp-introspector** - MCP server discovery
+- **5 MCP Tools**: Complete workflow from introspection to skill generation
+- **No LLM API Required**: Claude handles categorization in conversation
+- **98% Token Savings**: Progressive loading pattern reduces context usage
+- **Type-Safe**: Full TypeScript types from MCP JSON schemas
+- **Session Management**: Automatic 30-minute session expiry
 
 ## Related Crates
 
-This crate is part of the `mcp-execution` workspace:
+This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-core`](../mcp-core) - Foundation types, traits, and error handling
+- [`mcp-core`](../mcp-core) - Foundation types and traits
 - [`mcp-introspector`](../mcp-introspector) - MCP server analysis
 - [`mcp-codegen`](../mcp-codegen) - TypeScript code generation
 - [`mcp-files`](../mcp-files) - Virtual filesystem
@@ -189,9 +145,4 @@ MSRV increases are considered minor version bumps.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE.md) or <http://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](../../LICENSE.md) or <http://opensource.org/licenses/MIT>)
-
-at your option.
+Licensed under either of [Apache License 2.0](../../LICENSE.md) or [MIT license](../../LICENSE.md) at your option.

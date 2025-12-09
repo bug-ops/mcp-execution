@@ -1,23 +1,11 @@
 # mcp-core
 
-Foundation types, traits, and error handling for MCP Code Execution.
-
 [![Crates.io](https://img.shields.io/crates/v/mcp-core.svg)](https://crates.io/crates/mcp-core)
-[![Documentation](https://docs.rs/mcp-core/badge.svg)](https://docs.rs/mcp-core)
+[![docs.rs](https://img.shields.io/docsrs/mcp-core)](https://docs.rs/mcp-core)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
-## Overview
-
-`mcp-core` provides foundational types and abstractions used across all crates in the mcp-execution workspace. Following [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines/), it emphasizes strong typing, safety, and clear error handling.
-
-## Features
-
-- **Strong Domain Types**: `ServerId`, `ToolName` instead of raw strings
-- **Error Hierarchy**: Contextual errors with `thiserror`
-- **Server Configuration**: Type-safe config with security validation
-- **Command Validation**: Prevents command injection attacks
-- **Thread-Safe**: All types are `Send + Sync`
-- **Zero Unsafe**: No `unsafe` code blocks
+Foundation types, traits, and error handling for MCP Code Execution.
 
 ## Installation
 
@@ -26,6 +14,15 @@ Foundation types, traits, and error handling for MCP Code Execution.
 mcp-core = "0.6"
 ```
 
+Or with cargo-add:
+
+```bash
+cargo add mcp-core
+```
+
+> [!IMPORTANT]
+> Requires Rust 1.89 or later.
+
 ## Usage
 
 ### Server Configuration
@@ -33,7 +30,6 @@ mcp-core = "0.6"
 ```rust
 use mcp_core::{ServerConfig, ServerId};
 
-// Create a server configuration with builder pattern
 let config = ServerConfig::builder()
     .command("docker".to_string())
     .arg("run".to_string())
@@ -41,12 +37,9 @@ let config = ServerConfig::builder()
     .arg("--rm".to_string())
     .arg("ghcr.io/org/mcp-server".to_string())
     .env("LOG_LEVEL".to_string(), "debug".to_string())
-    .env("API_KEY".to_string(), "secret".to_string())
     .build();
 
-// Strong-typed server identifier
 let server_id = ServerId::new("github");
-println!("Server: {}", server_id);
 ```
 
 ### Domain Types
@@ -58,10 +51,12 @@ use mcp_core::{ServerId, ToolName};
 let server = ServerId::new("github");
 let tool = ToolName::new("create_issue");
 
-// Compare and use as HashMap keys
 assert_eq!(server.as_str(), "github");
 assert_eq!(tool.as_str(), "create_issue");
 ```
+
+> [!TIP]
+> Strong types prevent accidentally passing a `ToolName` where a `ServerId` is expected.
 
 ### Error Handling
 
@@ -89,9 +84,21 @@ let config = ServerConfig::builder()
     .arg("@modelcontextprotocol/server-github".to_string())
     .build();
 
-// Validates against command injection and other security issues
+// Validates against command injection
 validate_server_config(&config)?;
 ```
+
+> [!WARNING]
+> Always validate server configurations before execution to prevent command injection attacks.
+
+## Features
+
+- **Strong Domain Types**: `ServerId`, `ToolName` instead of raw strings
+- **Error Hierarchy**: Contextual errors with `thiserror`
+- **Server Configuration**: Type-safe config with security validation
+- **Command Validation**: Prevents command injection attacks
+- **Thread-Safe**: All types are `Send + Sync`
+- **Zero Unsafe**: No `unsafe` code blocks
 
 ## Types Reference
 
@@ -104,21 +111,9 @@ validate_server_config(&config)?;
 | `Error` | Error type with contextual information |
 | `Result<T>` | Alias for `std::result::Result<T, Error>` |
 
-## Architecture
-
-```
-mcp-core/
-├── types.rs         # ServerId, ToolName domain types
-├── server_config.rs # ServerConfig, ServerConfigBuilder
-├── command.rs       # Command validation utilities
-├── error.rs         # Error enum with thiserror
-├── cli.rs           # CLI-related utilities
-└── lib.rs           # Public API re-exports
-```
-
 ## Related Crates
 
-This crate is the foundation for:
+This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
 - [`mcp-introspector`](../mcp-introspector) - MCP server analysis
 - [`mcp-codegen`](../mcp-codegen) - TypeScript code generation
@@ -126,11 +121,12 @@ This crate is the foundation for:
 - [`mcp-server`](../mcp-server) - MCP server implementation
 - [`mcp-cli`](../mcp-cli) - Command-line interface
 
+## MSRV Policy
+
+Minimum Supported Rust Version: **1.89**
+
+MSRV increases are considered minor version bumps.
+
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE.md))
-- MIT license ([LICENSE-MIT](../../LICENSE.md))
-
-at your option.
+Licensed under either of [Apache License 2.0](../../LICENSE.md) or [MIT license](../../LICENSE.md) at your option.
