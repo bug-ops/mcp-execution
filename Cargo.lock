@@ -1005,11 +1005,11 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs",
- "handlebars",
  "mcp-codegen",
  "mcp-core",
  "mcp-files",
  "mcp-introspector",
+ "mcp-skill",
  "regex",
  "rmcp",
  "schemars",
@@ -1021,6 +1021,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "mcp-skill"
+version = "0.6.3"
+dependencies = [
+ "dirs",
+ "handlebars",
+ "mcp-core",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

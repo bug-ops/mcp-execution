@@ -3,7 +3,7 @@
 //! Transforms parsed tool files into structured context
 //! that the LLM uses to generate SKILL.md content.
 
-use crate::skill::parser::ParsedToolFile;
+use crate::parser::ParsedToolFile;
 use crate::types::{GenerateSkillResult, SkillCategory, SkillTool, ToolExample};
 use std::collections::HashMap;
 
@@ -268,7 +268,10 @@ fn build_generation_prompt(
     examples: &[ToolExample],
     use_case_hints: Option<&[String]>,
 ) -> String {
-    let mut prompt = String::new();
+    // Pre-allocate String capacity to reduce reallocations
+    // Estimate: 500 base + 100/category + 200/example
+    let estimated_size = 500 + (categories.len() * 100) + (examples.len() * 200);
+    let mut prompt = String::with_capacity(estimated_size);
 
     prompt.push_str(&format!(
         r#"You are generating a Claude Code skill file (SKILL.md) for the "{server_id}" MCP server.
@@ -388,7 +391,7 @@ Do not include any explanation or commentary outside the file content.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skill::parser::ParsedParameter;
+    use crate::parser::ParsedParameter;
 
     fn create_test_tool(name: &str, category: Option<&str>) -> ParsedToolFile {
         ParsedToolFile {

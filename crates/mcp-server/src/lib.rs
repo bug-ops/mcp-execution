@@ -50,16 +50,19 @@
 //! - **Discoverable**: grep-friendly headers for tool discovery
 
 pub mod service;
-pub mod skill;
 pub mod state;
 pub mod types;
 
 pub use service::GeneratorService;
 pub use state::StateManager;
 pub use types::{
-    CategorizedTool, GenerateSkillParams, GenerateSkillResult, GeneratedServerInfo,
-    IntrospectServerParams, IntrospectServerResult, ListGeneratedServersParams,
-    ListGeneratedServersResult, PendingGeneration, SaveCategorizedToolsParams,
-    SaveCategorizedToolsResult, SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata,
-    SkillTool, ToolExample, ToolGenerationError, ToolMetadata,
+    CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
+    ListGeneratedServersParams, ListGeneratedServersResult, PendingGeneration,
+    SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolGenerationError, ToolMetadata,
+};
+
+// Re-export skill types from mcp-skill crate
+pub use mcp_skill::{
+    GenerateSkillParams, GenerateSkillResult, SaveSkillParams, SaveSkillResult, SkillCategory,
+    SkillMetadata, SkillTool, ToolExample,
 };

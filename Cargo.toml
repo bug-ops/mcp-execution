@@ -24,11 +24,12 @@ dhat = "0.3"
 dialoguer = "0.12"
 dirs = "6.0"
 handlebars = "6.4"
-mcp-codegen = { path = "crates/mcp-codegen" }
-mcp-core = { path = "crates/mcp-core" }
-mcp-files = { path = "crates/mcp-files" }
-mcp-introspector = { path = "crates/mcp-introspector" }
-mcp-server = { path = "crates/mcp-server" }
+mcp-codegen = { path = "crates/mcp-codegen", version = "0.6.3" }
+mcp-core = { path = "crates/mcp-core", version = "0.6.3"}
+mcp-files = { path = "crates/mcp-files", version = "0.6.3" }
+mcp-introspector = { path = "crates/mcp-introspector", version = "0.6.3"}
+mcp-server = { path = "crates/mcp-server", version = "0.6.3"}
+mcp-skill = { path = "crates/mcp-skill", version = "0.6.3"}
 rayon = "1.11"
 regex = "1.12"
 rmcp = "0.12"

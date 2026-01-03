@@ -1,9 +1,7 @@
-//! Skill generation module for creating SKILL.md files.
+//! Skill generation for MCP progressive loading.
 //!
-//! This module provides functionality to:
-//! - Parse TypeScript tool files for metadata
-//! - Build context for skill generation
-//! - Render prompt templates for LLM generation
+//! This crate provides functionality to generate Claude Code skill files (SKILL.md)
+//! from generated progressive loading TypeScript files.
 //!
 //! # Architecture
 //!
@@ -15,7 +13,7 @@
 //! # Examples
 //!
 //! ```no_run
-//! use mcp_server::skill::{scan_tools_directory, build_skill_context};
+//! use mcp_skill::{scan_tools_directory, build_skill_context};
 //! use std::path::Path;
 //!
 //! # async fn example() -> anyhow::Result<()> {
@@ -28,9 +26,15 @@
 mod context;
 mod parser;
 mod template;
+pub mod types;
 
 pub use context::build_skill_context;
 pub use parser::{
-    ParseError, ParsedParameter, ParsedToolFile, ScanError, parse_tool_file, scan_tools_directory,
+    ParseError, ParsedParameter, ParsedToolFile, ScanError, extract_skill_metadata,
+    parse_tool_file, scan_tools_directory, MAX_FILE_SIZE, MAX_TOOL_FILES,
 };
 pub use template::{TemplateError, render_generation_prompt};
+pub use types::{
+    validate_server_id, GenerateSkillParams, GenerateSkillResult, SaveSkillParams,
+    SaveSkillResult, SkillCategory, SkillMetadata, SkillTool, ToolExample,
+};
