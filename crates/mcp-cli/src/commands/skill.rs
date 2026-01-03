@@ -331,7 +331,7 @@ mod tests {
         assert!(result.is_ok());
         let path = result.unwrap();
         // Should expand ~ to home directory
-        assert!(!path.to_string_lossy().starts_with("~"));
+        assert!(!path.to_string_lossy().starts_with('~'));
         assert!(path.to_string_lossy().contains("custom/servers"));
     }
 
