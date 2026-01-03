@@ -425,7 +425,12 @@ async function test(x: string): Promise<void> {}
         std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
 
         // Try to use path traversal in output path
-        let evil_output = temp.path().join("..").join("..").join("etc").join("evil.md");
+        let evil_output = temp
+            .path()
+            .join("..")
+            .join("..")
+            .join("etc")
+            .join("evil.md");
 
         let result = run(
             "github".to_string(),
