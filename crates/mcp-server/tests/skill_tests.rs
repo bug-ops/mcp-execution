@@ -478,7 +478,7 @@ async fn test_parse_tool_file_binary_content() {
 
 #[tokio::test]
 async fn test_scan_directory_too_many_files() {
-    use mcp_skill::{ScanError, MAX_TOOL_FILES};
+    use mcp_skill::{MAX_TOOL_FILES, ScanError};
 
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
@@ -502,7 +502,7 @@ async fn test_scan_directory_too_many_files() {
 
 #[tokio::test]
 async fn test_scan_directory_file_too_large() {
-    use mcp_skill::{ScanError, MAX_FILE_SIZE};
+    use mcp_skill::{MAX_FILE_SIZE, ScanError};
 
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();

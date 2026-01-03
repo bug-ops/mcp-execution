@@ -962,6 +962,7 @@ dependencies = [
  "mcp-core",
  "mcp-files",
  "mcp-introspector",
+ "mcp-skill",
  "serde",
  "serde_json",
  "tempfile",

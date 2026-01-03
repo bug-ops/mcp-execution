@@ -160,6 +160,44 @@ mcp-execution-cli introspect --http https://api.example.com/mcp \
   --header "Authorization=Bearer token"
 ```
 
+### `skill`
+
+Generate Claude Code skill files (SKILL.md) from progressive loading tools:
+
+```bash
+mcp-execution-cli skill --server <SERVER_ID> [OPTIONS]
+```
+
+**Options**:
+
+- `--server, -s <ID>`: Server identifier (required)
+- `--servers-dir <PATH>`: Custom servers directory
+- `--output, -o <PATH>`: Custom output path
+- `--skill-name <NAME>`: Custom skill name
+- `--hint <HINT>`: Use case hints (repeatable)
+- `--overwrite`: Overwrite existing SKILL.md
+
+**Examples**:
+
+```bash
+# Generate skill for GitHub server
+mcp-execution-cli skill --server github
+
+# With custom output and hints
+mcp-execution-cli skill --server github \
+  --output ~/.claude/skills/github/SKILL.md \
+  --hint "managing pull requests" \
+  --hint "code review"
+
+# Overwrite existing skill
+mcp-execution-cli skill --server github --overwrite
+```
+
+> [!TIP]
+> For optimal results, prefer using the MCP server (`mcp-server`) for skill generation.
+> The MCP server can leverage LLM capabilities to summarize tool descriptions and reduce
+> context size, resulting in more concise and effective skill files.
+
 ### `stats`
 
 View cache statistics:
@@ -212,6 +250,7 @@ This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-executi
 - [`mcp-introspector`](../mcp-introspector) - MCP server analysis
 - [`mcp-codegen`](../mcp-codegen) - TypeScript code generation
 - [`mcp-files`](../mcp-files) - Virtual filesystem
+- [`mcp-skill`](../mcp-skill) - Skill generation
 - [`mcp-server`](../mcp-server) - MCP server
 
 ## MSRV Policy

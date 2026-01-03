@@ -255,7 +255,9 @@ pub fn validate_server_id(server_id: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err("server_id must contain only lowercase letters, digits, and hyphens".to_string());
+        return Err(
+            "server_id must contain only lowercase letters, digits, and hyphens".to_string(),
+        );
     }
 
     Ok(())

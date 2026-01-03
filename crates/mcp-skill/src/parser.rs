@@ -329,11 +329,12 @@ fn parse_parameters(content: &str) -> Vec<ParsedParameter> {
 /// ```
 pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, ScanError> {
     // Canonicalize the base directory to resolve symlinks and get absolute path
-    let canonical_base = tokio::fs::canonicalize(dir).await.map_err(|_| {
-        ScanError::DirectoryNotFound {
-            path: sanitize_path_for_error(dir),
-        }
-    })?;
+    let canonical_base =
+        tokio::fs::canonicalize(dir)
+            .await
+            .map_err(|_| ScanError::DirectoryNotFound {
+                path: sanitize_path_for_error(dir),
+            })?;
 
     let mut tools = Vec::new();
     let mut file_count = 0usize;
@@ -412,11 +413,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
             Ok(tool) => tools.push(tool),
             Err(e) => {
                 // Log warning but continue with other files
-                tracing::warn!(
-                    "Failed to parse {}: {}",
-                    sanitize_path_for_error(&path),
-                    e
-                );
+                tracing::warn!("Failed to parse {}: {}", sanitize_path_for_error(&path), e);
             }
         }
     }

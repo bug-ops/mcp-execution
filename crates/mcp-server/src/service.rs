@@ -16,8 +16,8 @@ use mcp_core::{ServerConfig, ServerId};
 use mcp_files::FilesBuilder;
 use mcp_introspector::Introspector;
 use mcp_skill::{
-    extract_skill_metadata, validate_server_id, GenerateSkillParams, SaveSkillParams,
-    SaveSkillResult, build_skill_context, scan_tools_directory,
+    GenerateSkillParams, SaveSkillParams, SaveSkillResult, build_skill_context,
+    extract_skill_metadata, scan_tools_directory, validate_server_id,
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
@@ -103,8 +103,7 @@ impl GeneratorService {
         Parameters(params): Parameters<IntrospectServerParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format
-        validate_server_id(&params.server_id)
-            .map_err(|e| McpError::invalid_params(e, None))?;
+        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
 
         // Extract server_id before consuming params
         let server_id_str = params.server_id;
@@ -374,8 +373,7 @@ impl GeneratorService {
         Parameters(params): Parameters<GenerateSkillParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format and length
-        validate_server_id(&params.server_id)
-            .map_err(|e| McpError::invalid_params(e, None))?;
+        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
 
         // Determine servers directory
         let servers_dir = params.servers_dir.unwrap_or_else(|| {
@@ -441,8 +439,7 @@ impl GeneratorService {
         Parameters(params): Parameters<SaveSkillParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format and length
-        validate_server_id(&params.server_id)
-            .map_err(|e| McpError::invalid_params(e, None))?;
+        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
 
         // Validate content size (DoS protection)
         if params.content.len() > MAX_SKILL_CONTENT_SIZE {
