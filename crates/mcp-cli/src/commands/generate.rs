@@ -14,7 +14,7 @@ use mcp_files::FilesBuilder;
 use mcp_introspector::Introspector;
 use serde::Serialize;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Result of progressive loading code generation.
 #[derive(Debug, Serialize)]
@@ -78,7 +78,7 @@ pub async fn run(
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
     let (server_id, server_config) = if let Some(config_name) = from_config {
-        info!(
+        debug!(
             "Loading server configuration from ~/.claude/mcp.json: {}",
             config_name
         );
