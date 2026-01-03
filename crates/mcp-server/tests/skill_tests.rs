@@ -1,8 +1,6 @@
 //! Integration tests for skill generation.
 
-use mcp_server::skill::{
-    ParsedToolFile, build_skill_context, parse_tool_file, scan_tools_directory,
-};
+use mcp_skill::{ParsedToolFile, build_skill_context, parse_tool_file, scan_tools_directory};
 use std::fmt::Write;
 use tempfile::TempDir;
 use tokio::fs;
@@ -476,4 +474,72 @@ async fn test_parse_tool_file_binary_content() {
 
     let result = parse_tool_file(&content_str, "binary.ts");
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_scan_directory_too_many_files() {
+    use mcp_skill::{MAX_TOOL_FILES, ScanError};
+
+    let temp_dir = TempDir::new().unwrap();
+    let dir = temp_dir.path();
+
+    // Create MAX_TOOL_FILES + 1 files (501 files)
+    for i in 0..=MAX_TOOL_FILES {
+        create_test_tool_file(dir, &format!("tool_{i}"), "test").await;
+    }
+
+    let result = scan_tools_directory(dir).await;
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ScanError::TooManyFiles { count, limit } => {
+            assert_eq!(count, MAX_TOOL_FILES + 1);
+            assert_eq!(limit, MAX_TOOL_FILES);
+        }
+        other => panic!("Expected TooManyFiles error, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_scan_directory_file_too_large() {
+    use mcp_skill::{MAX_FILE_SIZE, ScanError};
+
+    let temp_dir = TempDir::new().unwrap();
+    let dir = temp_dir.path();
+
+    // Create a file larger than MAX_FILE_SIZE (1MB)
+    #[allow(clippy::cast_possible_truncation)]
+    let large_content = "a".repeat((MAX_FILE_SIZE as usize) + 1);
+
+    // Add minimal valid JSDoc to make it a tool file
+    let content = format!(
+        r"/**
+ * @tool large_tool
+ * @server test
+ * @keywords large
+ * @description Large tool for testing
+ */
+
+interface LargeToolParams {{
+  param: string;
+}}
+
+{large_content}
+"
+    );
+
+    let large_file = dir.join("LargeTool.ts");
+    fs::write(&large_file, content).await.unwrap();
+
+    let result = scan_tools_directory(dir).await;
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        ScanError::FileTooLarge { path, size, limit } => {
+            assert!(path.contains("LargeTool.ts"));
+            assert!(size > MAX_FILE_SIZE);
+            assert_eq!(limit, MAX_FILE_SIZE);
+        }
+        other => panic!("Expected FileTooLarge error, got: {other:?}"),
+    }
 }

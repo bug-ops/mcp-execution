@@ -48,6 +48,28 @@ static INTERFACE_REGEX: LazyLock<Regex> =
 static PROP_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\w+)(\?)?:\s*([^;]+);").expect("valid regex"));
 
+// Regexes for SKILL.md frontmatter parsing
+static FRONTMATTER_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---").expect("valid regex"));
+static NAME_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"name:\s*(.+)").expect("valid regex"));
+static SKILL_DESC_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"description:\s*(.+)").expect("valid regex"));
+
+/// Sanitize file path for error messages to prevent information disclosure.
+///
+/// Replaces the home directory with `~` to avoid leaking usernames and
+/// full filesystem paths in error messages.
+fn sanitize_path_for_error(path: &Path) -> String {
+    dirs::home_dir().map_or_else(
+        || path.display().to_string(),
+        |home| {
+            let path_str = path.display().to_string();
+            path_str.replace(&home.display().to_string(), "~")
+        },
+    )
+}
+
 /// Errors that can occur during TypeScript file parsing.
 #[derive(Debug, Error)]
 pub enum ParseError {
@@ -155,7 +177,7 @@ pub struct ParsedParameter {
 /// # Examples
 ///
 /// ```
-/// use mcp_server::skill::parse_tool_file;
+/// use mcp_skill::parse_tool_file;
 ///
 /// let content = r"
 /// /**
@@ -296,26 +318,28 @@ fn parse_parameters(content: &str) -> Vec<ParsedParameter> {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_server::skill::scan_tools_directory;
+/// use mcp_skill::scan_tools_directory;
 /// use std::path::Path;
 ///
-/// # async fn example() -> Result<(), mcp_server::skill::ScanError> {
+/// # async fn example() -> Result<(), mcp_skill::ScanError> {
 /// let tools = scan_tools_directory(Path::new("/home/user/.claude/servers/github")).await?;
 /// println!("Found {} tools", tools.len());
 /// # Ok(())
 /// # }
 /// ```
 pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, ScanError> {
-    if !dir.exists() {
-        return Err(ScanError::DirectoryNotFound {
-            path: dir.display().to_string(),
-        });
-    }
+    // Canonicalize the base directory to resolve symlinks and get absolute path
+    let canonical_base =
+        tokio::fs::canonicalize(dir)
+            .await
+            .map_err(|_| ScanError::DirectoryNotFound {
+                path: sanitize_path_for_error(dir),
+            })?;
 
     let mut tools = Vec::new();
     let mut file_count = 0usize;
 
-    let mut entries = tokio::fs::read_dir(dir).await?;
+    let mut entries = tokio::fs::read_dir(&canonical_base).await?;
 
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
@@ -343,6 +367,26 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
             continue;
         }
 
+        // SECURITY: Canonicalize file path and validate it stays within base directory
+        // This prevents path traversal via symlinks
+        let Ok(canonical_file) = tokio::fs::canonicalize(&path).await else {
+            tracing::warn!(
+                "Skipping file with invalid path: {}",
+                sanitize_path_for_error(&path)
+            );
+            continue;
+        };
+
+        // Prevent path traversal via symlinks
+        if !canonical_file.starts_with(&canonical_base) {
+            tracing::warn!(
+                "Skipping file outside base directory: {} (symlink to {})",
+                sanitize_path_for_error(&path),
+                sanitize_path_for_error(&canonical_file)
+            );
+            continue;
+        }
+
         // Check file count limit (DoS protection)
         file_count += 1;
         if file_count > MAX_TOOL_FILES {
@@ -353,23 +397,23 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
         }
 
         // Check file size before reading (DoS protection)
-        let metadata = tokio::fs::metadata(&path).await?;
+        let metadata = tokio::fs::metadata(&canonical_file).await?;
         if metadata.len() > MAX_FILE_SIZE {
             return Err(ScanError::FileTooLarge {
-                path: path.display().to_string(),
+                path: sanitize_path_for_error(&path),
                 size: metadata.len(),
                 limit: MAX_FILE_SIZE,
             });
         }
 
-        // Read and parse file
-        let content = tokio::fs::read_to_string(&path).await?;
+        // Read and parse file (use canonical path)
+        let content = tokio::fs::read_to_string(&canonical_file).await?;
 
         match parse_tool_file(&content, filename) {
             Ok(tool) => tools.push(tool),
             Err(e) => {
                 // Log warning but continue with other files
-                tracing::warn!("Failed to parse {}: {}", path.display(), e);
+                tracing::warn!("Failed to parse {}: {}", sanitize_path_for_error(&path), e);
             }
         }
     }
@@ -378,6 +422,82 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
     tools.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(tools)
+}
+
+/// Extract skill metadata from SKILL.md content.
+///
+/// Parses YAML frontmatter to extract name and description, and counts
+/// sections (H2 headers) and words.
+///
+/// # Arguments
+///
+/// * `content` - SKILL.md content with YAML frontmatter
+///
+/// # Returns
+///
+/// `SkillMetadata` with extracted information.
+///
+/// # Errors
+///
+/// Returns error if YAML frontmatter is missing or required fields not found.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_skill::extract_skill_metadata;
+///
+/// let content = r"---
+/// name: github-progressive
+/// description: GitHub MCP server operations
+/// ---
+///
+/// # GitHub Progressive
+///
+/// ## Quick Start
+///
+/// Content here.
+/// ";
+///
+/// let metadata = extract_skill_metadata(content).unwrap();
+/// assert_eq!(metadata.name, "github-progressive");
+/// assert_eq!(metadata.description, "GitHub MCP server operations");
+/// ```
+pub fn extract_skill_metadata(content: &str) -> Result<crate::types::SkillMetadata, String> {
+    use crate::types::SkillMetadata;
+
+    // Extract YAML frontmatter (using pre-compiled regex)
+    let frontmatter = FRONTMATTER_REGEX
+        .captures(content)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str())
+        .ok_or("YAML frontmatter not found")?;
+
+    // Extract name (using pre-compiled regex)
+    let name = NAME_REGEX
+        .captures(frontmatter)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .ok_or("'name' field not found in frontmatter")?;
+
+    // Extract description (using pre-compiled regex)
+    let description = SKILL_DESC_REGEX
+        .captures(frontmatter)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .ok_or("'description' field not found in frontmatter")?;
+
+    // Count sections (H2 headers)
+    let section_count = content.lines().filter(|l| l.starts_with("## ")).count();
+
+    // Count words (approximate)
+    let word_count = content.split_whitespace().count();
+
+    Ok(SkillMetadata {
+        name,
+        description,
+        section_count,
+        word_count,
+    })
 }
 
 #[cfg(test)]
@@ -787,5 +907,105 @@ interface TestParams {
         let result = parse_tool_file(content, "test.ts").unwrap();
         // Empty strings from trailing commas should be filtered out
         assert_eq!(result.keywords, vec!["create", "update", "delete"]);
+    }
+
+    // ========================================================================
+    // extract_skill_metadata Tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_skill_metadata_valid() {
+        let content = r"---
+name: github-progressive
+description: GitHub MCP server operations
+---
+
+# GitHub Progressive
+
+## Quick Start
+
+Content here.
+
+## Common Tasks
+
+More content.
+";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.name, "github-progressive");
+        assert_eq!(metadata.description, "GitHub MCP server operations");
+        assert_eq!(metadata.section_count, 2);
+        assert!(metadata.word_count > 0);
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_no_frontmatter() {
+        let content = "# Test\n\nNo frontmatter";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("YAML frontmatter not found"));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_missing_name() {
+        let content = "---\ndescription: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("'name' field not found"));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_missing_description() {
+        let content = "---\nname: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("'description' field not found")
+        );
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_with_extra_fields() {
+        let content = r"---
+name: test-skill
+description: Test description
+version: 1.0.0
+author: Test Author
+---
+
+# Test
+";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert_eq!(metadata.name, "test-skill");
+        assert_eq!(metadata.description, "Test description");
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_multiline_description() {
+        let content = r"---
+name: test
+description: This is a long description that contains multiple words
+---
+
+# Test
+";
+
+        let result = extract_skill_metadata(content);
+        assert!(result.is_ok());
+
+        let metadata = result.unwrap();
+        assert!(metadata.description.contains("multiple words"));
     }
 }

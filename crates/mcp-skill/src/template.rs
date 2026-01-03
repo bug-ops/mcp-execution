@@ -3,6 +3,8 @@
 //! Uses Handlebars templates to render the skill generation prompt.
 //! The template is embedded at compile time for reliability.
 
+use std::sync::LazyLock;
+
 use handlebars::Handlebars;
 use thiserror::Error;
 
@@ -22,6 +24,17 @@ pub enum TemplateError {
 
 /// Embedded Handlebars template for skill generation.
 const SKILL_GENERATION_TEMPLATE: &str = include_str!("templates/skill-generation.hbs");
+
+/// Handlebars instance with pre-registered templates.
+///
+/// Initialized once per process using `LazyLock` for optimal performance.
+/// Template is parsed and validated on first access.
+static HANDLEBARS: LazyLock<Handlebars<'static>> = LazyLock::new(|| {
+    let mut hb = Handlebars::new();
+    hb.register_template_string("skill", SKILL_GENERATION_TEMPLATE)
+        .expect("embedded template must be valid Handlebars syntax");
+    hb
+});
 
 /// Render the skill generation prompt.
 ///
@@ -43,20 +56,14 @@ const SKILL_GENERATION_TEMPLATE: &str = include_str!("templates/skill-generation
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_server::skill::{build_skill_context, render_generation_prompt};
+/// use mcp_skill::{build_skill_context, render_generation_prompt};
 ///
 /// let context = build_skill_context("github", &[], None);
 /// let prompt = render_generation_prompt(&context).unwrap();
 /// ```
 pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String, TemplateError> {
-    let mut handlebars = Handlebars::new();
-
-    // Register the template
-    handlebars.register_template_string("skill", SKILL_GENERATION_TEMPLATE)?;
-
-    // Render with context
-    let rendered = handlebars.render("skill", context)?;
-
+    // Use pre-compiled template instance
+    let rendered = HANDLEBARS.render("skill", context)?;
     Ok(rendered)
 }
 

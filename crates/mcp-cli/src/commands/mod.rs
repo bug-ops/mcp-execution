@@ -10,3 +10,4 @@ pub mod generate;
 pub mod introspect;
 pub mod server;
 pub mod setup;
+pub mod skill;

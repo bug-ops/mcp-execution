@@ -5,19 +5,20 @@
 //! 2. `save_categorized_tools` - Generate TypeScript files with categorization
 //! 3. `list_generated_servers` - List all servers with generated files
 
-use crate::skill::{build_skill_context, scan_tools_directory};
 use crate::state::StateManager;
 use crate::types::{
-    CategorizedTool, GenerateSkillParams, GeneratedServerInfo, IntrospectServerParams,
-    IntrospectServerResult, ListGeneratedServersParams, ListGeneratedServersResult,
-    PendingGeneration, SaveCategorizedToolsParams, SaveCategorizedToolsResult, SaveSkillParams,
-    SaveSkillResult, SkillMetadata, ToolMetadata,
+    CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
+    ListGeneratedServersParams, ListGeneratedServersResult, PendingGeneration,
+    SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolMetadata,
 };
 use mcp_codegen::progressive::ProgressiveGenerator;
 use mcp_core::{ServerConfig, ServerId};
 use mcp_files::FilesBuilder;
 use mcp_introspector::Introspector;
-use regex::Regex;
+use mcp_skill::{
+    GenerateSkillParams, SaveSkillParams, SaveSkillResult, build_skill_context,
+    extract_skill_metadata, scan_tools_directory, validate_server_id,
+};
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -27,19 +28,8 @@ use rmcp::model::{
 use rmcp::{ErrorData as McpError, tool, tool_handler, tool_router};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use tokio::sync::Mutex;
-
-// Pre-compiled regexes for performance (compiled once, reused)
-static FRONTMATTER_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---").expect("valid regex"));
-static NAME_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"name:\s*(.+)").expect("valid regex"));
-static DESC_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"description:\s*(.+)").expect("valid regex"));
-
-/// Maximum `server_id` length (denial-of-service protection).
-const MAX_SERVER_ID_LENGTH: usize = 64;
 
 /// Maximum SKILL.md content size in bytes (100KB).
 const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
@@ -113,16 +103,7 @@ impl GeneratorService {
         Parameters(params): Parameters<IntrospectServerParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format
-        if !params
-            .server_id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        {
-            return Err(McpError::invalid_params(
-                "server_id must contain only lowercase letters, digits, and hyphens",
-                None,
-            ));
-        }
+        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
 
         // Extract server_id before consuming params
         let server_id_str = params.server_id;
@@ -392,26 +373,7 @@ impl GeneratorService {
         Parameters(params): Parameters<GenerateSkillParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format and length
-        if params.server_id.len() > MAX_SERVER_ID_LENGTH {
-            return Err(McpError::invalid_params(
-                format!(
-                    "server_id too long: {} chars exceeds {} limit",
-                    params.server_id.len(),
-                    MAX_SERVER_ID_LENGTH
-                ),
-                None,
-            ));
-        }
-        if !params
-            .server_id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        {
-            return Err(McpError::invalid_params(
-                "server_id must contain only lowercase letters, digits, and hyphens",
-                None,
-            ));
-        }
+        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
 
         // Determine servers directory
         let servers_dir = params.servers_dir.unwrap_or_else(|| {
@@ -476,29 +438,8 @@ impl GeneratorService {
         &self,
         Parameters(params): Parameters<SaveSkillParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate server_id length (DoS protection)
-        if params.server_id.len() > MAX_SERVER_ID_LENGTH {
-            return Err(McpError::invalid_params(
-                format!(
-                    "server_id too long: {} chars exceeds {} limit",
-                    params.server_id.len(),
-                    MAX_SERVER_ID_LENGTH
-                ),
-                None,
-            ));
-        }
-
-        // Validate server_id format
-        if !params
-            .server_id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        {
-            return Err(McpError::invalid_params(
-                "server_id must contain only lowercase letters, digits, and hyphens",
-                None,
-            ));
-        }
+        // Validate server_id format and length
+        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
 
         // Validate content size (DoS protection)
         if params.content.len() > MAX_SKILL_CONTENT_SIZE {
@@ -630,43 +571,6 @@ fn generate_with_categorization(
         .collect();
 
     generator.generate_with_categories(server_info, &categorizations)
-}
-
-/// Extract skill metadata from SKILL.md content.
-fn extract_skill_metadata(content: &str) -> Result<SkillMetadata, String> {
-    // Extract YAML frontmatter (using pre-compiled regex)
-    let frontmatter = FRONTMATTER_REGEX
-        .captures(content)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str())
-        .ok_or("YAML frontmatter not found")?;
-
-    // Extract name (using pre-compiled regex)
-    let name = NAME_REGEX
-        .captures(frontmatter)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().trim().to_string())
-        .ok_or("'name' field not found in frontmatter")?;
-
-    // Extract description (using pre-compiled regex)
-    let description = DESC_REGEX
-        .captures(frontmatter)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().trim().to_string())
-        .ok_or("'description' field not found in frontmatter")?;
-
-    // Count sections (H2 headers)
-    let section_count = content.lines().filter(|l| l.starts_with("## ")).count();
-
-    // Count words (approximate)
-    let word_count = content.split_whitespace().count();
-
-    Ok(SkillMetadata {
-        name,
-        description,
-        section_count,
-        word_count,
-    })
 }
 
 #[cfg(test)]
@@ -1397,105 +1301,5 @@ mod tests {
 
         // Verify file was written
         assert!(output_path.exists());
-    }
-
-    // ========================================================================
-    // extract_skill_metadata Tests
-    // ========================================================================
-
-    #[test]
-    fn test_extract_skill_metadata_valid() {
-        let content = r"---
-name: github-progressive
-description: GitHub MCP server operations
----
-
-# GitHub Progressive
-
-## Quick Start
-
-Content here.
-
-## Common Tasks
-
-More content.
-";
-
-        let result = extract_skill_metadata(content);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert_eq!(metadata.name, "github-progressive");
-        assert_eq!(metadata.description, "GitHub MCP server operations");
-        assert_eq!(metadata.section_count, 2);
-        assert!(metadata.word_count > 0);
-    }
-
-    #[test]
-    fn test_extract_skill_metadata_no_frontmatter() {
-        let content = "# Test\n\nNo frontmatter";
-
-        let result = extract_skill_metadata(content);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("YAML frontmatter not found"));
-    }
-
-    #[test]
-    fn test_extract_skill_metadata_missing_name() {
-        let content = "---\ndescription: test\n---\n# Test";
-
-        let result = extract_skill_metadata(content);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("'name' field not found"));
-    }
-
-    #[test]
-    fn test_extract_skill_metadata_missing_description() {
-        let content = "---\nname: test\n---\n# Test";
-
-        let result = extract_skill_metadata(content);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .contains("'description' field not found")
-        );
-    }
-
-    #[test]
-    fn test_extract_skill_metadata_with_extra_fields() {
-        let content = r"---
-name: test-skill
-description: Test description
-version: 1.0.0
-author: Test Author
----
-
-# Test
-";
-
-        let result = extract_skill_metadata(content);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert_eq!(metadata.name, "test-skill");
-        assert_eq!(metadata.description, "Test description");
-    }
-
-    #[test]
-    fn test_extract_skill_metadata_multiline_description() {
-        let content = r"---
-name: test
-description: This is a long description that contains multiple words
----
-
-# Test
-";
-
-        let result = extract_skill_metadata(content);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
-        assert!(metadata.description.contains("multiple words"));
     }
 }
