@@ -38,7 +38,7 @@ fn load_mcp_config() -> Result<McpConfig> {
     let config_path = home.join(".claude").join("mcp.json");
 
     let content = std::fs::read_to_string(&config_path)
-        .with_context(|| format!("failed to read MCP config from {}", config_path.display()))?;
+        .with_context(|| "failed to read MCP config from ~/.claude/mcp.json")?;
 
     let config: McpConfig =
         serde_json::from_str(&content).context("failed to parse MCP config JSON")?;
@@ -74,8 +74,10 @@ pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
     let config = load_mcp_config()?;
 
     let server_config = config.mcp_servers.get(name).with_context(|| {
-        let available: Vec<_> = config.mcp_servers.keys().collect();
-        format!("server '{name}' not found in MCP config\nAvailable servers: {available:?}")
+        format!(
+            "server '{name}' not found in MCP config at ~/.claude/mcp.json\n\
+             Hint: Use 'mcp-execution-cli server list' to see available servers"
+        )
     })?;
 
     let id = ServerId::new(name);

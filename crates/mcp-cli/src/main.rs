@@ -75,16 +75,34 @@ pub enum Commands {
     /// Connects to an MCP server, discovers its tools, and displays
     /// detailed information about available capabilities.
     ///
+    /// # Configuration Modes
+    ///
+    /// 1. Load from ~/.claude/mcp.json (recommended):
+    ///    ```bash
+    ///    mcp-cli introspect --from-config github
+    ///    ```
+    ///
+    /// 2. Manual configuration:
+    ///    ```bash
+    ///    mcp-cli introspect github-mcp-server --arg=stdio
+    ///    ```
+    ///
     /// # Examples
     ///
     /// ```bash
-    /// # Simple binary
+    /// # Load GitHub server config from mcp.json
+    /// mcp-cli introspect --from-config github
+    ///
+    /// # Load with detailed schemas
+    /// mcp-cli introspect --from-config github --detailed
+    ///
+    /// # Manual: Simple binary
     /// mcp-cli introspect github-mcp-server
     ///
-    /// # With arguments
+    /// # Manual: With arguments
     /// mcp-cli introspect github-mcp-server --arg=stdio
     ///
-    /// # Docker container
+    /// # Manual: Docker container
     /// mcp-cli introspect docker --arg=run --arg=-i --arg=--rm \
     ///     --arg=ghcr.io/github/github-mcp-server \
     ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
@@ -94,11 +112,31 @@ pub enum Commands {
     ///     --header "Authorization=Bearer ghp_xxx"
     /// ```
     Introspect {
+        /// Load server configuration from ~/.claude/mcp.json by name
+        ///
+        /// When specified, all other server configuration options are ignored.
+        /// The server must be defined in ~/.claude/mcp.json with matching name.
+        ///
+        /// Example mcp.json:
+        /// ```json
+        /// {
+        ///   "mcpServers": {
+        ///     "github": {
+        ///       "command": "docker",
+        ///       "args": ["run", "-i", "--rm", "..."],
+        ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
+        ///     }
+        ///   }
+        /// }
+        /// ```
+        #[arg(long = "from-config", conflicts_with_all = ["server", "args", "env", "cwd", "http", "sse"])]
+        from_config: Option<String>,
+
         /// Server command (binary name or path)
         ///
         /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
         /// Not required when using --http or --sse
-        #[arg(required_unless_present_any = ["http", "sse"])]
+        #[arg(required_unless_present_any = ["from_config", "http", "sse"])]
         server: Option<String>,
 
         /// Arguments to pass to the server command
@@ -318,6 +356,7 @@ fn init_logging(verbose: bool) -> Result<()> {
 async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
     match command {
         Commands::Introspect {
+            from_config,
             server,
             args,
             env,
@@ -328,6 +367,7 @@ async fn execute_command(command: Commands, output_format: OutputFormat) -> Resu
             detailed,
         } => {
             commands::introspect::run(
+                from_config,
                 server,
                 args,
                 env,

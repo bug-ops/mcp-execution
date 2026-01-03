@@ -2,12 +2,12 @@
 //!
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
-use super::common::build_server_config;
+use super::common::{build_server_config, load_server_from_config};
 use anyhow::{Context, Result};
 use mcp_core::cli::{ExitCode, OutputFormat};
 use mcp_introspector::{Introspector, ServerInfo, ToolInfo};
 use serde::Serialize;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Result of server introspection.
 ///
@@ -86,7 +86,7 @@ pub struct ToolMetadata {
 ///
 /// # Process
 ///
-/// 1. Builds `ServerConfig` from CLI arguments
+/// 1. Builds `ServerConfig` from CLI arguments or loads from ~/.claude/mcp.json
 /// 2. Creates an introspector and connects to the server
 /// 3. Discovers server capabilities and tools
 /// 4. Formats the output according to the specified format
@@ -94,6 +94,7 @@ pub struct ToolMetadata {
 ///
 /// # Arguments
 ///
+/// * `from_config` - Load server config from ~/.claude/mcp.json by name
 /// * `server` - Server command (binary name or path), None for HTTP/SSE
 /// * `args` - Arguments to pass to the server command
 /// * `env` - Environment variables in KEY=VALUE format
@@ -121,6 +122,7 @@ pub struct ToolMetadata {
 /// # async fn example() -> anyhow::Result<()> {
 /// // Simple server
 /// let exit_code = introspect::run(
+///     None,
 ///     Some("github-mcp-server".to_string()),
 ///     vec!["stdio".to_string()],
 ///     vec![],
@@ -134,6 +136,7 @@ pub struct ToolMetadata {
 ///
 /// // HTTP transport
 /// let exit_code = introspect::run(
+///     None,
 ///     None,
 ///     vec![],
 ///     vec![],
@@ -149,6 +152,7 @@ pub struct ToolMetadata {
 /// ```
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
+    from_config: Option<String>,
     server: Option<String>,
     args: Vec<String>,
     env: Vec<String>,
@@ -159,8 +163,16 @@ pub async fn run(
     detailed: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    // Build ServerConfig from CLI arguments
-    let (server_id, config) = build_server_config(server, args, env, cwd, http, sse, headers)?;
+    // Build server config: either from mcp.json or from CLI arguments
+    let (server_id, config) = if let Some(config_name) = from_config {
+        debug!(
+            "Loading server configuration from ~/.claude/mcp.json: {}",
+            config_name
+        );
+        load_server_from_config(&config_name)?
+    } else {
+        build_server_config(server, args, env, cwd, http, sse, headers)?
+    };
 
     info!("Introspecting server: {}", server_id);
     info!("Transport: {:?}", config.transport());
@@ -500,6 +512,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_server_connection_failure() {
         let result = run(
+            None,
             Some("nonexistent-server-xyz".to_string()),
             vec![],
             vec![],
@@ -608,6 +621,7 @@ mod tests {
     async fn test_run_with_text_format() {
         // Test that Text format output works correctly (compact JSON)
         let result = run(
+            None,
             Some("nonexistent-server".to_string()),
             vec![],
             vec![],
@@ -628,6 +642,7 @@ mod tests {
     async fn test_run_with_pretty_format() {
         // Test that Pretty format output works correctly (colorized)
         let result = run(
+            None,
             Some("nonexistent-server".to_string()),
             vec![],
             vec![],
@@ -648,6 +663,7 @@ mod tests {
     async fn test_run_with_detailed_mode() {
         // Test that detailed mode doesn't cause crashes even with connection failure
         let result = run(
+            None,
             Some("nonexistent-server".to_string()),
             vec![],
             vec![],
@@ -667,6 +683,7 @@ mod tests {
     async fn test_run_http_transport() {
         // Test HTTP transport with invalid URL
         let result = run(
+            None,
             None,
             vec![],
             vec![],
@@ -689,6 +706,7 @@ mod tests {
         // Test SSE transport with invalid URL
         let result = run(
             None,
+            None,
             vec![],
             vec![],
             None,
@@ -710,6 +728,7 @@ mod tests {
         // Test all output formats don't cause panics
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
             let result = run(
+                None,
                 Some("nonexistent".to_string()),
                 vec![],
                 vec![],
@@ -731,6 +750,7 @@ mod tests {
         // Test detailed mode with all output formats
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
             let result = run(
+                None,
                 Some("nonexistent".to_string()),
                 vec![],
                 vec![],
@@ -939,5 +959,84 @@ mod tests {
         assert!(result.server.supports_tools);
         assert!(result.server.supports_resources);
         assert!(!result.server.supports_prompts);
+    }
+
+    #[tokio::test]
+    async fn test_run_from_config_not_found() {
+        let result = run(
+            Some("nonexistent-server-xyz".to_string()),
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found in MCP config")
+                || err_msg.contains("failed to read MCP config"),
+            "Expected config-related error, got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_from_config_takes_priority() {
+        // When from_config is Some, it should be used for config loading
+        // (server arg should be None due to clap conflicts, but we test the logic)
+        let result = run(
+            Some("test-server".to_string()),
+            None, // server is None when from_config is used
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        // Should fail because config doesn't exist, not because of server
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        // Should try to load from config, not use manual server
+        assert!(
+            err_msg.contains("MCP config") || err_msg.contains("test-server"),
+            "Should attempt config loading: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_manual_mode_backward_compatible() {
+        // Existing behavior: from_config = None, use server arg
+        let result = run(
+            None, // from_config
+            Some("test-server-direct".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        // Should fail with connection error, not config error
+        assert!(
+            err_msg.contains("failed to connect") || err_msg.contains("test-server-direct"),
+            "Should try direct connection: {err_msg}"
+        );
     }
 }
