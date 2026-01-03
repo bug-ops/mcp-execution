@@ -508,6 +508,7 @@ async fn test_scan_directory_file_too_large() {
     let dir = temp_dir.path();
 
     // Create a file larger than MAX_FILE_SIZE (1MB)
+    #[allow(clippy::cast_possible_truncation)]
     let large_content = "a".repeat((MAX_FILE_SIZE as usize) + 1);
 
     // Add minimal valid JSDoc to make it a tool file
