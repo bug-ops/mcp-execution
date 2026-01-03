@@ -75,16 +75,34 @@ pub enum Commands {
     /// Connects to an MCP server, discovers its tools, and displays
     /// detailed information about available capabilities.
     ///
+    /// # Configuration Modes
+    ///
+    /// 1. Load from ~/.claude/mcp.json (recommended):
+    ///    ```bash
+    ///    mcp-cli introspect --from-config github
+    ///    ```
+    ///
+    /// 2. Manual configuration:
+    ///    ```bash
+    ///    mcp-cli introspect github-mcp-server --arg=stdio
+    ///    ```
+    ///
     /// # Examples
     ///
     /// ```bash
-    /// # Simple binary
+    /// # Load GitHub server config from mcp.json
+    /// mcp-cli introspect --from-config github
+    ///
+    /// # Load with detailed schemas
+    /// mcp-cli introspect --from-config github --detailed
+    ///
+    /// # Manual: Simple binary
     /// mcp-cli introspect github-mcp-server
     ///
-    /// # With arguments
+    /// # Manual: With arguments
     /// mcp-cli introspect github-mcp-server --arg=stdio
     ///
-    /// # Docker container
+    /// # Manual: Docker container
     /// mcp-cli introspect docker --arg=run --arg=-i --arg=--rm \
     ///     --arg=ghcr.io/github/github-mcp-server \
     ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
