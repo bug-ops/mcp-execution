@@ -414,14 +414,14 @@ mod tests {
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
 
-        let ts_content = r#"/**
+        let ts_content = r"/**
  * @tool test
  * @server github
  * @description Test
  * @keywords test
  */
 async function test(x: string): Promise<void> {}
-"#;
+";
         std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
 
         // Try to use path traversal in output path
@@ -525,7 +525,7 @@ async function test(x: string): Promise<void> {}
         std::fs::create_dir(&server_dir).unwrap();
 
         // Create a minimal TypeScript file with JSDoc (requires @tool and @server)
-        let ts_content = r#"/**
+        let ts_content = r"/**
  * @tool test_tool
  * @server test-server
  * @description Test tool description
@@ -535,7 +535,7 @@ async function test(x: string): Promise<void> {}
 async function testTool(input: string): Promise<void> {
     console.log(input);
 }
-"#;
+";
         std::fs::write(server_dir.join("test_tool.ts"), ts_content).unwrap();
 
         let result = run(
@@ -562,7 +562,7 @@ async function testTool(input: string): Promise<void> {
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
 
-        let ts_content = r#"/**
+        let ts_content = r"/**
  * @tool create_issue
  * @server github
  * @description Create a GitHub issue
@@ -570,7 +570,7 @@ async function testTool(input: string): Promise<void> {
  * @keywords create,issue
  */
 async function createIssue(title: string): Promise<void> {}
-"#;
+";
         std::fs::write(server_dir.join("create_issue.ts"), ts_content).unwrap();
 
         // Use custom output path to avoid conflicts with real files
@@ -600,7 +600,7 @@ async function createIssue(title: string): Promise<void> {}
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
 
-        let ts_content = r#"/**
+        let ts_content = r"/**
  * @tool list_prs
  * @server github
  * @description List pull requests
@@ -608,7 +608,7 @@ async function createIssue(title: string): Promise<void> {}
  * @keywords list,prs
  */
 async function listPrs(repo: string): Promise<void> {}
-"#;
+";
         std::fs::write(server_dir.join("list_prs.ts"), ts_content).unwrap();
 
         // Use custom output path to avoid conflicts with real files
@@ -638,14 +638,14 @@ async function listPrs(repo: string): Promise<void> {}
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
 
-        let ts_content = r#"/**
+        let ts_content = r"/**
  * @tool test
  * @server github
  * @description Test
  * @keywords test
  */
 async function test(x: string): Promise<void> {}
-"#;
+";
         std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
 
         // Create existing output file
@@ -673,14 +673,14 @@ async function test(x: string): Promise<void> {}
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
 
-        let ts_content = r#"/**
+        let ts_content = r"/**
  * @tool test
  * @server github
  * @description Test
  * @keywords test
  */
 async function test(x: string): Promise<void> {}
-"#;
+";
         std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
 
         // Create existing output file
@@ -711,14 +711,14 @@ async function test(x: string): Promise<void> {}
         let server_dir = temp.path().join("test");
         std::fs::create_dir(&server_dir).unwrap();
 
-        let ts_content = r#"/**
+        let ts_content = r"/**
  * @tool test
  * @server test
  * @description Test
  * @keywords test
  */
 async function test(x: string): Promise<void> {}
-"#;
+";
         std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
 
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
