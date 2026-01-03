@@ -13,10 +13,10 @@
 //! # Examples
 //!
 //! ```no_run
-//! use mcp_skill::{scan_tools_directory, build_skill_context};
+//! use mcp_skill::{scan_tools_directory, build_skill_context, ScanError};
 //! use std::path::Path;
 //!
-//! # async fn example() -> anyhow::Result<()> {
+//! # async fn example() -> Result<(), ScanError> {
 //! let tools = scan_tools_directory(Path::new("~/.claude/servers/github")).await?;
 //! let context = build_skill_context("github", &tools, None);
 //! # Ok(())

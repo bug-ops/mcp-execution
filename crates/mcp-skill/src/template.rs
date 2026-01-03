@@ -56,7 +56,7 @@ static HANDLEBARS: LazyLock<Handlebars<'static>> = LazyLock::new(|| {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_server::skill::{build_skill_context, render_generation_prompt};
+/// use mcp_skill::{build_skill_context, render_generation_prompt};
 ///
 /// let context = build_skill_context("github", &[], None);
 /// let prompt = render_generation_prompt(&context).unwrap();

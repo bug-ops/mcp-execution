@@ -22,7 +22,7 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```
-/// use mcp_server::skill::{build_skill_context, ParsedToolFile, ParsedParameter};
+/// use mcp_skill::{build_skill_context, ParsedToolFile, ParsedParameter};
 ///
 /// let tools: Vec<ParsedToolFile> = vec![]; // Parsed from scan_tools_directory
 /// let context = build_skill_context("github", &tools, None);
