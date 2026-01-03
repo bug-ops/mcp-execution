@@ -960,4 +960,83 @@ mod tests {
         assert!(result.server.supports_resources);
         assert!(!result.server.supports_prompts);
     }
+
+    #[tokio::test]
+    async fn test_run_from_config_not_found() {
+        let result = run(
+            Some("nonexistent-server-xyz".to_string()),
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found in MCP config")
+                || err_msg.contains("failed to read MCP config"),
+            "Expected config-related error, got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_from_config_takes_priority() {
+        // When from_config is Some, it should be used for config loading
+        // (server arg should be None due to clap conflicts, but we test the logic)
+        let result = run(
+            Some("test-server".to_string()),
+            None, // server is None when from_config is used
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        // Should fail because config doesn't exist, not because of server
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        // Should try to load from config, not use manual server
+        assert!(
+            err_msg.contains("MCP config") || err_msg.contains("test-server"),
+            "Should attempt config loading: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_manual_mode_backward_compatible() {
+        // Existing behavior: from_config = None, use server arg
+        let result = run(
+            None, // from_config
+            Some("test-server-direct".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        // Should fail with connection error, not config error
+        assert!(
+            err_msg.contains("failed to connect") || err_msg.contains("test-server-direct"),
+            "Should try direct connection: {err_msg}"
+        );
+    }
 }
