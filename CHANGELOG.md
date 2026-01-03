@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.3] - 2026-01-03
+
+### Summary
+
+**CLI Enhancement: Config-Based Introspection**
+
+This patch release adds `--from-config` support to the `introspect` command, enabling users to load server configurations from `~/.claude/mcp.json` instead of specifying manual arguments.
+
+**Key Achievements**:
+- New `--from-config` flag for `introspect` command
+- Security improvements to error messages
+- 556 tests passing (100% pass rate)
+- Dependency updates (rmcp 0.12, tokio 1.49)
+
+### Added
+
+- **`--from-config` for introspect command**: Load server configuration from `~/.claude/mcp.json` by name
+  - `mcp-execution-cli introspect --from-config github` instead of manual docker/npx args
+  - Matches existing `--from-config` in `generate` command
+  - Configuration Modes section in help text
+  - 3 new integration tests for config loading
+
+### Changed
+
+- **Error messages**: Improved security by removing information disclosure
+  - Removed server list from "not found" errors (prevents enumeration)
+  - Use `~/.claude/mcp.json` instead of full filesystem path
+- **Logging**: Changed config loading logs from `info!` to `debug!` level
+- **Help text**: Added Configuration Modes section with recommended usage
+
+### Dependencies
+
+- `rmcp`: 0.10 → 0.12
+- `tokio`: 1.48 → 1.49
+- `handlebars`: 6.3 → 6.4
+- `schemars`: 1.1 → 1.2
+- `tempfile`: 3.23 → 3.24
+
+---
+
 ## [0.6.2] - 2025-12-08
 
 ### Summary
@@ -943,5 +983,17 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2025-12-08
-**Version**: 0.6.2 (Production Ready)
+**Last Updated**: 2026-01-03
+**Version**: 0.6.3 (Production Ready)
+
+---
+
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/bug-ops/mcp-execution/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/bug-ops/mcp-execution/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/bug-ops/mcp-execution/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/bug-ops/mcp-execution/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/bug-ops/mcp-execution/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/bug-ops/mcp-execution/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/bug-ops/mcp-execution/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/bug-ops/mcp-execution/releases/tag/v0.2.0

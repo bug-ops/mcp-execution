@@ -54,7 +54,7 @@ mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
 ```
 
 > [!TIP]
-> Use `--from-config` to load server configuration from `~/.config/claude/mcp.json`.
+> Use `--from-config` to load server configuration from `~/.claude/mcp.json`.
 
 ### Discover Available Tools
 
@@ -118,7 +118,46 @@ mcp-execution-cli generate docker \
 Analyze MCP servers and discover capabilities:
 
 ```bash
-mcp-execution-cli introspect --from-config github --output json
+mcp-execution-cli introspect <SERVER> [OPTIONS]
+```
+
+**Configuration Modes**:
+
+1. Load from `~/.claude/mcp.json` (recommended):
+   ```bash
+   mcp-execution-cli introspect --from-config github
+   ```
+
+2. Manual configuration:
+   ```bash
+   mcp-execution-cli introspect github-mcp-server --arg=stdio
+   ```
+
+**Options**:
+
+- `--from-config <NAME>`: Load config from mcp.json
+- `--arg <ARG>`: Server command argument (repeatable)
+- `--env <KEY=VALUE>`: Environment variable (repeatable)
+- `--detailed`: Show full input/output schemas
+- `--format <FORMAT>`: Output format (json, text, pretty)
+- `--http <URL>`: Use HTTP transport
+- `--sse <URL>`: Use SSE transport
+
+**Examples**:
+
+```bash
+# From config with detailed schemas
+mcp-execution-cli introspect --from-config github --detailed
+
+# Manual with Docker
+mcp-execution-cli introspect docker \
+  --arg=run --arg=-i --arg=--rm \
+  --arg=ghcr.io/github/github-mcp-server \
+  --env=GITHUB_TOKEN=ghp_xxx
+
+# HTTP transport
+mcp-execution-cli introspect --http https://api.example.com/mcp \
+  --header "Authorization=Bearer token"
 ```
 
 ### `stats`

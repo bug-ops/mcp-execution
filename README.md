@@ -53,7 +53,7 @@ cargo install --path crates/mcp-cli
 ### Generate TypeScript Tools
 
 ```bash
-# 1. Configure MCP server in ~/.config/claude/mcp.json
+# 1. Configure MCP server in ~/.claude/mcp.json
 # 2. Generate tools
 mcp-execution-cli generate --from-config github
 
@@ -88,6 +88,7 @@ node ~/.claude/servers/github/createIssue.ts --repo="owner/repo" --title="Bug"
 | **Type-Safe** | Full TypeScript interfaces from MCP JSON schemas |
 | **Lightning Fast** | 526x faster than target (0.19ms for 10 tools) |
 | **100% MCP Compatible** | Works with all MCP servers via [rmcp SDK](https://docs.rs/rmcp) |
+| **Thoroughly Tested** | 556 tests with 100% pass rate |
 
 ## Workspace Crates
 
@@ -115,18 +116,24 @@ mcp-files → mcp-core
 See [mcp-cli README](crates/mcp-cli) for full reference.
 
 ```bash
-# Generate TypeScript tools
+# Generate TypeScript tools from config (recommended)
 mcp-execution-cli generate --from-config github
 
-# Introspect MCP server
+# Introspect MCP server from config (v0.6.3+)
 mcp-execution-cli introspect --from-config github
 
-# View cache statistics
-mcp-execution-cli stats
+# Introspect with detailed schemas
+mcp-execution-cli introspect --from-config github --detailed
+
+# Manual configuration (alternative)
+mcp-execution-cli introspect docker --arg=run --arg=-i --env=TOKEN=xxx
 
 # Shell completions
 mcp-execution-cli completions bash
 ```
+
+> [!TIP]
+> Use `--from-config` to load server settings from `~/.claude/mcp.json` instead of manual arguments.
 
 ## Performance
 
