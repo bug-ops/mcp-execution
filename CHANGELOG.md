@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.4] - 2026-01-04
+
+### Summary
+
+**crates.io Release Preparation**
+
+This patch release prepares all workspace crates for publishing to crates.io with the `mcp-execution-` prefix and adds trusted publishing workflow.
+
+**Key Changes**:
+- Renamed all crates to `mcp-execution-*` prefix for crates.io namespace
+- Added GitHub Actions workflow for trusted publishing (OIDC)
+- Fixed circular dev-dependency between codegen and files crates
+- Updated all README files with crates.io badges and installation instructions
+
+### Changed
+
+- **Crate Renames**: All crates now use `mcp-execution-` prefix for crates.io
+  - `mcp-core` → `mcp-execution-core`
+  - `mcp-introspector` → `mcp-execution-introspector`
+  - `mcp-codegen` → `mcp-execution-codegen`
+  - `mcp-files` → `mcp-execution-files`
+  - `mcp-skill` → `mcp-execution-skill`
+  - `mcp-server` → `mcp-execution-server`
+  - `mcp-execution-cli` (unchanged)
+
+- **README Updates**: All crate READMEs now include:
+  - crates.io and docs.rs badges
+  - Installation instructions via `cargo add`
+  - Collapsible sections for alternative installation methods (root README)
+
+### Added
+
+- **Trusted Publishing Workflow**: `.github/workflows/release.yml`
+  - OIDC-based authentication with crates.io
+  - Automatic publishing on GitHub releases
+  - Uses `rust-lang/crates-io-auth-action` for secure token management
+  - 5-second delay between crate publications for dependency resolution
+
+### Fixed
+
+- **Circular Dependency**: Removed `mcp-execution-files` from `mcp-execution-codegen` dev-dependencies
+  - This was blocking crates.io publishing due to circular dependency
+  - VFS-related benchmarks removed from codegen crate
+
+### Documentation
+
+- Root README.md: Added "From crates.io" as primary installation method
+- All crate READMEs: Added installation section with `cargo add` command
+- Made pre-built binaries and source installation collapsible in root README
+
+---
+
 ## [0.6.3] - 2026-01-03
 
 ### Summary
@@ -983,12 +1035,13 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2026-01-03
-**Version**: 0.6.3 (Production Ready)
+**Last Updated**: 2026-01-04
+**Version**: 0.6.4 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/bug-ops/mcp-execution/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/bug-ops/mcp-execution/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/bug-ops/mcp-execution/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/bug-ops/mcp-execution/compare/v0.6.0...v0.6.1
