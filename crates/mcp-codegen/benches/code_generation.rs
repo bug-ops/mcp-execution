@@ -7,7 +7,7 @@
 //!
 //! Run with: cargo bench --package mcp-execution-codegen
 //!
-//! Note: VFS-related benchmarks (bench_vfs_loading, bench_end_to_end) are in
+//! Note: VFS-related benchmarks (`bench_vfs_loading`, `bench_end_to_end`) are in
 //! mcp-execution-files to avoid circular dependencies.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};

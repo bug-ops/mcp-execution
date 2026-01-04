@@ -12,7 +12,7 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct McpConfig {
-    mcp_execution_servers: HashMap<String, McpServerConfig>,
+    mcp_servers: HashMap<String, McpServerConfig>,
 }
 
 /// Individual MCP server configuration
@@ -73,7 +73,7 @@ fn load_mcp_config() -> Result<McpConfig> {
 pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
     let config = load_mcp_config()?;
 
-    let server_config = config.mcp_execution_servers.get(name).with_context(|| {
+    let server_config = config.mcp_servers.get(name).with_context(|| {
         format!(
             "server '{name}' not found in MCP config at ~/.claude/mcp.json\n\
              Hint: Use 'mcp-execution-cli server list' to see available servers"
