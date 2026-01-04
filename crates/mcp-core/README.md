@@ -1,7 +1,7 @@
-# mcp-core
+# mcp-execution-core
 
-[![Crates.io](https://img.shields.io/crates/v/mcp-core.svg)](https://crates.io/crates/mcp-core)
-[![docs.rs](https://img.shields.io/docsrs/mcp-core)](https://docs.rs/mcp-core)
+[![Crates.io](https://img.shields.io/crates/v/mcp-execution-core.svg)](https://crates.io/crates/mcp-execution-core)
+[![docs.rs](https://img.shields.io/docsrs/mcp-execution-core)](https://docs.rs/mcp-execution-core)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
@@ -11,13 +11,13 @@ Foundation types, traits, and error handling for MCP Code Execution.
 
 ```toml
 [dependencies]
-mcp-core = "0.6"
+mcp-execution-core = "0.6"
 ```
 
 Or with cargo-add:
 
 ```bash
-cargo add mcp-core
+cargo add mcp-execution-core
 ```
 
 > [!IMPORTANT]
@@ -28,14 +28,14 @@ cargo add mcp-core
 ### Server Configuration
 
 ```rust
-use mcp_core::{ServerConfig, ServerId};
+use mcp_execution_core::{ServerConfig, ServerId};
 
 let config = ServerConfig::builder()
     .command("docker".to_string())
     .arg("run".to_string())
     .arg("-i".to_string())
     .arg("--rm".to_string())
-    .arg("ghcr.io/org/mcp-server".to_string())
+    .arg("ghcr.io/org/mcp-execution-server".to_string())
     .env("LOG_LEVEL".to_string(), "debug".to_string())
     .build();
 
@@ -45,7 +45,7 @@ let server_id = ServerId::new("github");
 ### Domain Types
 
 ```rust
-use mcp_core::{ServerId, ToolName};
+use mcp_execution_core::{ServerId, ToolName};
 
 // Type-safe identifiers prevent mixing up strings
 let server = ServerId::new("github");
@@ -61,7 +61,7 @@ assert_eq!(tool.as_str(), "create_issue");
 ### Error Handling
 
 ```rust
-use mcp_core::{Error, Result};
+use mcp_execution_core::{Error, Result};
 
 fn process_server(id: &str) -> Result<()> {
     if id.is_empty() {
@@ -76,7 +76,7 @@ fn process_server(id: &str) -> Result<()> {
 ### Command Validation
 
 ```rust
-use mcp_core::{ServerConfig, validate_server_config};
+use mcp_execution_core::{ServerConfig, validate_server_config};
 
 let config = ServerConfig::builder()
     .command("npx".to_string())
@@ -115,11 +115,12 @@ validate_server_config(&config)?;
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-introspector`](../mcp-introspector) - MCP server analysis
-- [`mcp-codegen`](../mcp-codegen) - TypeScript code generation
-- [`mcp-files`](../mcp-files) - Virtual filesystem
-- [`mcp-server`](../mcp-server) - MCP server implementation
-- [`mcp-cli`](../mcp-cli) - Command-line interface
+- [`mcp-execution-introspector`](../mcp-introspector) - MCP server analysis
+- [`mcp-execution-codegen`](../mcp-codegen) - TypeScript code generation
+- [`mcp-execution-files`](../mcp-files) - Virtual filesystem
+- [`mcp-execution-skill`](../mcp-skill) - SKILL.md generation
+- [`mcp-execution-server`](../mcp-server) - MCP server implementation
+- [`mcp-execution-cli`](../mcp-cli) - Command-line interface
 
 ## MSRV Policy
 

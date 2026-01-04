@@ -3,7 +3,7 @@
 //! Provides shared functionality for building server configurations from CLI arguments.
 
 use anyhow::{Context, Result, bail};
-use mcp_core::{ServerConfig, ServerConfigBuilder, ServerId};
+use mcp_execution_core::{ServerConfig, ServerConfigBuilder, ServerId};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;

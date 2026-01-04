@@ -1,11 +1,13 @@
 [package]
-name = "mcp-server"
+name = "mcp-execution-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
-publish.workspace = true
-description = "MCP server for generating progressive loading TypeScript files"
+repository.workspace = true
+homepage.workspace = true
+description = "MCP server for progressive loading TypeScript code generation"
 keywords = ["mcp", "server", "codegen", "progressive-loading"]
 categories = ["development-tools"]
 
@@ -17,11 +19,11 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 dirs = { workspace = true }
-mcp-codegen = { workspace = true }
-mcp-core = { workspace = true }
-mcp-files = { workspace = true }
-mcp-introspector = { workspace = true }
-mcp-skill = { workspace = true }
+mcp-execution-codegen = { workspace = true }
+mcp-execution-core = { workspace = true }
+mcp-execution-files = { workspace = true }
+mcp-execution-introspector = { workspace = true }
+mcp-execution-skill = { workspace = true }
 regex = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-io", "macros"] }
 schemars = { workspace = true, features = ["uuid1", "chrono04"] }

@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mcp_files::{FileSystem, FilesBuilder};
+use mcp_execution_files::{FileSystem, FilesBuilder};
 use std::hint::black_box;
 
 /// Benchmark `read_file` operation across different VFS sizes
@@ -111,7 +111,7 @@ fn bench_builder(c: &mut Criterion) {
 
 /// Benchmark path validation overhead
 fn bench_path_validation(c: &mut Criterion) {
-    use mcp_files::FilePath;
+    use mcp_execution_files::FilePath;
 
     let paths = vec![
         ("/simple.ts", "short"),

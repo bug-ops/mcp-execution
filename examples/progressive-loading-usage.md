@@ -15,7 +15,7 @@ Progressive loading generates one TypeScript file per MCP tool, achieving **98% 
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
   --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
-  --arg=ghcr.io/github/github-mcp-server \
+  --arg=ghcr.io/github/github-mcp-execution-server \
   --env=GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_YOUR_TOKEN \
   --name=github
 
@@ -37,7 +37,7 @@ Create `~/.claude/mcp.json` with your server configurations:
         "--rm",
         "-e",
         "GITHUB_PERSONAL_ACCESS_TOKEN",
-        "ghcr.io/github/github-mcp-server"
+        "ghcr.io/github/github-mcp-execution-server"
       ],
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_YOUR_TOKEN_HERE"
@@ -126,7 +126,7 @@ import * as github from '~/.claude/servers/github/index.js';
     "args": [
       "run", "-i", "--rm",
       "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
-      "ghcr.io/github/github-mcp-server"
+      "ghcr.io/github/github-mcp-execution-server"
     ],
     "env": {
       "GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_..."
@@ -315,7 +315,7 @@ Options:
 # GitHub via Docker with custom name
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-server \
+  --arg=ghcr.io/github/github-mcp-execution-server \
   --name=github
 
 # Filesystem via npx
@@ -362,4 +362,4 @@ mcp-execution-cli generate docker \
 
 - [MCP Specification](https://github.com/modelcontextprotocol/specification)
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
-- [GitHub MCP Server](https://github.com/github/github-mcp-server)
+- [GitHub MCP Server](https://github.com/github/github-mcp-execution-server)

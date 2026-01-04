@@ -22,7 +22,7 @@
 //! ```
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mcp_files::{ExportOptions, FilesBuilder};
+use mcp_execution_files::{ExportOptions, FilesBuilder};
 use std::hint::black_box;
 use tempfile::TempDir;
 

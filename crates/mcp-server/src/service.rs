@@ -11,11 +11,11 @@ use crate::types::{
     ListGeneratedServersParams, ListGeneratedServersResult, PendingGeneration,
     SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolMetadata,
 };
-use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_core::{ServerConfig, ServerId};
-use mcp_files::FilesBuilder;
-use mcp_introspector::Introspector;
-use mcp_skill::{
+use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_core::{ServerConfig, ServerId};
+use mcp_execution_files::FilesBuilder;
+use mcp_execution_introspector::Introspector;
+use mcp_execution_skill::{
     GenerateSkillParams, SaveSkillParams, SaveSkillResult, build_skill_context,
     extract_skill_metadata, scan_tools_directory, validate_server_id,
 };
@@ -50,7 +50,7 @@ const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_server::service::GeneratorService;
+/// use mcp_execution_server::service::GeneratorService;
 /// use rmcp::transport::stdio;
 ///
 /// # async fn example() {
@@ -550,10 +550,10 @@ fn extract_parameter_names(schema: &serde_json::Value) -> Vec<String> {
 /// and calls `generate_with_categories`.
 fn generate_with_categorization(
     generator: &ProgressiveGenerator,
-    server_info: &mcp_introspector::ServerInfo,
+    server_info: &mcp_execution_introspector::ServerInfo,
     categorization: &HashMap<String, &CategorizedTool>,
-) -> mcp_core::Result<mcp_codegen::GeneratedCode> {
-    use mcp_codegen::progressive::ToolCategorization;
+) -> mcp_execution_core::Result<mcp_execution_codegen::GeneratedCode> {
+    use mcp_execution_codegen::progressive::ToolCategorization;
 
     // Convert CategorizedTool map to ToolCategorization map
     let categorizations: HashMap<String, ToolCategorization> = categorization
@@ -577,8 +577,8 @@ fn generate_with_categorization(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use mcp_core::ToolName;
-    use mcp_introspector::{ServerCapabilities, ToolInfo};
+    use mcp_execution_core::ToolName;
+    use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
     use rmcp::model::ErrorCode;
     use uuid::Uuid;
 
@@ -647,7 +647,7 @@ mod tests {
     fn test_generate_with_categorization() {
         let generator = ProgressiveGenerator::new().unwrap();
 
-        let server_info = mcp_introspector::ServerInfo {
+        let server_info = mcp_execution_introspector::ServerInfo {
             id: ServerId::new("test"),
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
@@ -690,7 +690,7 @@ mod tests {
     fn test_generate_with_categorization_multiple_tools() {
         let generator = ProgressiveGenerator::new().unwrap();
 
-        let server_info = mcp_introspector::ServerInfo {
+        let server_info = mcp_execution_introspector::ServerInfo {
             id: ServerId::new("test"),
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
@@ -742,7 +742,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
 
         let server_id = ServerId::new("test");
-        let server_info = mcp_introspector::ServerInfo {
+        let server_info = mcp_execution_introspector::ServerInfo {
             id: server_id,
             name: "Empty Server".to_string(),
             version: "1.0.0".to_string(),
@@ -917,7 +917,7 @@ mod tests {
 
         // Create a pending generation with tool1
         let server_id = ServerId::new("test");
-        let server_info = mcp_introspector::ServerInfo {
+        let server_info = mcp_execution_introspector::ServerInfo {
             id: server_id.clone(),
             name: "Test".to_string(),
             version: "1.0.0".to_string(),
@@ -970,7 +970,7 @@ mod tests {
 
         // Create an expired pending generation
         let server_id = ServerId::new("test");
-        let server_info = mcp_introspector::ServerInfo {
+        let server_info = mcp_execution_introspector::ServerInfo {
             id: server_id.clone(),
             name: "Test".to_string(),
             version: "1.0.0".to_string(),

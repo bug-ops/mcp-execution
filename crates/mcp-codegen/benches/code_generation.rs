@@ -5,13 +5,15 @@
 //! - Schema complexity (simple, moderate, complex)
 //! - Operations (full generation, individual components)
 //!
-//! Run with: cargo bench --package mcp-codegen
+//! Run with: cargo bench --package mcp-execution-codegen
+//!
+//! Note: VFS-related benchmarks (`bench_vfs_loading`, `bench_end_to_end`) are in
+//! mcp-execution-files to avoid circular dependencies.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_core::{ServerId, ToolName};
-use mcp_files::FilesBuilder;
-use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
+use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_core::{ServerId, ToolName};
+use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 use std::hint::black_box;
 
@@ -204,63 +206,6 @@ fn bench_schema_complexity(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks VFS loading performance.
-fn bench_vfs_loading(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vfs_loading");
-
-    for count in [1, 10, 50, 100, 500] {
-        let server_info = create_server_info(count, create_moderate_tool);
-        let generator = ProgressiveGenerator::new().expect("Generator should initialize");
-        let generated = generator
-            .generate(&server_info)
-            .expect("Generation should succeed");
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _count| {
-            b.iter(|| {
-                let vfs = FilesBuilder::from_generated_code(
-                    black_box(generated.clone()),
-                    "/mcp-tools/servers/bench",
-                )
-                .build();
-                assert!(vfs.is_ok());
-            });
-        });
-    }
-
-    group.finish();
-}
-
-/// Benchmarks end-to-end workflow (generation + VFS loading).
-fn bench_end_to_end(c: &mut Criterion) {
-    let mut group = c.benchmark_group("end_to_end");
-
-    for count in [1, 10, 50, 100] {
-        let server_info = create_server_info(count, create_moderate_tool);
-        let generator = ProgressiveGenerator::new().expect("Generator should initialize");
-
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _count| {
-            b.iter(|| {
-                // Generate code
-                let generated = generator
-                    .generate(black_box(&server_info))
-                    .expect("Generation should succeed");
-
-                // Load into VFS
-                let vfs = FilesBuilder::from_generated_code(generated, "/mcp-tools/servers/bench")
-                    .build()
-                    .expect("VFS build should succeed");
-
-                // Verify files exist
-                assert!(vfs.exists("/mcp-tools/servers/bench/manifest.json"));
-            });
-        });
-    }
-
-    group.finish();
-}
-
 /// Benchmarks generator initialization overhead.
 fn bench_generator_initialization(c: &mut Criterion) {
     c.bench_function("generator_initialization", |b| {
@@ -274,7 +219,7 @@ fn bench_generator_initialization(c: &mut Criterion) {
 
 /// Benchmarks type conversion performance.
 fn bench_type_conversion(c: &mut Criterion) {
-    use mcp_codegen::common::typescript;
+    use mcp_execution_codegen::common::typescript;
 
     let mut group = c.benchmark_group("type_conversion");
 
@@ -372,8 +317,6 @@ criterion_group!(
         bench_type_conversion,
         bench_schema_complexity,
         bench_full_generation_scaling,
-        bench_vfs_loading,
-        bench_end_to_end,
         bench_memory_patterns,
 );
 

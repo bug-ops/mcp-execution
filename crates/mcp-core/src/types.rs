@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{ServerId, ToolName};
+//! use mcp_execution_core::{ServerId, ToolName};
 //!
 //! // Type-safe identifiers
 //! let server = ServerId::new("my-server");
@@ -31,7 +31,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use mcp_core::ServerId;
+/// use mcp_execution_core::ServerId;
 ///
 /// let id = ServerId::new("example-server");
 /// assert_eq!(id.as_str(), "example-server");
@@ -45,7 +45,7 @@ impl ServerId {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerId;
+    /// use mcp_execution_core::ServerId;
     ///
     /// let id = ServerId::new("my-server");
     /// let from_string = ServerId::new(String::from("my-server"));
@@ -62,7 +62,7 @@ impl ServerId {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerId;
+    /// use mcp_execution_core::ServerId;
     ///
     /// let id = ServerId::new("test");
     /// assert_eq!(id.as_str(), "test");
@@ -78,7 +78,7 @@ impl ServerId {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerId;
+    /// use mcp_execution_core::ServerId;
     ///
     /// let id = ServerId::new("test");
     /// let inner: String = id.into_inner();
@@ -117,7 +117,7 @@ impl From<&str> for ServerId {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::ToolName;
+/// use mcp_execution_core::ToolName;
 ///
 /// let tool = ToolName::new("execute_code");
 /// assert_eq!(tool.as_str(), "execute_code");
@@ -131,7 +131,7 @@ impl ToolName {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ToolName;
+    /// use mcp_execution_core::ToolName;
     ///
     /// let name = ToolName::new("my_tool");
     /// assert_eq!(name.as_str(), "my_tool");
@@ -147,7 +147,7 @@ impl ToolName {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ToolName;
+    /// use mcp_execution_core::ToolName;
     ///
     /// let name = ToolName::new("test_tool");
     /// assert_eq!(name.as_str(), "test_tool");
@@ -163,7 +163,7 @@ impl ToolName {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ToolName;
+    /// use mcp_execution_core::ToolName;
     ///
     /// let name = ToolName::new("tool");
     /// let inner: String = name.into_inner();

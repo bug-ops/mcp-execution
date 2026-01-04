@@ -23,7 +23,7 @@
 //! # Examples
 //!
 //! ```no_run
-//! use mcp_server::service::GeneratorService;
+//! use mcp_execution_server::service::GeneratorService;
 //! use rmcp::transport::stdio;
 //! use rmcp::ServiceExt;
 //!
@@ -62,7 +62,7 @@ pub use types::{
 };
 
 // Re-export skill types from mcp-skill crate
-pub use mcp_skill::{
+pub use mcp_execution_skill::{
     GenerateSkillParams, GenerateSkillResult, SaveSkillParams, SaveSkillResult, SkillCategory,
     SkillMetadata, SkillTool, ToolExample,
 };

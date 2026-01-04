@@ -8,11 +8,11 @@ This directory contains path-specific instructions for GitHub Copilot using the 
 .github/
 ├── copilot-instructions.md           # Global instructions (all files)
 └── instructions/                     # Path-specific instructions
-    ├── mcp-core.instructions.md     # crates/mcp-core/**/*.rs
+    ├── mcp-execution-core.instructions.md     # crates/mcp-execution-core/**/*.rs
     ├── mcp-cli.instructions.md      # crates/mcp-cli/**/*.rs
     ├── mcp-bridge.instructions.md   # crates/mcp-bridge/**/*.rs
-    ├── mcp-introspector.instructions.md  # crates/mcp-introspector/**/*.rs
-    ├── mcp-codegen.instructions.md  # crates/mcp-codegen/**/*.rs
+    ├── mcp-execution-introspector.instructions.md  # crates/mcp-execution-introspector/**/*.rs
+    ├── mcp-execution-codegen.instructions.md  # crates/mcp-execution-codegen/**/*.rs
     └── mcp-wasm-runtime.instructions.md  # crates/mcp-wasm-runtime/**/*.rs
 ```
 
@@ -28,10 +28,10 @@ All path-specific instruction files follow the official GitHub format:
 
 ```markdown
 ---
-applyTo: "crates/mcp-core/**/*.rs"
+applyTo: "crates/mcp-execution-core/**/*.rs"
 ---
 
-# Copilot Instructions: mcp-core
+# Copilot Instructions: mcp-execution-core
 
 Instructions content here...
 ```
@@ -55,11 +55,11 @@ Editing `crates/mcp-cli/src/main.rs`:
 
 | Crate | Error Handling | Key Requirements |
 |-------|---------------|------------------|
-| **mcp-core** | `thiserror` only | Strong types, no business logic |
+| **mcp-execution-core** | `thiserror` only | Strong types, no business logic |
 | **mcp-cli** | `anyhow` only | User-friendly errors, CLI patterns |
 | **mcp-bridge** | `thiserror` | rmcp SDK, caching, thread-safe |
-| **mcp-introspector** | `thiserror` | rmcp ServiceExt, server discovery |
-| **mcp-codegen** | `thiserror` | Feature flags, Handlebars templates |
+| **mcp-execution-introspector** | `thiserror` | rmcp ServiceExt, server discovery |
+| **mcp-execution-codegen** | `thiserror` | Feature flags, Handlebars templates |
 | **mcp-wasm-runtime** | `thiserror` + `anyhow` | Security-critical, resource limits |
 
 ## Maintenance
@@ -86,7 +86,7 @@ To verify instructions are working:
 2. Start typing code
 3. Check Copilot suggestions match crate-specific patterns
 
-For example, in `crates/mcp-core/src/types.rs`:
+For example, in `crates/mcp-execution-core/src/types.rs`:
 
 ```rust
 pub struct ServerId(/* Copilot should suggest String or similar, not u64 */)

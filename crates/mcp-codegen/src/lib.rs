@@ -22,8 +22,8 @@
 //! # Example
 //!
 //! ```no_run
-//! use mcp_codegen::progressive::ProgressiveGenerator;
-//! use mcp_introspector::ServerInfo;
+//! use mcp_execution_codegen::progressive::ProgressiveGenerator;
+//! use mcp_execution_introspector::ServerInfo;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let generator = ProgressiveGenerator::new()?;

@@ -1,6 +1,8 @@
 //! Integration tests for skill generation.
 
-use mcp_skill::{ParsedToolFile, build_skill_context, parse_tool_file, scan_tools_directory};
+use mcp_execution_skill::{
+    ParsedToolFile, build_skill_context, parse_tool_file, scan_tools_directory,
+};
 use std::fmt::Write;
 use tempfile::TempDir;
 use tokio::fs;
@@ -478,7 +480,7 @@ async fn test_parse_tool_file_binary_content() {
 
 #[tokio::test]
 async fn test_scan_directory_too_many_files() {
-    use mcp_skill::{MAX_TOOL_FILES, ScanError};
+    use mcp_execution_skill::{MAX_TOOL_FILES, ScanError};
 
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
@@ -502,7 +504,7 @@ async fn test_scan_directory_too_many_files() {
 
 #[tokio::test]
 async fn test_scan_directory_file_too_large() {
-    use mcp_skill::{MAX_FILE_SIZE, ScanError};
+    use mcp_execution_skill::{MAX_FILE_SIZE, ScanError};
 
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();

@@ -111,7 +111,7 @@ Key requirements:
    - Example: `pub struct ToolName(String);`
 
 2. **Error Handling**
-   - Use `thiserror` for library crates (mcp-core, mcp-codegen, etc.)
+   - Use `thiserror` for library crates (mcp-execution-core, mcp-execution-codegen, etc.)
    - Use `anyhow` ONLY in CLI crates (mcp-cli)
    - All errors must implement `std::error::Error`
 
@@ -200,7 +200,7 @@ cargo nextest run --test test_name
 cargo nextest run --workspace -- --nocapture
 
 # Run tests for specific crate
-cargo nextest run -p mcp-codegen
+cargo nextest run -p mcp-execution-codegen
 ```
 
 #### Code Coverage
@@ -236,7 +236,7 @@ open target/llvm-cov/html/index.html
 //! # Examples
 //!
 //! ```
-//! use mcp_codegen::Generator;
+//! use mcp_execution_codegen::Generator;
 //!
 //! let gen = Generator::new();
 //! ```
@@ -267,7 +267,7 @@ open target/llvm-cov/html/index.html
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::{Generator, Tool};
+/// use mcp_execution_codegen::{Generator, Tool};
 ///
 /// let tool = Tool::new("my-tool");
 /// let code = Generator::generate(&tool)?;
@@ -287,7 +287,7 @@ pub fn generate(tool: &Tool, options: &Options) -> Result<String> {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::ServerId;
+/// use mcp_execution_core::ServerId;
 ///
 /// let id = ServerId::from("github");
 /// assert_eq!(id.as_str(), "github");
@@ -337,11 +337,11 @@ We use [Conventional Commits](https://www.conventionalcommits.org/) format:
 - `ci`: CI/CD changes
 
 **Scopes:**
-- `core`: mcp-core crate
-- `codegen`: mcp-codegen crate
-- `introspector`: mcp-introspector crate
-- `files`: mcp-files crate
-- `server`: mcp-server crate
+- `core`: mcp-execution-core crate
+- `codegen`: mcp-execution-codegen crate
+- `introspector`: mcp-execution-introspector crate
+- `files`: mcp-execution-files crate
+- `server`: mcp-execution-server crate
 - `cli`: mcp-cli crate
 - `deps`: Dependency updates
 - `docs`: Documentation
@@ -511,11 +511,11 @@ criterion_main!(benches);
 ```
 mcp-execution/
 ├── crates/
-│   ├── mcp-core/          # Foundation: types, traits, errors
-│   ├── mcp-introspector/  # MCP server analysis (uses rmcp SDK)
-│   ├── mcp-codegen/       # TypeScript code generation
-│   ├── mcp-files/         # Virtual filesystem
-│   ├── mcp-server/        # MCP server for generation
+│   ├── mcp-execution-core/          # Foundation: types, traits, errors
+│   ├── mcp-execution-introspector/  # MCP server analysis (uses rmcp SDK)
+│   ├── mcp-execution-codegen/       # TypeScript code generation
+│   ├── mcp-execution-files/         # Virtual filesystem
+│   ├── mcp-execution-server/        # MCP server for generation
 │   └── mcp-cli/           # CLI application
 ├── examples/              # Usage examples
 ├── docs/adr/              # Architecture Decision Records
@@ -527,11 +527,11 @@ mcp-execution/
 **No circular dependencies allowed:**
 
 ```
-mcp-cli → {mcp-server, mcp-codegen, mcp-introspector, mcp-files, mcp-core}
-mcp-server → {mcp-codegen, mcp-introspector, mcp-files, mcp-core}
-mcp-codegen → {mcp-files, mcp-core}
-mcp-introspector → {rmcp, mcp-core}
-mcp-files → mcp-core
+mcp-cli → {mcp-execution-server, mcp-execution-codegen, mcp-execution-introspector, mcp-execution-files, mcp-execution-core}
+mcp-execution-server → {mcp-execution-codegen, mcp-execution-introspector, mcp-execution-files, mcp-execution-core}
+mcp-execution-codegen → {mcp-execution-files, mcp-execution-core}
+mcp-execution-introspector → {rmcp, mcp-execution-core}
+mcp-execution-files → mcp-execution-core
 ```
 
 ### Key Technologies

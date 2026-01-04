@@ -21,7 +21,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_core::ServerConfig;
+//! use mcp_execution_core::ServerConfig;
 //! use std::collections::HashMap;
 //!
 //! // Simple configuration with just command
@@ -55,7 +55,7 @@ use std::path::PathBuf;
 /// # Examples
 ///
 /// ```
-/// use mcp_core::TransportType;
+/// use mcp_execution_core::TransportType;
 ///
 /// // Default is stdio
 /// let transport = TransportType::default();
@@ -92,7 +92,7 @@ pub enum TransportType {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::ServerConfig;
+/// use mcp_execution_core::ServerConfig;
 ///
 /// // Stdio transport
 /// let config = ServerConfig::builder()
@@ -181,7 +181,7 @@ impl ServerConfig {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
@@ -243,7 +243,7 @@ impl ServerConfig {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::ServerConfig;
+/// use mcp_execution_core::ServerConfig;
 ///
 /// // Stdio transport
 /// let config = ServerConfig::builder()
@@ -275,7 +275,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
@@ -292,7 +292,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
@@ -311,7 +311,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
@@ -329,7 +329,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .command("mcp-server".to_string())
@@ -347,7 +347,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     /// use std::collections::HashMap;
     ///
     /// let mut env_map = HashMap::new();
@@ -369,7 +369,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     /// use std::path::PathBuf;
     ///
     /// let config = ServerConfig::builder()
@@ -390,7 +390,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .http_transport("https://api.example.com/mcp".to_string())
@@ -414,7 +414,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .sse_transport("https://api.example.com/sse".to_string())
@@ -436,7 +436,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .http_transport("https://api.example.com/mcp".to_string())
@@ -454,7 +454,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .http_transport("https://api.example.com/mcp".to_string())
@@ -472,7 +472,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     /// use std::collections::HashMap;
     ///
     /// let mut headers = HashMap::new();
@@ -502,7 +502,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
@@ -525,7 +525,7 @@ impl ServerConfigBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::ServerConfig;
+    /// use mcp_execution_core::ServerConfig;
     ///
     /// let result = ServerConfig::builder()
     ///     .command("docker".to_string())

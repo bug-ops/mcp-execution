@@ -25,7 +25,7 @@
 //! ```
 
 use anyhow::Result;
-use mcp_server::service::GeneratorService;
+use mcp_execution_server::service::GeneratorService;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,mcp_server=debug")),
+                .unwrap_or_else(|_| EnvFilter::new("info,mcp_execution_server=debug")),
         )
         .with(
             tracing_subscriber::fmt::layer()

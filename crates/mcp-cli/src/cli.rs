@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_output_format_parsing_valid() {
-        use mcp_core::cli::OutputFormat;
+        use mcp_execution_core::cli::OutputFormat;
 
         let format: OutputFormat = "json".parse().unwrap();
         assert_eq!(format, OutputFormat::Json);
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_output_format_parsing_invalid() {
-        use mcp_core::cli::OutputFormat;
+        use mcp_execution_core::cli::OutputFormat;
         assert!("invalid".parse::<OutputFormat>().is_err());
     }
 

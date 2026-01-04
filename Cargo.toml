@@ -4,13 +4,13 @@ default-members = [ "crates/*" ]
 resolver = "2"
 
 [workspace.package]
-version = "0.6.3"
+version = "0.6.4"
 edition = "2024"
 rust-version = "1.89"
 authors = ["Andrei G <k05h31@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bug-ops/mcp-execution"
-publish = false
+homepage = "https://github.com/bug-ops/mcp-execution"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -24,12 +24,12 @@ dhat = "0.3"
 dialoguer = "0.12"
 dirs = "6.0"
 handlebars = "6.4"
-mcp-codegen = { path = "crates/mcp-codegen", version = "0.6.3" }
-mcp-core = { path = "crates/mcp-core", version = "0.6.3"}
-mcp-files = { path = "crates/mcp-files", version = "0.6.3" }
-mcp-introspector = { path = "crates/mcp-introspector", version = "0.6.3"}
-mcp-server = { path = "crates/mcp-server", version = "0.6.3"}
-mcp-skill = { path = "crates/mcp-skill", version = "0.6.3"}
+mcp-execution-codegen = { path = "crates/mcp-codegen", version = "0.6.4" }
+mcp-execution-core = { path = "crates/mcp-core", version = "0.6.4" }
+mcp-execution-files = { path = "crates/mcp-files", version = "0.6.4" }
+mcp-execution-introspector = { path = "crates/mcp-introspector", version = "0.6.4" }
+mcp-execution-server = { path = "crates/mcp-server", version = "0.6.4" }
+mcp-execution-skill = { path = "crates/mcp-skill", version = "0.6.4" }
 rayon = "1.11"
 regex = "1.12"
 rmcp = "0.12"

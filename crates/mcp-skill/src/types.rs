@@ -22,7 +22,7 @@ const MAX_SERVER_ID_LENGTH: usize = 64;
 /// # Examples
 ///
 /// ```
-/// use mcp_skill::types::GenerateSkillParams;
+/// use mcp_execution_skill::types::GenerateSkillParams;
 ///
 /// let params = GenerateSkillParams {
 ///     server_id: "github".to_string(),
@@ -146,7 +146,7 @@ pub struct ToolExample {
 /// # Examples
 ///
 /// ```
-/// use mcp_skill::types::SaveSkillParams;
+/// use mcp_execution_skill::types::SaveSkillParams;
 ///
 /// let params = SaveSkillParams {
 ///     server_id: "github".to_string(),
@@ -233,7 +233,7 @@ pub struct SkillMetadata {
 /// # Examples
 ///
 /// ```
-/// use mcp_skill::validate_server_id;
+/// use mcp_execution_skill::validate_server_id;
 ///
 /// assert!(validate_server_id("github").is_ok());
 /// assert!(validate_server_id("my-server-123").is_ok());

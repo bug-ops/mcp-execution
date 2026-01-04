@@ -6,7 +6,7 @@
 //! - Provides helpful error messages and suggestions
 
 use anyhow::{Context, Result};
-use mcp_core::cli::ExitCode;
+use mcp_execution_core::cli::ExitCode;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;

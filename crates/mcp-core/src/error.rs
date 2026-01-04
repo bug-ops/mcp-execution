@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{Error, Result};
+//! use mcp_execution_core::{Error, Result};
 //!
 //! fn connect_to_server(name: &str) -> Result<()> {
 //!     if name.is_empty() {
@@ -136,7 +136,7 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::Error;
+    /// use mcp_execution_core::Error;
     ///
     /// let err = Error::ConnectionFailed {
     ///     server: "test".to_string(),
@@ -154,7 +154,7 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::Error;
+    /// use mcp_execution_core::Error;
     ///
     /// let err = Error::SecurityViolation {
     ///     reason: "Unauthorized access".to_string(),
@@ -171,7 +171,7 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::Error;
+    /// use mcp_execution_core::Error;
     ///
     /// let err = Error::ResourceNotFound {
     ///     resource: "tool:example".to_string(),
@@ -188,7 +188,7 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::Error;
+    /// use mcp_execution_core::Error;
     ///
     /// let err = Error::ConfigError {
     ///     message: "Invalid port".to_string(),
@@ -205,7 +205,7 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::Error;
+    /// use mcp_execution_core::Error;
     ///
     /// let err = Error::Timeout {
     ///     operation: "execute_code".to_string(),
@@ -223,7 +223,7 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::Error;
+    /// use mcp_execution_core::Error;
     ///
     /// let err = Error::ValidationError {
     ///     field: "skill_name".to_string(),
@@ -241,7 +241,7 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::Error;
+    /// use mcp_execution_core::Error;
     ///
     /// let err = Error::ScriptGenerationError {
     ///     tool: "send_message".to_string(),
@@ -264,7 +264,7 @@ impl Error {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::{Result, Error};
+/// use mcp_execution_core::{Result, Error};
 ///
 /// fn validate_input(value: i32) -> Result<i32> {
 ///     if value < 0 {

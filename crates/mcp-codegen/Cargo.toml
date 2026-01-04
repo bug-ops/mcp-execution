@@ -1,10 +1,15 @@
 [package]
-name = "mcp-codegen"
+name = "mcp-execution-codegen"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "TypeScript code generation with progressive loading for MCP tools"
+keywords = ["mcp", "codegen", "typescript", "progressive-loading"]
+categories = ["development-tools"]
 
 [lints]
 workspace = true
@@ -14,15 +19,14 @@ default = []
 
 [dependencies]
 handlebars = { workspace = true }
-mcp-core = { workspace = true }
-mcp-introspector = { workspace = true }
+mcp-execution-core = { workspace = true }
+mcp-execution-introspector = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-mcp-files = { workspace = true }
 
 [[bench]]
 name = "code_generation"

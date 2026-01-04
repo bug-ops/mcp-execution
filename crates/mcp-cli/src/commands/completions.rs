@@ -5,7 +5,7 @@
 use anyhow::Result;
 use clap::Command;
 use clap_complete::{Shell, generate};
-use mcp_core::cli::ExitCode;
+use mcp_execution_core::cli::ExitCode;
 use std::io;
 use tracing::info;
 

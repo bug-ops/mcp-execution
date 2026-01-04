@@ -1,6 +1,6 @@
 //! Tests to verify that all public types are Send + Sync as required.
 
-use mcp_core::*;
+use mcp_execution_core::*;
 
 const fn assert_send_sync<T: Send + Sync>() {}
 

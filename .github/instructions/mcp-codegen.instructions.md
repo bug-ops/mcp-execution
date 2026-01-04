@@ -1,7 +1,7 @@
 ---
-applyTo: "crates/mcp-codegen/**/*.rs"
+applyTo: "crates/mcp-execution-codegen/**/*.rs"
 ---
-# Copilot Instructions: mcp-codegen
+# Copilot Instructions: mcp-execution-codegen
 
 This crate provides **code generation** from MCP tool schemas using Handlebars templates. It supports multiple output formats via feature flags.
 

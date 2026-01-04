@@ -1,16 +1,18 @@
 [package]
-name = "mcp-skill"
+name = "mcp-execution-skill"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
-publish.workspace = true
-description = "Skill generation for MCP progressive loading"
-keywords = ["mcp", "skill", "codegen"]
+repository.workspace = true
+homepage.workspace = true
+description = "SKILL.md generation for Claude Code integration with MCP tools"
+keywords = ["mcp", "skill", "claude-code", "codegen"]
 categories = ["development-tools"]
 
 [dependencies]
-mcp-core = { workspace = true }
+mcp-execution-core = { workspace = true }
 regex = { workspace = true }
 handlebars = { workspace = true }
 thiserror = { workspace = true }

@@ -3,8 +3,8 @@
 //! Tests the complete workflow from VFS building to filesystem export,
 //! including real GitHub server structure simulation.
 
-use mcp_codegen::{GeneratedCode, GeneratedFile};
-use mcp_files::FilesBuilder;
+use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
+use mcp_execution_files::FilesBuilder;
 use std::fs;
 use tempfile::TempDir;
 

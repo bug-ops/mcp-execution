@@ -32,8 +32,8 @@ On **2025-01-25**, we removed WASM runtime and skills categorization to focus ex
 
 **Removed Components**:
 - `mcp-wasm-runtime` (15,000 LOC) - Wasmtime sandbox
-- `mcp-skill-generator` (12,000 LOC) - LLM-based categorization
-- `mcp-skill-store` (7,000 LOC) - Disk persistence
+- `mcp-execution-skill-generator` (12,000 LOC) - LLM-based categorization
+- `mcp-execution-skill-store` (7,000 LOC) - Disk persistence
 - `mcp-examples` (2,000 LOC) - Example workflows
 
 **Why**:
@@ -58,11 +58,11 @@ On **2025-01-25**, we removed WASM runtime and skills categorization to focus ex
 ```
 mcp-execution/
 ├── crates/
-│   ├── mcp-core/             # Foundation: types, traits, errors
-│   ├── mcp-introspector/     # MCP server analysis (rmcp)
-│   ├── mcp-codegen/          # TypeScript code generation
-│   ├── mcp-files/            # Filesystem for code organization
-│   ├── mcp-server/           # MCP server for generation
+│   ├── mcp-execution-core/             # Foundation: types, traits, errors
+│   ├── mcp-execution-introspector/     # MCP server analysis (rmcp)
+│   ├── mcp-execution-codegen/          # TypeScript code generation
+│   ├── mcp-execution-files/            # Filesystem for code organization
+│   ├── mcp-execution-server/           # MCP server for generation
 │   └── mcp-cli/              # CLI application
 ├── examples/
 │   └── progressive-loading-usage.md  # Usage tutorial
@@ -76,15 +76,15 @@ mcp-execution/
 
 ```mermaid
 graph TD
-    CLI[mcp-cli<br/>CLI application] --> CODEGEN[mcp-codegen<br/>Code generation]
-    CLI --> INTRO[mcp-introspector<br/>Server introspection]
-    CLI --> CORE[mcp-core<br/>Foundation]
+    CLI[mcp-cli<br/>CLI application] --> CODEGEN[mcp-execution-codegen<br/>Code generation]
+    CLI --> INTRO[mcp-execution-introspector<br/>Server introspection]
+    CLI --> CORE[mcp-execution-core<br/>Foundation]
 
-    SERVER[mcp-server<br/>MCP Generation Server] --> CODEGEN
+    SERVER[mcp-execution-server<br/>MCP Generation Server] --> CODEGEN
     SERVER --> INTRO
     SERVER --> CORE
 
-    CODEGEN --> FILES[mcp-files<br/>Filesystem]
+    CODEGEN --> FILES[mcp-execution-files<br/>Filesystem]
     CODEGEN --> CORE
 
     INTRO --> RMCP[rmcp<br/>Official MCP SDK]
@@ -184,20 +184,20 @@ export interface CreateIssueResult {
 
 ```
 1. User Command
-   mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=xxx
+   mcp-execution-cli generate github-mcp-execution-server --env GITHUB_TOKEN=xxx
 
 2. CLI Parsing
    ↓ Parse arguments
    ↓ Validate configuration
    ↓ Setup transport (stdio/HTTP/SSE/Docker)
 
-3. MCP Introspection (mcp-introspector + rmcp)
+3. MCP Introspection (mcp-execution-introspector + rmcp)
    ↓ Connect to MCP server
    ↓ Call server.listTools()
    ↓ Extract tool schemas (JSON Schema)
    ↓ Return ServerInfo
 
-4. Code Generation (mcp-codegen)
+4. Code Generation (mcp-execution-codegen)
    ↓ For each tool:
    ↓   - Convert JSON Schema → TypeScript types
    ↓   - Render tool.ts.hbs template
@@ -205,7 +205,7 @@ export interface CreateIssueResult {
    ↓ Generate index.ts (re-export all tools)
    ↓ Generate _runtime/mcp-bridge.ts (stub)
 
-5. Filesystem Export (mcp-files)
+5. Filesystem Export (mcp-execution-files)
    ↓ Create in-memory file structure
    ↓ Organize by server-id/
 
@@ -234,7 +234,7 @@ export interface CreateIssueResult {
 
 ## Crate Architecture
 
-### mcp-core
+### mcp-execution-core
 
 **Purpose**: Foundation types, traits, and error handling.
 
@@ -262,7 +262,7 @@ pub enum CoreError {
 }
 ```
 
-### mcp-introspector
+### mcp-execution-introspector
 
 **Purpose**: Analyze MCP servers using rmcp SDK.
 
@@ -283,7 +283,7 @@ impl Introspector {
 
 **Output**: `ServerInfo` with all tool schemas.
 
-### mcp-codegen
+### mcp-execution-codegen
 
 **Purpose**: Generate TypeScript files using progressive loading pattern.
 
@@ -317,7 +317,7 @@ required = false => "paramName?: type"
 required = true  => "paramName: type"
 ```
 
-### mcp-files
+### mcp-execution-files
 
 **Purpose**: Filesystem for organizing and exporting generated code.
 
@@ -336,7 +336,7 @@ impl VirtualFilesystem {
 
 **Usage**: In-memory file structure before disk writes.
 
-### mcp-server
+### mcp-execution-server
 
 **Purpose**: MCP server for progressive loading generation with Claude-powered categorization.
 
@@ -379,7 +379,7 @@ impl GeneratorService {
 
 **Example**:
 ```bash
-mcp-execution-cli generate github-mcp-server \
+mcp-execution-cli generate github-mcp-execution-server \
   --env GITHUB_TOKEN=ghp_xxx \
   --progressive-output ~/.claude/servers/
 ```

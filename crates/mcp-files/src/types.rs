@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_files::{FilePath, FileEntry};
+//! use mcp_execution_files::{FilePath, FileEntry};
 //!
 //! let path = FilePath::new("/mcp-tools/servers/github/manifest.json").unwrap();
 //! let file = FileEntry::new("{}");
@@ -27,7 +27,7 @@ use thiserror::Error;
 /// # Examples
 ///
 /// ```
-/// use mcp_files::FilesError;
+/// use mcp_execution_files::FilesError;
 ///
 /// let error = FilesError::FileNotFound {
 ///     path: "/missing.txt".to_string(),
@@ -88,7 +88,7 @@ impl FilesError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesError;
+    /// use mcp_execution_files::FilesError;
     ///
     /// let error = FilesError::FileNotFound {
     ///     path: "/test.txt".to_string(),
@@ -106,7 +106,7 @@ impl FilesError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesError;
+    /// use mcp_execution_files::FilesError;
     ///
     /// let error = FilesError::NotADirectory {
     ///     path: "/file.txt".to_string(),
@@ -124,7 +124,7 @@ impl FilesError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesError;
+    /// use mcp_execution_files::FilesError;
     ///
     /// let error = FilesError::InvalidPath {
     ///     path: "".to_string(),
@@ -147,7 +147,7 @@ impl FilesError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesError;
+    /// use mcp_execution_files::FilesError;
     /// use std::io;
     ///
     /// let error = FilesError::IoError {
@@ -177,14 +177,14 @@ impl FilesError {
 /// # Examples
 ///
 /// ```
-/// use mcp_files::FilePath;
+/// use mcp_execution_files::FilePath;
 ///
 /// let path = FilePath::new("/mcp-tools/servers/test/file.ts").unwrap();
 /// assert_eq!(path.as_str(), "/mcp-tools/servers/test/file.ts");
 /// ```
 ///
 /// ```
-/// use mcp_files::FilePath;
+/// use mcp_execution_files::FilePath;
 ///
 /// // Invalid paths are rejected
 /// assert!(FilePath::new("relative/path").is_err());
@@ -216,14 +216,14 @@ impl FilePath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilePath;
+    /// use mcp_execution_files::FilePath;
     ///
     /// let path = FilePath::new("/mcp-tools/test.ts")?;
     /// assert_eq!(path.as_str(), "/mcp-tools/test.ts");
     ///
     /// // Works on all platforms (Unix-style paths)
     /// let path = FilePath::new("/mcp-tools/servers/test/manifest.json")?;
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -273,12 +273,12 @@ impl FilePath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilePath;
+    /// use mcp_execution_files::FilePath;
     ///
     /// let vfs_path = FilePath::new("/test.ts")?;
     /// let path = vfs_path.as_path();
     /// assert_eq!(path.to_str(), Some("/test.ts"));
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn as_path(&self) -> &Path {
@@ -290,11 +290,11 @@ impl FilePath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilePath;
+    /// use mcp_execution_files::FilePath;
     ///
     /// let path = FilePath::new("/mcp-tools/file.ts")?;
     /// assert_eq!(path.as_str(), "/mcp-tools/file.ts");
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -308,12 +308,12 @@ impl FilePath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilePath;
+    /// use mcp_execution_files::FilePath;
     ///
     /// let path = FilePath::new("/mcp-tools/servers/test.ts")?;
     /// let parent = path.parent().unwrap();
     /// assert_eq!(parent.as_str(), "/mcp-tools/servers");
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
@@ -336,14 +336,14 @@ impl FilePath {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilePath;
+    /// use mcp_execution_files::FilePath;
     ///
     /// let dir = FilePath::new("/mcp-tools/servers")?;
     /// assert!(dir.is_dir_path());
     ///
     /// let file = FilePath::new("/mcp-tools/manifest.json")?;
     /// assert!(!file.is_dir_path());
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn is_dir_path(&self) -> bool {
@@ -373,7 +373,7 @@ impl AsRef<Path> for FilePath {
 /// # Examples
 ///
 /// ```
-/// use mcp_files::FileEntry;
+/// use mcp_execution_files::FileEntry;
 ///
 /// let file = FileEntry::new("console.log('hello');");
 /// assert_eq!(file.content(), "console.log('hello');");
@@ -390,7 +390,7 @@ impl FileEntry {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileEntry;
+    /// use mcp_execution_files::FileEntry;
     ///
     /// let file = FileEntry::new("export const VERSION = '1.0';");
     /// assert_eq!(file.size(), 29);
@@ -407,7 +407,7 @@ impl FileEntry {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileEntry;
+    /// use mcp_execution_files::FileEntry;
     ///
     /// let file = FileEntry::new("test content");
     /// assert_eq!(file.content(), "test content");
@@ -422,7 +422,7 @@ impl FileEntry {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileEntry;
+    /// use mcp_execution_files::FileEntry;
     ///
     /// let file = FileEntry::new("hello");
     /// assert_eq!(file.size(), 5);
@@ -438,7 +438,7 @@ impl FileEntry {
 /// # Examples
 ///
 /// ```
-/// use mcp_files::{Result, FilePath};
+/// use mcp_execution_files::{Result, FilePath};
 ///
 /// fn validate_path(path: &str) -> Result<FilePath> {
 ///     FilePath::new(path)

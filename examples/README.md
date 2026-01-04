@@ -13,10 +13,10 @@ Complete examples and guides for using MCP Code Execution with progressive loadi
 
 ### 1. For Claude Code Users
 
-Skills can be generated dynamically using the `mcp-server` MCP tools:
+Skills can be generated dynamically using the `mcp-execution-server` MCP tools:
 
 ```bash
-# Start the mcp-server and use generate_skill/save_skill tools
+# Start the mcp-execution-server and use generate_skill/save_skill tools
 mcp-execution
 
 # Or use the mcp-execution-cli to generate files first
@@ -33,7 +33,7 @@ If you're using the CLI directly, start with [progressive-loading-usage.md](./pr
 # Generate TypeScript files for GitHub server
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-server \
+  --arg=ghcr.io/github/github-mcp-execution-server \
   --name=github
 ```
 
@@ -83,7 +83,7 @@ Load 1 specific tool → 500 tokens → 98% savings
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
   --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
-  --arg=ghcr.io/github/github-mcp-server \
+  --arg=ghcr.io/github/github-mcp-execution-server \
   --env=GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_YOUR_TOKEN \
   --name=github
 
@@ -115,7 +115,7 @@ mcp-execution-cli generate docker --arg=... --name=slack
 # Inspect server capabilities before generating
 mcp-execution-cli introspect docker \
   --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-server \
+  --arg=ghcr.io/github/github-mcp-execution-server \
   --detailed
 
 # Shows all available tools, their parameters, and schemas

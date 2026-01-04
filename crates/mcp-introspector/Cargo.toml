@@ -1,16 +1,21 @@
 [package]
-name = "mcp-introspector"
+name = "mcp-execution-introspector"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "MCP server introspection and tool discovery using rmcp SDK"
+keywords = ["mcp", "introspection", "rmcp", "tools"]
+categories = ["development-tools"]
 
 [lints]
 workspace = true
 
 [dependencies]
-mcp-core.workspace = true
+mcp-execution-core.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

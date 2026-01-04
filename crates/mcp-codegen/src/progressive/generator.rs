@@ -6,9 +6,9 @@
 //! # Examples
 //!
 //! ```no_run
-//! use mcp_codegen::progressive::ProgressiveGenerator;
-//! use mcp_introspector::{Introspector, ServerInfo};
-//! use mcp_core::{ServerId, ServerConfig};
+//! use mcp_execution_codegen::progressive::ProgressiveGenerator;
+//! use mcp_execution_introspector::{Introspector, ServerInfo};
+//! use mcp_execution_core::{ServerId, ServerConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut introspector = Introspector::new();
@@ -37,8 +37,8 @@ use crate::progressive::types::{
     ToolSummary,
 };
 use crate::template_engine::TemplateEngine;
-use mcp_core::{Error, Result};
-use mcp_introspector::ServerInfo;
+use mcp_execution_core::{Error, Result};
+use mcp_execution_introspector::ServerInfo;
 use std::collections::HashMap;
 
 /// Generator for progressive loading TypeScript files.
@@ -53,7 +53,7 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::ProgressiveGenerator;
+/// use mcp_execution_codegen::progressive::ProgressiveGenerator;
 ///
 /// let generator = ProgressiveGenerator::new().unwrap();
 /// ```
@@ -76,7 +76,7 @@ impl<'a> ProgressiveGenerator<'a> {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::progressive::ProgressiveGenerator;
+    /// use mcp_execution_codegen::progressive::ProgressiveGenerator;
     ///
     /// let generator = ProgressiveGenerator::new().unwrap();
     /// ```
@@ -108,9 +108,9 @@ impl<'a> ProgressiveGenerator<'a> {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_codegen::progressive::ProgressiveGenerator;
-    /// use mcp_introspector::{ServerInfo, ServerCapabilities};
-    /// use mcp_core::ServerId;
+    /// use mcp_execution_codegen::progressive::ProgressiveGenerator;
+    /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
+    /// use mcp_execution_core::ServerId;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let generator = ProgressiveGenerator::new()?;
@@ -214,9 +214,9 @@ impl<'a> ProgressiveGenerator<'a> {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_codegen::progressive::{ProgressiveGenerator, ToolCategorization};
-    /// use mcp_introspector::{ServerInfo, ServerCapabilities};
-    /// use mcp_core::ServerId;
+    /// use mcp_execution_codegen::progressive::{ProgressiveGenerator, ToolCategorization};
+    /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
+    /// use mcp_execution_core::ServerId;
     /// use std::collections::HashMap;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -323,7 +323,7 @@ impl<'a> ProgressiveGenerator<'a> {
     fn create_tool_context(
         &self,
         server_id: &str,
-        tool: &mcp_introspector::ToolInfo,
+        tool: &mcp_execution_introspector::ToolInfo,
         categorization: Option<&ToolCategorization>,
     ) -> Result<ToolContext> {
         let typescript_name = to_camel_case(tool.name.as_str());
@@ -465,8 +465,8 @@ impl<'a> ProgressiveGenerator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_core::{ServerId, ToolName};
-    use mcp_introspector::{ServerCapabilities, ToolInfo};
+    use mcp_execution_core::{ServerId, ToolName};
+    use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
     use serde_json::json;
 
     fn create_test_server_info() -> ServerInfo {

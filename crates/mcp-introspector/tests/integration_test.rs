@@ -2,8 +2,8 @@
 //!
 //! These tests validate server discovery, tool extraction, and metadata management.
 
-use mcp_core::{ServerConfig, ServerId, ToolName};
-use mcp_introspector::{Introspector, ServerCapabilities, ServerInfo, ToolInfo};
+use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+use mcp_execution_introspector::{Introspector, ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 
 /// Tests introspector creation

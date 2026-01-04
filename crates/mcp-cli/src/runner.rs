@@ -3,7 +3,7 @@
 //! Contains the main command execution loop and logging initialization.
 
 use anyhow::Result;
-use mcp_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::cli::Commands;

@@ -177,7 +177,7 @@ pub struct ParsedParameter {
 /// # Examples
 ///
 /// ```
-/// use mcp_skill::parse_tool_file;
+/// use mcp_execution_skill::parse_tool_file;
 ///
 /// let content = r"
 /// /**
@@ -318,10 +318,10 @@ fn parse_parameters(content: &str) -> Vec<ParsedParameter> {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_skill::scan_tools_directory;
+/// use mcp_execution_skill::scan_tools_directory;
 /// use std::path::Path;
 ///
-/// # async fn example() -> Result<(), mcp_skill::ScanError> {
+/// # async fn example() -> Result<(), mcp_execution_skill::ScanError> {
 /// let tools = scan_tools_directory(Path::new("/home/user/.claude/servers/github")).await?;
 /// println!("Found {} tools", tools.len());
 /// # Ok(())
@@ -444,7 +444,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
 /// # Examples
 ///
 /// ```
-/// use mcp_skill::extract_skill_metadata;
+/// use mcp_execution_skill::extract_skill_metadata;
 ///
 /// let content = r"---
 /// name: github-progressive

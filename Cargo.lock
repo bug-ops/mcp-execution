@@ -917,22 +917,48 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp-codegen"
-version = "0.6.3"
+name = "mcp-execution-cli"
+version = "0.6.4"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap_complete",
+ "colored",
+ "criterion",
+ "dhat",
+ "dialoguer",
+ "dirs",
+ "mcp-execution-codegen",
+ "mcp-execution-core",
+ "mcp-execution-files",
+ "mcp-execution-introspector",
+ "mcp-execution-skill",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "which",
+]
+
+[[package]]
+name = "mcp-execution-codegen"
+version = "0.6.4"
 dependencies = [
  "criterion",
  "handlebars",
- "mcp-core",
- "mcp-files",
- "mcp-introspector",
+ "mcp-execution-core",
+ "mcp-execution-introspector",
  "serde",
  "serde_json",
  "tracing",
 ]
 
 [[package]]
-name = "mcp-core"
-version = "0.6.3"
+name = "mcp-execution-core"
+version = "0.6.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -947,51 +973,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp-execution-cli"
-version = "0.6.3"
-dependencies = [
- "anyhow",
- "clap",
- "clap_complete",
- "colored",
- "criterion",
- "dhat",
- "dialoguer",
- "dirs",
- "mcp-codegen",
- "mcp-core",
- "mcp-files",
- "mcp-introspector",
- "mcp-skill",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "which",
-]
-
-[[package]]
-name = "mcp-files"
-version = "0.6.3"
+name = "mcp-execution-files"
+version = "0.6.4"
 dependencies = [
  "criterion",
  "dhat",
  "dirs",
- "mcp-codegen",
+ "mcp-execution-codegen",
  "rayon",
  "tempfile",
  "thiserror",
 ]
 
 [[package]]
-name = "mcp-introspector"
-version = "0.6.3"
+name = "mcp-execution-introspector"
+version = "0.6.4"
 dependencies = [
  "criterion",
- "mcp-core",
+ "mcp-execution-core",
  "rmcp",
  "serde",
  "serde_json",
@@ -1000,17 +999,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp-server"
-version = "0.6.3"
+name = "mcp-execution-server"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "chrono",
  "dirs",
- "mcp-codegen",
- "mcp-core",
- "mcp-files",
- "mcp-introspector",
- "mcp-skill",
+ "mcp-execution-codegen",
+ "mcp-execution-core",
+ "mcp-execution-files",
+ "mcp-execution-introspector",
+ "mcp-execution-skill",
  "regex",
  "rmcp",
  "schemars",
@@ -1025,12 +1024,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp-skill"
-version = "0.6.3"
+name = "mcp-execution-skill"
+version = "0.6.4"
 dependencies = [
  "dirs",
  "handlebars",
- "mcp-core",
+ "mcp-execution-core",
  "regex",
  "schemars",
  "serde",

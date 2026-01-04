@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::ToolContext;
+/// use mcp_execution_codegen::progressive::ToolContext;
 /// use serde_json::json;
 ///
 /// let context = ToolContext {
@@ -59,7 +59,7 @@ pub struct ToolContext {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::PropertyInfo;
+/// use mcp_execution_codegen::progressive::PropertyInfo;
 ///
 /// let prop = PropertyInfo {
 ///     name: "title".to_string(),
@@ -90,7 +90,7 @@ pub struct PropertyInfo {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::IndexContext;
+/// use mcp_execution_codegen::progressive::IndexContext;
 ///
 /// let context = IndexContext {
 ///     server_name: "GitHub".to_string(),
@@ -125,7 +125,7 @@ pub struct IndexContext {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::ToolSummary;
+/// use mcp_execution_codegen::progressive::ToolSummary;
 ///
 /// let summary = ToolSummary {
 ///     typescript_name: "createIssue".to_string(),
@@ -158,7 +158,7 @@ pub struct ToolSummary {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::ToolCategorization;
+/// use mcp_execution_codegen::progressive::ToolCategorization;
 ///
 /// let cat = ToolCategorization {
 ///     category: "issues".to_string(),
@@ -185,7 +185,7 @@ pub struct ToolCategorization {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::{CategoryInfo, ToolSummary};
+/// use mcp_execution_codegen::progressive::{CategoryInfo, ToolSummary};
 ///
 /// let category = CategoryInfo {
 ///     name: "issues".to_string(),
@@ -218,7 +218,7 @@ pub struct CategoryInfo {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::progressive::BridgeContext;
+/// use mcp_execution_codegen::progressive::BridgeContext;
 ///
 /// let context = BridgeContext::default();
 /// // Currently no fields, but provides extensibility

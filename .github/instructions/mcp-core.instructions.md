@@ -1,14 +1,14 @@
 ---
-applyTo: "crates/mcp-core/**/*.rs"
+applyTo: "crates/mcp-execution-core/**/*.rs"
 ---
 
-# Copilot Instructions: mcp-core
+# Copilot Instructions: mcp-execution-core
 
 This crate is the **foundation** of the workspace. It defines core types, traits, and errors used by all other crates.
 
 ## Purpose
 
-`mcp-core` provides:
+`mcp-execution-core` provides:
 
 - **Strong types** (ServerId, ToolName, SessionId, etc.)
 - **Common traits** (shared interfaces)
@@ -193,7 +193,7 @@ impl BridgeStats {
 
 ## No Business Logic
 
-`mcp-core` should **only contain types and traits**, not business logic:
+`mcp-execution-core` should **only contain types and traits**, not business logic:
 
 ```rust
 // ✅ GOOD: Type definition
@@ -212,7 +212,7 @@ impl ToolName {
 // ❌ BAD: Business logic in core
 impl ToolName {
     pub async fn execute(&self, params: Value) -> Result<Value> {
-        // This belongs in mcp-bridge, not mcp-core!
+        // This belongs in mcp-bridge, not mcp-execution-core!
     }
 }
 ```
@@ -282,7 +282,7 @@ pub enum OutputFormat {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::ServerId;
+/// use mcp_execution_core::ServerId;
 ///
 /// let id = ServerId::new("github");
 /// assert_eq!(id.as_str(), "github");

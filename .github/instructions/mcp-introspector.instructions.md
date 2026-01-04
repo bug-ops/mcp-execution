@@ -1,7 +1,7 @@
 ---
-applyTo: "crates/mcp-introspector/**/*.rs"
+applyTo: "crates/mcp-execution-introspector/**/*.rs"
 ---
-# Copilot Instructions: mcp-introspector
+# Copilot Instructions: mcp-execution-introspector
 
 This crate provides **MCP server introspection** using the **official rmcp SDK**. It discovers server capabilities, tools, resources, and prompts for code generation.
 
@@ -158,7 +158,7 @@ The main introspector struct manages discovery:
 
 ```rust
 use std::collections::HashMap;
-use mcp_core::ServerId;
+use mcp_execution_core::ServerId;
 
 pub struct Introspector {
     // Cache discovered servers
@@ -177,8 +177,8 @@ impl Introspector {
     /// # Examples
     ///
     /// ```no_run
-    /// # use mcp_introspector::Introspector;
-    /// # use mcp_core::ServerId;
+    /// # use mcp_execution_introspector::Introspector;
+    /// # use mcp_execution_core::ServerId;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
     ///
@@ -360,7 +360,7 @@ mod tests {
 
         let server_id = ServerId::new("test-server");
         let info = introspector
-            .discover_server(server_id, "test-mcp-server")
+            .discover_server(server_id, "test-mcp-execution-server")
             .await
             .unwrap();
 
@@ -376,7 +376,7 @@ mod tests {
 
         // First call - discovers
         let info1 = introspector
-            .discover_server(server_id.clone(), "test-mcp-server")
+            .discover_server(server_id.clone(), "test-mcp-execution-server")
             .await
             .unwrap();
 

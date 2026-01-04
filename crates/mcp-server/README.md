@@ -1,7 +1,7 @@
-# mcp-server
+# mcp-execution-server
 
-[![Crates.io](https://img.shields.io/crates/v/mcp-server.svg)](https://crates.io/crates/mcp-server)
-[![docs.rs](https://img.shields.io/docsrs/mcp-server)](https://docs.rs/mcp-server)
+[![Crates.io](https://img.shields.io/crates/v/mcp-execution-server.svg)](https://crates.io/crates/mcp-execution-server)
+[![docs.rs](https://img.shields.io/docsrs/mcp-execution-server)](https://docs.rs/mcp-execution-server)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
@@ -11,7 +11,7 @@ MCP server for generating progressive loading TypeScript files. Achieves **98% t
 
 ```bash
 # Build from workspace root
-cargo build --release -p mcp-server
+cargo build --release -p mcp-execution-server
 
 # Binary: target/release/mcp-execution
 ```
@@ -28,7 +28,7 @@ cargo build --release -p mcp-server
 mcp-execution
 
 # Or via cargo
-cargo run -p mcp-server
+cargo run -p mcp-execution-server
 ```
 
 ### Claude Code Configuration
@@ -51,7 +51,7 @@ Add to `~/.config/claude/mcp.json`:
 ### Programmatic Usage
 
 ```rust
-use mcp_server::GeneratorService;
+use mcp_execution_server::GeneratorService;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
@@ -73,7 +73,7 @@ Connect to an MCP server and discover its tools.
 {
   "server_id": "github",
   "command": "npx",
-  "args": ["-y", "@anthropic/mcp-server-github"],
+  "args": ["-y", "@anthropic/mcp-execution-server-github"],
   "env": { "GITHUB_TOKEN": "..." }
 }
 ```
@@ -131,11 +131,12 @@ introspect_server → Claude categorizes → save_categorized_tools → TypeScri
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-core`](../mcp-core) - Foundation types and traits
-- [`mcp-introspector`](../mcp-introspector) - MCP server analysis
-- [`mcp-codegen`](../mcp-codegen) - TypeScript code generation
-- [`mcp-files`](../mcp-files) - Virtual filesystem
-- [`mcp-cli`](../mcp-cli) - Command-line interface
+- [`mcp-execution-core`](../mcp-core) - Foundation types and traits
+- [`mcp-execution-introspector`](../mcp-introspector) - MCP server analysis
+- [`mcp-execution-codegen`](../mcp-codegen) - TypeScript code generation
+- [`mcp-execution-files`](../mcp-files) - Virtual filesystem
+- [`mcp-execution-skill`](../mcp-skill) - SKILL.md generation
+- [`mcp-execution-cli`](../mcp-cli) - Command-line interface
 
 ## MSRV Policy
 

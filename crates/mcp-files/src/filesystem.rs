@@ -22,7 +22,7 @@
 //! ## Basic usage
 //!
 //! ```
-//! use mcp_files::FileSystem;
+//! use mcp_execution_files::FileSystem;
 //!
 //! let mut fs = FileSystem::new();
 //! fs.add_file("/mcp-tools/test.ts", "export const VERSION = '1.0';").unwrap();
@@ -34,7 +34,7 @@
 //! ## Export to filesystem
 //!
 //! ```
-//! use mcp_files::FilesBuilder;
+//! use mcp_execution_files::FilesBuilder;
 //! # use tempfile::TempDir;
 //!
 //! # let temp_dir = TempDir::new().unwrap();
@@ -71,7 +71,7 @@ use std::path::{Path, PathBuf};
 /// # Examples
 ///
 /// ```
-/// use mcp_files::FileSystem;
+/// use mcp_execution_files::FileSystem;
 ///
 /// let mut vfs = FileSystem::new();
 /// vfs.add_file("/mcp-tools/manifest.json", "{}").unwrap();
@@ -90,7 +90,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let vfs = FileSystem::new();
     /// assert_eq!(vfs.file_count(), 0);
@@ -113,13 +113,13 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/mcp-tools/test.ts", "console.log('hello');").unwrap();
     ///
     /// assert!(vfs.exists("/mcp-tools/test.ts"));
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     pub fn add_file(&mut self, path: impl AsRef<Path>, content: impl Into<String>) -> Result<()> {
         let vfs_path = FilePath::new(path)?;
@@ -138,14 +138,14 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/test.ts", "export {}").unwrap();
     ///
     /// let content = vfs.read_file("/test.ts").unwrap();
     /// assert_eq!(content, "export {}");
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     pub fn read_file(&self, path: impl AsRef<Path>) -> Result<&str> {
         let vfs_path = FilePath::new(path)?;
@@ -164,7 +164,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/exists.ts", "").unwrap();
@@ -192,7 +192,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/mcp-tools/servers/test1.ts", "").unwrap();
@@ -200,7 +200,7 @@ impl FileSystem {
     ///
     /// let entries = vfs.list_dir("/mcp-tools/servers").unwrap();
     /// assert_eq!(entries.len(), 2);
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     pub fn list_dir(&self, path: impl AsRef<Path>) -> Result<Vec<FilePath>> {
         let vfs_path = FilePath::new(path)?;
@@ -252,7 +252,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// assert_eq!(vfs.file_count(), 0);
@@ -273,7 +273,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/a.ts", "").unwrap();
@@ -296,7 +296,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/a.ts", "content a").unwrap();
@@ -314,7 +314,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FileSystem;
+    /// use mcp_execution_files::FileSystem;
     ///
     /// let mut vfs = FileSystem::new();
     /// vfs.add_file("/test.ts", "").unwrap();
@@ -351,7 +351,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     /// # use tempfile::TempDir;
     ///
     /// # let temp = TempDir::new().unwrap();
@@ -381,7 +381,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::{FilesBuilder, ExportOptions};
+    /// use mcp_execution_files::{FilesBuilder, ExportOptions};
     /// # use tempfile::TempDir;
     ///
     /// # let temp = TempDir::new().unwrap();
@@ -440,7 +440,7 @@ impl FileSystem {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     /// # use tempfile::TempDir;
     ///
     /// # let temp = TempDir::new().unwrap();
@@ -570,7 +570,7 @@ impl Default for FileSystem {
 /// # Examples
 ///
 /// ```
-/// use mcp_files::ExportOptions;
+/// use mcp_execution_files::ExportOptions;
 ///
 /// let options = ExportOptions::default()
 ///     .with_atomic_writes(true)

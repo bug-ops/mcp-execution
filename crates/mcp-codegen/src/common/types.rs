@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_codegen::{GeneratedCode, GeneratedFile};
+//! use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 //!
 //! let file = GeneratedFile {
 //!     path: "tools/sendMessage.ts".to_string(),
@@ -31,7 +31,7 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::GeneratedCode;
+/// use mcp_execution_codegen::GeneratedCode;
 ///
 /// let code = GeneratedCode {
 ///     files: vec![],
@@ -51,7 +51,7 @@ impl GeneratedCode {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::GeneratedCode;
+    /// use mcp_execution_codegen::GeneratedCode;
     ///
     /// let code = GeneratedCode::new();
     /// assert_eq!(code.file_count(), 0);
@@ -67,7 +67,7 @@ impl GeneratedCode {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::{GeneratedCode, GeneratedFile};
+    /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
     ///
     /// let mut code = GeneratedCode::new();
     /// code.add_file(GeneratedFile {
@@ -86,7 +86,7 @@ impl GeneratedCode {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::GeneratedCode;
+    /// use mcp_execution_codegen::GeneratedCode;
     ///
     /// let code = GeneratedCode::new();
     /// assert_eq!(code.file_count(), 0);
@@ -102,7 +102,7 @@ impl GeneratedCode {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::{GeneratedCode, GeneratedFile};
+    /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
     ///
     /// let mut code = GeneratedCode::new();
     /// code.add_file(GeneratedFile {
@@ -134,7 +134,7 @@ impl Default for GeneratedCode {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::GeneratedFile;
+/// use mcp_execution_codegen::GeneratedFile;
 ///
 /// let file = GeneratedFile {
 ///     path: "types.ts".to_string(),
@@ -157,7 +157,7 @@ impl GeneratedFile {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::GeneratedFile;
+    /// use mcp_execution_codegen::GeneratedFile;
     ///
     /// let file = GeneratedFile {
     ///     path: "test.ts".to_string(),
@@ -177,7 +177,7 @@ impl GeneratedFile {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::GeneratedFile;
+    /// use mcp_execution_codegen::GeneratedFile;
     ///
     /// let file = GeneratedFile {
     ///     path: "test.ts".to_string(),
@@ -201,7 +201,7 @@ impl GeneratedFile {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::TemplateContext;
+/// use mcp_execution_codegen::TemplateContext;
 /// use std::collections::HashMap;
 ///
 /// let context = TemplateContext {
@@ -233,7 +233,7 @@ pub struct TemplateContext {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::ToolDefinition;
+/// use mcp_execution_codegen::ToolDefinition;
 /// use serde_json::json;
 ///
 /// let tool = ToolDefinition {
