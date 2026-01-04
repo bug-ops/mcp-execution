@@ -27,7 +27,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-mcp-execution-files = { workspace = true }
 
 [[bench]]
 name = "code_generation"

@@ -950,7 +950,6 @@ dependencies = [
  "criterion",
  "handlebars",
  "mcp-execution-core",
- "mcp-execution-files",
  "mcp-execution-introspector",
  "serde",
  "serde_json",
