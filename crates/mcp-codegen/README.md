@@ -1,7 +1,7 @@
-# mcp-codegen
+# mcp-execution-codegen
 
-[![Crates.io](https://img.shields.io/crates/v/mcp-codegen.svg)](https://crates.io/crates/mcp-codegen)
-[![docs.rs](https://img.shields.io/docsrs/mcp-codegen)](https://docs.rs/mcp-codegen)
+[![Crates.io](https://img.shields.io/crates/v/mcp-execution-codegen.svg)](https://crates.io/crates/mcp-execution-codegen)
+[![docs.rs](https://img.shields.io/docsrs/mcp-execution-codegen)](https://docs.rs/mcp-execution-codegen)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
@@ -11,13 +11,13 @@ Progressive loading TypeScript code generation for MCP tools. Achieves **98% tok
 
 ```toml
 [dependencies]
-mcp-codegen = "0.6"
+mcp-execution-codegen = "0.6"
 ```
 
 Or with cargo-add:
 
 ```bash
-cargo add mcp-codegen
+cargo add mcp-execution-codegen
 ```
 
 > [!IMPORTANT]
@@ -28,9 +28,9 @@ cargo add mcp-codegen
 ### Progressive Loading Generation
 
 ```rust
-use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_introspector::Introspector;
-use mcp_core::{ServerId, ServerConfig};
+use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_introspector::Introspector;
+use mcp_execution_core::{ServerId, ServerConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut introspector = Introspector::new();
     let server_id = ServerId::new("github");
     let config = ServerConfig::builder()
-        .command("github-mcp-server".to_string())
+        .command("github-mcp-execution-server".to_string())
         .build();
     let info = introspector.discover_server(server_id, &config).await?;
 
@@ -122,9 +122,9 @@ JSON Schema types are converted to TypeScript:
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-core`](../mcp-core) - Foundation types
-- [`mcp-introspector`](../mcp-introspector) - MCP server analysis
-- [`mcp-files`](../mcp-files) - Virtual filesystem for output
+- [`mcp-execution-core`](../mcp-execution-core) - Foundation types
+- [`mcp-execution-introspector`](../mcp-execution-introspector) - MCP server analysis
+- [`mcp-execution-files`](../mcp-execution-files) - Virtual filesystem for output
 
 ## MSRV Policy
 

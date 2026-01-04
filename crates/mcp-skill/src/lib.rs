@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```no_run
-//! use mcp_skill::{scan_tools_directory, build_skill_context, ScanError};
+//! use mcp_execution_skill::{scan_tools_directory, build_skill_context, ScanError};
 //! use std::path::Path;
 //!
 //! # async fn example() -> Result<(), ScanError> {

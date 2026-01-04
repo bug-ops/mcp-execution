@@ -113,7 +113,7 @@ When using library crates from this workspace:
 ```rust
 // ✅ GOOD: Library crates return their own Result types
 use mcp_bridge::Bridge;
-use mcp_core::ServerId;
+use mcp_execution_core::ServerId;
 
 async fn connect_server(id: ServerId) -> Result<Bridge> {
     let bridge = Bridge::new(1000);

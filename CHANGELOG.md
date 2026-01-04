@@ -66,9 +66,9 @@ This patch release refactors documentation by reducing the main README size and 
 
 ### Added
 
-- **crates/mcp-core/README.md**: Foundation types, traits, and error handling documentation
-- **crates/mcp-files/README.md**: Virtual filesystem usage and API documentation
-- **crates/mcp-introspector/README.md**: MCP server analysis and rmcp SDK usage
+- **crates/mcp-execution-core/README.md**: Foundation types, traits, and error handling documentation
+- **crates/mcp-execution-files/README.md**: Virtual filesystem usage and API documentation
+- **crates/mcp-execution-introspector/README.md**: MCP server analysis and rmcp SDK usage
 
 ---
 
@@ -78,7 +78,7 @@ This patch release refactors documentation by reducing the main README size and 
 
 **Skill Generator & Security Hardening**
 
-This patch release adds skill generation capabilities to `mcp-server` and improves security with DoS protection limits.
+This patch release adds skill generation capabilities to `mcp-execution-server` and improves security with DoS protection limits.
 
 **Key Achievements**:
 - ✅ 2 new MCP tools: `generate_skill`, `save_skill`
@@ -105,7 +105,7 @@ This patch release adds skill generation capabilities to `mcp-server` and improv
 
 - **README.md**: Removed roadmap section, updated test count (550), added skill generator tools
 - **mcp-cli/README.md**: Removed outdated "Current Limitations" section
-- **mcp-codegen/README.md**: Removed outdated "Current Limitations" section, updated version
+- **mcp-execution-codegen/README.md**: Removed outdated "Current Limitations" section, updated version
 
 ### Fixed
 
@@ -127,18 +127,18 @@ This patch release adds skill generation capabilities to `mcp-server` and improv
 
 **MCP Generation Server & Enhanced Categorization**
 
-This release introduces `mcp-server` crate - an MCP server that enables progressive loading generation directly from Claude Code, with Claude-powered tool categorization.
+This release introduces `mcp-execution-server` crate - an MCP server that enables progressive loading generation directly from Claude Code, with Claude-powered tool categorization.
 
 **Key Achievements**:
-- ✅ New `mcp-server` crate with 3 MCP tools
+- ✅ New `mcp-execution-server` crate with 3 MCP tools
 - ✅ Claude-powered categorization (category, keywords, short_description)
 - ✅ 486 tests passing (100% pass rate)
-- ✅ ~85% test coverage for mcp-server
+- ✅ ~85% test coverage for mcp-execution-server
 - ✅ Simplified CI (removed sccache)
 
 ### Added
 
-- **mcp-server crate**: MCP server for progressive loading generation
+- **mcp-execution-server crate**: MCP server for progressive loading generation
   - `introspect_server` - Connect to MCP server and discover tools
   - `save_categorized_tools` - Generate TypeScript with Claude's categorization
   - `list_generated_servers` - List all servers with generated files
@@ -163,7 +163,7 @@ This release introduces `mcp-server` crate - an MCP server that enables progress
   - 44 lines removed from workflows
   - Still provides 60-80% build time reduction
 
-- **Test Coverage**: Significantly improved mcp-server coverage
+- **Test Coverage**: Significantly improved mcp-execution-server coverage
   - service.rs: 10% → 85% line coverage
   - state.rs: 99% coverage
   - types.rs: 100% coverage
@@ -178,9 +178,9 @@ This release introduces `mcp-server` crate - an MCP server that enables progress
 ### Documentation
 
 - Updated README.md with 6 crates architecture
-- Updated CLAUDE.md with mcp-server details
-- Updated docs/ARCHITECTURE.md with mcp-server section
-- Added mcp-server to dependency graphs
+- Updated CLAUDE.md with mcp-execution-server details
+- Updated docs/ARCHITECTURE.md with mcp-execution-server section
+- Added mcp-execution-server to dependency graphs
 
 ---
 
@@ -297,7 +297,7 @@ mcp-execution-cli generate docker --arg=... --name=github
     "github": {
       "command": "docker",
       "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
-               "ghcr.io/github/github-mcp-server"],
+               "ghcr.io/github/github-mcp-execution-server"],
       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_..."}
     }
   }
@@ -711,7 +711,7 @@ plugins/
 
 ### Added
 
-#### mcp-codegen crate
+#### mcp-execution-codegen crate
 - TypeScript code generation from MCP tool schemas
   - Handlebars templates for type-safe code
   - Feature flags support (wasm/skills modes)
@@ -752,7 +752,7 @@ plugins/
 
 ### Added
 
-#### mcp-introspector crate
+#### mcp-execution-introspector crate
 - MCP server analysis using rmcp SDK v0.8
   - Server capability discovery
   - Tool schema extraction
@@ -788,16 +788,16 @@ plugins/
 
 #### Workspace Structure
 - Multi-crate workspace (8 crates total)
-  - mcp-core - Foundation types and traits
-  - mcp-introspector - Server analysis
-  - mcp-codegen - Code generation
+  - mcp-execution-core - Foundation types and traits
+  - mcp-execution-introspector - Server analysis
+  - mcp-execution-codegen - Code generation
   - mcp-bridge - WASM ↔ MCP proxy
   - mcp-wasm-runtime - WASM execution
-  - mcp-files - Virtual filesystem
+  - mcp-execution-files - Virtual filesystem
   - mcp-examples - Examples and integration tests
   - mcp-cli - CLI application (minimal)
 
-#### mcp-core crate
+#### mcp-execution-core crate
 - Strong domain types
   - `ServerId`, `ToolName`, `SessionId`, `MemoryLimit`
   - All types `Send + Sync` for Tokio compatibility
@@ -812,7 +812,7 @@ plugins/
   - `CacheProvider` - Caching abstraction
   - `StateStorage` - Persistent state management
 
-#### mcp-files crate
+#### mcp-execution-files crate
 - Virtual filesystem for progressive tool discovery
   - `/mcp-tools/servers/{server-name}/` structure
   - Lazy loading of tool definitions
@@ -916,12 +916,12 @@ Core dependencies configured:
 
 | Crate | Unit | Integration | Doc | Total | Status |
 |-------|------|-------------|-----|-------|--------|
-| mcp-core | - | - | - | - | ✅ |
-| mcp-introspector | 85 | - | - | 85 | ✅ |
-| mcp-codegen | 69 | - | - | 69 | ✅ |
+| mcp-execution-core | - | - | - | - | ✅ |
+| mcp-execution-introspector | 85 | - | - | 85 | ✅ |
+| mcp-execution-codegen | 69 | - | - | 69 | ✅ |
 | mcp-bridge | 10 | 17 | - | 27 | ✅ |
 | mcp-wasm-runtime | 57 | - | - | 57 | ✅ |
-| mcp-files | 42 | - | - | 42 | ✅ |
+| mcp-execution-files | 42 | - | - | 42 | ✅ |
 | mcp-examples | 19 | 21 | 21 | 61 | ✅ |
 | **TOTAL** | **282** | **38** | **21** | **314** | ✅ **100% Pass** |
 

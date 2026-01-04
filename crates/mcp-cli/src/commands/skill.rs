@@ -8,8 +8,8 @@
 //! 4. Returns a prompt for Claude to generate optimal SKILL.md content
 
 use anyhow::{Context, Result, bail};
-use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_skill::{build_skill_context, scan_tools_directory, validate_server_id};
+use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_skill::{build_skill_context, scan_tools_directory, validate_server_id};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
@@ -58,7 +58,7 @@ const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
 ///
 /// ```no_run
 /// use mcp_execution_cli::commands::skill;
-/// use mcp_core::cli::OutputFormat;
+/// use mcp_execution_core::cli::OutputFormat;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// // Generate skill for GitHub server

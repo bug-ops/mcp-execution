@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_core::cli::{OutputFormat, ExitCode, ServerConnectionString};
+//! use mcp_execution_core::cli::{OutputFormat, ExitCode, ServerConnectionString};
 //! use std::path::PathBuf;
 //!
 //! // Output format selection
@@ -40,7 +40,7 @@ use std::str::FromStr;
 /// # Examples
 ///
 /// ```
-/// use mcp_core::cli::OutputFormat;
+/// use mcp_execution_core::cli::OutputFormat;
 ///
 /// let format = OutputFormat::Json;
 /// assert_eq!(format.as_str(), "json");
@@ -65,7 +65,7 @@ impl OutputFormat {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::cli::OutputFormat;
+    /// use mcp_execution_core::cli::OutputFormat;
     ///
     /// assert_eq!(OutputFormat::Json.as_str(), "json");
     /// assert_eq!(OutputFormat::Text.as_str(), "text");
@@ -110,7 +110,7 @@ impl FromStr for OutputFormat {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::cli::ExitCode;
+/// use mcp_execution_core::cli::ExitCode;
 ///
 /// let code = ExitCode::SUCCESS;
 /// assert_eq!(code.as_i32(), 0);
@@ -143,7 +143,7 @@ impl ExitCode {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::cli::ExitCode;
+    /// use mcp_execution_core::cli::ExitCode;
     ///
     /// let code = ExitCode::from_i32(0);
     /// assert_eq!(code, ExitCode::SUCCESS);
@@ -158,7 +158,7 @@ impl ExitCode {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::cli::ExitCode;
+    /// use mcp_execution_core::cli::ExitCode;
     ///
     /// assert_eq!(ExitCode::SUCCESS.as_i32(), 0);
     /// assert_eq!(ExitCode::ERROR.as_i32(), 1);
@@ -173,7 +173,7 @@ impl ExitCode {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::cli::ExitCode;
+    /// use mcp_execution_core::cli::ExitCode;
     ///
     /// assert!(ExitCode::SUCCESS.is_success());
     /// assert!(!ExitCode::ERROR.is_success());
@@ -216,7 +216,7 @@ impl fmt::Display for ExitCode {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::cli::ServerConnectionString;
+/// use mcp_execution_core::cli::ServerConnectionString;
 ///
 /// let conn = ServerConnectionString::new("github").unwrap();
 /// assert_eq!(conn.as_str(), "github");
@@ -253,14 +253,14 @@ impl ServerConnectionString {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::cli::ServerConnectionString;
+    /// use mcp_execution_core::cli::ServerConnectionString;
     ///
     /// let conn = ServerConnectionString::new("my-server")?;
     /// assert_eq!(conn.as_str(), "my-server");
     ///
     /// // Shell metacharacters are rejected for security
     /// assert!(ServerConnectionString::new("server && rm -rf /").is_err());
-    /// # Ok::<(), mcp_core::Error>(())
+    /// # Ok::<(), mcp_execution_core::Error>(())
     /// ```
     pub fn new(s: impl Into<String>) -> crate::Result<Self> {
         // Define allowed characters: alphanumeric, hyphen, underscore, dot, slash, colon
@@ -306,11 +306,11 @@ impl ServerConnectionString {
     /// # Examples
     ///
     /// ```
-    /// use mcp_core::cli::ServerConnectionString;
+    /// use mcp_execution_core::cli::ServerConnectionString;
     ///
     /// let conn = ServerConnectionString::new("server")?;
     /// assert_eq!(conn.as_str(), "server");
-    /// # Ok::<(), mcp_core::Error>(())
+    /// # Ok::<(), mcp_execution_core::Error>(())
     /// ```
     #[must_use]
     pub fn as_str(&self) -> &str {

@@ -17,7 +17,7 @@
 //! ## Basic usage
 //!
 //! ```
-//! use mcp_files::{FileSystem, FilesBuilder};
+//! use mcp_execution_files::{FileSystem, FilesBuilder};
 //!
 //! // Create FileSystem using builder
 //! let fs = FilesBuilder::new()
@@ -38,8 +38,8 @@
 //! ## Integration with code generation
 //!
 //! ```
-//! use mcp_files::FilesBuilder;
-//! use mcp_codegen::{GeneratedCode, GeneratedFile};
+//! use mcp_execution_files::FilesBuilder;
+//! use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 //!
 //! let mut code = GeneratedCode::new();
 //! code.add_file(GeneratedFile {
@@ -62,7 +62,7 @@
 //! ## Directory operations
 //!
 //! ```
-//! use mcp_files::FilesBuilder;
+//! use mcp_execution_files::FilesBuilder;
 //!
 //! let vfs = FilesBuilder::new()
 //!     .add_file("/mcp-tools/servers/test/file1.ts", "")

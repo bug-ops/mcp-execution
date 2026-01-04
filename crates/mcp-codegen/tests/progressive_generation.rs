@@ -3,9 +3,9 @@
 //! Tests the full pipeline from `ServerInfo` to generated TypeScript files
 //! for progressive loading pattern.
 
-use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_core::{ServerId, ToolName};
-use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
+use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_core::{ServerId, ToolName};
+use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 
 /// Creates a mock server info for testing.

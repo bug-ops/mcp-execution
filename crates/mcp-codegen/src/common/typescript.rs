@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_codegen::common::typescript;
+//! use mcp_execution_codegen::common::typescript;
 //! use serde_json::json;
 //!
 //! let schema = json!({
@@ -27,7 +27,7 @@ use serde_json::Value;
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::common::typescript::to_camel_case;
+/// use mcp_execution_codegen::common::typescript::to_camel_case;
 ///
 /// assert_eq!(to_camel_case("send_message"), "sendMessage");
 /// assert_eq!(to_camel_case("get_user_data"), "getUserData");
@@ -57,7 +57,7 @@ pub fn to_camel_case(snake_case: &str) -> String {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::common::typescript::to_pascal_case;
+/// use mcp_execution_codegen::common::typescript::to_pascal_case;
 ///
 /// assert_eq!(to_pascal_case("send_message"), "SendMessage");
 /// assert_eq!(to_pascal_case("get_user_data"), "GetUserData");
@@ -80,7 +80,7 @@ pub fn to_pascal_case(snake_case: &str) -> String {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::common::typescript::json_type_to_typescript;
+/// use mcp_execution_codegen::common::typescript::json_type_to_typescript;
 ///
 /// assert_eq!(json_type_to_typescript("string"), "string");
 /// assert_eq!(json_type_to_typescript("number"), "number");
@@ -108,7 +108,7 @@ pub fn json_type_to_typescript(json_type: &str) -> &'static str {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::common::typescript::json_schema_to_typescript;
+/// use mcp_execution_codegen::common::typescript::json_schema_to_typescript;
 /// use serde_json::json;
 ///
 /// let schema = json!({
@@ -184,7 +184,7 @@ pub fn json_schema_to_typescript(schema: &Value) -> String {
 /// # Examples
 ///
 /// ```
-/// use mcp_codegen::common::typescript::extract_properties;
+/// use mcp_execution_codegen::common::typescript::extract_properties;
 /// use serde_json::json;
 ///
 /// let schema = json!({

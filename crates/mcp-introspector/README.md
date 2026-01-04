@@ -1,7 +1,7 @@
-# mcp-introspector
+# mcp-execution-introspector
 
-[![Crates.io](https://img.shields.io/crates/v/mcp-introspector.svg)](https://crates.io/crates/mcp-introspector)
-[![docs.rs](https://img.shields.io/docsrs/mcp-introspector)](https://docs.rs/mcp-introspector)
+[![Crates.io](https://img.shields.io/crates/v/mcp-execution-introspector.svg)](https://crates.io/crates/mcp-execution-introspector)
+[![docs.rs](https://img.shields.io/docsrs/mcp-execution-introspector)](https://docs.rs/mcp-execution-introspector)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
@@ -11,13 +11,13 @@ MCP server introspection using the official [rmcp](https://docs.rs/rmcp) SDK.
 
 ```toml
 [dependencies]
-mcp-introspector = "0.6"
+mcp-execution-introspector = "0.6"
 ```
 
 Or with cargo-add:
 
 ```bash
-cargo add mcp-introspector
+cargo add mcp-execution-introspector
 ```
 
 > [!IMPORTANT]
@@ -28,8 +28,8 @@ cargo add mcp-introspector
 ### Basic Introspection
 
 ```rust
-use mcp_introspector::Introspector;
-use mcp_core::{ServerId, ServerConfig};
+use mcp_execution_introspector::Introspector;
+use mcp_execution_core::{ServerId, ServerConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -86,7 +86,7 @@ let config = ServerConfig::builder()
     .arg("run".to_string())
     .arg("-i".to_string())
     .arg("--rm".to_string())
-    .arg("ghcr.io/org/mcp-server".to_string())
+    .arg("ghcr.io/org/mcp-execution-server".to_string())
     .build();
 ```
 
@@ -124,8 +124,8 @@ let config = ServerConfig::builder()
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-core`](../mcp-core) - Foundation types (`ServerId`, `ServerConfig`)
-- [`mcp-codegen`](../mcp-codegen) - Uses introspection results for code generation
+- [`mcp-execution-core`](../mcp-execution-core) - Foundation types (`ServerId`, `ServerConfig`)
+- [`mcp-execution-codegen`](../mcp-execution-codegen) - Uses introspection results for code generation
 - [`rmcp`](https://docs.rs/rmcp) - Official Rust MCP SDK
 
 ## MSRV Policy

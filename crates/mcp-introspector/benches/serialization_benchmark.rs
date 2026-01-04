@@ -4,8 +4,8 @@
 //! `ServerInfo` and `ToolInfo` structures.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mcp_core::{ServerId, ToolName};
-use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
+use mcp_execution_core::{ServerId, ToolName};
+use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 use std::hint::black_box;
 

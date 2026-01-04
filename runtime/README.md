@@ -94,7 +94,7 @@ Server configurations are loaded from `~/.claude/mcp.json`:
       "args": [
         "run", "-i", "--rm",
         "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
-        "ghcr.io/github/github-mcp-server"
+        "ghcr.io/github/github-mcp-execution-server"
       ],
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "github_pat_YOUR_TOKEN"

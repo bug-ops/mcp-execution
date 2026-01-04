@@ -1,7 +1,7 @@
-# mcp-files
+# mcp-execution-files
 
-[![Crates.io](https://img.shields.io/crates/v/mcp-files.svg)](https://crates.io/crates/mcp-files)
-[![docs.rs](https://img.shields.io/docsrs/mcp-files)](https://docs.rs/mcp-files)
+[![Crates.io](https://img.shields.io/crates/v/mcp-execution-files.svg)](https://crates.io/crates/mcp-execution-files)
+[![docs.rs](https://img.shields.io/docsrs/mcp-execution-files)](https://docs.rs/mcp-execution-files)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
@@ -11,13 +11,13 @@ In-memory virtual filesystem for MCP tools organization and export.
 
 ```toml
 [dependencies]
-mcp-files = "0.6"
+mcp-execution-files = "0.6"
 ```
 
 Or with cargo-add:
 
 ```bash
-cargo add mcp-files
+cargo add mcp-execution-files
 ```
 
 > [!IMPORTANT]
@@ -28,7 +28,7 @@ cargo add mcp-files
 ### Basic Usage
 
 ```rust
-use mcp_files::{FileSystem, FilesBuilder};
+use mcp_execution_files::{FileSystem, FilesBuilder};
 
 let fs = FilesBuilder::new()
     .add_file("/mcp-tools/manifest.json", "{\"version\": \"1.0\"}")
@@ -46,7 +46,7 @@ assert!(fs.exists("/mcp-tools/createIssue.ts"));
 ### Directory Operations
 
 ```rust
-use mcp_files::FilesBuilder;
+use mcp_execution_files::FilesBuilder;
 
 let fs = FilesBuilder::new()
     .add_file("/servers/github/createIssue.ts", "// code")
@@ -62,8 +62,8 @@ assert_eq!(files.len(), 3);
 ### Integration with Code Generation
 
 ```rust
-use mcp_files::FilesBuilder;
-use mcp_codegen::{GeneratedCode, GeneratedFile};
+use mcp_execution_files::FilesBuilder;
+use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 
 let mut code = GeneratedCode::new();
 code.add_file(GeneratedFile {
@@ -79,12 +79,12 @@ assert!(vfs.exists("/servers/github/createIssue.ts"));
 ```
 
 > [!TIP]
-> Use `from_generated_code` to seamlessly integrate with `mcp-codegen` output.
+> Use `from_generated_code` to seamlessly integrate with `mcp-execution-codegen` output.
 
 ### Export to Disk
 
 ```rust
-use mcp_files::{FilesBuilder, ExportOptions};
+use mcp_execution_files::{FilesBuilder, ExportOptions};
 use std::path::Path;
 
 let fs = FilesBuilder::new()
@@ -129,8 +129,8 @@ fs.export_to_disk(Path::new("~/.claude/servers"), &options)?;
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-core`](../mcp-core) - Foundation types used by this crate
-- [`mcp-codegen`](../mcp-codegen) - Generates code that this crate organizes
+- [`mcp-execution-core`](../mcp-execution-core) - Foundation types used by this crate
+- [`mcp-execution-codegen`](../mcp-execution-codegen) - Generates code that this crate organizes
 
 ## MSRV Policy
 

@@ -36,9 +36,9 @@
 //! ## Basic Usage
 //!
 //! ```no_run
-//! use mcp_codegen::progressive::ProgressiveGenerator;
-//! use mcp_introspector::{Introspector, ServerInfo};
-//! use mcp_core::{ServerId, ServerConfig};
+//! use mcp_execution_codegen::progressive::ProgressiveGenerator;
+//! use mcp_execution_introspector::{Introspector, ServerInfo};
+//! use mcp_execution_core::{ServerId, ServerConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Introspect server

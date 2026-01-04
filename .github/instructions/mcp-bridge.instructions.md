@@ -127,7 +127,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use lru::LruCache;
-use mcp_core::{ServerId, ToolName, CacheKey};
+use mcp_execution_core::{ServerId, ToolName, CacheKey};
 
 pub struct Bridge {
     // Connection pool - one client per server

@@ -8,10 +8,10 @@
 //! Run with: cargo bench --package mcp-codegen
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_core::{ServerId, ToolName};
-use mcp_files::FilesBuilder;
-use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
+use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_core::{ServerId, ToolName};
+use mcp_execution_files::FilesBuilder;
+use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 use std::hint::black_box;
 
@@ -274,7 +274,7 @@ fn bench_generator_initialization(c: &mut Criterion) {
 
 /// Benchmarks type conversion performance.
 fn bench_type_conversion(c: &mut Criterion) {
-    use mcp_codegen::common::typescript;
+    use mcp_execution_codegen::common::typescript;
 
     let mut group = c.benchmark_group("type_conversion");
 

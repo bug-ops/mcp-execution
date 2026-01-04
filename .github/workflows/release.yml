@@ -77,7 +77,7 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Build release (MCP Server)
-        run: cargo build --release --target ${{ matrix.target }} --package mcp-server
+        run: cargo build --release --target ${{ matrix.target }} --package mcp-execution-server
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -157,3 +157,46 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for trusted publishing (OIDC)
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release"
+
+      - name: Verify packages build
+        run: |
+          cargo build --release -p mcp-execution-core
+          cargo build --release -p mcp-execution-introspector
+          cargo build --release -p mcp-execution-codegen
+          cargo build --release -p mcp-execution-files
+          cargo build --release -p mcp-execution-skill
+          cargo build --release -p mcp-execution-server
+          cargo build --release -p mcp-execution-cli
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      # Trusted Publishing (OIDC) - no manual token needed after initial setup
+      - name: Authenticate with crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: crates-io-auth
+
+      - name: Publish crates
+        uses: katyo/publish-crates@v2
+        with:
+          registry-token: ${{ steps.crates-io-auth.outputs.token }}
+          ignore-unpublished-changes: true
+          publish-delay: 30000

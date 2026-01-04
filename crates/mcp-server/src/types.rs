@@ -6,8 +6,8 @@
 //! - `list_generated_servers`: List all servers with generated files
 
 use chrono::{DateTime, Utc};
-use mcp_core::{ServerConfig, ServerId};
-use mcp_introspector::ServerInfo;
+use mcp_execution_core::{ServerConfig, ServerId};
+use mcp_execution_introspector::ServerInfo;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ use uuid::Uuid;
 /// # Examples
 ///
 /// ```
-/// use mcp_server::types::IntrospectServerParams;
+/// use mcp_execution_server::types::IntrospectServerParams;
 /// use std::collections::HashMap;
 ///
 /// let params = IntrospectServerParams {
@@ -104,7 +104,7 @@ pub struct ToolMetadata {
 /// # Examples
 ///
 /// ```
-/// use mcp_server::types::{SaveCategorizedToolsParams, CategorizedTool};
+/// use mcp_execution_server::types::{SaveCategorizedToolsParams, CategorizedTool};
 /// use uuid::Uuid;
 ///
 /// let params = SaveCategorizedToolsParams {
@@ -257,9 +257,9 @@ impl PendingGeneration {
     /// # Examples
     ///
     /// ```
-    /// use mcp_server::types::PendingGeneration;
-    /// use mcp_core::{ServerId, ServerConfig};
-    /// use mcp_introspector::ServerInfo;
+    /// use mcp_execution_server::types::PendingGeneration;
+    /// use mcp_execution_core::{ServerId, ServerConfig};
+    /// use mcp_execution_introspector::ServerInfo;
     /// use std::path::PathBuf;
     ///
     /// # fn example(server_info: ServerInfo) {
@@ -302,9 +302,9 @@ impl PendingGeneration {
     /// # Examples
     ///
     /// ```
-    /// use mcp_server::types::PendingGeneration;
-    /// # use mcp_core::{ServerId, ServerConfig};
-    /// # use mcp_introspector::ServerInfo;
+    /// use mcp_execution_server::types::PendingGeneration;
+    /// # use mcp_execution_core::{ServerId, ServerConfig};
+    /// # use mcp_execution_introspector::ServerInfo;
     /// # use std::path::PathBuf;
     ///
     /// # fn example(server_info: ServerInfo) {
@@ -349,8 +349,8 @@ mod tests {
 
     // Test helper
     fn create_test_pending() -> PendingGeneration {
-        use mcp_core::ToolName;
-        use mcp_introspector::{ServerCapabilities, ToolInfo};
+        use mcp_execution_core::ToolName;
+        use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
         let server_id = ServerId::new("test");
         let server_info = ServerInfo {

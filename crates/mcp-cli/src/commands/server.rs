@@ -4,9 +4,9 @@
 
 use crate::actions::ServerAction;
 use anyhow::{Context, Result};
-use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_core::{ServerConfig as CoreServerConfig, ServerId};
-use mcp_introspector::Introspector;
+use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_core::{ServerConfig as CoreServerConfig, ServerId};
+use mcp_execution_introspector::Introspector;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 struct ClaudeDesktopConfig {
     #[serde(rename = "mcpServers")]
-    mcp_servers: HashMap<String, ServerConfig>,
+    mcp_execution_servers: HashMap<String, ServerConfig>,
 }
 
 /// MCP server configuration from Claude Desktop config.
@@ -198,14 +198,14 @@ impl ServerManager {
     /// Lists all configured servers.
     fn list_servers(&self) -> Result<Vec<(String, ServerConfig)>> {
         let config = self.read_config()?;
-        Ok(config.mcp_servers.into_iter().collect())
+        Ok(config.mcp_execution_servers.into_iter().collect())
     }
 
     /// Gets configuration for a specific server.
     fn get_server_config(&self, server_name: &str) -> Result<ServerConfig> {
         let config = self.read_config()?;
         config
-            .mcp_servers
+            .mcp_execution_servers
             .get(server_name)
             .cloned()
             .context(format!("Server '{server_name}' not found in configuration"))
@@ -249,7 +249,10 @@ impl ServerManager {
     }
 
     /// Introspects a server using mcp-introspector.
-    async fn introspect_server(&self, server_name: &str) -> Result<mcp_introspector::ServerInfo> {
+    async fn introspect_server(
+        &self,
+        server_name: &str,
+    ) -> Result<mcp_execution_introspector::ServerInfo> {
         let config = self.get_server_config(server_name)?;
 
         let mut introspector = Introspector::new();
@@ -292,7 +295,7 @@ impl ServerManager {
 ///
 /// ```no_run
 /// use mcp_execution_cli::commands::server;
-/// use mcp_core::cli::{ExitCode, OutputFormat};
+/// use mcp_execution_core::cli::{ExitCode, OutputFormat};
 ///
 /// # #[tokio::main]
 /// # async fn main() {
@@ -557,7 +560,7 @@ mod tests {
         }"#;
 
         let config: ClaudeDesktopConfig = serde_json::from_str(json).unwrap();
-        assert!(config.mcp_servers.contains_key("test-server"));
+        assert!(config.mcp_execution_servers.contains_key("test-server"));
     }
 
     #[test]
@@ -614,8 +617,8 @@ mod tests {
         };
 
         let config = manager.read_config().unwrap();
-        assert_eq!(config.mcp_servers.len(), 1);
-        assert!(config.mcp_servers.contains_key("test-server"));
+        assert_eq!(config.mcp_execution_servers.len(), 1);
+        assert!(config.mcp_execution_servers.contains_key("test-server"));
     }
 
     #[test]

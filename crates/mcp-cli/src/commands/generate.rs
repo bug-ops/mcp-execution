@@ -8,10 +8,10 @@
 
 use super::common::{build_server_config, load_server_from_config};
 use anyhow::{Context, Result};
-use mcp_codegen::progressive::ProgressiveGenerator;
-use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_files::FilesBuilder;
-use mcp_introspector::Introspector;
+use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_files::FilesBuilder;
+use mcp_execution_introspector::Introspector;
 use serde::Serialize;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
@@ -111,7 +111,7 @@ pub async fn run(
     // This ensures generated code uses the correct server_id that matches mcp.json
     let mut server_info = server_info;
     if let Some(ref custom_name) = name {
-        server_info.id = mcp_core::ServerId::new(custom_name);
+        server_info.id = mcp_execution_core::ServerId::new(custom_name);
     }
 
     // Determine server directory name (use custom name if provided, otherwise server_id)
@@ -190,8 +190,8 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_core::ServerId;
-    use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
+    use mcp_execution_core::ServerId;
+    use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
     use serde_json::json;
 
     fn create_mock_server_info() -> ServerInfo {
@@ -200,7 +200,7 @@ mod tests {
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![ToolInfo {
-                name: mcp_core::ToolName::new("test_tool"),
+                name: mcp_execution_core::ToolName::new("test_tool"),
                 description: "A test tool".to_string(),
                 input_schema: json!({
                     "type": "object",

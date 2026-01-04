@@ -94,21 +94,23 @@ node ~/.claude/servers/github/createIssue.ts --repo="owner/repo" --title="Bug"
 
 | Crate | Description |
 |-------|-------------|
-| [mcp-core](crates/mcp-core) | Foundation types, traits, and error handling |
-| [mcp-introspector](crates/mcp-introspector) | MCP server analysis using rmcp SDK |
-| [mcp-codegen](crates/mcp-codegen) | TypeScript code generation with progressive loading |
-| [mcp-files](crates/mcp-files) | Virtual filesystem for code organization |
-| [mcp-server](crates/mcp-server) | MCP server for progressive loading generation |
-| [mcp-cli](crates/mcp-cli) | Command-line interface |
+| [mcp-execution-core](crates/mcp-core) | Foundation types, traits, and error handling |
+| [mcp-execution-introspector](crates/mcp-introspector) | MCP server analysis using rmcp SDK |
+| [mcp-execution-codegen](crates/mcp-codegen) | TypeScript code generation with progressive loading |
+| [mcp-execution-files](crates/mcp-files) | Virtual filesystem for code organization |
+| [mcp-execution-skill](crates/mcp-skill) | SKILL.md generation for Claude Code |
+| [mcp-execution-server](crates/mcp-server) | MCP server for progressive loading generation |
+| [mcp-execution-cli](crates/mcp-cli) | Command-line interface |
 
 **Dependency Graph**:
 
 ```text
-mcp-cli → {mcp-codegen, mcp-introspector, mcp-files, mcp-core}
-mcp-server → {mcp-codegen, mcp-introspector, mcp-files, mcp-core}
-mcp-codegen → {mcp-files, mcp-core}
-mcp-introspector → {rmcp, mcp-core}
-mcp-files → mcp-core
+mcp-execution-cli → {mcp-execution-codegen, mcp-execution-introspector, mcp-execution-files, mcp-execution-core, mcp-execution-skill}
+mcp-execution-server → {mcp-execution-codegen, mcp-execution-introspector, mcp-execution-files, mcp-execution-core, mcp-execution-skill}
+mcp-execution-codegen → {mcp-execution-introspector, mcp-execution-core}
+mcp-execution-files → mcp-execution-codegen
+mcp-execution-introspector → {rmcp, mcp-execution-core}
+mcp-execution-skill → mcp-execution-core
 ```
 
 ## CLI Commands

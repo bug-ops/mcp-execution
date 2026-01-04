@@ -5,9 +5,9 @@
 //! unit tests in service.rs, so we focus on testing public types and state manager.
 
 use chrono::Duration;
-use mcp_core::{ServerConfig, ServerId, ToolName};
-use mcp_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
-use mcp_server::{CategorizedTool, GeneratorService, PendingGeneration, StateManager};
+use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
+use mcp_execution_server::{CategorizedTool, GeneratorService, PendingGeneration, StateManager};
 use rmcp::handler::server::ServerHandler;
 use std::sync::Arc;
 

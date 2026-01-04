@@ -1,7 +1,7 @@
-# mcp-skill
+# mcp-execution-skill
 
-[![Crates.io](https://img.shields.io/crates/v/mcp-skill.svg)](https://crates.io/crates/mcp-skill)
-[![docs.rs](https://img.shields.io/docsrs/mcp-skill)](https://docs.rs/mcp-skill)
+[![Crates.io](https://img.shields.io/crates/v/mcp-execution-skill.svg)](https://crates.io/crates/mcp-execution-skill)
+[![docs.rs](https://img.shields.io/docsrs/mcp-execution-skill)](https://docs.rs/mcp-execution-skill)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
@@ -10,14 +10,14 @@ Skill generation for MCP progressive loading. Generates Claude Code skill files 
 ## Installation
 
 ```bash
-cargo add mcp-skill
+cargo add mcp-execution-skill
 ```
 
 Or add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mcp-skill = "0.6"
+mcp-execution-skill = "0.6"
 ```
 
 > [!IMPORTANT]
@@ -26,7 +26,7 @@ mcp-skill = "0.6"
 ## Usage
 
 ```rust
-use mcp_skill::{scan_tools_directory, build_skill_context};
+use mcp_execution_skill::{scan_tools_directory, build_skill_context};
 use std::path::Path;
 
 #[tokio::main]
@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 > [!TIP]
-> For optimal results, use the MCP server (`mcp-server`) for skill generation. It leverages LLM capabilities to summarize tool descriptions, resulting in more concise skill files.
+> For optimal results, use the MCP server (`mcp-execution-server`) for skill generation. It leverages LLM capabilities to summarize tool descriptions, resulting in more concise skill files.
 
 ## Features
 
@@ -71,7 +71,7 @@ TypeScript Files → Parser → Context Builder → Template Renderer → SKILL.
 ### Parse a Single Tool File
 
 ```rust
-use mcp_skill::parse_tool_file;
+use mcp_execution_skill::parse_tool_file;
 
 let content = r#"
 /**
@@ -91,7 +91,7 @@ assert_eq!(parsed.category, Some("issues".to_string()));
 ### Build Context with Hints
 
 ```rust
-use mcp_skill::build_skill_context;
+use mcp_execution_skill::build_skill_context;
 
 // Add use-case hints for better context
 let hints = vec!["managing pull requests", "code review"];
@@ -113,7 +113,7 @@ println!("Categories: {:?}", context.categories.len());
 ## Error Handling
 
 ```rust
-use mcp_skill::{ParseError, ScanError};
+use mcp_execution_skill::{ParseError, ScanError};
 
 // ParseError - JSDoc parsing failures
 // ScanError - Directory scanning issues (permissions, limits)
@@ -132,9 +132,9 @@ use mcp_skill::{ParseError, ScanError};
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-core`](../mcp-core) - Foundation types and traits
-- [`mcp-codegen`](../mcp-codegen) - TypeScript code generation
-- [`mcp-files`](../mcp-files) - Virtual filesystem
+- [`mcp-execution-core`](../mcp-execution-core) - Foundation types and traits
+- [`mcp-execution-codegen`](../mcp-execution-codegen) - TypeScript code generation
+- [`mcp-execution-files`](../mcp-execution-files) - Virtual filesystem
 - [`mcp-cli`](../mcp-cli) - CLI with `skill` command
 
 ## MSRV Policy

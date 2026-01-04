@@ -13,8 +13,8 @@
 //! # Examples
 //!
 //! ```no_run
-//! use mcp_introspector::Introspector;
-//! use mcp_core::{ServerId, ServerConfig};
+//! use mcp_execution_introspector::Introspector;
+//! use mcp_execution_core::{ServerId, ServerConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut introspector = Introspector::new();
@@ -42,7 +42,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-use mcp_core::{Error, Result, ServerConfig, ServerId, ToolName, validate_server_config};
+use mcp_execution_core::{Error, Result, ServerConfig, ServerId, ToolName, validate_server_config};
 use rmcp::ServiceExt;
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde::{Deserialize, Serialize};
@@ -56,8 +56,8 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```
-/// use mcp_introspector::{ServerInfo, ServerCapabilities};
-/// use mcp_core::ServerId;
+/// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
+/// use mcp_execution_core::ServerId;
 ///
 /// let info = ServerInfo {
 ///     id: ServerId::new("example"),
@@ -94,8 +94,8 @@ pub struct ServerInfo {
 /// # Examples
 ///
 /// ```
-/// use mcp_introspector::ToolInfo;
-/// use mcp_core::ToolName;
+/// use mcp_execution_introspector::ToolInfo;
+/// use mcp_execution_core::ToolName;
 /// use serde_json::json;
 ///
 /// let tool = ToolInfo {
@@ -133,7 +133,7 @@ pub struct ToolInfo {
 /// # Examples
 ///
 /// ```
-/// use mcp_introspector::ServerCapabilities;
+/// use mcp_execution_introspector::ServerCapabilities;
 ///
 /// let caps = ServerCapabilities {
 ///     supports_tools: true,
@@ -168,8 +168,8 @@ pub struct ServerCapabilities {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_introspector::Introspector;
-/// use mcp_core::{ServerId, ServerConfig};
+/// use mcp_execution_introspector::Introspector;
+/// use mcp_execution_core::{ServerId, ServerConfig};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut introspector = Introspector::new();
@@ -209,7 +209,7 @@ impl Introspector {
     /// # Examples
     ///
     /// ```
-    /// use mcp_introspector::Introspector;
+    /// use mcp_execution_introspector::Introspector;
     ///
     /// let introspector = Introspector::new();
     /// assert_eq!(introspector.list_servers().len(), 0);
@@ -243,8 +243,8 @@ impl Introspector {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_introspector::Introspector;
-    /// use mcp_core::{ServerId, ServerConfig};
+    /// use mcp_execution_introspector::Introspector;
+    /// use mcp_execution_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
@@ -355,8 +355,8 @@ impl Introspector {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_introspector::Introspector;
-    /// use mcp_core::{ServerId, ServerConfig};
+    /// use mcp_execution_introspector::Introspector;
+    /// use mcp_execution_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
@@ -389,7 +389,7 @@ impl Introspector {
     /// # Examples
     ///
     /// ```
-    /// use mcp_introspector::Introspector;
+    /// use mcp_execution_introspector::Introspector;
     ///
     /// let introspector = Introspector::new();
     /// let servers = introspector.list_servers();
@@ -405,7 +405,7 @@ impl Introspector {
     /// # Examples
     ///
     /// ```
-    /// use mcp_introspector::Introspector;
+    /// use mcp_execution_introspector::Introspector;
     ///
     /// let introspector = Introspector::new();
     /// assert_eq!(introspector.server_count(), 0);
@@ -422,8 +422,8 @@ impl Introspector {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_introspector::Introspector;
-    /// use mcp_core::{ServerId, ServerConfig};
+    /// use mcp_execution_introspector::Introspector;
+    /// use mcp_execution_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
@@ -450,8 +450,8 @@ impl Introspector {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_introspector::Introspector;
-    /// use mcp_core::{ServerId, ServerConfig};
+    /// use mcp_execution_introspector::Introspector;
+    /// use mcp_execution_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();

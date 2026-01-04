@@ -40,15 +40,15 @@ This document provides comprehensive guidelines for GitHub Copilot to generate h
 ```
 mcp-execution/
 ├── crates/
-│   ├── mcp-core/          - Foundation: types, traits, errors
-│   ├── mcp-introspector/  - MCP server analysis (rmcp v0.9)
-│   ├── mcp-codegen/       - Code generation (wasm/skills features)
+│   ├── mcp-execution-core/          - Foundation: types, traits, errors
+│   ├── mcp-execution-introspector/  - MCP server analysis (rmcp v0.9)
+│   ├── mcp-execution-codegen/       - Code generation (wasm/skills features)
 │   ├── mcp-bridge/        - WASM ↔ MCP proxy (rmcp client)
 │   ├── mcp-wasm-runtime/  - Wasmtime sandbox (v39.0)
-│   ├── mcp-files/           - Virtual filesystem
+│   ├── mcp-execution-files/           - Virtual filesystem
 │   ├── mcp-cli/           - CLI application
-│   ├── mcp-skill-store/   - Skill management
-│   ├── mcp-skill-generator/ - Skill generation
+│   ├── mcp-execution-skill-store/   - Skill management
+│   ├── mcp-execution-skill-generator/ - Skill generation
 │   └── mcp-examples/      - Usage examples
 └── .local/                - Detailed documentation (not in git)
 ```
@@ -292,11 +292,11 @@ async fn process() {
 **CRITICAL**: No circular dependencies allowed.
 
 ```
-mcp-cli → mcp-wasm-runtime → {mcp-bridge, mcp-files, mcp-codegen}
-                           ↘ mcp-core
+mcp-cli → mcp-wasm-runtime → {mcp-bridge, mcp-execution-files, mcp-execution-codegen}
+                           ↘ mcp-execution-core
 
 mcp-bridge → rmcp (official SDK)
-mcp-introspector → rmcp
+mcp-execution-introspector → rmcp
 ```
 
 ### Module Organization
@@ -664,7 +664,7 @@ for item in items {
 // benches/my_benchmark.rs
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use mcp_core::parse_tool;
+use mcp_execution_core::parse_tool;
 
 fn benchmark_parse_tool(c: &mut Criterion) {
     let json = include_str!("../fixtures/tool.json");
@@ -717,7 +717,7 @@ pub fn read_skill_file(filename: &str) -> Result<String> {
         .ok_or_else(|| VfsError::InvalidPath)?;
 
     // Build safe path
-    let base_dir = Path::new("/var/mcp-skills");
+    let base_dir = Path::new("/var/mcp-execution-skills");
     let path = base_dir.join(filename);
 
     // Ensure path is within base directory
@@ -787,7 +787,7 @@ pub unsafe fn bytes_to_str_unchecked(bytes: &[u8]) -> &str {
 /// # Examples
 ///
 /// ```
-/// use mcp_core::Tool;
+/// use mcp_execution_core::Tool;
 ///
 /// let tool = Tool::new("send_message", schema)?;
 /// assert_eq!(tool.name(), "send_message");
@@ -809,7 +809,7 @@ impl Tool {
     /// # Examples
     ///
     /// ```
-    /// # use mcp_core::{Tool, Schema};
+    /// # use mcp_execution_core::{Tool, Schema};
     /// let schema = Schema::default();
     /// let tool = Tool::new("test_tool", schema)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -961,7 +961,7 @@ let valid: Vec<_> = items
 ```toml
 # In crate's Cargo.toml
 [dependencies]
-mcp-core = { workspace = true }
+mcp-execution-core = { workspace = true }
 tokio = { workspace = true }
 ```
 

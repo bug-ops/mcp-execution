@@ -3,7 +3,7 @@
 //! These tests verify that unicode bypass vectors, encoding tricks,
 //! and other edge cases are properly handled by the validation logic.
 
-use mcp_core::cli::ServerConnectionString;
+use mcp_execution_core::cli::ServerConnectionString;
 
 /// Test that zero-width Unicode characters are rejected.
 #[test]

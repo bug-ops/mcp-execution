@@ -4,8 +4,8 @@
 
 use super::common::{build_server_config, load_server_from_config};
 use anyhow::{Context, Result};
-use mcp_core::cli::{ExitCode, OutputFormat};
-use mcp_introspector::{Introspector, ServerInfo, ToolInfo};
+use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_introspector::{Introspector, ServerInfo, ToolInfo};
 use serde::Serialize;
 use tracing::{debug, info};
 
@@ -117,7 +117,7 @@ pub struct ToolMetadata {
 ///
 /// ```no_run
 /// use mcp_execution_cli::commands::introspect;
-/// use mcp_core::cli::OutputFormat;
+/// use mcp_execution_core::cli::OutputFormat;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// // Simple server
@@ -222,8 +222,8 @@ pub async fn run(
 ///
 /// ```
 /// use mcp_execution_cli::commands::introspect::build_result;
-/// use mcp_introspector::{ServerInfo, ServerCapabilities};
-/// use mcp_core::ServerId;
+/// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
+/// use mcp_execution_core::ServerId;
 ///
 /// let server_info = ServerInfo {
 ///     id: ServerId::new("test"),
@@ -289,8 +289,8 @@ fn build_tool_metadata(tool_info: &ToolInfo, detailed: bool) -> ToolMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_core::{ServerId, ToolName};
-    use mcp_introspector::ServerCapabilities;
+    use mcp_execution_core::{ServerId, ToolName};
+    use mcp_execution_introspector::ServerCapabilities;
     use serde_json::json;
 
     #[test]

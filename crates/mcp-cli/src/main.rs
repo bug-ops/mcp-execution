@@ -34,7 +34,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use mcp_core::cli::OutputFormat;
+use mcp_execution_core::cli::OutputFormat;
 
 mod actions;
 mod cli;

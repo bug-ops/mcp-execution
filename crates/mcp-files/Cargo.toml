@@ -1,10 +1,15 @@
 [package]
-name = "mcp-files"
+name = "mcp-execution-files"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Virtual filesystem for MCP code generation and organization"
+keywords = ["mcp", "filesystem", "vfs", "codegen"]
+categories = ["development-tools", "filesystem"]
 
 [lints]
 workspace = true
@@ -12,7 +17,7 @@ workspace = true
 [dependencies]
 dirs.workspace = true
 dhat = { workspace = true, optional = true }
-mcp-codegen.workspace = true
+mcp-execution-codegen.workspace = true
 rayon = { workspace = true, optional = true }
 thiserror.workspace = true
 

@@ -14,7 +14,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{ServerConfig, validate_server_config};
+//! use mcp_execution_core::{ServerConfig, validate_server_config};
 //!
 //! // Valid binary name (resolved via PATH)
 //! let config = ServerConfig::builder()
@@ -74,7 +74,7 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
 /// # Examples
 ///
 /// ```
-/// use mcp_core::{ServerConfig, validate_server_config};
+/// use mcp_execution_core::{ServerConfig, validate_server_config};
 ///
 /// // Valid: binary name
 /// let config = ServerConfig::builder()

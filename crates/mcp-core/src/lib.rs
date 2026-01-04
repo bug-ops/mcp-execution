@@ -14,7 +14,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_core::{ServerConfig, ServerId};
+//! use mcp_execution_core::{ServerConfig, ServerId};
 //!
 //! // Create a server configuration
 //! let config = ServerConfig::builder()

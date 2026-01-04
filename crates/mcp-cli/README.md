@@ -50,7 +50,7 @@ cargo install --path crates/mcp-cli
 mcp-execution-cli generate --from-config github
 
 # With manual configuration
-mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
+mcp-execution-cli generate github-mcp-execution-server --env GITHUB_TOKEN=ghp_xxx
 ```
 
 > [!TIP]
@@ -130,7 +130,7 @@ mcp-execution-cli introspect <SERVER> [OPTIONS]
 
 2. Manual configuration:
    ```bash
-   mcp-execution-cli introspect github-mcp-server --arg=stdio
+   mcp-execution-cli introspect github-mcp-execution-server --arg=stdio
    ```
 
 **Options**:
@@ -152,7 +152,7 @@ mcp-execution-cli introspect --from-config github --detailed
 # Manual with Docker
 mcp-execution-cli introspect docker \
   --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-server \
+  --arg=ghcr.io/github/github-mcp-execution-server \
   --env=GITHUB_TOKEN=ghp_xxx
 
 # HTTP transport
@@ -194,7 +194,7 @@ mcp-execution-cli skill --server github --overwrite
 ```
 
 > [!TIP]
-> For optimal results, prefer using the MCP server (`mcp-server`) for skill generation.
+> For optimal results, prefer using the MCP server (`mcp-execution-server`) for skill generation.
 > The MCP server can leverage LLM capabilities to summarize tool descriptions and reduce
 > context size, resulting in more concise and effective skill files.
 
@@ -246,12 +246,12 @@ mcp-execution-cli completions <SHELL>
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-core`](../mcp-core) - Foundation types
-- [`mcp-introspector`](../mcp-introspector) - MCP server analysis
-- [`mcp-codegen`](../mcp-codegen) - TypeScript code generation
-- [`mcp-files`](../mcp-files) - Virtual filesystem
-- [`mcp-skill`](../mcp-skill) - Skill generation
-- [`mcp-server`](../mcp-server) - MCP server
+- [`mcp-execution-core`](../mcp-execution-core) - Foundation types
+- [`mcp-execution-introspector`](../mcp-execution-introspector) - MCP server analysis
+- [`mcp-execution-codegen`](../mcp-execution-codegen) - TypeScript code generation
+- [`mcp-execution-files`](../mcp-execution-files) - Virtual filesystem
+- [`mcp-execution-skill`](../mcp-execution-skill) - Skill generation
+- [`mcp-execution-server`](../mcp-execution-server) - MCP server
 
 ## MSRV Policy
 

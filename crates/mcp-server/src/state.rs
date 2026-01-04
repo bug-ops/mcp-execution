@@ -18,10 +18,10 @@ use uuid::Uuid;
 /// # Examples
 ///
 /// ```
-/// use mcp_server::state::StateManager;
-/// use mcp_server::types::PendingGeneration;
-/// use mcp_core::{ServerId, ServerConfig};
-/// use mcp_introspector::ServerInfo;
+/// use mcp_execution_server::state::StateManager;
+/// use mcp_execution_server::types::PendingGeneration;
+/// use mcp_execution_core::{ServerId, ServerConfig};
+/// use mcp_execution_introspector::ServerInfo;
 /// use std::path::PathBuf;
 ///
 /// # async fn example() {
@@ -31,7 +31,7 @@ use uuid::Uuid;
 /// #     id: ServerId::new("test"),
 /// #     name: "Test".to_string(),
 /// #     version: "1.0.0".to_string(),
-/// #     capabilities: mcp_introspector::ServerCapabilities {
+/// #     capabilities: mcp_execution_introspector::ServerCapabilities {
 /// #         supports_tools: true,
 /// #         supports_resources: false,
 /// #         supports_prompts: false,
@@ -72,10 +72,10 @@ impl StateManager {
     /// # Examples
     ///
     /// ```
-    /// use mcp_server::state::StateManager;
-    /// # use mcp_server::types::PendingGeneration;
-    /// # use mcp_core::{ServerId, ServerConfig};
-    /// # use mcp_introspector::ServerInfo;
+    /// use mcp_execution_server::state::StateManager;
+    /// # use mcp_execution_server::types::PendingGeneration;
+    /// # use mcp_execution_core::{ServerId, ServerConfig};
+    /// # use mcp_execution_introspector::ServerInfo;
     /// # use std::path::PathBuf;
     ///
     /// # async fn example(pending: PendingGeneration) {
@@ -102,10 +102,10 @@ impl StateManager {
     /// # Examples
     ///
     /// ```
-    /// use mcp_server::state::StateManager;
-    /// # use mcp_server::types::PendingGeneration;
-    /// # use mcp_core::{ServerId, ServerConfig};
-    /// # use mcp_introspector::ServerInfo;
+    /// use mcp_execution_server::state::StateManager;
+    /// # use mcp_execution_server::types::PendingGeneration;
+    /// # use mcp_execution_core::{ServerId, ServerConfig};
+    /// # use mcp_execution_introspector::ServerInfo;
     /// # use std::path::PathBuf;
     ///
     /// # async fn example(pending: PendingGeneration) {
@@ -145,10 +145,10 @@ impl StateManager {
     /// # Examples
     ///
     /// ```
-    /// use mcp_server::state::StateManager;
-    /// # use mcp_server::types::PendingGeneration;
-    /// # use mcp_core::{ServerId, ServerConfig};
-    /// # use mcp_introspector::ServerInfo;
+    /// use mcp_execution_server::state::StateManager;
+    /// # use mcp_execution_server::types::PendingGeneration;
+    /// # use mcp_execution_core::{ServerId, ServerConfig};
+    /// # use mcp_execution_introspector::ServerInfo;
     /// # use std::path::PathBuf;
     ///
     /// # async fn example(pending: PendingGeneration) {
@@ -177,7 +177,7 @@ impl StateManager {
     /// # Examples
     ///
     /// ```
-    /// use mcp_server::state::StateManager;
+    /// use mcp_execution_server::state::StateManager;
     ///
     /// # async fn example() {
     /// let state = StateManager::new();
@@ -196,7 +196,7 @@ impl StateManager {
     /// # Examples
     ///
     /// ```
-    /// use mcp_server::state::StateManager;
+    /// use mcp_execution_server::state::StateManager;
     ///
     /// # async fn example() {
     /// let state = StateManager::new();
@@ -217,12 +217,12 @@ mod tests {
     use super::*;
     use crate::types::PendingGeneration;
     use chrono::{Duration, Utc};
-    use mcp_core::{ServerConfig, ServerId, ToolName};
-    use mcp_introspector::ServerInfo;
+    use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+    use mcp_execution_introspector::ServerInfo;
     use std::path::PathBuf;
 
     fn create_test_pending() -> PendingGeneration {
-        use mcp_introspector::{ServerCapabilities, ToolInfo};
+        use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
         let server_id = ServerId::new("test");
         let server_info = ServerInfo {

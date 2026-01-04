@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_files::FilesBuilder;
+//! use mcp_execution_files::FilesBuilder;
 //!
 //! let vfs = FilesBuilder::new()
 //!     .add_file("/mcp-tools/manifest.json", "{}")
@@ -19,7 +19,7 @@
 
 use crate::filesystem::FileSystem;
 use crate::types::{FilesError, Result};
-use mcp_codegen::GeneratedCode;
+use mcp_execution_codegen::GeneratedCode;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 /// ## Building from scratch
 ///
 /// ```
-/// use mcp_files::FilesBuilder;
+/// use mcp_execution_files::FilesBuilder;
 ///
 /// let vfs = FilesBuilder::new()
 ///     .add_file("/test.ts", "console.log('test');")
@@ -42,14 +42,14 @@ use std::path::{Path, PathBuf};
 ///     .unwrap();
 ///
 /// assert!(vfs.exists("/test.ts"));
-/// # Ok::<(), mcp_files::FilesError>(())
+/// # Ok::<(), mcp_execution_files::FilesError>(())
 /// ```
 ///
 /// ## Building from generated code
 ///
 /// ```
-/// use mcp_files::FilesBuilder;
-/// use mcp_codegen::{GeneratedCode, GeneratedFile};
+/// use mcp_execution_files::FilesBuilder;
+/// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 ///
 /// let mut code = GeneratedCode::new();
 /// code.add_file(GeneratedFile {
@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 ///     .unwrap();
 ///
 /// assert!(vfs.exists("/mcp-tools/servers/test/manifest.json"));
-/// # Ok::<(), mcp_files::FilesError>(())
+/// # Ok::<(), mcp_execution_files::FilesError>(())
 /// ```
 #[derive(Debug, Default)]
 pub struct FilesBuilder {
@@ -76,7 +76,7 @@ impl FilesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     ///
     /// let builder = FilesBuilder::new();
     /// let vfs = builder.build().unwrap();
@@ -99,8 +99,8 @@ impl FilesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
-    /// use mcp_codegen::{GeneratedCode, GeneratedFile};
+    /// use mcp_execution_files::FilesBuilder;
+    /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
     ///
     /// let mut code = GeneratedCode::new();
     /// code.add_file(GeneratedFile {
@@ -113,7 +113,7 @@ impl FilesBuilder {
     ///     .unwrap();
     ///
     /// assert!(vfs.exists("/mcp-tools/servers/test/types.ts"));
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn from_generated_code(code: GeneratedCode, base_path: impl AsRef<Path>) -> Self {
@@ -145,7 +145,7 @@ impl FilesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     ///
     /// let vfs = FilesBuilder::new()
     ///     .add_file("/test.ts", "export const x = 1;")
@@ -153,7 +153,7 @@ impl FilesBuilder {
     ///     .unwrap();
     ///
     /// assert_eq!(vfs.read_file("/test.ts").unwrap(), "export const x = 1;");
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn add_file(mut self, path: impl AsRef<Path>, content: impl Into<String>) -> Self {
@@ -170,7 +170,7 @@ impl FilesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     ///
     /// let files = vec![
     ///     ("/file1.ts", "content1"),
@@ -183,7 +183,7 @@ impl FilesBuilder {
     ///     .unwrap();
     ///
     /// assert_eq!(vfs.file_count(), 2);
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     #[must_use]
     pub fn add_files<P, C>(mut self, files: impl IntoIterator<Item = (P, C)>) -> Self
@@ -220,14 +220,14 @@ impl FilesBuilder {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     ///
     /// let vfs = FilesBuilder::new()
     ///     .add_file("/github/createIssue.ts", "export function createIssue() {}")
     ///     .build_and_export("~/.claude/servers/")?;
     ///
     /// // Files are now at: ~/.claude/servers/github/createIssue.ts
-    /// # Ok::<(), mcp_files::FilesError>(())
+    /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
     pub fn build_and_export(self, base_path: impl AsRef<Path>) -> Result<FileSystem> {
         // First, build the VFS to check for errors
@@ -254,7 +254,7 @@ impl FilesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     ///
     /// let vfs = FilesBuilder::new()
     ///     .add_file("/test.ts", "content")
@@ -265,7 +265,7 @@ impl FilesBuilder {
     /// ```
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     ///
     /// let result = FilesBuilder::new()
     ///     .add_file("invalid/relative/path", "content")
@@ -287,7 +287,7 @@ impl FilesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use mcp_files::FilesBuilder;
+    /// use mcp_execution_files::FilesBuilder;
     ///
     /// let mut builder = FilesBuilder::new();
     /// assert_eq!(builder.file_count(), 0);
@@ -388,7 +388,7 @@ fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_codegen::GeneratedFile;
+    use mcp_execution_codegen::GeneratedFile;
     use std::fs;
     use tempfile::TempDir;
 

@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_codegen::template_engine::TemplateEngine;
+//! use mcp_execution_codegen::template_engine::TemplateEngine;
 //! use serde_json::json;
 //!
 //! let engine = TemplateEngine::new().unwrap();
@@ -15,7 +15,7 @@
 //! ```
 
 use handlebars::Handlebars;
-use mcp_core::{Error, Result};
+use mcp_execution_core::{Error, Result};
 use serde::Serialize;
 
 /// Template engine for code generation.
@@ -45,7 +45,7 @@ impl<'a> TemplateEngine<'a> {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::template_engine::TemplateEngine;
+    /// use mcp_execution_codegen::template_engine::TemplateEngine;
     ///
     /// let engine = TemplateEngine::new().unwrap();
     /// ```
@@ -114,7 +114,7 @@ impl<'a> TemplateEngine<'a> {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_codegen::template_engine::TemplateEngine;
+    /// use mcp_execution_codegen::template_engine::TemplateEngine;
     /// use serde_json::json;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -144,7 +144,7 @@ impl<'a> TemplateEngine<'a> {
     /// # Examples
     ///
     /// ```
-    /// use mcp_codegen::template_engine::TemplateEngine;
+    /// use mcp_execution_codegen::template_engine::TemplateEngine;
     ///
     /// let mut engine = TemplateEngine::new().unwrap();
     /// engine.register_template_string(

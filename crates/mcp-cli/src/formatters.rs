@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use mcp_core::cli::OutputFormat;
+use mcp_execution_core::cli::OutputFormat;
 use serde::Serialize;
 
 /// Format data according to the specified output format.
@@ -22,7 +22,7 @@ use serde::Serialize;
 ///
 /// ```
 /// use mcp_execution_cli::formatters::format_output;
-/// use mcp_core::cli::OutputFormat;
+/// use mcp_execution_core::cli::OutputFormat;
 /// use serde::Serialize;
 ///
 /// #[derive(Serialize)]
