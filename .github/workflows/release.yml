@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      actions: write  # For uploading artifacts
+      actions: write # For uploading artifacts
     strategy:
       fail-fast: false
       matrix:
@@ -163,7 +163,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for trusted publishing (OIDC)
+      id-token: write # Required for trusted publishing (OIDC)
       contents: read
     steps:
       - uses: actions/checkout@v6
@@ -199,4 +199,4 @@ jobs:
         with:
           registry-token: ${{ steps.crates-io-auth.outputs.token }}
           ignore-unpublished-changes: true
-          publish-delay: 30000
+          publish-delay: 5000

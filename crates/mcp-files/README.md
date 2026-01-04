@@ -129,8 +129,8 @@ fs.export_to_disk(Path::new("~/.claude/servers"), &options)?;
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-execution-core`](../mcp-execution-core) - Foundation types used by this crate
-- [`mcp-execution-codegen`](../mcp-execution-codegen) - Generates code that this crate organizes
+- [`mcp-execution-core`](../mcp-core) - Foundation types used by this crate
+- [`mcp-execution-codegen`](../mcp-codegen) - Generates code that this crate organizes
 
 ## MSRV Policy
 

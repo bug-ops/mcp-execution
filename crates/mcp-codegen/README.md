@@ -122,9 +122,9 @@ JSON Schema types are converted to TypeScript:
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-execution-core`](../mcp-execution-core) - Foundation types
-- [`mcp-execution-introspector`](../mcp-execution-introspector) - MCP server analysis
-- [`mcp-execution-files`](../mcp-execution-files) - Virtual filesystem for output
+- [`mcp-execution-core`](../mcp-core) - Foundation types
+- [`mcp-execution-introspector`](../mcp-introspector) - MCP server analysis
+- [`mcp-execution-files`](../mcp-files) - Virtual filesystem for output
 
 ## MSRV Policy
 

@@ -1,7 +1,8 @@
 # MCP Code Execution
 
+[![Crates.io](https://img.shields.io/crates/v/mcp-execution-cli.svg)](https://crates.io/crates/mcp-execution-cli)
+[![docs.rs](https://img.shields.io/docsrs/mcp-execution-core)](https://docs.rs/mcp-execution-core)
 [![CI](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/bug-ops/mcp-execution/branch/master/graph/badge.svg)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://blog.rust-lang.org/2025/01/23/Rust-1.89.0.html)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE.md)
 
@@ -22,7 +23,14 @@ Progressive loading generates one TypeScript file per tool (~500-1,500 tokens ea
 
 ## Installation
 
-### Pre-built binaries
+### From crates.io (recommended)
+
+```bash
+cargo install mcp-execution-cli
+```
+
+<details>
+<summary><h3>Pre-built binaries</h3></summary>
 
 Download from [GitHub Releases](https://github.com/bug-ops/mcp-execution/releases/latest):
 
@@ -35,9 +43,18 @@ curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-ex
 
 # Linux (x86_64)
 curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-execution-cli-linux-amd64.tar.gz | tar xz
+
+# Linux (ARM64)
+curl -L https://github.com/bug-ops/mcp-execution/releases/latest/download/mcp-execution-cli-linux-arm64.tar.gz | tar xz
+
+# Windows (x86_64)
+# Download mcp-execution-cli-windows-amd64.zip from releases page
 ```
 
-### From source
+</details>
+
+<details>
+<summary><h3>From source</h3></summary>
 
 ```bash
 git clone https://github.com/bug-ops/mcp-execution
@@ -45,8 +62,34 @@ cd mcp-execution
 cargo install --path crates/mcp-cli
 ```
 
+</details>
+
+<details>
+<summary><h3>As a library</h3></summary>
+
+Add individual crates to your project:
+
+```bash
+cargo add mcp-execution-core          # Foundation types
+cargo add mcp-execution-introspector  # MCP server analysis
+cargo add mcp-execution-codegen       # TypeScript generation
+cargo add mcp-execution-files         # Virtual filesystem
+cargo add mcp-execution-skill         # SKILL.md generation
+```
+
+Or add to `Cargo.toml`:
+
+```toml
+[dependencies]
+mcp-execution-core = "0.6"
+mcp-execution-introspector = "0.6"
+mcp-execution-codegen = "0.6"
+```
+
+</details>
+
 > [!IMPORTANT]
-> Requires Rust 1.89 or later.
+> Requires Rust 1.89 or later for building from source.
 
 ## Usage
 

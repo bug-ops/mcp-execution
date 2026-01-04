@@ -124,8 +124,8 @@ let config = ServerConfig::builder()
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-execution-core`](../mcp-execution-core) - Foundation types (`ServerId`, `ServerConfig`)
-- [`mcp-execution-codegen`](../mcp-execution-codegen) - Uses introspection results for code generation
+- [`mcp-execution-core`](../mcp-core) - Foundation types (`ServerId`, `ServerConfig`)
+- [`mcp-execution-codegen`](../mcp-codegen) - Uses introspection results for code generation
 - [`rmcp`](https://docs.rs/rmcp) - Official Rust MCP SDK
 
 ## MSRV Policy

@@ -246,12 +246,12 @@ mcp-execution-cli completions <SHELL>
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-execution-core`](../mcp-execution-core) - Foundation types
-- [`mcp-execution-introspector`](../mcp-execution-introspector) - MCP server analysis
-- [`mcp-execution-codegen`](../mcp-execution-codegen) - TypeScript code generation
-- [`mcp-execution-files`](../mcp-execution-files) - Virtual filesystem
-- [`mcp-execution-skill`](../mcp-execution-skill) - Skill generation
-- [`mcp-execution-server`](../mcp-execution-server) - MCP server
+- [`mcp-execution-core`](../mcp-core) - Foundation types
+- [`mcp-execution-introspector`](../mcp-introspector) - MCP server analysis
+- [`mcp-execution-codegen`](../mcp-codegen) - TypeScript code generation
+- [`mcp-execution-files`](../mcp-files) - Virtual filesystem
+- [`mcp-execution-skill`](../mcp-skill) - Skill generation
+- [`mcp-execution-server`](../mcp-server) - MCP server
 
 ## MSRV Policy
 

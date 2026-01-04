@@ -131,11 +131,12 @@ introspect_server → Claude categorizes → save_categorized_tools → TypeScri
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
 
-- [`mcp-execution-core`](../mcp-execution-core) - Foundation types and traits
-- [`mcp-execution-introspector`](../mcp-execution-introspector) - MCP server analysis
-- [`mcp-execution-codegen`](../mcp-execution-codegen) - TypeScript code generation
-- [`mcp-execution-files`](../mcp-execution-files) - Virtual filesystem
-- [`mcp-cli`](../mcp-cli) - Command-line interface
+- [`mcp-execution-core`](../mcp-core) - Foundation types and traits
+- [`mcp-execution-introspector`](../mcp-introspector) - MCP server analysis
+- [`mcp-execution-codegen`](../mcp-codegen) - TypeScript code generation
+- [`mcp-execution-files`](../mcp-files) - Virtual filesystem
+- [`mcp-execution-skill`](../mcp-skill) - SKILL.md generation
+- [`mcp-execution-cli`](../mcp-cli) - Command-line interface
 
 ## MSRV Policy
 
