@@ -167,7 +167,7 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
           verbose: true
-          flags: unittests
+          flags: mcp-core,mcp-introspector,mcp-codegen,mcp-files,mcp-skill,mcp-server,mcp-cli
           name: codecov-umbrella
 
       - name: Archive coverage report

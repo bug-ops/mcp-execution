@@ -1,7 +1,5 @@
-codecov:
-  require_ci_to_pass: true
-  notify:
-    wait_for_ci: true
+# Codecov configuration
+# https://docs.codecov.com/docs/codecovyml-reference
 
 coverage:
   precision: 2
@@ -10,28 +8,45 @@ coverage:
   status:
     project:
       default:
-        target: 80%
-        threshold: 2%
-        informational: false
+        target: auto
+        threshold: 1%
     patch:
       default:
-        target: 80%
-        threshold: 5%
-        informational: false
+        target: auto
+        threshold: 1%
+
+# Define flags for per-crate coverage
+flags:
+  mcp-core:
+    paths:
+      - crates/mcp-core/
+    carryforward: true
+  mcp-introspector:
+    paths:
+      - crates/mcp-introspector/
+    carryforward: true
+  mcp-codegen:
+    paths:
+      - crates/mcp-codegen/
+    carryforward: true
+  mcp-files:
+    paths:
+      - crates/mcp-files/
+    carryforward: true
+  mcp-skill:
+    paths:
+      - crates/mcp-skill/
+    carryforward: true
+  mcp-server:
+    paths:
+      - crates/mcp-server/
+    carryforward: true
+  mcp-cli:
+    paths:
+      - crates/mcp-cli/
+    carryforward: true
 
 comment:
-  layout: "reach,diff,flags,tree,footer"
+  layout: "reach,diff,flags,files"
   behavior: default
-  require_changes: false
-  require_base: false
-  require_head: true
-
-ignore:
-  - "tests/"
-  - "benches/"
-  - "examples/"
-  - "crates/*/tests/"
-  - "crates/*/benches/"
-  - "crates/*/examples/"
-  - "crates/mcp-cli/"
-  - "crates/mcp-examples/"
+  require_changes: true

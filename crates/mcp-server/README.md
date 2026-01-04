@@ -2,6 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/mcp-execution-server.svg)](https://crates.io/crates/mcp-execution-server)
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-server)](https://docs.rs/mcp-execution-server)
+[![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN&flag=mcp-server)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
