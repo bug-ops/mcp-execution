@@ -32,7 +32,7 @@ mcp-execution-server = { path = "crates/mcp-server", version = "0.6.4" }
 mcp-execution-skill = { path = "crates/mcp-skill", version = "0.6.4" }
 rayon = "1.11"
 regex = "1.12"
-rmcp = "0.13"
+rmcp = "0.14"
 schemars = "1.2"
 serde = "1.0"
 serde_json = "1.0"
