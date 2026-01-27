@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-cli"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-codegen"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "criterion",
  "handlebars",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-files"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "criterion",
  "dhat",
@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-introspector"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "criterion",
  "mcp-execution-core",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-server"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1025,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-skill"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "dirs",
  "handlebars",

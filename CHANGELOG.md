@@ -9,6 +9,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.5] - 2026-01-27
+
+### Summary
+
+**Dependency Updates & CI Improvements**
+
+This patch release updates core dependencies and improves CI automation with dependabot automerge workflow.
+
+**Key Changes**:
+- Updated rmcp to 0.14.0 (latest official MCP SDK)
+- Updated uuid to 1.20.0
+- Upgraded Cargo resolver to version 3
+- Added dependabot automerge workflow
+- Added codecov badges with per-crate coverage flags
+
+### Changed
+
+- **Dependencies**: Updated to latest stable versions
+  - `rmcp`: 0.12.0 → 0.14.0 (official Rust MCP SDK)
+  - `uuid`: 1.19.0 → 1.20.0
+  - `cc`: 1.2.52 → 1.2.54
+  - `clap_lex`: 0.7.6 → 0.7.7
+  - `find-msvc-tools`: 0.1.7 → 0.1.8
+  - `js-sys`: 0.3.83 → 0.3.85
+  - `proc-macro2`: 1.0.105 → 1.0.106
+  - `process-wrap`: 9.0.0 → 9.0.1
+  - `quote`: 1.0.43 → 1.0.44
+  - `rand_core`: 0.9.3 → 0.9.5
+  - `rustc-demangle`: 0.1.26 → 0.1.27
+  - `wasm-bindgen`: 0.2.106 → 0.2.108
+  - `web-sys`: 0.3.83 → 0.3.85
+  - `windows`: 0.61.3 → 0.62.2
+  - Multiple other transitive dependency updates
+
+- **Cargo resolver**: Upgraded to version 3 (Rust 2024 edition)
+  - Better dependency resolution
+  - Improved build times
+
+### Added
+
+- **CI/CD**: Dependabot automerge workflow (`.github/workflows/dependabot-automerge.yml`)
+  - Automatically merges minor and patch dependency updates
+  - Reduces manual PR review overhead
+  - Ensures dependencies stay up-to-date
+
+- **Documentation**: Added codecov badges with per-crate coverage flags
+  - Individual coverage tracking for each workspace crate
+  - Better visibility into test coverage
+
+### Dependencies
+
+Complete dependency update list:
+- Core: `rmcp` 0.12.0 → 0.14.0, `uuid` 1.19.0 → 1.20.0
+- Build: `cc`, `find-msvc-tools`, `rustc-demangle` (minor updates)
+- WASM: `wasm-bindgen`, `js-sys`, `web-sys`, `wasip2` (minor updates)
+- Windows: `windows` 0.61.3 → 0.62.2 and related crates
+- Other: Multiple transitive dependency updates for security and performance
+
+---
+
 ## [0.6.4] - 2026-01-04
 
 ### Summary
@@ -1035,12 +1095,13 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2026-01-04
-**Version**: 0.6.4 (Production Ready)
+**Last Updated**: 2026-01-27
+**Version**: 0.6.5 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/bug-ops/mcp-execution/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/bug-ops/mcp-execution/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/bug-ops/mcp-execution/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/bug-ops/mcp-execution/compare/v0.6.1...v0.6.2
