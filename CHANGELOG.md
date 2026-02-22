@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.6] - 2026-02-22
+
+### Summary
+
+**Dependency Updates**
+
+This patch release updates core dependencies to latest stable versions.
+
+### Changed
+
+- **Dependencies**: Updated to latest stable versions
+  - `rmcp`: 0.14.0 → 0.16.0 (official Rust MCP SDK)
+  - `toml`: 0.9 → 1.0
+  - `uuid`: 1.20.0 → 1.21.0
+  - Multiple transitive dependency updates (anyhow, bitflags, bumpalo, bytes, cc)
+
+---
+
 ## [0.6.5] - 2026-01-27
 
 ### Summary
@@ -1095,12 +1113,13 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2026-01-27
-**Version**: 0.6.5 (Production Ready)
+**Last Updated**: 2026-02-22
+**Version**: 0.6.6 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/bug-ops/mcp-execution/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/bug-ops/mcp-execution/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/bug-ops/mcp-execution/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/bug-ops/mcp-execution/compare/v0.6.2...v0.6.3
