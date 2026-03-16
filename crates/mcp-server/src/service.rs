@@ -517,17 +517,17 @@ impl GeneratorService {
 #[tool_handler]
 impl ServerHandler for GeneratorService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2025_06_18,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "Generate progressive loading TypeScript files for MCP servers. \
-                 Use introspect_server to discover tools, then save_categorized_tools \
-                 with your categorization."
-                    .to_string(),
-            ),
-        }
+        let mut info = ServerInfo::default();
+        info.protocol_version = ProtocolVersion::V_2025_06_18;
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info.server_info = Implementation::from_build_env();
+        info.instructions = Some(
+            "Generate progressive loading TypeScript files for MCP servers. \
+             Use introspect_server to discover tools, then save_categorized_tools \
+             with your categorization."
+                .to_string(),
+        );
+        info
     }
 }
 
