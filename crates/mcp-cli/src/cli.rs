@@ -291,6 +291,10 @@ pub enum Commands {
         /// (default: ~/.claude/servers/)
         #[arg(long)]
         progressive_output: Option<PathBuf>,
+
+        /// Preview files that would be generated without writing to disk
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Manage MCP server connections.
@@ -412,6 +416,26 @@ mod tests {
         } = cli.command
         {
             assert_eq!(progressive_output, Some(PathBuf::from("/tmp/output")));
+        } else {
+            panic!("Expected Generate command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_dry_run() {
+        let cli = Cli::parse_from(["mcp-cli", "generate", "server", "--dry-run"]);
+        if let Commands::Generate { dry_run, .. } = cli.command {
+            assert!(dry_run);
+        } else {
+            panic!("Expected Generate command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_dry_run_default_false() {
+        let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
+        if let Commands::Generate { dry_run, .. } = cli.command {
+            assert!(!dry_run);
         } else {
             panic!("Expected Generate command");
         }

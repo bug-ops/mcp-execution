@@ -95,6 +95,7 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
             server_headers,
             name,
             progressive_output,
+            dry_run,
         } => {
             commands::generate::run(
                 from_config,
@@ -107,6 +108,7 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
                 server_headers,
                 name,
                 progressive_output,
+                dry_run,
                 output_format,
             )
             .await

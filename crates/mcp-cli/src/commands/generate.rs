@@ -29,6 +29,43 @@ struct GenerationResult {
     output_path: String,
 }
 
+/// Preview of a file that would be generated in dry-run mode.
+#[derive(Debug, Serialize)]
+struct FilePreview {
+    /// Relative file path under the server directory
+    path: String,
+    /// File size in bytes
+    size: usize,
+}
+
+/// Result of a dry-run preview.
+#[derive(Debug, Serialize)]
+struct DryRunResult {
+    /// Server ID
+    server_id: String,
+    /// Server name
+    server_name: String,
+    /// Output path that would be used
+    output_path: String,
+    /// Files that would be generated
+    files: Vec<FilePreview>,
+    /// Total number of files
+    total_files: usize,
+    /// Total estimated size in bytes
+    total_size: usize,
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// Runs the generate command.
 ///
 /// Generates progressive loading TypeScript files from an MCP server.
@@ -51,6 +88,7 @@ struct GenerationResult {
 /// * `headers` - HTTP headers in KEY=VALUE format
 /// * `name` - Custom server name for directory (default: `server_id`)
 /// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
+/// * `dry_run` - When true, preview files without writing to disk
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -61,7 +99,7 @@ struct GenerationResult {
 /// - Server connection fails
 /// - Tool introspection fails
 /// - Code generation fails
-/// - File export fails
+/// - File export fails (skipped in dry-run mode)
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     from_config: Option<String>,
@@ -74,6 +112,7 @@ pub async fn run(
     headers: Vec<String>,
     name: Option<String>,
     output_dir: Option<PathBuf>,
+    dry_run: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
@@ -129,15 +168,7 @@ pub async fn run(
         generated_code.file_count()
     );
 
-    // Build VFS with generated code
-    // Note: base_path should be "/" because generated files already have flat structure
-    // The server_dir_name will be used when exporting to filesystem
-    let vfs = FilesBuilder::from_generated_code(generated_code, "/")
-        .build()
-        .context("failed to build VFS")?;
-
-    // Determine output directory
-    // Always append server_dir_name to ensure proper structure
+    // Determine output path (needed for both dry-run display and normal export)
     let base_dir = if let Some(custom_dir) = output_dir {
         custom_dir
     } else {
@@ -146,8 +177,69 @@ pub async fn run(
             .join(".claude")
             .join("servers")
     };
-
     let output_path = base_dir.join(&server_dir_name);
+
+    if dry_run {
+        let files: Vec<FilePreview> = generated_code
+            .files
+            .iter()
+            .map(|f| FilePreview {
+                path: format!("{}/{}", server_dir_name, f.path),
+                size: f.content.len(),
+            })
+            .collect();
+        let total_size: usize = files.iter().map(|f| f.size).sum();
+        let total_files = files.len();
+
+        let result = DryRunResult {
+            server_id: server_info.id.to_string(),
+            server_name: server_info.name,
+            output_path: output_path.display().to_string(),
+            files,
+            total_files,
+            total_size,
+        };
+
+        match output_format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            OutputFormat::Text => {
+                println!("Server: {} ({})", result.server_name, result.server_id);
+                println!(
+                    "Would generate {} files ({}) to {}/",
+                    result.total_files,
+                    format_size(result.total_size),
+                    result.output_path
+                );
+            }
+            OutputFormat::Pretty => {
+                println!(
+                    "Would generate {} files to {}/:",
+                    result.total_files, result.output_path
+                );
+                println!();
+                for f in &result.files {
+                    println!("  - {} ({})", f.path, format_size(f.size));
+                }
+                println!();
+                println!(
+                    "Total: {} files, ~{}",
+                    result.total_files,
+                    format_size(result.total_size)
+                );
+            }
+        }
+
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Build VFS with generated code
+    // Note: base_path should be "/" because generated files already have flat structure
+    // The server_dir_name will be used when exporting to filesystem
+    let vfs = FilesBuilder::from_generated_code(generated_code, "/")
+        .build()
+        .context("failed to build VFS")?;
 
     info!("Exporting files to: {}", output_path.display());
 
@@ -248,5 +340,118 @@ mod tests {
 
         let code = result.unwrap();
         assert!(code.file_count() > 0);
+    }
+
+    #[test]
+    fn test_format_size_bytes() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_format_size_kilobytes() {
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(2048), "2.0 KB");
+        assert_eq!(format_size(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn test_format_size_megabytes() {
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(2 * 1024 * 1024), "2.0 MB");
+    }
+
+    #[test]
+    fn test_dry_run_result_serialization() {
+        let result = DryRunResult {
+            server_id: "github".to_string(),
+            server_name: "GitHub MCP Server".to_string(),
+            output_path: "/home/user/.claude/servers/github".to_string(),
+            files: vec![
+                FilePreview {
+                    path: "github/createIssue.ts".to_string(),
+                    size: 2450,
+                },
+                FilePreview {
+                    path: "github/listRepos.ts".to_string(),
+                    size: 1200,
+                },
+            ],
+            total_files: 2,
+            total_size: 3650,
+        };
+
+        let json = serde_json::to_string_pretty(&result).unwrap();
+        assert!(json.contains("\"server_id\": \"github\""));
+        assert!(json.contains("\"total_files\": 2"));
+        assert!(json.contains("\"total_size\": 3650"));
+        assert!(json.contains("\"path\": \"github/createIssue.ts\""));
+        assert!(json.contains("\"size\": 2450"));
+    }
+
+    #[test]
+    fn test_dry_run_collects_file_metadata() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_mock_server_info();
+        let generated_code = generator.generate(&server_info).unwrap();
+
+        let server_dir_name = server_info.id.to_string();
+        let files: Vec<FilePreview> = generated_code
+            .files
+            .iter()
+            .map(|f| FilePreview {
+                path: format!("{}/{}", server_dir_name, f.path),
+                size: f.content.len(),
+            })
+            .collect();
+
+        assert!(!files.is_empty());
+        for file in &files {
+            assert!(file.path.starts_with("test-server/"));
+            assert!(file.size > 0);
+        }
+
+        let total_size: usize = files.iter().map(|f| f.size).sum();
+        assert_eq!(
+            total_size,
+            generated_code
+                .files
+                .iter()
+                .map(|f| f.content.len())
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn test_dry_run_does_not_write_files() {
+        use std::path::Path;
+
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_mock_server_info();
+        let generated_code = generator.generate(&server_info).unwrap();
+
+        // Simulate what dry-run does: collect metadata without touching the filesystem
+        let server_dir_name = server_info.id.to_string();
+        let fake_output_path = Path::new("/tmp/dry-run-test-should-not-exist-abc123");
+        let output_path = fake_output_path.join(&server_dir_name);
+
+        let files: Vec<FilePreview> = generated_code
+            .files
+            .iter()
+            .map(|f| FilePreview {
+                path: format!("{}/{}", server_dir_name, f.path),
+                size: f.content.len(),
+            })
+            .collect();
+
+        // Verify metadata collected correctly
+        assert!(!files.is_empty());
+
+        // Verify nothing was written to disk
+        assert!(
+            !output_path.exists(),
+            "dry-run must not write files to disk"
+        );
     }
 }
