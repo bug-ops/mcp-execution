@@ -115,7 +115,6 @@ pub async fn run(
     dry_run: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    // Build server config: either from mcp.json or from CLI arguments
     let (server_id, server_config) = if let Some(config_name) = from_config {
         debug!(
             "Loading server configuration from ~/.claude/mcp.json: {}",
@@ -128,7 +127,6 @@ pub async fn run(
 
     info!("Connecting to MCP server: {}", server_id);
 
-    // Introspect server
     let mut introspector = Introspector::new();
     let server_info = introspector
         .discover_server(server_id, &server_config)
@@ -153,12 +151,9 @@ pub async fn run(
         server_info.id = mcp_execution_core::ServerId::new(custom_name);
     }
 
-    // Determine server directory name (use custom name if provided, otherwise server_id)
     let server_dir_name = server_info.id.to_string();
 
-    // Generate progressive loading files
     let generator = ProgressiveGenerator::new().context("failed to create code generator")?;
-
     let generated_code = generator
         .generate(&server_info)
         .context("failed to generate TypeScript code")?;
@@ -168,7 +163,6 @@ pub async fn run(
         generated_code.file_count()
     );
 
-    // Determine output path (needed for both dry-run display and normal export)
     let base_dir = if let Some(custom_dir) = output_dir {
         custom_dir
     } else {
@@ -234,23 +228,18 @@ pub async fn run(
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Build VFS with generated code
-    // Note: base_path should be "/" because generated files already have flat structure
-    // The server_dir_name will be used when exporting to filesystem
+    // Build VFS with base_path="/" since generated files already have flat structure;
+    // server_dir_name will be used when exporting to filesystem
     let vfs = FilesBuilder::from_generated_code(generated_code, "/")
         .build()
         .context("failed to build VFS")?;
 
     info!("Exporting files to: {}", output_path.display());
 
-    // Create output directory if it doesn't exist
     std::fs::create_dir_all(&output_path).context("failed to create output directory")?;
-
-    // Export VFS to filesystem
     vfs.export_to_filesystem(&output_path)
         .context("failed to export files to filesystem")?;
 
-    // Prepare result
     let result = GenerationResult {
         server_id: server_info.id.to_string(),
         server_name: server_info.name.clone(),
@@ -258,7 +247,6 @@ pub async fn run(
         output_path: output_path.display().to_string(),
     };
 
-    // Output result
     match output_format {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
