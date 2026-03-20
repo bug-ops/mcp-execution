@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--dry-run` flag for `generate` command**: Preview files that would be generated without writing to disk. Outputs file list with sizes and total size in all supported formats (pretty/text/json). Server connection still runs to produce accurate previews based on real tool definitions.
+
 ---
 
 ## [0.6.6] - 2026-02-22
