@@ -67,6 +67,7 @@ pub struct GeneratorService {
     introspector: Arc<Mutex<Introspector>>,
 
     /// Tool router for MCP protocol
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
@@ -307,17 +308,15 @@ impl GeneratorService {
                         let id = entry.file_name().to_string_lossy().to_string();
 
                         // Count .ts files (excluding _runtime and starting with _)
-                        let tool_count = std::fs::read_dir(entry.path())
-                            .map(|e| {
-                                e.flatten()
-                                    .filter(|f| {
-                                        let name = f.file_name();
-                                        let name = name.to_string_lossy();
-                                        name.ends_with(".ts") && !name.starts_with('_')
-                                    })
-                                    .count()
-                            })
-                            .unwrap_or(0);
+                        let tool_count = std::fs::read_dir(entry.path()).map_or(0, |e| {
+                            e.flatten()
+                                .filter(|f| {
+                                    let name = f.file_name();
+                                    let name = name.to_string_lossy();
+                                    name.ends_with(".ts") && !name.starts_with('_')
+                                })
+                                .count()
+                        });
 
                         // Get modification time
                         let generated_at = entry
