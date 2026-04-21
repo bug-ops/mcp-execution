@@ -631,7 +631,7 @@ fn write_file_atomic(path: &Path, content: &str, options: &ExportOptions) -> Res
 
     if options.atomic {
         // Atomic write: temp file + rename
-        let temp_path = path.with_extension("tmp");
+        let temp_path = path.with_added_extension("tmp");
 
         // Write to temp file
         let mut file = fs::File::create(&temp_path).map_err(|e| FilesError::InvalidPath {

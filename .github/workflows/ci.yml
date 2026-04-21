@@ -179,7 +179,7 @@ jobs:
 
   # MSRV check (Minimum Supported Rust Version)
   msrv:
-    name: Check MSRV (1.89)
+    name: Check MSRV (1.91)
     needs: [check]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -188,10 +188,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust 1.89
+      - name: Install Rust 1.91
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.89"
+          toolchain: "1.91"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
