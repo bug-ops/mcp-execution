@@ -370,7 +370,7 @@ fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<
     }
 
     // Atomic write: write to temp file, then rename
-    let temp_path = disk_path.with_extension("tmp");
+    let temp_path = disk_path.with_added_extension("tmp");
 
     fs::write(&temp_path, content).map_err(|e| FilesError::IoError {
         path: temp_path.display().to_string(),

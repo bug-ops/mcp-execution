@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-execution-cli.svg)](https://crates.io/crates/mcp-execution-cli)
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-cli)](https://docs.rs/mcp-execution-cli)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN&flag=mcp-cli)](https://codecov.io/gh/bug-ops/mcp-execution)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
+[![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
 Command-line interface for MCP Code Execution progressive loading. Achieves **98% token savings** by generating one TypeScript file per MCP tool.
@@ -40,7 +40,7 @@ cargo install --path crates/mcp-cli
 ```
 
 > [!IMPORTANT]
-> Requires Rust 1.89 or later for building from source.
+> Requires Rust 1.91 or later for building from source.
 
 ## Usage
 
@@ -256,7 +256,7 @@ This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-executi
 
 ## MSRV Policy
 
-Minimum Supported Rust Version: **1.89**
+Minimum Supported Rust Version: **1.91**
 
 MSRV increases are considered minor version bumps.
 

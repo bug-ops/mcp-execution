@@ -7,9 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.7.0] - 2026-04-21
+
 ### Added
 
 - **`--dry-run` flag for `generate` command**: Preview files that would be generated without writing to disk. Outputs file list with sizes and total size in all supported formats (pretty/text/json). Server connection still runs to produce accurate previews based on real tool definitions.
+
+### Fixed
+
+- **`mcp-execution-server`**: Replaced `.map(...).unwrap_or(0)` with `.map_or(0, ...)` on `Result` to satisfy `clippy::map_unwrap_or` (`pedantic` group). Suppressed `dead_code` warning on `tool_router` field, which is required by the `#[tool_router]` macro but not read directly.
+
+### Changed
+
+- **MSRV**: raised from 1.89 to 1.91
+- **`mcp-execution-files`**: replaced `Path::with_extension("tmp")` with `Path::with_added_extension("tmp")` for atomic writes — more precise semantics (appends suffix rather than replacing the last extension)
+- **Dependencies**: Updated to latest stable versions
+  - `rmcp`: 0.16.0 → 1.5.0 (official Rust MCP SDK — major version, stable API)
+  - `clap` / `clap_complete`: 4.5.x → 4.6.1
+  - `tokio`: 1.49.0 → 1.52.0
+  - `rayon`: 1.11 → 1.12
+  - `rand`: 0.10.0 → 0.10.1
+  - `toml`, `uuid`, `chrono`, `tracing-subscriber`, `which` (minor/patch updates)
+- **CI**: Updated `codecov/codecov-action` v5→v6, `lewagon/wait-on-check-action` 1.5→1.6.1, `actions/upload-artifact` v6→v7, `actions/download-artifact` v7→v8
+
+---
+
+## [0.6.7] - 2026-04-21
+
+### Added
+
+- **`--dry-run` flag for `generate` command**: Preview files that would be generated without writing to disk. Outputs file list with sizes and total size in all supported formats (pretty/text/json). Server connection still runs to produce accurate previews based on real tool definitions.
+
+### Fixed
+
+- **`mcp-execution-server`**: Replaced `.map(...).unwrap_or(0)` with `.map_or(0, ...)` on `Result` to satisfy `clippy::map_unwrap_or` (`pedantic` group). Suppressed `dead_code` warning on `tool_router` field, which is required by the `#[tool_router]` macro but not read directly.
+
+### Changed
+
+- **Dependencies**: Updated to latest stable versions
+  - `rmcp`: 0.16.0 → 1.4.0 (official Rust MCP SDK — major version, stable API)
+  - `clap` / `clap_complete`: 4.5.x → 4.6.1
+  - `tokio`: 1.49.0 → 1.50.0
+  - `rand`: 0.10.0 → 0.10.1
+  - `toml`, `uuid`, `chrono`, `tracing-subscriber`, `which` (minor/patch updates)
+- **CI**: Updated `codecov/codecov-action` from v5 to v6, `lewagon/wait-on-check-action` from 1.5.0 to 1.6.1, `actions/upload-artifact` from v6 to v7, `actions/download-artifact` from v7 to v8
 
 ---
 
@@ -1117,12 +1160,13 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2026-02-22
-**Version**: 0.6.6 (Production Ready)
+**Last Updated**: 2026-04-21
+**Version**: 0.7.0 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/bug-ops/mcp-execution/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/bug-ops/mcp-execution/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/bug-ops/mcp-execution/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/bug-ops/mcp-execution/compare/v0.6.3...v0.6.4

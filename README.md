@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-core)](https://docs.rs/mcp-execution-core)
 [![CI](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN)](https://codecov.io/gh/bug-ops/mcp-execution)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://blog.rust-lang.org/2025/01/23/Rust-1.89.0.html)
+[![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://blog.rust-lang.org/2025/01/23/Rust-1.91.0.html)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE.md)
 
 Transform any MCP server into executable, type-safe TypeScript tools using progressive loading pattern. Achieve **98% token savings** by loading only what you need.
@@ -82,15 +82,15 @@ Or add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-mcp-execution-core = "0.6"
-mcp-execution-introspector = "0.6"
-mcp-execution-codegen = "0.6"
+mcp-execution-core = "0.7"
+mcp-execution-introspector = "0.7"
+mcp-execution-codegen = "0.7"
 ```
 
 </details>
 
 > [!IMPORTANT]
-> Requires Rust 1.89 or later for building from source.
+> Requires Rust 1.91 or later for building from source.
 
 ## Usage
 
@@ -132,7 +132,7 @@ node ~/.claude/servers/github/createIssue.ts --repo="owner/repo" --title="Bug"
 | **Type-Safe** | Full TypeScript interfaces from MCP JSON schemas |
 | **Lightning Fast** | 526x faster than target (0.19ms for 10 tools) |
 | **100% MCP Compatible** | Works with all MCP servers via [rmcp SDK](https://docs.rs/rmcp) |
-| **Thoroughly Tested** | 556 tests with 100% pass rate |
+| **Thoroughly Tested** | 626 tests with 100% pass rate |
 
 ## Workspace Crates
 
@@ -165,7 +165,10 @@ See [mcp-cli README](crates/mcp-cli) for full reference.
 # Generate TypeScript tools from config (recommended)
 mcp-execution-cli generate --from-config github
 
-# Introspect MCP server from config (v0.6.3+)
+# Preview what would be generated without writing to disk
+mcp-execution-cli generate --from-config github --dry-run
+
+# Introspect MCP server from config
 mcp-execution-cli introspect --from-config github
 
 # Introspect with detailed schemas
@@ -210,7 +213,7 @@ cargo +nightly fmt --workspace # Format
 
 ## MSRV Policy
 
-Minimum Supported Rust Version: **1.89**
+Minimum Supported Rust Version: **1.91**
 
 MSRV increases are considered minor version bumps.
 
