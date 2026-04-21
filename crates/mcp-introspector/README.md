@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-execution-introspector.svg)](https://crates.io/crates/mcp-execution-introspector)
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-introspector)](https://docs.rs/mcp-execution-introspector)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN&flag=mcp-introspector)](https://codecov.io/gh/bug-ops/mcp-execution)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
+[![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
 MCP server introspection using the official [rmcp](https://docs.rs/rmcp) SDK.
@@ -12,7 +12,7 @@ MCP server introspection using the official [rmcp](https://docs.rs/rmcp) SDK.
 
 ```toml
 [dependencies]
-mcp-execution-introspector = "0.6"
+mcp-execution-introspector = "0.7"
 ```
 
 Or with cargo-add:
@@ -22,7 +22,7 @@ cargo add mcp-execution-introspector
 ```
 
 > [!IMPORTANT]
-> Requires Rust 1.89 or later.
+> Requires Rust 1.91 or later.
 
 ## Usage
 
@@ -131,7 +131,7 @@ This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-executi
 
 ## MSRV Policy
 
-Minimum Supported Rust Version: **1.89**
+Minimum Supported Rust Version: **1.91**
 
 MSRV increases are considered minor version bumps.
 

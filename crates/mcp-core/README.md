@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-execution-core.svg)](https://crates.io/crates/mcp-execution-core)
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-core)](https://docs.rs/mcp-execution-core)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN&flag=mcp-core)](https://codecov.io/gh/bug-ops/mcp-execution)
-[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://github.com/bug-ops/mcp-execution)
+[![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
 Foundation types, traits, and error handling for MCP Code Execution.
@@ -12,7 +12,7 @@ Foundation types, traits, and error handling for MCP Code Execution.
 
 ```toml
 [dependencies]
-mcp-execution-core = "0.6"
+mcp-execution-core = "0.7"
 ```
 
 Or with cargo-add:
@@ -22,7 +22,7 @@ cargo add mcp-execution-core
 ```
 
 > [!IMPORTANT]
-> Requires Rust 1.89 or later.
+> Requires Rust 1.91 or later.
 
 ## Usage
 
@@ -125,7 +125,7 @@ This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-executi
 
 ## MSRV Policy
 
-Minimum Supported Rust Version: **1.89**
+Minimum Supported Rust Version: **1.91**
 
 MSRV increases are considered minor version bumps.
 
