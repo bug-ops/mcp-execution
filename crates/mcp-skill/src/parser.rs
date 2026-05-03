@@ -45,8 +45,23 @@ static DESC_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"@description[ \t]+(.+)").expect("valid regex"));
 static INTERFACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"interface\s+\w+Params\s*\{([^}]*)\}").expect("valid regex"));
-static PROP_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\w+)(\?)?:\s*([^;]+);").expect("valid regex"));
+// TODO(review): INTERFACE_REGEX body truncation — nested-type bodies containing `}` are cut off
+// (e.g., `{ foo: string }` as a property type truncates the interface match early).
+// Suggested action: switch to a balanced-brace parser or accept multi-pass scanning.
+
+/// Anchored single-line property pattern.
+///
+/// Matches TypeScript interface properties like:
+/// - `name: string;`
+/// - `count?: number;`
+/// - `readonly id: string;`
+///
+/// The `^...$` anchors, combined with line-by-line iteration, prevent false
+/// positives from `JSDoc` comment lines such as `* Tags to include: foo, bar`.
+static PROP_LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:readonly\s+)?([A-Za-z_$][A-Za-z0-9_$]*)(\?)?\s*:\s*([^;]+?)\s*[;,]?\s*$")
+        .expect("valid regex")
+});
 
 // Regexes for SKILL.md frontmatter parsing
 static FRONTMATTER_REGEX: LazyLock<Regex> =
@@ -266,30 +281,69 @@ pub fn parse_tool_file(content: &str, filename: &str) -> Result<ParsedToolFile, 
 ///   body?: string;  // optional
 /// }
 /// ```
+///
+/// Each line is processed individually so that `JSDoc` comment lines (e.g.
+/// `* Tags to include: foo, bar`) are rejected before the regex runs.
+/// Trailing `// ...` inline comments are stripped from each property line
+/// before matching.
+///
+/// # Limitations
+///
+/// Multi-line property declarations (type wraps to the next line) are not
+/// supported — each property must fit on a single line.
+/// TODO(review): Add multi-line property support if generated TS ever wraps types.
 fn parse_parameters(content: &str) -> Vec<ParsedParameter> {
     let mut parameters = Vec::new();
 
-    // Find interface block (Params suffix) using pre-compiled regex
     if let Some(captures) = INTERFACE_REGEX.captures(content)
         && let Some(body) = captures.get(1)
     {
-        // Parse each property line using pre-compiled regex
-        for cap in PROP_REGEX.captures_iter(body.as_str()) {
-            let name = cap
-                .get(1)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
-            let optional = cap.get(2).is_some();
-            let typescript_type = cap
-                .get(3)
-                .map_or_else(|| "unknown".to_string(), |m| m.as_str().trim().to_string());
+        for raw in body.as_str().lines() {
+            let line = raw.trim_start();
 
-            parameters.push(ParsedParameter {
-                name,
-                typescript_type,
-                required: !optional,
-                description: None,
-            });
+            // Skip blank lines and comment lines before applying the regex.
+            if line.is_empty()
+                || line.starts_with("//")
+                || line.starts_with("/*")
+                || line.starts_with('*')
+            {
+                continue;
+            }
+
+            // Bound comment search before the first string delimiter so that
+            // `//` or `/*` inside a string-literal type (e.g. `"https://x"`)
+            // does not falsely truncate the property line (S2).
+            let comment_search_end = line
+                .find('"')
+                .or_else(|| line.find('\''))
+                .unwrap_or(line.len());
+            let search_region = &line[..comment_search_end];
+
+            // Find the earliest `//` or `/*` comment marker within the safe region,
+            // then strip everything from that position to end-of-line (S1 + C1).
+            let comment_start = [search_region.find("//"), search_region.find("/*")]
+                .into_iter()
+                .flatten()
+                .min();
+            let line = comment_start.map_or(line, |i| line[..i].trim_end());
+
+            if let Some(cap) = PROP_LINE_REGEX.captures(line) {
+                let name = cap
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                let optional = cap.get(2).is_some();
+                let typescript_type = cap
+                    .get(3)
+                    .map_or_else(|| "unknown".to_string(), |m| m.as_str().trim().to_string());
+
+                parameters.push(ParsedParameter {
+                    name,
+                    typescript_type,
+                    required: !optional,
+                    description: None,
+                });
+            }
         }
     }
 
@@ -874,11 +928,100 @@ interface TestParams {
 ";
 
         let params = parse_parameters(content);
-        // Readonly modifier is not currently handled by the regex.
-        // This is a known limitation - the parser is lenient.
-        // If params is empty, readonly fields were not parsed (expected).
-        // If params has items, the regex matched something (acceptable).
-        let _ = params; // Acknowledge the result without asserting specific behavior
+        // PROP_LINE_REGEX handles `readonly` — both fields must be extracted.
+        assert_eq!(params.len(), 2);
+
+        let id = params.iter().find(|p| p.name == "id").unwrap();
+        assert!(id.required);
+        assert_eq!(id.typescript_type, "string");
+
+        let count = params.iter().find(|p| p.name == "count").unwrap();
+        assert!(!count.required);
+        assert_eq!(count.typescript_type, "number");
+    }
+
+    #[test]
+    fn test_parse_parameters_inline_block_comment_stripped() {
+        // S1 regression: inline `/* */` block comments must not drop the parameter.
+        let content = r"
+interface TestParams {
+  name: string; /* required */
+  count?: number; /* default: 5 */
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().any(|p| p.name == "name" && p.required));
+        assert!(params.iter().any(|p| p.name == "count" && !p.required));
+    }
+
+    #[test]
+    fn test_parse_parameters_url_type_not_stripped() {
+        // S2 regression: `//` inside a string-literal type must not truncate the line.
+        let content = r"
+interface TestParams {
+  url: string; // endpoint URL
+  mode: string;
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(params.len(), 2);
+        assert!(
+            params.iter().any(|p| p.name == "url"),
+            "url must not be dropped"
+        );
+        assert!(params.iter().any(|p| p.name == "mode"));
+    }
+
+    #[test]
+    fn test_parse_parameters_jsdoc_body_comments_not_extracted() {
+        // Regression: comment lines inside JSDoc must NOT produce parameters.
+        let content = r"
+interface FooParams {
+  /**
+   * @default 4
+   * Tags to include: foo, bar
+   */
+  count?: number;
+  name: string;
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(
+            params.len(),
+            2,
+            "expected exactly count and name, got: {params:?}"
+        );
+
+        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"count"), "missing 'count'");
+        assert!(names.contains(&"name"), "missing 'name'");
+        assert!(!names.contains(&"default"), "false positive: 'default'");
+        assert!(!names.contains(&"include"), "false positive: 'include'");
+    }
+
+    #[test]
+    fn test_parse_parameters_inline_comment_stripped() {
+        // C1: trailing `// ...` inline comment must be stripped before matching.
+        let content = r"
+interface TestParams {
+  name: string; // parameter name
+  count?: number; // how many
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(params.len(), 2);
+
+        let name = params.iter().find(|p| p.name == "name").unwrap();
+        assert!(name.required);
+        assert_eq!(name.typescript_type, "string");
+
+        let count = params.iter().find(|p| p.name == "count").unwrap();
+        assert!(!count.required);
     }
 
     #[test]

@@ -1,0 +1,43 @@
+---
+name: {{skill_name}}
+description: {{#if server_description}}{{{server_description}}}{{else}}"{{server_id}} MCP server tools ({{tool_count}} tools)"{{/if}}
+---
+
+# {{skill_name}}
+
+Progressive loading skill for the `{{server_id}}` MCP server ({{tool_count}} tools).
+
+## Usage
+
+**Discover tools:**
+```bash
+ls ~/.claude/servers/{{server_id}}/
+```
+
+**Load a tool:**
+```bash
+cat ~/.claude/servers/{{server_id}}/<tool>.ts
+```
+
+**Execute:**
+```bash
+node ~/.claude/servers/{{server_id}}/<tool>.ts '<json params>'
+```
+
+**Search by keyword:**
+```bash
+grep -l "<keyword>" ~/.claude/servers/{{server_id}}/*.ts
+```
+
+## Tools by Category
+
+{{#each categories}}
+### {{display_name}}
+
+{{#each tools}}
+- `{{typescript_name}}` — {{{description}}}
+{{/each}}
+
+{{else}}
+No tools categorized.
+{{/each}}

@@ -33,7 +33,7 @@ pub use parser::{
     MAX_FILE_SIZE, MAX_TOOL_FILES, ParseError, ParsedParameter, ParsedToolFile, ScanError,
     extract_skill_metadata, parse_tool_file, scan_tools_directory,
 };
-pub use template::{TemplateError, render_generation_prompt};
+pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{
     GenerateSkillParams, GenerateSkillResult, SaveSkillParams, SaveSkillResult, SkillCategory,
     SkillMetadata, SkillTool, ToolExample, validate_server_id,
