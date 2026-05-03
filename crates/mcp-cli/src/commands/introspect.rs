@@ -980,8 +980,9 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("not found in MCP config")
-                || err_msg.contains("failed to read MCP config"),
+            err_msg.contains("not found in")
+                || err_msg.contains("failed to read MCP config")
+                || err_msg.contains("mcp.json"),
             "Expected config-related error, got: {err_msg}"
         );
     }

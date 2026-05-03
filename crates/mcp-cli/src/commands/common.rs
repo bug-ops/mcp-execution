@@ -1,66 +1,186 @@
 //! Common utilities shared across CLI commands.
 //!
-//! Provides shared functionality for building server configurations from CLI arguments.
+//! Provides shared functionality for building server configurations from CLI arguments
+//! and loading MCP server definitions from `~/.claude/mcp.json`.
 
 use anyhow::{Context, Result, bail};
 use mcp_execution_core::{ServerConfig, ServerConfigBuilder, ServerId};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// MCP configuration file structure (~/.claude/mcp.json)
+/// MCP configuration file structure (`~/.claude/mcp.json`).
+///
+/// The `mcp_servers` field defaults to an empty map so that an absent file or
+/// a file containing only `{}` does not produce a deserialization error.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct McpConfig {
-    mcp_servers: HashMap<String, McpServerConfig>,
+pub struct McpConfig {
+    /// Map of server name → server configuration entry.
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, McpServerEntry>,
 }
 
-/// Individual MCP server configuration
-#[derive(Debug, Deserialize)]
-struct McpServerConfig {
-    command: String,
+/// Individual MCP server configuration entry from `mcp.json`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpServerEntry {
+    /// Command to execute (binary name or absolute path).
+    pub command: String,
+    /// Arguments to pass to the command.
     #[serde(default)]
-    args: Vec<String>,
+    pub args: Vec<String>,
+    /// Environment variables for the server process.
     #[serde(default)]
-    env: HashMap<String, String>,
+    pub env: HashMap<String, String>,
 }
 
-/// Loads MCP configuration from ~/.claude/mcp.json
+/// Loads MCP configuration from the given path.
+///
+/// This is the primary, testable entry point. [`load_mcp_config`] is a thin
+/// wrapper that resolves the default `~/.claude/mcp.json` location.
 ///
 /// # Errors
 ///
-/// Returns error if:
-/// - Home directory cannot be determined
-/// - Config file cannot be read
-/// - JSON is malformed
-fn load_mcp_config() -> Result<McpConfig> {
-    let home = dirs::home_dir().context("failed to get home directory")?;
-    let config_path = home.join(".claude").join("mcp.json");
+/// Returns an error if the file cannot be read or the JSON is malformed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::commands::common::load_mcp_config_from;
+/// use std::path::Path;
+///
+/// let config = load_mcp_config_from(Path::new("/tmp/mcp.json")).unwrap();
+/// println!("{} servers configured", config.mcp_servers.len());
+/// ```
+pub fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read MCP config from {}", path.display()))?;
 
-    let content = std::fs::read_to_string(&config_path)
-        .with_context(|| "failed to read MCP config from ~/.claude/mcp.json")?;
-
-    let config: McpConfig =
-        serde_json::from_str(&content).context("failed to parse MCP config JSON")?;
-
-    Ok(config)
+    serde_json::from_str(&content).context("failed to parse MCP config JSON")
 }
 
-/// Loads server configuration from ~/.claude/mcp.json by server name.
+/// Loads MCP configuration from `~/.claude/mcp.json`.
+///
+/// Delegates to [`load_mcp_config_from`] after resolving the default path.
+///
+/// # Errors
+///
+/// Returns an error if the home directory cannot be determined, the file
+/// cannot be read, or the JSON is malformed.
+pub fn load_mcp_config() -> Result<McpConfig> {
+    let home = dirs::home_dir().context("failed to get home directory")?;
+    load_mcp_config_from(&home.join(".claude").join("mcp.json"))
+}
+
+/// Lists all servers defined in the given `mcp.json` file.
+///
+/// Returns an empty list when the file does not exist — the primary testable
+/// entry point for the "fresh machine" code path (no config file yet).
+///
+/// # Errors
+///
+/// Returns an error if the file exists but cannot be read or parsed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::commands::common::list_mcp_servers_from;
+/// use std::path::Path;
+///
+/// let servers = list_mcp_servers_from(Path::new("/tmp/mcp.json")).unwrap();
+/// println!("{} servers", servers.len());
+/// ```
+pub fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let config = load_mcp_config_from(path)?;
+    Ok(config.mcp_servers.into_iter().collect())
+}
+
+/// Lists all servers defined in `~/.claude/mcp.json`.
+///
+/// Returns an empty list when the config file does not exist so that
+/// `server list` shows a clear empty result rather than hard-failing.
+///
+/// Delegates to [`list_mcp_servers_from`] after resolving the default path.
+///
+/// # Errors
+///
+/// Returns an error if the home directory cannot be determined, or the config
+/// file exists but cannot be read or parsed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::commands::common::list_mcp_servers;
+///
+/// for (name, entry) in list_mcp_servers().unwrap() {
+///     println!("{}: {} {:?}", name, entry.command, entry.args);
+/// }
+/// ```
+pub fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
+    let home = dirs::home_dir().context("failed to get home directory")?;
+    list_mcp_servers_from(&home.join(".claude").join("mcp.json"))
+}
+
+/// Retrieves a named server from `~/.claude/mcp.json`.
 ///
 /// # Arguments
 ///
-/// * `name` - Server name from mcp.json (e.g., "github")
+/// * `name` - Server name as defined under `mcpServers` in `mcp.json`
 ///
 /// # Returns
 ///
-/// Returns `(ServerId, ServerConfig)` if server is found in config.
+/// A tuple of `(ServerId, ServerConfig, McpServerEntry)`:
+/// - [`ServerId`] — typed server identifier
+/// - [`ServerConfig`] — ready-to-use connection config for `Introspector`
+/// - [`McpServerEntry`] — raw entry for display purposes (command, args, env)
 ///
 /// # Errors
 ///
-/// Returns error if:
-/// - Config file doesn't exist or is malformed
-/// - Server name not found in config
+/// Returns an error if the config file is missing, malformed, or the named
+/// server is not present.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::commands::common::get_mcp_server;
+///
+/// let (id, _config, entry) = get_mcp_server("github").unwrap();
+/// assert_eq!(id.as_str(), "github");
+/// println!("command: {}", entry.command);
+/// ```
+pub fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
+    let config = load_mcp_config()?;
+
+    let entry = config
+        .mcp_servers
+        .get(name)
+        .with_context(|| {
+            format!(
+                "server '{name}' not found in ~/.claude/mcp.json\n\
+                 Hint: ensure the server is defined in ~/.claude/mcp.json under \"mcpServers\""
+            )
+        })?
+        .clone();
+
+    let server_config = build_core_config(&entry);
+    Ok((ServerId::new(name), server_config, entry))
+}
+
+/// Loads server configuration from `~/.claude/mcp.json` by server name.
+///
+/// Convenience wrapper around [`get_mcp_server`] that drops the raw entry.
+///
+/// # Arguments
+///
+/// * `name` - Server name from `mcp.json` (e.g., `"github"`)
+///
+/// # Errors
+///
+/// Returns an error if the config file is missing, malformed, or the server
+/// name is not present.
 ///
 /// # Examples
 ///
@@ -71,27 +191,23 @@ fn load_mcp_config() -> Result<McpConfig> {
 /// assert_eq!(id.as_str(), "github");
 /// ```
 pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
-    let config = load_mcp_config()?;
+    let (id, config, _) = get_mcp_server(name)?;
+    Ok((id, config))
+}
 
-    let server_config = config.mcp_servers.get(name).with_context(|| {
-        format!(
-            "server '{name}' not found in MCP config at ~/.claude/mcp.json\n\
-             Hint: Use 'mcp-execution-cli server list' to see available servers"
-        )
-    })?;
+/// Builds a core [`ServerConfig`] from an [`McpServerEntry`].
+fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
+    let mut builder = ServerConfig::builder().command(entry.command.clone());
 
-    let id = ServerId::new(name);
-    let mut builder = ServerConfig::builder().command(server_config.command.clone());
-
-    if !server_config.args.is_empty() {
-        builder = builder.args(server_config.args.clone());
+    if !entry.args.is_empty() {
+        builder = builder.args(entry.args.clone());
     }
 
-    for (key, value) in &server_config.env {
+    for (key, value) in &entry.env {
         builder = builder.env(key.clone(), value.clone());
     }
 
-    Ok((id, builder.build()))
+    builder.build()
 }
 
 /// Builds `ServerConfig` from CLI arguments.
@@ -208,6 +324,79 @@ pub fn build_server_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    /// Creates a temporary mcp.json file for testing.
+    fn create_test_config(content: &str) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
+    #[test]
+    fn test_load_mcp_config_from_valid() {
+        let json = r#"{"mcpServers": {"github": {"command": "node", "args": ["server.js"]}}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        assert_eq!(config.mcp_servers.len(), 1);
+        assert!(config.mcp_servers.contains_key("github"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_from_empty_servers() {
+        // mcp_servers defaults to empty map when key is absent
+        let json = r"{}";
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        assert!(config.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn test_load_mcp_config_from_minimal_server() {
+        // Server with only command (args and env should default)
+        let json = r#"{"mcpServers": {"minimal": {"command": "python"}}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        let entry = &config.mcp_servers["minimal"];
+        assert_eq!(entry.command, "python");
+        assert!(entry.args.is_empty());
+        assert!(entry.env.is_empty());
+    }
+
+    #[test]
+    fn test_load_mcp_config_from_multiple_servers() {
+        let json = r#"{
+            "mcpServers": {
+                "server1": {"command": "node", "args": ["s1.js"]},
+                "server2": {"command": "python", "args": ["s2.py"]}
+            }
+        }"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        assert_eq!(config.mcp_servers.len(), 2);
+        assert!(config.mcp_servers.contains_key("server1"));
+        assert!(config.mcp_servers.contains_key("server2"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_from_not_found() {
+        let result = load_mcp_config_from(Path::new("/nonexistent/path/mcp.json"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("failed to read"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_from_malformed_json() {
+        let file = create_test_config("not valid json");
+        let result = load_mcp_config_from(file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("parse MCP config"));
+    }
 
     #[test]
     fn test_build_server_config_stdio() {
@@ -620,20 +809,16 @@ mod tests {
 
     #[test]
     fn test_load_server_from_config_not_found() {
-        // Test with non-existent server name
-        let result = load_server_from_config("nonexistent");
-
         // Should fail because either config doesn't exist or server not in it
+        let result = load_server_from_config("nonexistent");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_load_mcp_config_no_file() {
         // Should fail gracefully when config file doesn't exist
-        let result = load_mcp_config();
+        let result = load_mcp_config_from(Path::new("/nonexistent/mcp.json"));
 
-        // Can fail either because home dir not found or config file missing
-        // Both are acceptable error states
         if let Err(error) = result {
             let error = error.to_string();
             assert!(
@@ -642,5 +827,46 @@ mod tests {
                 "Expected config read error or home dir error, got: {error}"
             );
         }
+    }
+
+    #[test]
+    fn test_list_mcp_servers_from_missing_file_returns_empty() {
+        // GAP-1: the primary UX fix for #81 — missing config → empty list, not error.
+        let result = list_mcp_servers_from(Path::new("/nonexistent/path/mcp.json"));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_list_mcp_servers_from_valid_file() {
+        let json = r#"{"mcpServers": {"github": {"command": "node"}}}"#;
+        let file = create_test_config(json);
+
+        let servers = list_mcp_servers_from(file.path()).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, "github");
+        assert_eq!(servers[0].1.command, "node");
+    }
+
+    #[test]
+    fn test_list_mcp_servers_from_empty_servers_key() {
+        let json = r#"{"mcpServers": {}}"#;
+        let file = create_test_config(json);
+
+        let servers = list_mcp_servers_from(file.path()).unwrap();
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn test_load_mcp_config_serde_default_on_missing_mcp_servers() {
+        // When mcp.json has no mcpServers key, should deserialize to empty map
+        let json = r#"{"someOtherKey": "value"}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        assert!(
+            config.mcp_servers.is_empty(),
+            "missing mcpServers key must produce empty map, not error"
+        );
     }
 }

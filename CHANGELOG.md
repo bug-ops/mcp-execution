@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`skill` command stdout shape changed** (#82): previously printed a raw JSON blob of `GenerateSkillResult` (the generation context). Now prints a compact `SkillWriteResult` (`{success, output_path, bytes_written, tool_count}`). Scripts or tooling parsing the old JSON output must be updated.
+
 ### Fixed
 
+- **`server` subcommand** (#81): unified all server subcommands (`list`, `info`, `validate`) to read from `~/.claude/mcp.json` — previously `server list` used the Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`) while `introspect` and `generate --from-config` used `mcp.json`. Removed `ServerManager` and all Claude Desktop config logic. `load_mcp_config_from(path)` is now the primary testable entry point; `load_mcp_config()` is a thin wrapper. `server list` returns an empty list (no error) when the config file does not exist.
+- **`skill` command** (#82): command now renders SKILL.md directly via a new Handlebars template (`skill-md.hbs`) and writes the file atomically (temp-then-rename), instead of printing a raw JSON dump of the generation context to stdout and logging a false "Output path" line.
+- **TypeScript property parser** (#83): `parse_parameters` now iterates interface body line-by-line, skipping blank lines and comment lines (`//`, `/*`, `*`) before applying the regex. Trailing `//` and `/* */` inline comments are stripped (bounded before string-literal type delimiters to avoid false truncation). Replaced the unanchored `PROP_REGEX` with the anchored `PROP_LINE_REGEX` to prevent false positives from `JSDoc` `@default` and similar comment content being extracted as parameters.
 - **`mcp-execution-cli`**: `--version` output and generated shell completions now correctly
   report `mcp-execution-cli` instead of `mcp-cli`. Removed hardcoded `#[command(name = "mcp-cli")]`
   so clap derives the binary name from argv\[0\] at runtime (issue #89).

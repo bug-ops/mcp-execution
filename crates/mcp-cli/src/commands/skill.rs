@@ -9,11 +9,23 @@
 
 use anyhow::{Context, Result, bail};
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
-use mcp_execution_skill::{build_skill_context, scan_tools_directory, validate_server_id};
+use mcp_execution_skill::{
+    build_skill_context, render_skill_md, scan_tools_directory, validate_server_id,
+};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 use crate::formatters::format_output;
+
+/// Output of a successful `skill` command invocation.
+#[derive(Debug, Serialize)]
+struct SkillWriteResult {
+    success: bool,
+    output_path: String,
+    bytes_written: usize,
+    tool_count: usize,
+}
 
 /// Default base directory for generated servers.
 const DEFAULT_SERVERS_DIR: &str = ".claude/servers";
@@ -164,17 +176,39 @@ pub async fn run(
         );
     }
 
-    // Step 7: Format and output
-    let output = format_output(&context, output_format)?;
-    println!("{output}");
+    // Step 7: Render SKILL.md and write atomically.
+    let rendered = render_skill_md(&context).context("failed to render SKILL.md template")?;
 
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
+    }
+
+    // Atomic write: write to a temp file in the same directory, then rename.
+    // `with_added_extension` appends `.tmp` without removing `.md` (N1).
+    let tmp_path = output_path.with_added_extension("tmp");
+    std::fs::write(&tmp_path, &rendered)
+        .with_context(|| format!("failed to write temp file: {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, &output_path)
+        .with_context(|| format!("failed to rename to: {}", output_path.display()))?;
+
+    let bytes_written = rendered.len();
     info!(
-        "Skill context generated successfully for server '{}'",
-        server
+        "SKILL.md written to {} ({} bytes, {} tools)",
+        output_path.display(),
+        bytes_written,
+        context.tool_count,
     );
-    info!("Output path: {}", context.output_path);
-    info!("Tool count: {}", context.tool_count);
-    info!("Categories: {}", context.categories.len());
+
+    let result = SkillWriteResult {
+        success: true,
+        output_path: output_path.display().to_string(),
+        bytes_written,
+        tool_count: context.tool_count,
+    };
+
+    let output = format_output(&result, output_format)?;
+    println!("{output}");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -538,10 +572,12 @@ async function testTool(input: string): Promise<void> {
 ";
         std::fs::write(server_dir.join("test_tool.ts"), ts_content).unwrap();
 
+        let output_path = temp.path().join("SKILL.md");
+
         let result = run(
             "test-server".to_string(),
             Some(temp.path().to_path_buf()),
-            None,
+            Some(output_path.clone()),
             None,
             vec![],
             false,
@@ -553,6 +589,12 @@ async function testTool(input: string): Promise<void> {
             result.is_ok(),
             "Expected success but got: {:?}",
             result.err()
+        );
+        assert!(output_path.exists(), "SKILL.md must be written to disk");
+        let content = std::fs::read_to_string(&output_path).unwrap();
+        assert!(
+            content.starts_with("---\n"),
+            "SKILL.md must start with YAML frontmatter"
         );
     }
 
@@ -722,10 +764,11 @@ async function test(x: string): Promise<void> {}
         std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
 
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
+            let output_path = temp.path().join(format!("SKILL-{format}.md"));
             let result = run(
                 "test".to_string(),
                 Some(temp.path().to_path_buf()),
-                None,
+                Some(output_path),
                 None,
                 vec![],
                 false,
