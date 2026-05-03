@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Implementation::from_build_env()` (which expands `env!()` at rmcp's compile time) with a
   direct construction using `env!("CARGO_PKG_NAME")` and `env!("CARGO_PKG_VERSION")` at the
   call site in `service.rs` (issue #85).
+- **`mcp-execution-codegen`**: Server-controlled strings (`name`, `version`, tool `name`,
+  tool `description`) are now sanitized before interpolation into JSDoc block comments.
+  Malicious servers could previously inject arbitrary TypeScript by embedding `*/` in
+  their `InitializeResult`. Sanitizer replaces `*/` with `*\/`, strips CR/LF, and
+  truncates to 256 chars (`name`/`description`) or 64 chars (`version`) (issue #87).
+- **`mcp-execution-codegen`**: Generated server output directory now includes `package.json`
+  with `{"type":"module"}`, eliminating the Node.js `MODULE_TYPELESS_PACKAGE_JSON` performance
+  warning on every tool execution (issue #86).
 - **`mcp-execution-introspector`**: Server `name` now read from MCP handshake
   (`peer_info().server_info.name`) instead of `config.command` (issue #84).
 - **`mcp-execution-introspector`**: Server `version` now read from MCP handshake

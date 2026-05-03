@@ -90,6 +90,7 @@ impl<'a> ProgressiveGenerator<'a> {
     /// Creates one TypeScript file per tool, plus:
     /// - `index.ts`: Re-exports all tools
     /// - `_runtime/mcp-bridge.ts`: Runtime bridge for calling MCP tools
+    /// - `package.json`: ES module type declaration
     ///
     /// # Arguments
     ///
@@ -132,6 +133,7 @@ impl<'a> ProgressiveGenerator<'a> {
     /// // Files generated:
     /// // - index.ts
     /// // - _runtime/mcp-bridge.ts
+    /// // - package.json
     /// // - one file per tool
     /// println!("Generated {} files", code.file_count());
     /// # Ok(())
@@ -182,6 +184,14 @@ impl<'a> ProgressiveGenerator<'a> {
         });
 
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
+
+        // Generate package.json for ES module identification
+        code.add_file(GeneratedFile {
+            path: "package.json".to_string(),
+            content: "{\"type\":\"module\"}\n".to_string(),
+        });
+
+        tracing::debug!("Generated package.json");
 
         tracing::info!(
             "Successfully generated {} files for {} (progressive loading)",
@@ -304,6 +314,14 @@ impl<'a> ProgressiveGenerator<'a> {
 
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
 
+        // Generate package.json for ES module identification
+        code.add_file(GeneratedFile {
+            path: "package.json".to_string(),
+            content: "{\"type\":\"module\"}\n".to_string(),
+        });
+
+        tracing::debug!("Generated package.json");
+
         tracing::info!(
             "Successfully generated {} files for {} with categorizations (progressive loading)",
             code.file_count(),
@@ -333,9 +351,9 @@ impl<'a> ProgressiveGenerator<'a> {
 
         Ok(ToolContext {
             server_id: server_id.to_string(),
-            name: tool.name.as_str().to_string(),
+            name: sanitize_jsdoc(tool.name.as_str(), 256),
             typescript_name,
-            description: tool.description.clone(),
+            description: sanitize_jsdoc(&tool.description, 256),
             input_schema: tool.input_schema.clone(),
             properties,
             category: categorization.map(|c| c.category.clone()),
@@ -358,7 +376,7 @@ impl<'a> ProgressiveGenerator<'a> {
                 let cat = categorizations.and_then(|c| c.get(tool_name));
                 ToolSummary {
                     typescript_name: to_camel_case(tool_name),
-                    description: tool.description.clone(),
+                    description: sanitize_jsdoc(&tool.description, 256),
                     category: cat.map(|c| c.category.clone()),
                     keywords: cat.map(|c| c.keywords.clone()),
                     short_description: cat.map(|c| c.short_description.clone()),
@@ -398,8 +416,8 @@ impl<'a> ProgressiveGenerator<'a> {
         });
 
         Ok(IndexContext {
-            server_name: server_info.name.clone(),
-            server_version: server_info.version.clone(),
+            server_name: sanitize_jsdoc(&server_info.name, 256),
+            server_version: sanitize_jsdoc(&server_info.version, 64),
             tool_count: server_info.tools.len(),
             tools,
             categories: category_groups,
@@ -459,6 +477,19 @@ impl<'a> ProgressiveGenerator<'a> {
         }
 
         Ok(properties)
+    }
+}
+
+/// Sanitizes a server-controlled string for safe interpolation into JSDoc block comments.
+///
+/// Prevents JSDoc comment terminator injection by replacing `*/` sequences,
+/// stripping newlines, and truncating to a safe maximum length.
+fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
+    let sanitized = s.replace("*/", "*\\/").replace(['\r', '\n'], " ");
+    if sanitized.chars().count() > max_len {
+        sanitized.chars().take(max_len).collect()
+    } else {
+        sanitized
     }
 }
 
@@ -534,7 +565,8 @@ mod tests {
         // - 2 tool files
         // - 1 index.ts
         // - 1 runtime bridge
-        assert_eq!(code.file_count(), 4);
+        // - 1 package.json
+        assert_eq!(code.file_count(), 5);
 
         // Check tool files exist
         let tool_files: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
@@ -543,6 +575,7 @@ mod tests {
         assert!(tool_files.contains(&"updateIssue.ts"));
         assert!(tool_files.contains(&"index.ts"));
         assert!(tool_files.contains(&"_runtime/mcp-bridge.ts"));
+        assert!(tool_files.contains(&"package.json"));
     }
 
     #[test]
@@ -630,5 +663,50 @@ mod tests {
         let age_prop = props.iter().find(|p| p.name == "age").unwrap();
         assert_eq!(age_prop.typescript_type, "number");
         assert!(!age_prop.required);
+    }
+
+    #[test]
+    fn test_sanitize_jsdoc_strips_comment_terminator() {
+        assert_eq!(sanitize_jsdoc("Foo */ bar", 256), "Foo *\\/ bar");
+    }
+
+    #[test]
+    fn test_sanitize_jsdoc_replaces_newlines() {
+        assert_eq!(
+            sanitize_jsdoc("line1\nline2\r\nline3", 256),
+            "line1 line2  line3"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_jsdoc_truncates() {
+        let long = "a".repeat(300);
+        assert_eq!(sanitize_jsdoc(&long, 256).chars().count(), 256);
+    }
+
+    #[test]
+    fn test_sanitize_jsdoc_passthrough() {
+        assert_eq!(sanitize_jsdoc("Normal string", 256), "Normal string");
+    }
+
+    #[test]
+    fn test_generate_sanitizes_jsdoc_injection() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.name = "Evil */ injection".to_string();
+        server_info.version = "1.0\n<script>".to_string();
+
+        let code = generator.generate(&server_info).unwrap();
+        let index = code.files.iter().find(|f| f.path == "index.ts").unwrap();
+
+        // Raw injected strings must not appear in the output.
+        assert!(
+            !index.content.contains("Evil */ injection"),
+            "Server name should be sanitized in JSDoc"
+        );
+        assert!(
+            !index.content.contains("1.0\n<script>"),
+            "Server version should have newlines stripped"
+        );
     }
 }
