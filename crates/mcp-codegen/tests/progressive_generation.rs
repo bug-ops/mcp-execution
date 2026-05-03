@@ -97,7 +97,8 @@ fn test_progressive_generator_creates_correct_number_of_files() {
     // - 3 tool files (createIssue.ts, updateIssue.ts, getIssue.ts)
     // - 1 index.ts
     // - 1 runtime bridge (_runtime/mcp-bridge.ts)
-    assert_eq!(code.file_count(), 5);
+    // - 1 package.json
+    assert_eq!(code.file_count(), 6);
 }
 
 #[test]
@@ -340,11 +341,13 @@ fn test_progressive_generator_with_empty_server() {
     // - 0 tool files
     // - 1 index.ts
     // - 1 runtime bridge
-    assert_eq!(code.file_count(), 2);
+    // - 1 package.json
+    assert_eq!(code.file_count(), 3);
 
     let file_paths: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
     assert!(file_paths.contains(&"index.ts"));
     assert!(file_paths.contains(&"_runtime/mcp-bridge.ts"));
+    assert!(file_paths.contains(&"package.json"));
 }
 
 #[test]
