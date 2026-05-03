@@ -15,7 +15,6 @@ use crate::actions::ServerAction;
 /// This CLI provides secure execution of MCP tools in a WebAssembly sandbox,
 /// achieving 90-98% token savings through progressive tool loading.
 #[derive(Parser, Debug)]
-#[command(name = "mcp-cli")]
 #[command(version, about, long_about = None)]
 #[command(author = "MCP Execution Team")]
 pub struct Cli {

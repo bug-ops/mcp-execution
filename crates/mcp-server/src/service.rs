@@ -519,7 +519,7 @@ impl ServerHandler for GeneratorService {
         let mut info = ServerInfo::default();
         info.protocol_version = ProtocolVersion::V_2025_06_18;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.server_info = Implementation::from_build_env();
+        info.server_info = Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
             "Generate progressive loading TypeScript files for MCP servers. \
              Use introspect_server to discover tools, then save_categorized_tools \
@@ -783,6 +783,8 @@ mod tests {
         assert_eq!(info.protocol_version, ProtocolVersion::V_2025_06_18);
         assert!(info.capabilities.tools.is_some());
         assert!(info.instructions.is_some());
+        assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
+        assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
     }
 
     // ========================================================================

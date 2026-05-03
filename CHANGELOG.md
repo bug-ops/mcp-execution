@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-cli`**: `--version` output and generated shell completions now correctly
+  report `mcp-execution-cli` instead of `mcp-cli`. Removed hardcoded `#[command(name = "mcp-cli")]`
+  so clap derives the binary name from argv\[0\] at runtime (issue #89).
+- **`mcp-execution-server`**: MCP initialization handshake now correctly reports
+  `"mcp-execution-server"` and the crate version instead of `"rmcp"` / `"1.5.0"`. Replaced
+  `Implementation::from_build_env()` (which expands `env!()` at rmcp's compile time) with a
+  direct construction using `env!("CARGO_PKG_NAME")` and `env!("CARGO_PKG_VERSION")` at the
+  call site in `service.rs` (issue #85).
 - **`mcp-execution-introspector`**: Server `name` now read from MCP handshake
   (`peer_info().server_info.name`) instead of `config.command` (issue #84).
 - **`mcp-execution-introspector`**: Server `version` now read from MCP handshake
