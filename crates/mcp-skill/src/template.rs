@@ -142,7 +142,8 @@ pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, Template
     }
 
     let rendered = HANDLEBARS.render("skill-md", &value)?;
-    Ok(rendered)
+    // Normalize CRLF → LF so output is consistent across platforms (Windows CI).
+    Ok(rendered.replace("\r\n", "\n"))
 }
 
 #[cfg(test)]
