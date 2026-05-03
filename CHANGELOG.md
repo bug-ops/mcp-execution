@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mcp-execution-introspector`**: Server `name` now read from MCP handshake
+  (`peer_info().server_info.name`) instead of `config.command` (issue #84).
+- **`mcp-execution-introspector`**: Server `version` now read from MCP handshake
+  (`peer_info().server_info.version`) instead of hardcoded `"unknown"` (issue #79).
+- **`mcp-execution-introspector`**: `supports_resources` now derived from
+  `capabilities.resources.is_some()` instead of `list_all_resources().is_ok()`,
+  eliminating the false-positive when servers advertise `resources: null` (issue #80).
+- **`mcp-execution-introspector`**: `supports_prompts` now derived from
+  `capabilities.prompts.is_some()` (was always `false`).
+
 ---
 
 ## [0.7.0] - 2026-04-21

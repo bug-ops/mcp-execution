@@ -324,19 +324,21 @@ impl Introspector {
             })
             .collect::<Vec<_>>();
 
-        // Try to get resources capability
-        let has_resources = client.list_all_resources().await.is_ok();
+        // Extract name, version, and capabilities from the MCP handshake result.
+        // Falls back to the command string / "unknown" if the server did not send peer info.
+        let (server_name, server_version, has_resources, has_prompts) =
+            extract_peer_meta(config, client.peer_info());
 
         let capabilities = ServerCapabilities {
             supports_tools: !tools.is_empty(),
             supports_resources: has_resources,
-            supports_prompts: false, // Would need to check prompts similarly
+            supports_prompts: has_prompts,
         };
 
         let info = ServerInfo {
             id: server_id.clone(),
-            name: config.command.clone(),   // Use command as name
-            version: "unknown".to_string(), // MCP doesn't expose version via ServiceExt
+            name: server_name,
+            version: server_version,
             tools,
             capabilities,
         };
@@ -477,6 +479,28 @@ impl Default for Introspector {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Extracts server name, version, resource support, and prompt support from
+/// the MCP handshake result (`peer_info`).
+///
+/// Falls back to `(config.command, "unknown", false, false)` when the server
+/// did not send peer information (i.e. `peer_info` is `None`).
+fn extract_peer_meta(
+    config: &ServerConfig,
+    peer_info: Option<&rmcp::model::InitializeResult>,
+) -> (String, String, bool, bool) {
+    peer_info.map_or_else(
+        || (config.command.clone(), "unknown".to_string(), false, false),
+        |info| {
+            (
+                info.server_info.name.clone(),
+                info.server_info.version.clone(),
+                info.capabilities.resources.is_some(),
+                info.capabilities.prompts.is_some(),
+            )
+        },
+    )
 }
 
 #[cfg(test)]
@@ -658,5 +682,147 @@ mod tests {
         let tool2: ToolInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(tool2.name.as_str(), "test_tool");
         assert_eq!(tool2.description, "Test");
+    }
+
+    // ── extract_peer_meta unit tests ─────────────────────────────────────────
+
+    fn make_peer_info(
+        name: &str,
+        version: &str,
+        has_resources: bool,
+        has_prompts: bool,
+    ) -> rmcp::model::InitializeResult {
+        // rmcp structs are #[non_exhaustive]; construct via JSON deserialization.
+        let mut capabilities = serde_json::json!({});
+        if has_resources {
+            capabilities["resources"] = serde_json::json!({});
+        }
+        if has_prompts {
+            capabilities["prompts"] = serde_json::json!({});
+        }
+
+        let raw = serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "serverInfo": { "name": name, "version": version },
+            "capabilities": capabilities
+        });
+        serde_json::from_value(raw).expect("valid InitializeResult JSON")
+    }
+
+    fn test_config(command: &str) -> ServerConfig {
+        ServerConfig::builder().command(command.to_string()).build()
+    }
+
+    /// #84 — name must come from the handshake, not `config.command`
+    #[test]
+    fn test_extract_peer_meta_name_from_handshake() {
+        let config = test_config("my-server-binary");
+        let peer = make_peer_info("Handshake Name", "0.0.0", false, false);
+
+        let (name, _, _, _) = extract_peer_meta(&config, Some(&peer));
+
+        assert_eq!(name, "Handshake Name");
+        assert_ne!(name, "my-server-binary");
+    }
+
+    /// #79 — version must come from the handshake, not the hardcoded "unknown"
+    #[test]
+    fn test_extract_peer_meta_version_from_handshake() {
+        let config = test_config("cmd");
+        let peer = make_peer_info("Server", "3.1.4", false, false);
+
+        let (_, version, _, _) = extract_peer_meta(&config, Some(&peer));
+
+        assert_eq!(version, "3.1.4");
+        assert_ne!(version, "unknown");
+    }
+
+    /// #80 — `supports_resources` reflects `capabilities.resources` being `Some`
+    #[test]
+    fn test_extract_peer_meta_supports_resources_true() {
+        let config = test_config("cmd");
+        let peer = make_peer_info("S", "1.0", true, false);
+
+        let (_, _, has_resources, _) = extract_peer_meta(&config, Some(&peer));
+
+        assert!(has_resources);
+    }
+
+    /// #80 — `supports_resources` is false when `capabilities.resources` is `None`
+    #[test]
+    fn test_extract_peer_meta_supports_resources_false() {
+        let config = test_config("cmd");
+        let peer = make_peer_info("S", "1.0", false, false);
+
+        let (_, _, has_resources, _) = extract_peer_meta(&config, Some(&peer));
+
+        assert!(!has_resources);
+    }
+
+    /// Bonus — `supports_prompts` reflects `capabilities.prompts` being `Some`
+    #[test]
+    fn test_extract_peer_meta_supports_prompts_true() {
+        let config = test_config("cmd");
+        let peer = make_peer_info("S", "1.0", false, true);
+
+        let (_, _, _, has_prompts) = extract_peer_meta(&config, Some(&peer));
+
+        assert!(has_prompts);
+    }
+
+    /// Bonus — `supports_prompts` is false when `capabilities.prompts` is `None`
+    #[test]
+    fn test_extract_peer_meta_supports_prompts_false() {
+        let config = test_config("cmd");
+        let peer = make_peer_info("S", "1.0", false, false);
+
+        let (_, _, _, has_prompts) = extract_peer_meta(&config, Some(&peer));
+
+        assert!(!has_prompts);
+    }
+
+    /// Fallback: `peer_info` is `None` — name falls back to `config.command`
+    #[test]
+    fn test_extract_peer_meta_fallback_name_is_command() {
+        let config = test_config("fallback-binary");
+
+        let (name, _, _, _) = extract_peer_meta(&config, None);
+
+        assert_eq!(name, "fallback-binary");
+    }
+
+    /// Fallback: `peer_info` is `None` — version falls back to `"unknown"`
+    #[test]
+    fn test_extract_peer_meta_fallback_version_is_unknown() {
+        let config = test_config("cmd");
+
+        let (_, version, _, _) = extract_peer_meta(&config, None);
+
+        assert_eq!(version, "unknown");
+    }
+
+    /// Fallback: `peer_info` is `None` — capabilities are all false
+    #[test]
+    fn test_extract_peer_meta_fallback_capabilities_false() {
+        let config = test_config("cmd");
+
+        let (_, _, has_resources, has_prompts) = extract_peer_meta(&config, None);
+
+        assert!(!has_resources);
+        assert!(!has_prompts);
+    }
+
+    /// All four values are correct simultaneously when `peer_info` is fully populated
+    #[test]
+    fn test_extract_peer_meta_all_fields_from_handshake() {
+        let config = test_config("binary");
+        let peer = make_peer_info("Full Server", "2.0.0", true, true);
+
+        let (name, version, has_resources, has_prompts) = extract_peer_meta(&config, Some(&peer));
+
+        assert_eq!(name, "Full Server");
+        assert_eq!(version, "2.0.0");
+        assert!(has_resources);
+        assert!(has_prompts);
     }
 }
