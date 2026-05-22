@@ -43,36 +43,36 @@ pub enum Commands {
     ///
     /// 1. Load from ~/.claude/mcp.json (recommended):
     ///    ```bash
-    ///    mcp-cli introspect --from-config github
+    ///    mcp-execution-cli introspect --from-config github
     ///    ```
     ///
     /// 2. Manual configuration:
     ///    ```bash
-    ///    mcp-cli introspect github-mcp-server --arg=stdio
+    ///    mcp-execution-cli introspect github-mcp-server --arg=stdio
     ///    ```
     ///
     /// # Examples
     ///
     /// ```bash
     /// # Load GitHub server config from mcp.json
-    /// mcp-cli introspect --from-config github
+    /// mcp-execution-cli introspect --from-config github
     ///
     /// # Load with detailed schemas
-    /// mcp-cli introspect --from-config github --detailed
+    /// mcp-execution-cli introspect --from-config github --detailed
     ///
     /// # Manual: Simple binary
-    /// mcp-cli introspect github-mcp-server
+    /// mcp-execution-cli introspect github-mcp-server
     ///
     /// # Manual: With arguments
-    /// mcp-cli introspect github-mcp-server --arg=stdio
+    /// mcp-execution-cli introspect github-mcp-server --arg=stdio
     ///
     /// # Manual: Docker container
-    /// mcp-cli introspect docker --arg=run --arg=-i --arg=--rm \
+    /// mcp-execution-cli introspect docker --arg=run --arg=-i --arg=--rm \
     ///     --arg=ghcr.io/github/github-mcp-server \
     ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
     ///
     /// # HTTP transport
-    /// mcp-cli introspect --http https://api.githubcopilot.com/mcp/ \
+    /// mcp-execution-cli introspect --http https://api.githubcopilot.com/mcp/ \
     ///     --header "Authorization=Bearer ghp_xxx"
     /// ```
     Introspect {
@@ -147,18 +147,18 @@ pub enum Commands {
     ///
     /// ```bash
     /// # Generate skill for GitHub server
-    /// mcp-cli skill --server github
+    /// mcp-execution-cli skill --server github
     ///
     /// # With custom output path
-    /// mcp-cli skill --server github --output ~/.claude/skills/github/SKILL.md
+    /// mcp-execution-cli skill --server github --output ~/.claude/skills/github/SKILL.md
     ///
     /// # With use case hints
-    /// mcp-cli skill --server github \
+    /// mcp-execution-cli skill --server github \
     ///     --hint "managing pull requests" \
     ///     --hint "reviewing code changes"
     ///
     /// # Overwrite existing skill
-    /// mcp-cli skill --server github --overwrite
+    /// mcp-execution-cli skill --server github --overwrite
     /// ```
     Skill {
         /// Server identifier (e.g., "github")
@@ -206,12 +206,12 @@ pub enum Commands {
     ///
     /// 1. Load from ~/.claude/mcp.json (recommended):
     ///    ```bash
-    ///    mcp-cli generate --from-config github
+    ///    mcp-execution-cli generate --from-config github
     ///    ```
     ///
     /// 2. Manual configuration:
     ///    ```bash
-    ///    mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
+    ///    mcp-execution-cli generate docker --arg=run --arg=-i --arg=--rm \
     ///        --arg=ghcr.io/github/github-mcp-server \
     ///        --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx \
     ///        --name=github
@@ -221,10 +221,10 @@ pub enum Commands {
     ///
     /// ```bash
     /// # Load GitHub server config from mcp.json
-    /// mcp-cli generate --from-config github
+    /// mcp-execution-cli generate --from-config github
     ///
     /// # Manual Docker container
-    /// mcp-cli generate docker --arg=run --arg=-i --arg=--rm \
+    /// mcp-execution-cli generate docker --arg=run --arg=-i --arg=--rm \
     ///     --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
     ///     --arg=ghcr.io/github/github-mcp-server \
     ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
@@ -339,6 +339,29 @@ pub enum Commands {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn test_cli_help_examples_use_published_binary_name() {
+        let mut command = Cli::command();
+
+        for subcommand in ["introspect", "generate", "skill"] {
+            let help = command
+                .find_subcommand_mut(subcommand)
+                .expect("subcommand should exist")
+                .render_long_help()
+                .to_string();
+
+            assert!(
+                help.contains(&format!("mcp-execution-cli {subcommand}")),
+                "{subcommand} help should include examples with the published binary name"
+            );
+            assert!(
+                !help.contains(&format!("mcp-cli {subcommand}")),
+                "{subcommand} help should not reference the old binary name"
+            );
+        }
+    }
 
     #[test]
     fn test_cli_parsing_introspect() {
