@@ -32,6 +32,31 @@
       - 'crates/mcp-cli/**/*'
       - 'crates/mcp-cli/*'
 
+# Area labels
+'area: core':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-core/**/*'
+      - 'crates/mcp-core/*'
+
+'area: codegen':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-codegen/**/*'
+      - 'crates/mcp-codegen/*'
+
+'area: cli':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-cli/**/*'
+      - 'crates/mcp-cli/*'
+
+'area: bridge':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'crates/mcp-server/**/*'
+      - 'crates/mcp-server/*'
+
 # Type labels
 'type: documentation':
   - changed-files:
