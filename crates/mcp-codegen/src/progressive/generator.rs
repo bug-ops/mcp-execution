@@ -502,11 +502,14 @@ fn sanitize_schema_jsdoc_value(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             for (key, child) in map.iter_mut() {
-                match (key.as_str(), child.as_str()) {
-                    ("description", Some(description)) => {
+                if key == "description" {
+                    if let Some(description) = child.as_str() {
                         *child = serde_json::Value::String(sanitize_jsdoc(description, 256));
+                    } else {
+                        *child = serde_json::Value::Null;
                     }
-                    _ => sanitize_schema_jsdoc_value(child),
+                } else {
+                    sanitize_schema_jsdoc_value(child);
                 }
             }
         }
@@ -713,6 +716,23 @@ mod tests {
     #[test]
     fn test_sanitize_jsdoc_passthrough() {
         assert_eq!(sanitize_jsdoc("Normal string", 256), "Normal string");
+    }
+
+    #[test]
+    fn test_sanitize_schema_jsdoc_drops_non_string_descriptions() {
+        let sanitized = sanitize_schema_jsdoc_descriptions(json!({
+            "type": "object",
+            "description": {"text": "Schema */ injected\nnext"},
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": ["Title */ injected\nnext"]
+                }
+            }
+        }));
+
+        assert!(sanitized["description"].is_null());
+        assert!(sanitized["properties"]["title"]["description"].is_null());
     }
 
     #[test]
