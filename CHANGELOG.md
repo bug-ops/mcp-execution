@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.7.1] - 2026-06-07
+
 ### Breaking
 
 - **`skill` command stdout shape changed** (#82): previously printed a raw JSON blob of `GenerateSkillResult` (the generation context). Now prints a compact `SkillWriteResult` (`{success, output_path, bytes_written, tool_count}`). Scripts or tooling parsing the old JSON output must be updated.
@@ -1195,12 +1199,13 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2026-04-21
-**Version**: 0.7.0 (Production Ready)
+**Last Updated**: 2026-06-07
+**Version**: 0.7.1 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/bug-ops/mcp-execution/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/bug-ops/mcp-execution/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/bug-ops/mcp-execution/compare/v0.6.4...v0.6.5
