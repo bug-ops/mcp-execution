@@ -354,11 +354,11 @@ impl<'a> ProgressiveGenerator<'a> {
             name: sanitize_jsdoc(tool.name.as_str(), 256),
             typescript_name,
             description: sanitize_jsdoc(&tool.description, 256),
-            input_schema: tool.input_schema.clone(),
+            input_schema: sanitize_schema_jsdoc_descriptions(tool.input_schema.clone()),
             properties,
-            category: categorization.map(|c| c.category.clone()),
-            keywords: categorization.map(|c| c.keywords.clone()),
-            short_description: categorization.map(|c| c.short_description.clone()),
+            category: categorization.map(|c| sanitize_jsdoc(&c.category, 128)),
+            keywords: categorization.map(|c| sanitize_jsdoc(&c.keywords, 256)),
+            short_description: categorization.map(|c| sanitize_jsdoc(&c.short_description, 256)),
         })
     }
 
@@ -377,9 +377,9 @@ impl<'a> ProgressiveGenerator<'a> {
                 ToolSummary {
                     typescript_name: to_camel_case(tool_name),
                     description: sanitize_jsdoc(&tool.description, 256),
-                    category: cat.map(|c| c.category.clone()),
-                    keywords: cat.map(|c| c.keywords.clone()),
-                    short_description: cat.map(|c| c.short_description.clone()),
+                    category: cat.map(|c| sanitize_jsdoc(&c.category, 128)),
+                    keywords: cat.map(|c| sanitize_jsdoc(&c.keywords, 256)),
+                    short_description: cat.map(|c| sanitize_jsdoc(&c.short_description, 256)),
                 }
             })
             .collect();
@@ -463,7 +463,7 @@ impl<'a> ProgressiveGenerator<'a> {
                     .and_then(|prop_schema| prop_schema.as_object())
                     .and_then(|obj| obj.get("description"))
                     .and_then(|desc| desc.as_str())
-                    .map(String::from)
+                    .map(|desc| sanitize_jsdoc(desc, 256))
             } else {
                 None
             };
@@ -490,6 +490,35 @@ fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
         sanitized.chars().take(max_len).collect()
     } else {
         sanitized
+    }
+}
+
+fn sanitize_schema_jsdoc_descriptions(mut value: serde_json::Value) -> serde_json::Value {
+    sanitize_schema_jsdoc_value(&mut value);
+    value
+}
+
+fn sanitize_schema_jsdoc_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "description" {
+                    if let Some(description) = child.as_str() {
+                        *child = serde_json::Value::String(sanitize_jsdoc(description, 256));
+                    } else {
+                        *child = serde_json::Value::Null;
+                    }
+                } else {
+                    sanitize_schema_jsdoc_value(child);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                sanitize_schema_jsdoc_value(child);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -690,6 +719,23 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_schema_jsdoc_drops_non_string_descriptions() {
+        let sanitized = sanitize_schema_jsdoc_descriptions(json!({
+            "type": "object",
+            "description": {"text": "Schema */ injected\nnext"},
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": ["Title */ injected\nnext"]
+                }
+            }
+        }));
+
+        assert!(sanitized["description"].is_null());
+        assert!(sanitized["properties"]["title"]["description"].is_null());
+    }
+
+    #[test]
     fn test_generate_sanitizes_jsdoc_injection() {
         let generator = ProgressiveGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
@@ -708,5 +754,60 @@ mod tests {
             !index.content.contains("1.0\n<script>"),
             "Server version should have newlines stripped"
         );
+    }
+
+    #[test]
+    fn test_generate_sanitizes_schema_and_category_jsdoc_injection() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools[0].input_schema = json!({
+            "type": "object",
+            "description": "Schema */ injected\nnext",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Title */ injected\nnext"
+                }
+            },
+            "required": ["title"]
+        });
+
+        let mut categorizations = HashMap::new();
+        categorizations.insert(
+            "create_issue".to_string(),
+            ToolCategorization {
+                category: "issues */ injected\nnext".to_string(),
+                keywords: "create,*/ injected\nnext".to_string(),
+                short_description: "Create */ injected\nnext".to_string(),
+            },
+        );
+
+        let code = generator
+            .generate_with_categories(&server_info, &categorizations)
+            .unwrap();
+        let tool = code
+            .files
+            .iter()
+            .find(|f| f.path == "createIssue.ts")
+            .unwrap();
+
+        for raw in [
+            "Schema */ injected",
+            "Title */ injected",
+            "issues */ injected",
+            "create,*/ injected",
+            "Create */ injected",
+        ] {
+            assert!(
+                !tool.content.contains(raw),
+                "generated JSDoc should not contain raw injection text: {raw}"
+            );
+        }
+
+        assert!(tool.content.contains("Schema *\\/ injected next"));
+        assert!(tool.content.contains("Title *\\/ injected next"));
+        assert!(tool.content.contains("issues *\\/ injected next"));
+        assert!(tool.content.contains("create,*\\/ injected next"));
+        assert!(tool.content.contains("Create *\\/ injected next"));
     }
 }
