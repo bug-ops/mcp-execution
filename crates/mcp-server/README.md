@@ -34,7 +34,7 @@ cargo run -p mcp-execution-server
 
 ### Claude Code Configuration
 
-Add to `~/.config/claude/mcp.json`:
+Add to `~/.claude/mcp.json`:
 
 ```json
 {

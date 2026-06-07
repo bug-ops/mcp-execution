@@ -119,6 +119,21 @@ JSON Schema types are converted to TypeScript:
 | 50 tools | <20ms | **0.97ms** (20.6x faster) |
 | VFS export | <10ms | **1.2ms** (8.3x faster) |
 
+## Security
+
+> [!IMPORTANT]
+> All server-controlled strings are sanitized before interpolation into generated TypeScript.
+
+The code generator applies JSDoc sanitization to every field that originates from an MCP server:
+
+- Tool `name` and `description` (truncated to 256 chars, `*/` escaped, CR/LF stripped)
+- Server `name` and `version` (same rules, `version` truncated to 64 chars)
+- Every `description` field inside `input_schema` JSON recursively
+- Categorization fields: `category` (128 chars), `keywords`, `short_description` (256 chars each)
+- Non-string `description` values in schemas are replaced with `null`
+
+This prevents malicious MCP servers from injecting arbitrary TypeScript by embedding `*/` in their metadata.
+
 ## Related Crates
 
 This crate is part of the [mcp-execution](https://github.com/bug-ops/mcp-execution) workspace:
