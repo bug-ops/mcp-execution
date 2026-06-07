@@ -132,7 +132,7 @@ node ~/.claude/servers/github/createIssue.ts --repo="owner/repo" --title="Bug"
 | **Type-Safe** | Full TypeScript interfaces from MCP JSON schemas |
 | **Lightning Fast** | 526x faster than target (0.19ms for 10 tools) |
 | **100% MCP Compatible** | Works with all MCP servers via [rmcp SDK](https://docs.rs/rmcp) |
-| **Thoroughly Tested** | 626 tests with 100% pass rate |
+| **Thoroughly Tested** | 657 tests with 100% pass rate |
 
 ## Workspace Crates
 

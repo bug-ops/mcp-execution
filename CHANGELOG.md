@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.7.1] - 2026-06-07
+
 ### Breaking
 
 - **`skill` command stdout shape changed** (#82): previously printed a raw JSON blob of `GenerateSkillResult` (the generation context). Now prints a compact `SkillWriteResult` (`{success, output_path, bytes_written, tool_count}`). Scripts or tooling parsing the old JSON output must be updated.
@@ -41,6 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eliminating the false-positive when servers advertise `resources: null` (issue #80).
 - **`mcp-execution-introspector`**: `supports_prompts` now derived from
   `capabilities.prompts.is_some()` (was always `false`).
+- **`mcp-execution-codegen`**: JSDoc sanitization extended to `input_schema` property descriptions,
+  `category`, `keywords`, and `short_description` from categorization data (#100). A new recursive
+  `sanitize_schema_jsdoc_descriptions` pass covers all `description` fields in the JSON schema tree;
+  non-string description values are replaced with `null` to prevent injection via schema metadata.
+- **`mcp-execution-cli`**: All help text examples updated from the incorrect `mcp-cli` binary name
+  to the correct `mcp-execution-cli` (#98).
+
+### Changed
+
+- **Dependencies**: Updated transitive dependencies (Cargo.lock only, no API changes)
+  - `clap` / `clap_complete`: 4.6.2 → 4.6.5
+  - `rmcp`: 1.5.0 → 1.7.0
+  - `tokio`: 1.52.1 → 1.52.3
+  - `handlebars`: 6.4.0 → 6.4.1
+  - `serde_json`: 1.0.149 → 1.0.150
+  - `uuid`: 1.23.1 → 1.23.2
 
 ---
 
@@ -1195,12 +1215,13 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2026-04-21
-**Version**: 0.7.0 (Production Ready)
+**Last Updated**: 2026-06-07
+**Version**: 0.7.1 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/bug-ops/mcp-execution/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/bug-ops/mcp-execution/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/bug-ops/mcp-execution/compare/v0.6.4...v0.6.5

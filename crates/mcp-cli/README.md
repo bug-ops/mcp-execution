@@ -98,7 +98,9 @@ mcp-execution-cli generate <SERVER> [OPTIONS]
 - `--from-config <NAME>`: Load config from mcp.json
 - `--arg <ARG>`: Server command argument (repeatable)
 - `--env <KEY=VALUE>`: Environment variable (repeatable)
+- `--name <NAME>`: Custom server name for output directory
 - `--progressive-output <PATH>`: Custom output directory
+- `--dry-run`: Preview files that would be generated without writing to disk
 - `--format <FORMAT>`: Output format (json, text, pretty)
 
 **Examples**:
@@ -107,11 +109,15 @@ mcp-execution-cli generate <SERVER> [OPTIONS]
 # From config
 mcp-execution-cli generate --from-config github
 
-# Docker container
+# Preview without writing
+mcp-execution-cli generate --from-config github --dry-run
+
+# Docker container with custom name
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
   --arg=ghcr.io/org/server \
-  --env=API_KEY=xxx
+  --env=API_KEY=xxx \
+  --name=myserver
 ```
 
 ### `introspect`
