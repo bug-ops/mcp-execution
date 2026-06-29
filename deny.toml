@@ -11,12 +11,7 @@
 [advisories]
 
 # Ignore specific advisories if needed (add RUSTSEC IDs here)
-ignore = [
-    # paste crate - unmaintained but used by rmcp (transitive dependency)
-    # Only used at compile-time for macros, low security risk
-    # Tracking: https://github.com/modelcontextprotocol/rust-sdk/issues
-    "RUSTSEC-2024-0436",
-]
+ignore = []
 
 [licenses]
 version = 2
