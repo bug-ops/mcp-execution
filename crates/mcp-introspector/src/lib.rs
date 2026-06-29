@@ -327,7 +327,7 @@ impl Introspector {
         // Extract name, version, and capabilities from the MCP handshake result.
         // Falls back to the command string / "unknown" if the server did not send peer info.
         let (server_name, server_version, has_resources, has_prompts) =
-            extract_peer_meta(config, client.peer_info());
+            extract_peer_meta(config, client.peer_info().as_deref());
 
         let capabilities = ServerCapabilities {
             supports_tools: !tools.is_empty(),
