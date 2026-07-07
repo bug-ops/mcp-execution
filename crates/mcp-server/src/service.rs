@@ -23,7 +23,7 @@ use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
+    CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
 };
 use rmcp::{ErrorData as McpError, tool, tool_handler, tool_router};
 use std::collections::{HashMap, HashSet};
@@ -174,7 +174,7 @@ impl GeneratorService {
             expires_at: pending.expires_at,
         };
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {
                 McpError::internal_error(format!("Failed to serialize result: {e}"), None)
             })?,
@@ -267,7 +267,7 @@ impl GeneratorService {
             errors: vec![],
         };
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {
                 McpError::internal_error(format!("Failed to serialize result: {e}"), None)
             })?,
@@ -346,7 +346,7 @@ impl GeneratorService {
             servers,
         };
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {
                 McpError::internal_error(format!("Failed to serialize result: {e}"), None)
             })?,
@@ -419,7 +419,7 @@ impl GeneratorService {
             result.skill_name = name;
         }
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {
                 McpError::internal_error(format!("Failed to serialize result: {e}"), None)
             })?,
@@ -505,7 +505,7 @@ impl GeneratorService {
             metadata,
         };
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {
                 McpError::internal_error(format!("Failed to serialize result: {e}"), None)
             })?,
