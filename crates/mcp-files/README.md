@@ -93,8 +93,12 @@ let fs = FilesBuilder::new()
     .build()
     .unwrap();
 
-let options = ExportOptions::default();
-fs.export_to_disk(Path::new("~/.claude/servers"), &options)?;
+// Default options (atomic writes enabled)
+fs.export_to_filesystem(Path::new("~/.claude/servers"))?;
+
+// Or with custom options
+let options = ExportOptions::default().with_atomic_writes(false);
+fs.export_to_filesystem_with_options(Path::new("~/.claude/servers"), &options)?;
 ```
 
 > [!NOTE]

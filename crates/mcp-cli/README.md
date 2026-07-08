@@ -205,13 +205,35 @@ mcp-execution-cli skill --server github --overwrite
 > The MCP server can leverage LLM capabilities to summarize tool descriptions and reduce
 > context size, resulting in more concise and effective skill files.
 
-### `stats`
+### `server`
 
-View cache statistics:
+Manage MCP server configurations from `~/.claude/mcp.json`:
 
 ```bash
-mcp-execution-cli stats
+# List all configured servers
+mcp-execution-cli server list
+
+# Show detailed information about a server
+mcp-execution-cli server info github
+
+# Validate a server command
+mcp-execution-cli server validate docker
 ```
+
+### `setup`
+
+Validate the runtime environment for generated MCP tool execution:
+
+```bash
+mcp-execution-cli setup
+
+# Output:
+# ✓ Node.js v20.10.0 detected
+# ✓ MCP configuration found
+# ✓ Runtime setup complete
+```
+
+Checks that Node.js 18+ is installed, `~/.claude/mcp.json` exists, and makes generated TypeScript files executable (Unix only).
 
 ### `completions`
 
