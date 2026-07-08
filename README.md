@@ -196,8 +196,8 @@ mcp-execution-cli completions bash
 ## Documentation
 
 - [Progressive Loading Tutorial](examples/progressive-loading-usage.md) - Complete guide
-- [Claude Code Integration](examples/SKILL.md) - Skill setup
-- [Architecture Decisions](docs/adr/) - ADRs explaining design choices
+- [Claude Code Integration](crates/mcp-skill) - SKILL.md generation (`mcp-execution-cli skill`)
+- [Architecture Overview](docs/ARCHITECTURE.md) - System architecture and design
 
 ## Development
 

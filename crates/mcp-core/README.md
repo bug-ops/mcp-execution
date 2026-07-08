@@ -66,7 +66,7 @@ use mcp_execution_core::{Error, Result};
 
 fn process_server(id: &str) -> Result<()> {
     if id.is_empty() {
-        return Err(Error::InvalidConfiguration {
+        return Err(Error::ConfigError {
             message: "Server ID cannot be empty".to_string(),
         });
     }

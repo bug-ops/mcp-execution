@@ -21,13 +21,13 @@ This module provides the bridge between generated TypeScript tool definitions an
 This module is automatically used by generated tool files. When you generate tools via:
 
 ```bash
-mcp-execution-cli generate github
+mcp-execution-cli generate --from-config github
 ```
 
 Each tool file imports `callMCPTool` from this module:
 
 ```typescript
-import { callMCPTool } from '../_runtime/mcp-bridge.js';
+import { callMCPTool } from './_runtime/mcp-bridge.ts';
 
 export async function createIssue(params) {
   return callMCPTool('github', 'create_issue', params);
