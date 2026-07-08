@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.2] - 2026-07-09
+
+### Fixed
+
+- **`mcp-execution-introspector`**: `extract_peer_meta` call site migrated to rmcp 1.8's `Peer::peer_info()`
+  return type change (`Option<&R::PeerInfo>` → `Option<Arc<R::PeerInfo>>`, a breaking change despite the
+  minor version bump) by adding `.as_deref()` (#113).
+
+### Changed
+
+- **`mcp-execution-server`**: migrated `CallToolResult::success()` call sites from the `Content` type
+  (removed in rmcp 2.0) to `ContentBlock` (#115).
+- **Dependencies**: Updated to latest stable versions
+  - `rmcp`: 1.7.0 → 2.1.0 (via 1.8.0; see Fixed/Changed entries above for the required call-site migrations)
+  - `clap_complete`: 4.6.5 → 4.6.7
+  - `anyhow`: 1.0.102 → 1.0.103
+  - `handlebars`: 6.4.1 → 6.4.2
+  - `uuid`: 1.23.2 → 1.23.4
+  - `regex`: 1.12.3 → 1.12.4
+  - `which`: 8.0.2 → 8.0.4
+- **CI**: Updated `actions/checkout` v6 → v7, `codecov/codecov-action` v6 → v7,
+  `lewagon/wait-on-check-action` 1.7.0 → 1.8.1
+- **`deny.toml`**: removed the now-unneeded `RUSTSEC-2024-0436` advisory ignore (paste crate advisory,
+  no longer triggered after the rmcp bump)
+
+---
+
 ## [0.7.1] - 2026-06-07
 
 ### Breaking
@@ -1215,12 +1242,13 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-**Last Updated**: 2026-06-07
-**Version**: 0.7.1 (Production Ready)
+**Last Updated**: 2026-07-09
+**Version**: 0.7.2 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/bug-ops/mcp-execution/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/bug-ops/mcp-execution/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/bug-ops/mcp-execution/compare/v0.6.5...v0.6.6
