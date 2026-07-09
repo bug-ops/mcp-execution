@@ -6,14 +6,53 @@
 //! - Provides helpful error messages and suggestions
 
 use anyhow::{Context, Result};
-use mcp_execution_core::cli::ExitCode;
+use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 
+/// Structured result of the environment setup checks.
+///
+/// Captures every check [`run`] performs so it can be rendered as JSON,
+/// plain text, or the default human-readable pretty summary via
+/// [`crate::formatters::format_output`].
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::setup::SetupResult;
+///
+/// let result = SetupResult {
+///     node_version: "20.10.0".to_string(),
+///     mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
+///     mcp_config_found: true,
+///     servers_dir_found: true,
+///     files_made_executable: 3,
+/// };
+///
+/// assert_eq!(result.files_made_executable, 3);
+/// ```
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SetupResult {
+    /// Detected Node.js version (e.g. `"20.10.0"`), without the leading `v`.
+    pub node_version: String,
+    /// Path where `~/.claude/mcp.json` is expected.
+    pub mcp_config_path: String,
+    /// Whether `~/.claude/mcp.json` exists.
+    pub mcp_config_found: bool,
+    /// Whether `~/.claude/servers/` exists. Always `false` on non-Unix
+    /// platforms, since file permissions are not checked there.
+    pub servers_dir_found: bool,
+    /// Number of `.ts` files made executable under `~/.claude/servers/`.
+    /// Always `0` on non-Unix platforms.
+    pub files_made_executable: usize,
+}
+
 /// Runs the setup command.
 ///
-/// Validates that the runtime environment is ready for MCP tool execution.
+/// Validates that the runtime environment is ready for MCP tool execution
+/// and renders the results according to `output_format`.
 ///
 /// # Checks Performed
 ///
@@ -24,7 +63,7 @@ use tokio::process::Command;
 /// # Examples
 ///
 /// ```bash
-/// # Run setup validation
+/// # Run setup validation (default pretty output)
 /// mcp-execution-cli setup
 ///
 /// # Output:
@@ -32,6 +71,9 @@ use tokio::process::Command;
 /// # ✓ Runtime setup complete
 /// # Claude Code can now execute MCP tools via:
 /// #   node ~/.claude/servers/<server>/<tool>.ts '{"param":"value"}'
+///
+/// # Structured output for scripting
+/// mcp-execution-cli --format json setup
 /// ```
 ///
 /// # Errors
@@ -40,18 +82,74 @@ use tokio::process::Command;
 /// - Node.js is not installed
 /// - Node.js version is less than 18.0.0
 /// - Home directory cannot be determined
-pub async fn run() -> Result<ExitCode> {
-    println!("Checking runtime environment...\n");
+/// - Output formatting fails (serialization error)
+pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
+    if output_format == OutputFormat::Pretty {
+        println!("Checking runtime environment...\n");
+    }
 
-    // Check Node.js installation
-    check_node_version().await?;
+    let node_version = check_node_version().await?;
 
-    // Check for MCP configuration
-    check_mcp_config()?;
+    let mcp_config_path = get_mcp_config_path()?;
+    let mcp_config_found = mcp_config_path.exists();
 
-    // Make files executable (Unix only)
+    let (servers_dir_found, files_made_executable) = check_files_executable().await?;
+
+    let result = SetupResult {
+        node_version,
+        mcp_config_path: mcp_config_path.display().to_string(),
+        mcp_config_found,
+        servers_dir_found,
+        files_made_executable,
+    };
+
+    if output_format == OutputFormat::Pretty {
+        print_pretty_summary(&result);
+    } else {
+        let formatted = crate::formatters::format_output(&result, output_format)?;
+        println!("{formatted}");
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Prints the human-readable setup summary (the `Pretty` format rendering).
+fn print_pretty_summary(result: &SetupResult) {
+    println!("✓ Node.js v{} detected", result.node_version);
+
+    if result.mcp_config_found {
+        println!("✓ MCP configuration found: {}", result.mcp_config_path);
+    } else {
+        println!("⚠ MCP configuration not found");
+        println!("  Expected location: {}", result.mcp_config_path);
+        println!("  Create it with your server configurations:");
+        println!();
+        println!("  {{");
+        println!("    \"mcpServers\": {{");
+        println!("      \"github\": {{");
+        println!("        \"command\": \"docker\",");
+        println!("        \"args\": [\"run\", \"-i\", \"--rm\", \"...\"]");
+        println!("      }}");
+        println!("    }}");
+        println!("  }}");
+        println!();
+        println!("  See examples/mcp.json.example for more details.");
+    }
+
     #[cfg(unix)]
-    make_files_executable().await?;
+    {
+        if result.servers_dir_found {
+            if result.files_made_executable > 0 {
+                println!(
+                    "✓ Made {} TypeScript files executable",
+                    result.files_made_executable
+                );
+            }
+        } else {
+            println!("⚠ No servers directory found");
+            println!("  Run 'mcp-execution-cli generate <server>' to create tools");
+        }
+    }
 
     println!("\n✓ Runtime setup complete");
     println!("  Claude Code can now execute MCP tools via:");
@@ -60,13 +158,12 @@ pub async fn run() -> Result<ExitCode> {
     println!("  1. Generate tools: mcp-execution-cli generate <server>");
     println!("  2. Configure servers in ~/.claude/mcp.json");
     println!("  3. Execute tools autonomously via Node.js");
-
-    Ok(ExitCode::SUCCESS)
 }
 
 /// Checks Node.js version requirement.
 ///
-/// Verifies that Node.js 18.0.0 or higher is installed and accessible.
+/// Verifies that Node.js 18.0.0 or higher is installed and accessible, and
+/// returns the detected version string (without the leading `v`).
 ///
 /// # Errors
 ///
@@ -74,7 +171,7 @@ pub async fn run() -> Result<ExitCode> {
 /// - Node.js command not found in PATH
 /// - Node.js version cannot be determined
 /// - Node.js version is less than 18.0.0
-async fn check_node_version() -> Result<()> {
+async fn check_node_version() -> Result<String> {
     // Check if node command exists
     let output = Command::new("node")
         .arg("--version")
@@ -121,53 +218,18 @@ async fn check_node_version() -> Result<()> {
         );
     }
 
-    println!("✓ Node.js v{version_str} detected");
-    Ok(())
+    Ok(version_str.to_string())
 }
 
-/// Checks if MCP configuration exists.
-///
-/// Validates that ~/.claude/mcp.json exists and is readable.
-/// Provides helpful guidance if not found.
-///
-/// # Errors
-///
-/// Returns error if home directory cannot be determined.
-/// Warns if config file doesn't exist but doesn't fail.
-fn check_mcp_config() -> Result<()> {
-    let config_path = get_mcp_config_path()?;
-
-    if config_path.exists() {
-        println!("✓ MCP configuration found: {}", config_path.display());
-    } else {
-        println!("⚠ MCP configuration not found");
-        println!("  Expected location: {}", config_path.display());
-        println!("  Create it with your server configurations:");
-        println!();
-        println!("  {{");
-        println!("    \"mcpServers\": {{");
-        println!("      \"github\": {{");
-        println!("        \"command\": \"docker\",");
-        println!("        \"args\": [\"run\", \"-i\", \"--rm\", \"...\"]");
-        println!("      }}");
-        println!("    }}");
-        println!("  }}");
-        println!();
-        println!("  See examples/mcp.json.example for more details.");
-    }
-
-    Ok(())
-}
-
-/// Makes TypeScript files executable (Unix only).
+/// Checks for and makes TypeScript files executable (Unix only).
 ///
 /// Sets executable permissions (0755) on all .ts files in ~/.claude/servers/
 /// This allows files to be executed with shebang: `./tool.ts`
 ///
 /// # Platform Support
 ///
-/// - Unix/Linux/macOS: Sets permissions
-/// - Windows: No-op (not needed)
+/// - Unix/Linux/macOS: Sets permissions, returns `(servers_dir_found, files_made_executable)`
+/// - Windows: No-op, always returns `(false, 0)`
 ///
 /// # Errors
 ///
@@ -175,7 +237,7 @@ fn check_mcp_config() -> Result<()> {
 /// - Home directory cannot be determined
 /// - Permission changes fail
 #[cfg(unix)]
-async fn make_files_executable() -> Result<()> {
+async fn check_files_executable() -> Result<(bool, usize)> {
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
@@ -183,9 +245,7 @@ async fn make_files_executable() -> Result<()> {
 
     // Check if servers directory exists
     if !servers_dir.exists() {
-        println!("⚠ No servers directory found");
-        println!("  Run 'mcp-execution-cli generate <server>' to create tools");
-        return Ok(());
+        return Ok((false, 0));
     }
 
     // Walk through all .ts files and make them executable
@@ -213,11 +273,15 @@ async fn make_files_executable() -> Result<()> {
         }
     }
 
-    if count > 0 {
-        println!("✓ Made {count} TypeScript files executable");
-    }
+    Ok((true, count))
+}
 
-    Ok(())
+/// Checks for and makes TypeScript files executable (Unix only).
+///
+/// No-op on non-Unix platforms, since file permissions are not checked there.
+#[cfg(not(unix))]
+async fn check_files_executable() -> Result<(bool, usize)> {
+    Ok((false, 0))
 }
 
 /// Gets the path to ~/.claude/mcp.json
@@ -273,10 +337,68 @@ mod tests {
         assert!(path.to_string_lossy().contains("servers"));
     }
 
-    #[test]
-    fn test_check_mcp_config_no_panic() {
-        // Should not panic even if config doesn't exist
-        let result = check_mcp_config();
+    #[tokio::test]
+    async fn test_check_files_executable_no_panic() {
+        // Should not panic regardless of whether ~/.claude/servers exists.
+        let result = check_files_executable().await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_setup_result_serialization() {
+        let result = SetupResult {
+            node_version: "20.10.0".to_string(),
+            mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
+            mcp_config_found: true,
+            servers_dir_found: true,
+            files_made_executable: 3,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"node_version\":\"20.10.0\""));
+        assert!(json.contains("\"mcp_config_found\":true"));
+        assert!(json.contains("\"files_made_executable\":3"));
+    }
+
+    #[test]
+    fn test_setup_result_format_output_json() {
+        let result = SetupResult {
+            node_version: "20.10.0".to_string(),
+            mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
+            mcp_config_found: false,
+            servers_dir_found: true,
+            files_made_executable: 7,
+        };
+
+        let formatted =
+            crate::formatters::format_output(&result, mcp_execution_core::cli::OutputFormat::Json)
+                .unwrap();
+        assert!(formatted.contains("\"node_version\": \"20.10.0\""));
+        assert!(formatted.contains("\"mcp_config_path\": \"/home/user/.claude/mcp.json\""));
+        assert!(formatted.contains("\"mcp_config_found\": false"));
+        assert!(formatted.contains("\"servers_dir_found\": true"));
+        assert!(formatted.contains("\"files_made_executable\": 7"));
+    }
+
+    #[test]
+    fn test_setup_result_format_output_text() {
+        let result = SetupResult {
+            node_version: "20.10.0".to_string(),
+            mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
+            mcp_config_found: true,
+            servers_dir_found: false,
+            files_made_executable: 0,
+        };
+
+        let formatted =
+            crate::formatters::format_output(&result, mcp_execution_core::cli::OutputFormat::Text)
+                .unwrap();
+        // Text format is compact JSON (no newlines), unlike the pretty-printed
+        // Json format checked above.
+        assert!(!formatted.contains('\n'));
+        assert!(formatted.contains("\"node_version\":\"20.10.0\""));
+        assert!(formatted.contains("\"mcp_config_found\":true"));
+        assert!(formatted.contains("\"servers_dir_found\":false"));
+        assert!(formatted.contains("\"files_made_executable\":0"));
     }
 }

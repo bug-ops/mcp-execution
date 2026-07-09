@@ -127,7 +127,10 @@ pub mod pretty {
             Value::Null => Ok("null".dimmed().to_string()),
             Value::Bool(b) => Ok(b.to_string().yellow().to_string()),
             Value::Number(n) => Ok(n.to_string().cyan().to_string()),
-            Value::String(s) => Ok(format!("\"{}\"", s.green())),
+            Value::String(s) => {
+                let quoted = serde_json::to_string(s)?;
+                Ok(quoted.green().to_string())
+            }
             Value::Array(arr) => {
                 if arr.is_empty() {
                     return Ok("[]".to_string());
@@ -155,7 +158,9 @@ pub mod pretty {
                 let entries: Vec<_> = obj.iter().collect();
                 for (i, (key, val)) in entries.iter().enumerate() {
                     result.push_str(&next_indent_str);
-                    result.push_str(&format!("\"{}\": ", key.blue().bold()));
+                    let quoted_key = serde_json::to_string(key)?;
+                    result.push_str(&quoted_key.blue().bold().to_string());
+                    result.push_str(": ");
                     result.push_str(&format_value(val, indent + 1)?);
                     if i < entries.len() - 1 {
                         result.push(',');
@@ -265,6 +270,64 @@ mod tests {
 
         let output = format_output(&data, OutputFormat::Text).unwrap();
         assert!(output.contains("\"name\""));
+    }
+
+    #[test]
+    fn test_pretty_format_escapes_quotes_and_newlines() {
+        // Regression test: strings containing embedded quotes, backslashes,
+        // or newlines must round-trip through valid JSON once ANSI color
+        // codes are stripped, not just be wrapped in literal quotes.
+        #[derive(Serialize)]
+        struct Message {
+            text: String,
+        }
+
+        let data = Message {
+            text: "line one\nline \"two\" with \\backslash\\".to_string(),
+        };
+
+        let output = pretty::format(&data).unwrap();
+        let stripped = strip_ansi(&output);
+
+        let parsed: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(parsed["text"], "line one\nline \"two\" with \\backslash\\");
+    }
+
+    #[test]
+    fn test_pretty_format_escapes_object_keys() {
+        // Regression test: object keys containing embedded quotes, backslashes,
+        // or newlines must also be escaped, not just values (the schema-derived
+        // property names rendered by `introspect --detailed` are attacker-controlled
+        // by the remote MCP server).
+        let mut data = std::collections::BTreeMap::new();
+        data.insert("line one\nline \"two\" with \\backslash\\".to_string(), 1);
+
+        let output = pretty::format(&data).unwrap();
+        let stripped = strip_ansi(&output);
+
+        let parsed: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(
+            parsed["line one\nline \"two\" with \\backslash\\"],
+            serde_json::json!(1)
+        );
+    }
+
+    /// Strips ANSI color escape sequences emitted by the `colored` crate.
+    fn strip_ansi(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
     }
 
     #[test]
