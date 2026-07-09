@@ -39,7 +39,7 @@ import { callMCPTool } from './_runtime/mcp-bridge.ts';
 export async function {{typescript_name}}(
   params: {{typescript_name}}Params
 ): Promise<{{typescript_name}}Result> {
-  return await callMCPTool('{{server_id}}', '{{name}}', params);
+  return await callMCPTool('{{{server_id_literal}}}', '{{{name_literal}}}', params);
 }
 
 /**

@@ -189,6 +189,8 @@ mod tests {
             "description": "Test tool",
             "server_id": "test",
             "name": "test_tool",
+            "name_literal": "test_tool",
+            "server_id_literal": "test",
             "properties": [],
             "has_required_properties": false,
             "input_schema": {}

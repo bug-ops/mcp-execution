@@ -31,15 +31,15 @@
 //! ```
 
 use crate::common::types::{GeneratedCode, GeneratedFile};
-use crate::common::typescript::{extract_properties, to_camel_case};
+use crate::common::typescript::{extract_properties, sanitize_ts_identifier, to_camel_case};
 use crate::progressive::types::{
     BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolCategorization, ToolContext,
     ToolSummary,
 };
 use crate::template_engine::TemplateEngine;
 use mcp_execution_core::{Error, Result};
-use mcp_execution_introspector::ServerInfo;
-use std::collections::HashMap;
+use mcp_execution_introspector::{ServerInfo, ToolInfo};
+use std::collections::{HashMap, HashSet};
 
 /// Generator for progressive loading TypeScript files.
 ///
@@ -147,10 +147,15 @@ impl<'a> ProgressiveGenerator<'a> {
 
         let mut code = GeneratedCode::new();
         let server_id = server_info.id.as_str();
+        let typescript_names = resolve_typescript_names(&server_info.tools);
 
         // Generate tool files (one per tool)
         for tool in &server_info.tools {
-            let tool_context = self.create_tool_context(server_id, tool, None)?;
+            let typescript_name = typescript_names
+                .get(tool.name.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let tool_context = self.create_tool_context(server_id, tool, None, typescript_name)?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
             code.add_file(GeneratedFile {
@@ -162,7 +167,7 @@ impl<'a> ProgressiveGenerator<'a> {
         }
 
         // Generate index.ts
-        let index_context = self.create_index_context(server_info, None)?;
+        let index_context = self.create_index_context(server_info, None, &typescript_names)?;
         let index_code = self.engine.render("progressive/index", &index_context)?;
 
         code.add_file(GeneratedFile {
@@ -267,12 +272,15 @@ impl<'a> ProgressiveGenerator<'a> {
 
         let mut code = GeneratedCode::new();
         let server_id = server_info.id.as_str();
+        let typescript_names = resolve_typescript_names(&server_info.tools);
 
         // Generate tool files (one per tool) with categorization metadata
         for tool in &server_info.tools {
             let tool_name = tool.name.as_str();
             let categorization = categorizations.get(tool_name);
-            let tool_context = self.create_tool_context(server_id, tool, categorization)?;
+            let typescript_name = typescript_names.get(tool_name).cloned().unwrap_or_default();
+            let tool_context =
+                self.create_tool_context(server_id, tool, categorization, typescript_name)?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
             code.add_file(GeneratedFile {
@@ -288,7 +296,8 @@ impl<'a> ProgressiveGenerator<'a> {
         }
 
         // Generate index.ts with category grouping
-        let index_context = self.create_index_context(server_info, Some(categorizations))?;
+        let index_context =
+            self.create_index_context(server_info, Some(categorizations), &typescript_names)?;
         let index_code = self.engine.render("progressive/index", &index_context)?;
 
         code.add_file(GeneratedFile {
@@ -335,6 +344,10 @@ impl<'a> ProgressiveGenerator<'a> {
     ///
     /// Converts MCP tool schema to the format needed for template rendering.
     ///
+    /// `typescript_name` must be pre-resolved via [`resolve_typescript_names`] so that
+    /// collisions across a server's tools are disambiguated consistently between the tool
+    /// file and its `index.ts` re-export.
+    ///
     /// # Errors
     ///
     /// Returns error if schema conversion fails.
@@ -343,9 +356,8 @@ impl<'a> ProgressiveGenerator<'a> {
         server_id: &str,
         tool: &mcp_execution_introspector::ToolInfo,
         categorization: Option<&ToolCategorization>,
+        typescript_name: String,
     ) -> Result<ToolContext> {
-        let typescript_name = to_camel_case(tool.name.as_str());
-
         // Extract properties from input schema
         let properties = self.extract_property_infos(&tool.input_schema)?;
 
@@ -358,8 +370,10 @@ impl<'a> ProgressiveGenerator<'a> {
         ));
 
         Ok(ToolContext {
-            server_id: server_id.to_string(),
+            server_id: sanitize_jsdoc(server_id, 256),
             name: sanitize_jsdoc(tool.name.as_str(), 256),
+            name_literal: sanitize_ts_string_literal(tool.name.as_str()),
+            server_id_literal: sanitize_ts_string_literal(server_id),
             typescript_name,
             description,
             input_schema: sanitize_schema_jsdoc_descriptions(tool.input_schema.clone()),
@@ -371,10 +385,15 @@ impl<'a> ProgressiveGenerator<'a> {
     }
 
     /// Creates index context from server information.
+    ///
+    /// `typescript_names` must be the same pre-resolved mapping (from
+    /// [`resolve_typescript_names`]) used to generate each tool's file, so the `index.ts`
+    /// re-exports reference the exact identifiers those files actually export.
     fn create_index_context(
         &self,
         server_info: &ServerInfo,
         categorizations: Option<&HashMap<String, ToolCategorization>>,
+        typescript_names: &HashMap<String, String>,
     ) -> Result<IndexContext> {
         let tools: Vec<ToolSummary> = server_info
             .tools
@@ -383,7 +402,7 @@ impl<'a> ProgressiveGenerator<'a> {
                 let tool_name = tool.name.as_str();
                 let cat = categorizations.and_then(|c| c.get(tool_name));
                 ToolSummary {
-                    typescript_name: to_camel_case(tool_name),
+                    typescript_name: typescript_names.get(tool_name).cloned().unwrap_or_default(),
                     description: sanitize_jsdoc(&tool.description, 256),
                     category: cat.map(|c| sanitize_jsdoc(&c.category, 128)),
                     keywords: cat.map(|c| sanitize_jsdoc(&c.keywords, 256)),
@@ -445,7 +464,7 @@ impl<'a> ProgressiveGenerator<'a> {
 
         let mut properties = Vec::new();
         for prop in raw_properties {
-            let name = prop["name"]
+            let raw_name = prop["name"]
                 .as_str()
                 .ok_or_else(|| Error::ValidationError {
                     field: "name".to_string(),
@@ -463,11 +482,12 @@ impl<'a> ProgressiveGenerator<'a> {
 
             let required = prop["required"].as_bool().unwrap_or(false);
 
-            // Extract description if available
+            // Extract description if available (looked up by the raw schema key, before
+            // sanitization, since that's what the input schema is actually keyed by)
             let description = if let Some(obj) = schema.as_object() {
                 obj.get("properties")
                     .and_then(|props| props.as_object())
-                    .and_then(|props| props.get(&name))
+                    .and_then(|props| props.get(&raw_name))
                     .and_then(|prop_schema| prop_schema.as_object())
                     .and_then(|obj| obj.get("description"))
                     .and_then(|desc| desc.as_str())
@@ -477,7 +497,7 @@ impl<'a> ProgressiveGenerator<'a> {
             };
 
             properties.push(PropertyInfo {
-                name,
+                name: sanitize_ts_identifier(&raw_name),
                 typescript_type,
                 description,
                 required,
@@ -499,6 +519,43 @@ fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
     } else {
         sanitized
     }
+}
+
+/// Escapes a string for safe embedding inside a single-quoted TypeScript string literal.
+///
+/// Backslashes are escaped before quotes so the backslash introduced by quote-escaping
+/// is not itself re-escaped. Carriage returns and newlines are escaped so the value
+/// cannot terminate the literal by injecting a raw line break.
+fn sanitize_ts_string_literal(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
+}
+
+/// Resolves a collision-free TypeScript identifier for each tool.
+///
+/// `sanitize_ts_identifier` can map distinct tool names to the same identifier (e.g.
+/// `foo-bar` and `foo.bar` both become `foo_bar`). Since `typescript_name` doubles as the
+/// generated file's basename and its `index.ts` re-export, an undetected collision would
+/// silently overwrite one tool's file and produce a duplicate-export compile error. Colliding
+/// names are disambiguated with a numeric suffix in tool order.
+fn resolve_typescript_names(tools: &[ToolInfo]) -> HashMap<String, String> {
+    let mut used = HashSet::new();
+    let mut resolved = HashMap::with_capacity(tools.len());
+
+    for tool in tools {
+        let base = sanitize_ts_identifier(&to_camel_case(tool.name.as_str()));
+        let mut candidate = base.clone();
+        let mut suffix = 2;
+        while !used.insert(candidate.clone()) {
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        resolved.insert(tool.name.as_str().to_string(), candidate);
+    }
+
+    resolved
 }
 
 fn sanitize_schema_jsdoc_descriptions(mut value: serde_json::Value) -> serde_json::Value {
@@ -637,11 +694,18 @@ mod tests {
             short_description: "Send a message".to_string(),
         };
         let context = generator
-            .create_tool_context("test-server", &tool, Some(&categorization))
+            .create_tool_context(
+                "test-server",
+                &tool,
+                Some(&categorization),
+                "sendMessage".to_string(),
+            )
             .unwrap();
 
         assert_eq!(context.server_id, "test-server");
         assert_eq!(context.name, "send_message");
+        assert_eq!(context.name_literal, "send_message");
+        assert_eq!(context.server_id_literal, "test-server");
         assert_eq!(context.typescript_name, "sendMessage");
         assert_eq!(context.description, "Sends a message");
         assert_eq!(context.properties.len(), 1);
@@ -671,7 +735,7 @@ mod tests {
         };
 
         let context = generator
-            .create_tool_context("test-server", &tool, None)
+            .create_tool_context("test-server", &tool, None, "formatDocument".to_string())
             .unwrap();
 
         assert_eq!(
@@ -705,7 +769,7 @@ mod tests {
         };
 
         let context = generator
-            .create_tool_context("test-server", &tool, None)
+            .create_tool_context("test-server", &tool, None, "sendMessage".to_string())
             .unwrap();
 
         let expected = sanitize_schema_jsdoc_descriptions(tool.input_schema);
@@ -720,8 +784,11 @@ mod tests {
     fn test_create_index_context() {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
+        let typescript_names = resolve_typescript_names(&server_info.tools);
 
-        let context = generator.create_index_context(&server_info, None).unwrap();
+        let context = generator
+            .create_index_context(&server_info, None, &typescript_names)
+            .unwrap();
 
         assert_eq!(context.server_name, "Test Server");
         assert_eq!(context.server_version, "1.0.0");
@@ -765,6 +832,55 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_property_infos_sanitizes_malicious_property_name() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "x: string }; export const pwned = 1; interface J {": {
+                    "type": "string",
+                    "description": "Evil property"
+                }
+            },
+            "required": []
+        });
+
+        let props = generator.extract_property_infos(&schema).unwrap();
+
+        assert_eq!(props.len(), 1);
+        assert!(!props[0].name.contains(['{', '}', ';', ':', ' ']));
+        // The description lookup must still succeed even though the property
+        // name used for the lookup differs from the sanitized display name.
+        assert_eq!(props[0].description, Some("Evil property".to_string()));
+    }
+
+    #[test]
+    fn test_generate_sanitizes_property_name_injection() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools[0].input_schema = json!({
+            "type": "object",
+            "properties": {
+                "x: string }; export const pwned = evil(); interface J {": {"type": "string"}
+            },
+            "required": []
+        });
+
+        let code = generator.generate(&server_info).unwrap();
+        let tool = code
+            .files
+            .iter()
+            .find(|f| f.path == "createIssue.ts")
+            .unwrap();
+
+        assert!(
+            !tool.content.contains("export const pwned"),
+            "raw property name must not inject a top-level statement: {}",
+            tool.content
+        );
+    }
+
+    #[test]
     fn test_sanitize_jsdoc_strips_comment_terminator() {
         assert_eq!(sanitize_jsdoc("Foo */ bar", 256), "Foo *\\/ bar");
     }
@@ -789,6 +905,148 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_ts_string_literal_escapes_quote_and_backslash() {
+        assert_eq!(
+            sanitize_ts_string_literal(r"it's a \test"),
+            r"it\'s a \\test"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_ts_string_literal_escape_order_prevents_double_escaping() {
+        // A trailing backslash followed by a quote must not become `\\\'`
+        // (which would re-open the string); backslash escaping happens first.
+        assert_eq!(sanitize_ts_string_literal("\\'"), r"\\\'");
+    }
+
+    #[test]
+    fn test_sanitize_ts_string_literal_escapes_newlines() {
+        assert_eq!(
+            sanitize_ts_string_literal("line1\nline2\rline3"),
+            "line1\\nline2\\rline3"
+        );
+    }
+
+    // `sanitize_ts_identifier`'s core behavior (invalid-char replacement, leading-digit
+    // and empty-string prefixing) is unit-tested in `common::typescript`, its canonical
+    // home now that it's a shared `pub fn`; this test covers the passthrough case that's
+    // specific to how this module uses it (already-valid camelCase tool names).
+    #[test]
+    fn test_sanitize_ts_identifier_passthrough_valid() {
+        assert_eq!(sanitize_ts_identifier("sendMessage_1"), "sendMessage_1");
+    }
+
+    #[test]
+    fn test_generate_sanitizes_call_site_string_literal_injection() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools[0].name = ToolName::new("create_issue'); alert('pwned");
+
+        let code = generator.generate(&server_info).unwrap();
+        let tool = code
+            .files
+            .iter()
+            .find(|f| {
+                std::path::Path::new(&f.path)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("ts"))
+                    && f.path != "index.ts"
+            })
+            .unwrap();
+
+        assert!(
+            !tool.content.contains("'); alert('pwned"),
+            "raw quote must not break out of the callMCPTool string literal: {}",
+            tool.content
+        );
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_disambiguates_collisions() {
+        let tools = vec![
+            ToolInfo {
+                name: ToolName::new("foo-bar"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+            ToolInfo {
+                name: ToolName::new("foo.bar"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+            ToolInfo {
+                name: ToolName::new("foo bar"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+        ];
+
+        let resolved = resolve_typescript_names(&tools);
+        let mut names: Vec<&String> = resolved.values().collect();
+        names.sort();
+
+        // All three distinct tool names must resolve to distinct identifiers.
+        assert_eq!(resolved.len(), 3);
+        let unique: HashSet<&String> = names.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            3,
+            "collisions must be disambiguated: {names:?}"
+        );
+        assert_eq!(resolved["foo-bar"], "foo_bar");
+    }
+
+    #[test]
+    fn test_generate_disambiguates_colliding_tool_names() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools = vec![
+            ToolInfo {
+                name: ToolName::new("foo-bar"),
+                description: "First".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+            ToolInfo {
+                name: ToolName::new("foo.bar"),
+                description: "Second".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+        ];
+
+        let code = generator.generate(&server_info).unwrap();
+
+        // Both tools must produce distinct files: no silent overwrite.
+        let tool_files: Vec<&str> = code
+            .files
+            .iter()
+            .filter(|f| f.path == "foo_bar.ts" || f.path == "foo_bar_2.ts")
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(
+            tool_files.len(),
+            2,
+            "colliding names must not overwrite each other's file: {tool_files:?}"
+        );
+
+        let index = code.files.iter().find(|f| f.path == "index.ts").unwrap();
+        assert_eq!(
+            index.content.matches("export { foo_bar,").count(),
+            1,
+            "index.ts must export the first tool's identifier exactly once"
+        );
+        assert_eq!(
+            index.content.matches("export { foo_bar_2,").count(),
+            1,
+            "index.ts must export the disambiguated second identifier exactly once"
+        );
+    }
+
+    #[test]
     fn test_sanitize_schema_jsdoc_drops_non_string_descriptions() {
         let sanitized = sanitize_schema_jsdoc_descriptions(json!({
             "type": "object",
@@ -803,6 +1061,47 @@ mod tests {
 
         assert!(sanitized["description"].is_null());
         assert!(sanitized["properties"]["title"]["description"].is_null());
+    }
+
+    #[test]
+    fn test_sanitize_schema_jsdoc_recurses_into_array_items() {
+        let sanitized = sanitize_schema_jsdoc_descriptions(json!({
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": [
+                        {
+                            "type": "string",
+                            "description": "Tag */ injected\nnext"
+                        }
+                    ]
+                }
+            }
+        }));
+
+        let description = sanitized["properties"]["tags"]["items"][0]["description"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(description, "Tag *\\/ injected next");
+    }
+
+    #[test]
+    fn test_sanitize_jsdoc_truncation_boundary_injection() {
+        let max_len = 256;
+        // Place the "*/" pair straddling the max_len boundary: '*' is the
+        // max_len-th character and '/' is the very next one, so a naive
+        // truncate-then-check could see the split land between them.
+        let payload = format!("{}*/{}", "a".repeat(max_len - 1), "trailer");
+
+        let sanitized = sanitize_jsdoc(&payload, max_len);
+
+        assert!(
+            !sanitized.contains("*/"),
+            "truncation must not re-open the JSDoc comment: {sanitized}"
+        );
+        assert_eq!(sanitized.chars().count(), max_len);
     }
 
     #[test]
