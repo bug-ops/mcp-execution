@@ -43,25 +43,160 @@ static KEYWORDS_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"@keywords[ \t]+(.+)").expect("valid regex"));
 static DESC_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"@description[ \t]+(.+)").expect("valid regex"));
-static INTERFACE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"interface\s+\w+Params\s*\{([^}]*)\}").expect("valid regex"));
-// TODO(#124): INTERFACE_REGEX body truncation — nested-type bodies containing `}` are cut off
-// (e.g., `{ foo: string }` as a property type truncates the interface match early).
-// Suggested action: switch to a balanced-brace parser or accept multi-pass scanning.
+static INTERFACE_OPEN_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"interface\s+\w+Params\s*\{").expect("valid regex"));
 
-/// Anchored single-line property pattern.
+/// Anchored property pattern, applied to a single already-isolated property
+/// declaration (comments stripped, internal whitespace collapsed to single
+/// spaces).
 ///
 /// Matches TypeScript interface properties like:
 /// - `name: string;`
 /// - `count?: number;`
 /// - `readonly id: string;`
-///
-/// The `^...$` anchors, combined with line-by-line iteration, prevent false
-/// positives from `JSDoc` comment lines such as `* Tags to include: foo, bar`.
+/// - `filter: { foo: string; bar: number; }` (nested object type — the type
+///   capture is unanchored to `;` since the caller has already isolated the
+///   property boundary via [`split_top_level_properties`]).
 static PROP_LINE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:readonly\s+)?([A-Za-z_$][A-Za-z0-9_$]*)(\?)?\s*:\s*([^;]+?)\s*[;,]?\s*$")
+    Regex::new(r"^(?:readonly\s+)?([A-Za-z_$][A-Za-z0-9_$]*)(\?)?\s*:\s*(.+?)\s*[;,]?\s*$")
         .expect("valid regex")
 });
+
+/// Scanner state while walking raw TypeScript source one character at a
+/// time, so structural characters (`{`, `}`, `;`) that appear inside a
+/// comment or string literal are not mistaken for real syntax.
+///
+/// This is a targeted heuristic, not a full TypeScript lexer — constructs
+/// like regex literals (`/a;b{2}/`) are not recognized and could still
+/// confuse comment detection. Revisit if generated parameter types grow
+/// more syntactically complex.
+#[derive(Clone, Copy, PartialEq)]
+enum ScanState {
+    Code,
+    LineComment,
+    BlockComment,
+    /// Inside a string/template literal; holds the opening quote character.
+    StringLiteral(char),
+}
+
+/// Extract the body of a `...Params` interface via a single comment- and
+/// string-literal-aware pass.
+///
+/// Brace depth is tracked from the opening `{` to its true match, but only
+/// while scanning code — braces inside a `//` or `/* */` comment (e.g. an
+/// MCP-supplied `JSDoc` `@description` mentioning `{`) or inside a string
+/// literal (e.g. a `"curly: {"` enum value) are ignored rather than treated
+/// as structural, so they can no longer corrupt the match or drop the whole
+/// interface. Comments are stripped from the returned body; string-literal
+/// contents are preserved verbatim.
+fn extract_interface_body(content: &str) -> Option<String> {
+    let open = INTERFACE_OPEN_REGEX.find(content)?;
+    let mut chars = content[open.end()..].chars().peekable();
+
+    let mut state = ScanState::Code;
+    let mut depth = 1i32;
+    let mut escaped = false;
+    let mut body = String::new();
+
+    while let Some(ch) = chars.next() {
+        match state {
+            ScanState::Code => match ch {
+                '/' if chars.peek() == Some(&'/') => {
+                    chars.next();
+                    state = ScanState::LineComment;
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    state = ScanState::BlockComment;
+                }
+                '"' | '\'' | '`' => {
+                    state = ScanState::StringLiteral(ch);
+                    body.push(ch);
+                }
+                '{' => {
+                    depth += 1;
+                    body.push(ch);
+                }
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(body);
+                    }
+                    body.push(ch);
+                }
+                _ => body.push(ch),
+            },
+            ScanState::LineComment => {
+                if ch == '\n' {
+                    state = ScanState::Code;
+                    body.push(ch);
+                }
+            }
+            ScanState::BlockComment => {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    state = ScanState::Code;
+                    body.push(' ');
+                }
+            }
+            ScanState::StringLiteral(quote) => {
+                body.push(ch);
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == quote {
+                    state = ScanState::Code;
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Split a comment-free interface body into individual property
+/// declarations on top-level `;` — semicolons that are nested inside
+/// neither a property's own `{}` type (e.g. `filter: { a: string; b: number };`)
+/// nor a string-literal type value (e.g. `pattern: "a;b";`).
+fn split_top_level_properties(body: &str) -> Vec<&str> {
+    let mut properties = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (offset, ch) in body.char_indices() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => quote = Some(ch),
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ';' if depth == 0 => {
+                properties.push(body[start..offset].trim());
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+
+    let tail = body[start..].trim();
+    if !tail.is_empty() {
+        properties.push(tail);
+    }
+
+    properties
+}
 
 // Regexes for SKILL.md frontmatter parsing
 static FRONTMATTER_REGEX: LazyLock<Regex> =
@@ -282,68 +417,42 @@ pub fn parse_tool_file(content: &str, filename: &str) -> Result<ParsedToolFile, 
 /// }
 /// ```
 ///
-/// Each line is processed individually so that `JSDoc` comment lines (e.g.
-/// `* Tags to include: foo, bar`) are rejected before the regex runs.
-/// Trailing `// ...` inline comments are stripped from each property line
-/// before matching.
-///
-/// # Limitations
-///
-/// Multi-line property declarations (type wraps to the next line) are not
-/// supported — each property must fit on a single line.
-/// TODO(#125): Add multi-line property support if generated TS ever wraps types.
+/// The interface body is extracted via a comment- and string-literal-aware
+/// balanced-brace scan (so nested object types like `filter: { a: string; b:
+/// number }` don't truncate the body, and braces inside comments or string
+/// literals don't corrupt it), then split into properties on top-level `;`.
+/// Splitting on `;` rather than newlines means a property declaration whose
+/// type wraps onto a second line (e.g. `mode:\n  "read" | "write";`) is
+/// captured and parsed as a single unit; each property's internal whitespace
+/// is then collapsed to single spaces before matching so a multi-line type
+/// (including a nested object type with its own `;`-terminated members) is
+/// captured in full.
 fn parse_parameters(content: &str) -> Vec<ParsedParameter> {
     let mut parameters = Vec::new();
 
-    if let Some(captures) = INTERFACE_REGEX.captures(content)
-        && let Some(body) = captures.get(1)
-    {
-        for raw in body.as_str().lines() {
-            let line = raw.trim_start();
+    let Some(body) = extract_interface_body(content) else {
+        return parameters;
+    };
 
-            // Skip blank lines and comment lines before applying the regex.
-            if line.is_empty()
-                || line.starts_with("//")
-                || line.starts_with("/*")
-                || line.starts_with('*')
-            {
-                continue;
-            }
+    for property in split_top_level_properties(&body) {
+        let collapsed = property.split_whitespace().collect::<Vec<_>>().join(" ");
 
-            // Bound comment search before the first string delimiter so that
-            // `//` or `/*` inside a string-literal type (e.g. `"https://x"`)
-            // does not falsely truncate the property line (S2).
-            let comment_search_end = line
-                .find('"')
-                .or_else(|| line.find('\''))
-                .unwrap_or(line.len());
-            let search_region = &line[..comment_search_end];
+        if let Some(cap) = PROP_LINE_REGEX.captures(&collapsed) {
+            let name = cap
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            let optional = cap.get(2).is_some();
+            let typescript_type = cap
+                .get(3)
+                .map_or_else(|| "unknown".to_string(), |m| m.as_str().trim().to_string());
 
-            // Find the earliest `//` or `/*` comment marker within the safe region,
-            // then strip everything from that position to end-of-line (S1 + C1).
-            let comment_start = [search_region.find("//"), search_region.find("/*")]
-                .into_iter()
-                .flatten()
-                .min();
-            let line = comment_start.map_or(line, |i| line[..i].trim_end());
-
-            if let Some(cap) = PROP_LINE_REGEX.captures(line) {
-                let name = cap
-                    .get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                let optional = cap.get(2).is_some();
-                let typescript_type = cap
-                    .get(3)
-                    .map_or_else(|| "unknown".to_string(), |m| m.as_str().trim().to_string());
-
-                parameters.push(ParsedParameter {
-                    name,
-                    typescript_type,
-                    required: !optional,
-                    description: None,
-                });
-            }
+            parameters.push(ParsedParameter {
+                name,
+                typescript_type,
+                required: !optional,
+                description: None,
+            });
         }
     }
 
@@ -838,6 +947,158 @@ interface TestParams {
         if let Some(union) = params.iter().find(|p| p.name == "union") {
             assert!(union.required);
         }
+    }
+
+    #[test]
+    fn test_parse_parameters_nested_type_does_not_truncate_body() {
+        // Issue #124 regression: a property with an inline nested object type
+        // containing `}` must not truncate the rest of the interface body.
+        let content = r"
+interface TestParams {
+  filter: { foo: string };
+  limit: number;
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(
+            params.len(),
+            2,
+            "expected filter and limit, got: {params:?}"
+        );
+
+        let filter = params.iter().find(|p| p.name == "filter").unwrap();
+        assert!(filter.required);
+        assert_eq!(filter.typescript_type, "{ foo: string }");
+
+        let limit = params.iter().find(|p| p.name == "limit").unwrap();
+        assert!(limit.required);
+        assert_eq!(limit.typescript_type, "number");
+    }
+
+    #[test]
+    fn test_parse_parameters_multiline_property_declaration() {
+        // Issue #125 regression: a property whose type wraps onto a second
+        // line must still be parsed, with its full type captured.
+        let content = "
+interface TestParams {
+  mode:\n    \"read\" | \"write\";
+  name: string;
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(params.len(), 2, "expected mode and name, got: {params:?}");
+
+        let mode = params.iter().find(|p| p.name == "mode").unwrap();
+        assert!(mode.required);
+        assert_eq!(mode.typescript_type, "\"read\" | \"write\"");
+
+        let name = params.iter().find(|p| p.name == "name").unwrap();
+        assert!(name.required);
+    }
+
+    #[test]
+    fn test_parse_parameters_multi_member_nested_object_type() {
+        // S1 regression: a multi-line nested object type with its own
+        // `;`-terminated members (the idiomatic codegen shape for an
+        // object-typed parameter) must still be captured in full, not
+        // dropped because its type contains internal `;`.
+        let content = r"
+interface TestParams {
+  filter: {
+    foo: string;
+    bar: number;
+  };
+  limit: number;
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(
+            params.len(),
+            2,
+            "expected filter and limit, got: {params:?}"
+        );
+
+        let filter = params.iter().find(|p| p.name == "filter").unwrap();
+        assert!(filter.required);
+        assert_eq!(filter.typescript_type, "{ foo: string; bar: number; }");
+
+        let limit = params.iter().find(|p| p.name == "limit").unwrap();
+        assert!(limit.required);
+        assert_eq!(limit.typescript_type, "number");
+    }
+
+    #[test]
+    fn test_parse_parameters_unbalanced_brace_in_line_comment() {
+        // S2 regression: a `}` inside a `//` comment (e.g. from an
+        // MCP-supplied JSDoc description) must not be treated as closing the
+        // interface — it must not drop every parameter.
+        let content = r"
+interface TestParams {
+  // returns just a closing brace }
+  name: string;
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(
+            params.len(),
+            1,
+            "brace inside a // comment must not corrupt body extraction, got: {params:?}"
+        );
+        assert_eq!(params[0].name, "name");
+    }
+
+    #[test]
+    fn test_parse_parameters_unbalanced_brace_in_block_comment() {
+        // S2 regression: an unmatched `{` inside a `/* */` comment must not
+        // corrupt brace-depth tracking for the rest of the interface.
+        let content = r"
+interface TestParams {
+  /* opening brace: { */
+  name: string;
+}
+";
+
+        let params = parse_parameters(content);
+        assert_eq!(
+            params.len(),
+            1,
+            "brace inside a block comment must not corrupt body extraction, got: {params:?}"
+        );
+        assert_eq!(params[0].name, "name");
+    }
+
+    #[test]
+    fn test_parse_parameters_string_literal_with_semicolon_and_brace() {
+        // S3 regression: `;` and `{` inside string-literal type values (e.g.
+        // enum-derived unions) must not be treated as structural — they must
+        // not corrupt splitting or brace-depth tracking.
+        let content = r#"
+interface TestParams {
+  pattern: "a;b";
+  note: "curly open: {";
+  limit: number;
+}
+"#;
+
+        let params = parse_parameters(content);
+        assert_eq!(
+            params.len(),
+            3,
+            "expected pattern, note, limit — got: {params:?}"
+        );
+
+        let pattern = params.iter().find(|p| p.name == "pattern").unwrap();
+        assert_eq!(pattern.typescript_type, "\"a;b\"");
+
+        let note = params.iter().find(|p| p.name == "note").unwrap();
+        assert_eq!(note.typescript_type, "\"curly open: {\"");
+
+        let limit = params.iter().find(|p| p.name == "limit").unwrap();
+        assert_eq!(limit.typescript_type, "number");
     }
 
     #[test]

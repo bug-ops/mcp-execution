@@ -50,6 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a single global mutex, so a slow or hung server only blocks `introspect_server` calls for that same
   server id rather than every session. The per-id lock entry is evicted after each call completes to
   bound memory growth from caller-supplied server ids (#120).
+- **`mcp-execution-skill`**: `parse_parameters` no longer silently drops or corrupts interface
+  properties on realistic generated TypeScript shapes. Interface body extraction and property
+  splitting now use a single comment- and string-literal-aware character scan instead of a
+  `[^}]*`-bounded regex, fixing: a nested object-type property (e.g. `filter: { foo: string };`)
+  truncating the rest of the interface body (#124); a property declaration whose type wraps onto
+  a second line (e.g. `mode:\n  "read" | "write";`) being silently dropped (#125); a multi-member
+  nested object type (e.g. `filter: { foo: string; bar: number; }`) still being dropped even after
+  the #124 fix, because the property regex could not span an internal `;`; a brace inside a `//` or
+  `/* */` comment (e.g. an MCP server's free-text tool description) corrupting brace-depth tracking
+  and dropping every parameter for that tool; and a `{`, `}`, or `;` inside a string-literal type
+  value (e.g. an enum-derived union) corrupting extraction or splitting.
 
 ### Testing
 
