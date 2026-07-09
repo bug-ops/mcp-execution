@@ -82,7 +82,8 @@ async fn test_scan_tools_directory_integration() {
 
     write_metadata_sidecar(dir, &["create_issue", "list_repos", "get_user"]).await;
 
-    let tools = scan_tools_directory(dir).await.unwrap();
+    let scan_result = scan_tools_directory(dir).await.unwrap();
+    let tools = scan_result.tools;
 
     assert_eq!(tools.len(), 3);
     assert!(tools.iter().any(|t| t.name == "create_issue"));
@@ -219,7 +220,7 @@ async fn test_scan_directory_with_many_tools() {
     let tool_name_refs: Vec<&str> = tool_names.iter().map(String::as_str).collect();
     write_metadata_sidecar(dir, &tool_name_refs).await;
 
-    let tools = scan_tools_directory(dir).await.unwrap();
+    let tools = scan_tools_directory(dir).await.unwrap().tools;
 
     assert_eq!(tools.len(), 50);
     // Verify they're sorted
@@ -249,10 +250,14 @@ async fn test_scan_directory_ignores_stray_files() {
         .await
         .unwrap();
 
-    let tools = scan_tools_directory(dir).await.unwrap();
+    let scan_result = scan_tools_directory(dir).await.unwrap();
 
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "valid_tool");
+    assert_eq!(scan_result.tools.len(), 1);
+    assert_eq!(scan_result.tools[0].name, "valid_tool");
+    assert!(
+        scan_result.warnings.is_empty(),
+        "index.ts, a nested _runtime file, and a non-.ts stray file must not be reported"
+    );
 }
 
 #[tokio::test]
@@ -314,7 +319,7 @@ async fn test_scan_directory_concurrent_access() {
     for handle in handles {
         let result = handle.await.unwrap();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 10);
+        assert_eq!(result.unwrap().tools.len(), 10);
     }
 }
 

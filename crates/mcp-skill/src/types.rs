@@ -57,7 +57,7 @@ pub struct GenerateSkillParams {
 /// Result from `generate_skill` tool.
 ///
 /// Contains all context Claude needs to generate optimal SKILL.md content.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GenerateSkillResult {
     /// Server identifier.
     pub server_id: String,
@@ -84,6 +84,12 @@ pub struct GenerateSkillResult {
 
     /// Output path for the skill file.
     pub output_path: String,
+
+    /// Non-fatal drift warnings, e.g. `.ts` files on disk excluded from
+    /// `categories`/`tool_count` because `_meta.json` has no matching entry
+    /// for them. Empty when the scanned directory has no drift.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// A category of tools for the skill.

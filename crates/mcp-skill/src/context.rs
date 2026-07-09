@@ -67,6 +67,9 @@ pub fn build_skill_context(
         example_tools,
         generation_prompt,
         output_path,
+        // Populated by the caller from `ScanResult::warnings`; `build_skill_context`
+        // only sees already-scanned `tools`, not the drift detected while scanning.
+        warnings: Vec::new(),
     }
 }
 

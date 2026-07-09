@@ -177,6 +177,7 @@ mod tests {
             }],
             generation_prompt: "Pre-built prompt".to_string(),
             output_path: "~/.claude/skills/test/SKILL.md".to_string(),
+            warnings: vec![],
         }
     }
 
