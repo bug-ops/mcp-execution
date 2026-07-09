@@ -44,7 +44,6 @@
 
 use mcp_execution_core::{Error, Result, ServerConfig, ServerId, ToolName, validate_server_config};
 use rmcp::ServiceExt;
-use rmcp::transport::ConfigureCommandExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -458,21 +457,19 @@ impl Default for Introspector {
 /// Returns [`Error::ConnectionFailed`] if the process cannot be spawned
 /// (e.g. the command does not exist or is not executable).
 fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Result<Child> {
-    tokio::process::Command::new(&config.command)
-        .configure(|cmd| {
-            cmd.args(&config.args);
-            cmd.envs(&config.env);
-            if let Some(cwd) = &config.cwd {
-                cmd.current_dir(cwd);
-            }
-            cmd.stdin(Stdio::piped());
-            cmd.stdout(Stdio::piped());
-        })
-        .spawn()
-        .map_err(|e| Error::ConnectionFailed {
-            server: server_id.to_string(),
-            source: Box::new(e),
-        })
+    let mut command = tokio::process::Command::new(&config.command);
+    command.args(&config.args);
+    command.envs(&config.env);
+    if let Some(cwd) = &config.cwd {
+        command.current_dir(cwd);
+    }
+    command.stdin(Stdio::piped());
+    command.stdout(Stdio::piped());
+
+    command.spawn().map_err(|e| Error::ConnectionFailed {
+        server: server_id.to_string(),
+        source: Box::new(e),
+    })
 }
 
 /// Connects to an already-spawned MCP server over `transport` and lists its

@@ -31,7 +31,7 @@ test-fixtures = ["rmcp/server", "rmcp/transport-io"]
 
 [dependencies]
 mcp-execution-core.workspace = true
-rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+rmcp = { workspace = true, features = ["client"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time"] }
