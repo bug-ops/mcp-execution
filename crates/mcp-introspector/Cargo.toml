@@ -39,4 +39,5 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros"] }

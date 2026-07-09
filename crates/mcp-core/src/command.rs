@@ -133,7 +133,7 @@ pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
     // Validate timeout bounds. Zero fires immediately and breaks all
     // discovery; unbounded values re-open the DoS window these timeouts
     // were introduced to close.
-    // TODO(critic): 0 is rejected; revisit if an infinite-timeout option is needed
+    // TODO(#145): 0 is rejected; revisit if an infinite-timeout option is needed
     validate_timeout(config.connect_timeout(), "connect_timeout")?;
     validate_timeout(config.discover_timeout(), "discover_timeout")?;
 

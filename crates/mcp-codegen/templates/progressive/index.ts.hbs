@@ -28,7 +28,7 @@
  * ```typescript
  * import { {{#if tools}}{{tools.[0].typescript_name}}{{/if}} } from './{{#if tools}}{{tools.[0].typescript_name}}{{/if}}.js';
  *
- * const result = await {{#if tools}}{{tools.[0].typescript_name}}{{/if}}({ /* params */ });
+ * const result = await {{#if tools}}{{tools.[0].typescript_name}}{{/if}}({ ...params });
  * ```
  *
  * @packageDocumentation
