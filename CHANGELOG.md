@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`mcp-execution-codegen`**: tool names, server IDs, and JSON Schema property keys are now
+  escaped before being interpolated into TypeScript string-literal and identifier positions in
+  generated tool files (`sanitize_ts_string_literal`, `sanitize_ts_identifier`), instead of
+  relying on Handlebars' incidental HTML-escaping. Closes a code-injection vector where a
+  malicious MCP server could break out of the `callMCPTool(...)` call-site string literal or the
+  `Params` interface body via crafted tool/property names (#104).
+- **`mcp-execution-codegen`**: distinct tool names that sanitize to the same TypeScript
+  identifier (e.g. `foo-bar` and `foo.bar`) are now disambiguated with a numeric suffix instead
+  of silently overwriting one another's generated file and producing a duplicate `index.ts`
+  export.
+
 ### Fixed
 
 - **`mcp-execution-codegen`**: CLI-generated TypeScript files (`generate` without LLM categorization)
@@ -14,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   description when no categorization is available. Previously the tag was omitted, causing
   `mcp-execution-skill` to fall back to uninformative `"{tool_name} tool"` placeholders in
   generated `SKILL.md` files (#94).
+
+### Testing
+
+- **`mcp-execution-codegen`**: extended the JSDoc sanitization regression test coverage added in
+  a prior PR with nested-array schema descriptions and a truncation-boundary injection case (#103).
 
 ### Documentation
 

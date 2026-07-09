@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 /// let context = ToolContext {
 ///     server_id: "github".to_string(),
 ///     name: "create_issue".to_string(),
+///     name_literal: "create_issue".to_string(),
+///     server_id_literal: "github".to_string(),
 ///     typescript_name: "createIssue".to_string(),
 ///     description: "Creates a new issue".to_string(),
 ///     input_schema: json!({"type": "object"}),
@@ -32,11 +34,15 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolContext {
-    /// MCP server identifier
+    /// MCP server identifier, sanitized for safe embedding in a JSDoc comment
     pub server_id: String,
-    /// Original tool name (snake_case)
+    /// Original tool name (snake_case), sanitized for safe embedding in a JSDoc comment
     pub name: String,
-    /// TypeScript-friendly name (camelCase)
+    /// Original tool name escaped for safe embedding in a single-quoted TS string literal
+    pub name_literal: String,
+    /// Server identifier escaped for safe embedding in a single-quoted TS string literal
+    pub server_id_literal: String,
+    /// TypeScript-friendly name (camelCase), sanitized to a safe identifier
     pub typescript_name: String,
     /// Human-readable description
     pub description: String,
@@ -239,6 +245,8 @@ mod tests {
         let context = ToolContext {
             server_id: "github".to_string(),
             name: "create_issue".to_string(),
+            name_literal: "create_issue".to_string(),
+            server_id_literal: "github".to_string(),
             typescript_name: "createIssue".to_string(),
             description: "Creates an issue".to_string(),
             input_schema: json!({"type": "object"}),

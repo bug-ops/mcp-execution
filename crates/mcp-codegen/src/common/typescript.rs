@@ -73,6 +73,43 @@ pub fn to_pascal_case(snake_case: &str) -> String {
     }
 }
 
+/// Sanitizes a string for safe use as a TypeScript identifier (e.g. a function, export,
+/// or object property name).
+///
+/// Replaces any character outside `[A-Za-z0-9_$]` with `_`, and prefixes the result with
+/// `_` if it would otherwise start with a digit or be empty. This prevents identifier-position
+/// injection of arbitrary TypeScript syntax from untrusted schema data (property keys, tool
+/// names, etc. sourced from an MCP server are not guaranteed to be valid identifiers).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_codegen::common::typescript::sanitize_ts_identifier;
+///
+/// assert_eq!(sanitize_ts_identifier("valid_name"), "valid_name");
+/// assert_eq!(sanitize_ts_identifier("123abc"), "_123abc");
+/// assert_eq!(sanitize_ts_identifier("a-b c"), "a_b_c");
+/// ```
+#[must_use]
+pub fn sanitize_ts_identifier(s: &str) -> String {
+    let mut result: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    if result.is_empty() || result.starts_with(|c: char| c.is_ascii_digit()) {
+        result.insert(0, '_');
+    }
+
+    result
+}
+
 /// Converts JSON Schema type to TypeScript type.
 ///
 /// Maps JSON Schema primitive types to their TypeScript equivalents.
@@ -149,7 +186,8 @@ pub fn json_schema_to_typescript(schema: &Value) -> String {
                             let is_required = required.contains(&key.as_str());
                             let optional_marker = if is_required { "" } else { "?" };
                             let ts_type = json_schema_to_typescript(value);
-                            fields.push(format!("  {}{}: {};", key, optional_marker, ts_type));
+                            let safe_key = sanitize_ts_identifier(key);
+                            fields.push(format!("  {safe_key}{optional_marker}: {ts_type};"));
                         }
 
                         if fields.is_empty() {
@@ -290,6 +328,38 @@ mod tests {
         let result = json_schema_to_typescript(&schema);
         assert!(result.contains("name: string"));
         assert!(result.contains("age?: number"));
+    }
+
+    #[test]
+    fn test_json_schema_to_typescript_object_sanitizes_nested_keys() {
+        let malicious_key = "x }; export const pwned = evil(); interface J {";
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                malicious_key: {"type": "string"}
+            },
+            "required": []
+        });
+
+        let result = json_schema_to_typescript(&schema);
+        assert!(!result.contains("export const pwned"));
+        assert!(!result.contains(malicious_key));
+        assert!(result.contains(&sanitize_ts_identifier(malicious_key)));
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_replaces_invalid_characters() {
+        assert_eq!(sanitize_ts_identifier("a-b c"), "a_b_c");
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_prefixes_leading_digit() {
+        assert_eq!(sanitize_ts_identifier("123name"), "_123name");
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_prefixes_empty_string() {
+        assert_eq!(sanitize_ts_identifier(""), "_");
     }
 
     #[test]
