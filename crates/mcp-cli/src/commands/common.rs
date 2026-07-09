@@ -8,6 +8,7 @@ use mcp_execution_core::{ServerConfig, ServerConfigBuilder, ServerId};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// MCP configuration file structure (`~/.claude/mcp.json`).
 ///
@@ -23,6 +24,7 @@ pub struct McpConfig {
 
 /// Individual MCP server configuration entry from `mcp.json`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpServerEntry {
     /// Command to execute (binary name or absolute path).
     pub command: String,
@@ -32,6 +34,14 @@ pub struct McpServerEntry {
     /// Environment variables for the server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Connection (handshake) timeout in seconds, overriding the 30-second
+    /// default when set. JSON key: `connectTimeoutSecs`.
+    #[serde(default)]
+    pub connect_timeout_secs: Option<u64>,
+    /// Tool discovery timeout in seconds, overriding the 30-second default
+    /// when set. JSON key: `discoverTimeoutSecs`.
+    #[serde(default)]
+    pub discover_timeout_secs: Option<u64>,
 }
 
 /// Loads MCP configuration from the given path.
@@ -207,6 +217,14 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
         builder = builder.env(key.clone(), value.clone());
     }
 
+    if let Some(secs) = entry.connect_timeout_secs {
+        builder = builder.connect_timeout(Duration::from_secs(secs));
+    }
+
+    if let Some(secs) = entry.discover_timeout_secs {
+        builder = builder.discover_timeout(Duration::from_secs(secs));
+    }
+
     builder.build()
 }
 
@@ -252,6 +270,7 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
 /// assert_eq!(id.as_str(), "github-mcp-server");
 /// assert_eq!(config.args(), &["stdio"]);
 /// ```
+// TODO(critic): expose connect/discover timeout flags for manual introspect
 pub fn build_server_config(
     server: Option<String>,
     args: Vec<String>,
@@ -855,6 +874,40 @@ mod tests {
 
         let servers = list_mcp_servers_from(file.path()).unwrap();
         assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn test_load_mcp_config_without_timeout_keys_uses_defaults() {
+        let json = r#"{"mcpServers": {"github": {"command": "node"}}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        let entry = &config.mcp_servers["github"];
+        assert_eq!(entry.connect_timeout_secs, None);
+        assert_eq!(entry.discover_timeout_secs, None);
+
+        let server_config = build_core_config(entry);
+        assert_eq!(server_config.connect_timeout(), Duration::from_secs(30));
+        assert_eq!(server_config.discover_timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_load_mcp_config_with_timeout_keys_reaches_server_config() {
+        let json = r#"{"mcpServers": {"github": {
+            "command": "node",
+            "connectTimeoutSecs": 5,
+            "discoverTimeoutSecs": 90
+        }}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        let entry = &config.mcp_servers["github"];
+        assert_eq!(entry.connect_timeout_secs, Some(5));
+        assert_eq!(entry.discover_timeout_secs, Some(90));
+
+        let server_config = build_core_config(entry);
+        assert_eq!(server_config.connect_timeout(), Duration::from_secs(5));
+        assert_eq!(server_config.discover_timeout(), Duration::from_secs(90));
     }
 
     #[test]

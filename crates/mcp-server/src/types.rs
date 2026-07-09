@@ -33,6 +33,8 @@ use uuid::Uuid;
 ///     args: vec!["-y".to_string(), "@anthropic/mcp-server-github".to_string()],
 ///     env: HashMap::new(),
 ///     output_dir: None,
+///     connect_timeout_secs: None,
+///     discover_timeout_secs: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -53,6 +55,16 @@ pub struct IntrospectServerParams {
 
     /// Custom output directory (default: `~/.claude/servers/{server_id}`)
     pub output_dir: Option<PathBuf>,
+
+    /// Connection (handshake) timeout in seconds, overriding the 30-second
+    /// default when set.
+    #[serde(default)]
+    pub connect_timeout_secs: Option<u64>,
+
+    /// Tool discovery timeout in seconds, overriding the 30-second default
+    /// when set.
+    #[serde(default)]
+    pub discover_timeout_secs: Option<u64>,
 }
 
 /// Result from introspecting an MCP server.

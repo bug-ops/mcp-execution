@@ -33,6 +33,7 @@
 
 use crate::{Error, Result, ServerConfig};
 use std::path::Path;
+use std::time::Duration;
 
 /// Shell metacharacters that indicate potential command injection.
 const FORBIDDEN_CHARS: &[char] = &[';', '|', '&', '>', '<', '`', '$', '(', ')', '\n', '\r'];
@@ -47,6 +48,11 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
     "PATH", // Block PATH override to prevent binary substitution
 ];
 
+/// Upper bound for `connect_timeout`/`discover_timeout`, matching the
+/// 30-second defaults declared in `server_config.rs` with headroom for
+/// slow-starting servers configured via `mcp.json`.
+const MAX_TIMEOUT: Duration = Duration::from_mins(10);
+
 /// Validates a `ServerConfig` for safe subprocess execution.
 ///
 /// This function performs comprehensive security validation to prevent
@@ -55,6 +61,7 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
 /// 1. **Command**: Can be absolute path (with existence/permission checks) or binary name
 /// 2. **Arguments**: Each arg checked for shell metacharacters
 /// 3. **Environment**: Variables checked for dangerous names
+/// 4. **Timeouts**: `connect_timeout`/`discover_timeout` checked against bounds
 ///
 /// # Security Rules
 ///
@@ -62,6 +69,8 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
 /// - **Forbidden env names**: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`
 /// - **Absolute paths**: Must exist and be executable
 /// - **Binary names**: Allowed (resolved via PATH at runtime)
+/// - **Timeout bounds**: `connect_timeout`/`discover_timeout` must be greater than zero and at
+///   most `MAX_TIMEOUT` (600s)
 ///
 /// # Errors
 ///
@@ -70,6 +79,10 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
 /// - Command/args contain shell metacharacters
 /// - Absolute path does not exist or is not executable
 /// - Environment variable name is forbidden
+///
+/// Returns `Error::ValidationError` if:
+/// - `connect_timeout` or `discover_timeout` is zero
+/// - `connect_timeout` or `discover_timeout` exceeds `MAX_TIMEOUT` (600s)
 ///
 /// # Examples
 ///
@@ -117,6 +130,30 @@ pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
         validate_env_name(env_name)?;
     }
 
+    // Validate timeout bounds. Zero fires immediately and breaks all
+    // discovery; unbounded values re-open the DoS window these timeouts
+    // were introduced to close.
+    // TODO(critic): 0 is rejected; revisit if an infinite-timeout option is needed
+    validate_timeout(config.connect_timeout(), "connect_timeout")?;
+    validate_timeout(config.discover_timeout(), "discover_timeout")?;
+
+    Ok(())
+}
+
+/// Validates that a timeout is within `(0, MAX_TIMEOUT]`.
+fn validate_timeout(timeout: Duration, field: &str) -> Result<()> {
+    if timeout.is_zero() {
+        return Err(Error::ValidationError {
+            field: field.to_string(),
+            reason: "timeout must be greater than zero".to_string(),
+        });
+    }
+    if timeout > MAX_TIMEOUT {
+        return Err(Error::ValidationError {
+            field: field.to_string(),
+            reason: format!("timeout {timeout:?} exceeds maximum allowed {MAX_TIMEOUT:?}"),
+        });
+    }
     Ok(())
 }
 
@@ -505,6 +542,71 @@ mod tests {
             .env("LOG_LEVEL".to_string(), "info".to_string())
             .env("CACHE_DIR".to_string(), "/var/cache".to_string())
             .cwd(std::path::PathBuf::from("/opt/app"))
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_default_timeouts_pass() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_zero_connect_timeout_rejected() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .connect_timeout(std::time::Duration::ZERO)
+            .build();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::ValidationError { field, reason }) = result {
+            assert_eq!(field, "connect_timeout");
+            assert!(reason.contains("greater than zero"));
+        } else {
+            panic!("expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_zero_discover_timeout_rejected() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .discover_timeout(std::time::Duration::ZERO)
+            .build();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::ValidationError { field, .. }) = result {
+            assert_eq!(field, "discover_timeout");
+        } else {
+            panic!("expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_above_max_timeout_rejected() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .connect_timeout(std::time::Duration::from_secs(601))
+            .build();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::ValidationError { field, reason }) = result {
+            assert_eq!(field, "connect_timeout");
+            assert!(reason.contains("exceeds maximum"));
+        } else {
+            panic!("expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_in_bounds_timeout_accepted() {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .connect_timeout(std::time::Duration::from_mins(1))
+            .discover_timeout(std::time::Duration::from_mins(10))
             .build();
         assert!(validate_server_config(&config).is_ok());
     }

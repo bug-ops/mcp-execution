@@ -170,6 +170,14 @@ impl GeneratorService {
             config_builder = config_builder.env(key, value);
         }
 
+        if let Some(secs) = params.connect_timeout_secs {
+            config_builder = config_builder.connect_timeout(std::time::Duration::from_secs(secs));
+        }
+
+        if let Some(secs) = params.discover_timeout_secs {
+            config_builder = config_builder.discover_timeout(std::time::Duration::from_secs(secs));
+        }
+
         let config = config_builder.build();
 
         // Connect and introspect, holding only the lock for this server_id
@@ -186,7 +194,11 @@ impl GeneratorService {
         self.evict_introspector(&server_id).await;
 
         let server_info = discover_result.map_err(|e| {
-            McpError::internal_error(format!("Failed to introspect server: {e}"), None)
+            if e.is_validation_error() {
+                McpError::invalid_params(e.to_string(), None)
+            } else {
+                McpError::internal_error(format!("Failed to introspect server: {e}"), None)
+            }
         })?;
 
         // Extract tool metadata for Claude
@@ -852,6 +864,8 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
 
         let result = service.introspect_server(Parameters(params)).await;
@@ -871,6 +885,8 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
 
         let result = service.introspect_server(Parameters(params)).await;
@@ -890,6 +906,8 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
 
         let result = service.introspect_server(Parameters(params)).await;
@@ -907,6 +925,8 @@ mod tests {
             args: vec!["test".to_string()],
             env: HashMap::new(),
             output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
 
         // This will fail because echo is not an MCP server, but validation should pass
@@ -932,6 +952,8 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
 
         let result = service.introspect_server(Parameters(params)).await;
@@ -940,6 +962,33 @@ mod tests {
         if let Err(err) = result {
             assert_ne!(err.code, ErrorCode::INVALID_PARAMS);
         }
+    }
+
+    /// A zero timeout is a client input error, not a server-side connection
+    /// failure — it must surface as `INVALID_PARAMS`, matching the sibling
+    /// `validate_server_id` behavior, not `internal_error`.
+    #[tokio::test]
+    async fn test_introspect_server_zero_connect_timeout_is_invalid_params() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "zero-timeout-test".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+            connect_timeout_secs: Some(0),
+            discover_timeout_secs: None,
+        };
+
+        let result = service.introspect_server(Parameters(params)).await;
+
+        let err = result.expect_err("zero connect_timeout must be rejected");
+        assert_eq!(
+            err.code,
+            ErrorCode::INVALID_PARAMS,
+            "zero timeout is a client input error, not an internal error"
+        );
     }
 
     // ========================================================================
@@ -970,6 +1019,8 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
 
         let result = service.introspect_server(Parameters(params)).await;
