@@ -92,6 +92,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any external library consumer of `mcp-execution-server` or `mcp-execution-cli` — neither crate
   sets `publish = false` and both types are `pub`-reachable from their crate roots; treat as a
   minor version bump at 0.7.x per pre-1.0 SemVer convention (#156).
+- **Dependencies**: Updated transitive dependencies (Cargo.lock only, no API changes) (#162)
+  - `rmcp` / `rmcp-macros`: 2.1.0 → 2.2.0
+  - `bytes`: 1.11.1 → 1.12.1
+  - `cc`: 1.2.63 → 1.2.66
+  - `crossbeam-deque` / `crossbeam-utils`: 0.8.6/0.8.21 → 0.8.7/0.8.22
+  - `js-sys` / `web-sys`: 0.3.99 → 0.3.103
+  - `regex` / `regex-automata`: 1.12.4/0.4.14 → 1.13.0/0.4.15
+  - `syn`: 2.0.117 → 2.0.118
+  - `wasm-bindgen` (and `-macro`/`-macro-support`/`-shared`): 0.2.122 → 0.2.126
+  - `zerocopy` / `zerocopy-derive`: 0.8.50 → 0.8.54
 
 ### Fixed
 
