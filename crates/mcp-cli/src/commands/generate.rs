@@ -258,10 +258,11 @@ pub async fn run(
 
     info!("Exporting files to: {}", output_path.display());
 
-    std::fs::create_dir_all(&output_path).context("failed to create output directory")?;
-    // TODO(#159): export is not atomic across the whole directory; an interrupted run
-    // can leave index.ts referencing a tool file that was never written, undetected by
-    // any consumer that reads .ts files directly instead of going through `skill`.
+    // Only the parent needs to exist: `export_to_filesystem` publishes
+    // `output_path` itself atomically (single rename on first generate,
+    // stage-then-swap on regeneration), so pre-creating it here would just
+    // force the slower regeneration path even on a brand-new server.
+    std::fs::create_dir_all(&base_dir).context("failed to create output directory")?;
     vfs.export_to_filesystem(&output_path)
         .context("failed to export files to filesystem")?;
 
