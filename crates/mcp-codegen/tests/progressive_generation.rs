@@ -269,6 +269,36 @@ fn test_progressive_index_structure() {
 }
 
 #[test]
+fn test_progressive_index_doc_comment_not_prematurely_closed() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+
+    let index_file = code
+        .files
+        .iter()
+        .find(|f| f.path == "index.ts")
+        .expect("index.ts not found");
+
+    let content = &index_file.content;
+
+    let doc_start = content.find("/**").expect("Missing opening JSDoc block");
+    let doc_end = content[doc_start..]
+        .find("*/")
+        .map(|i| doc_start + i)
+        .expect("Missing JSDoc close");
+
+    assert!(
+        content[doc_start..doc_end].contains("@packageDocumentation"),
+        "Top-level JSDoc block closed prematurely before @packageDocumentation \
+         — likely a nested /* ... */ inside the doc comment (regression for #139)"
+    );
+}
+
+#[test]
 fn test_progressive_runtime_bridge_structure() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
