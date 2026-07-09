@@ -100,10 +100,13 @@ pub struct ValidationResult {
 ///
 /// Returns an error if:
 /// - The configuration file cannot be read or is malformed
+/// - For the `Info` action, the named server is not found in the configuration
 /// - Output formatting fails (serialization error)
 ///
-/// Note: Server introspection failures (for Info and Validate actions) are caught
-/// internally and reported via `ExitCode::ERROR` rather than returning `Err`.
+/// Note: For the `Validate` action, an unknown server name is reported via
+/// `ExitCode::ERROR` rather than returning `Err`. Server introspection failures
+/// (for both `Info` and `Validate`) are also caught internally and reported via
+/// `ExitCode::ERROR`.
 ///
 /// # Examples
 ///
