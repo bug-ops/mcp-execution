@@ -25,6 +25,9 @@ struct SkillWriteResult {
     output_path: String,
     bytes_written: usize,
     tool_count: usize,
+    /// Non-fatal drift warnings, e.g. `.ts` files excluded from generation
+    /// because `_meta.json` has no matching entry for them (issue #161).
+    warnings: Vec<String>,
 }
 
 /// Default base directory for generated servers.
@@ -131,11 +134,11 @@ pub async fn run(
 
     // Step 5: Scan TypeScript files
     info!("Scanning TypeScript files in {}", tool_dir.display());
-    let tools = scan_tools_directory(&tool_dir)
+    let scan_result = scan_tools_directory(&tool_dir)
         .await
         .context("Failed to scan tools directory")?;
 
-    if tools.is_empty() {
+    if scan_result.tools.is_empty() {
         bail!(
             "No TypeScript tool files found in {}\n\
              Run 'mcp-execution-cli generate --from-config {}' first.",
@@ -147,12 +150,15 @@ pub async fn run(
     // `tools.len()` reflects sidecar entries that were cross-checked against an
     // actual `.ts` file on disk by `scan_tools_directory` (issue #154) — not a
     // raw sidecar entry count.
-    info!("Verified {} tool files against sidecar", tools.len());
+    info!(
+        "Verified {} tool files against sidecar",
+        scan_result.tools.len()
+    );
 
     // Step 6: Build skill context
     let hints_ref: Option<Vec<String>> = if hints.is_empty() { None } else { Some(hints) };
 
-    let mut context = build_skill_context(&server, &tools, hints_ref.as_deref());
+    let mut context = build_skill_context(&server, &scan_result.tools, hints_ref.as_deref());
 
     // Apply custom skill name if provided
     if let Some(name) = skill_name {
@@ -210,6 +216,7 @@ pub async fn run(
         output_path: output_path.display().to_string(),
         bytes_written,
         tool_count: context.tool_count,
+        warnings: scan_result.warnings,
     };
 
     let output = format_output(&result, output_format)?;
@@ -615,6 +622,67 @@ mod tests {
         assert!(
             content.starts_with("---\n"),
             "SKILL.md must start with YAML frontmatter"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_orphan_ts_file_succeeds() {
+        // Issue #161: a `.ts` file not referenced by `_meta.json` remains
+        // non-fatal (unlike a missing file, which is `ScanError::StaleMetadata`)
+        // — `run` must still succeed and write SKILL.md.
+        let temp = TempDir::new().unwrap();
+        let server_dir = temp.path().join("test-server");
+        std::fs::create_dir(&server_dir).unwrap();
+        write_meta_sidecar(&server_dir, "test-server", "test_tool");
+        std::fs::write(server_dir.join("orphanTool.ts"), "export {}").unwrap();
+
+        let output_path = temp.path().join("SKILL.md");
+
+        let result = run(
+            "test-server".to_string(),
+            Some(temp.path().to_path_buf()),
+            Some(output_path.clone()),
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "an orphaned .ts file must not fail the run: {:?}",
+            result.err()
+        );
+        assert!(output_path.exists(), "SKILL.md must still be written");
+    }
+
+    #[test]
+    fn test_skill_write_result_json_includes_warnings() {
+        // Issue #161: the JSON output must name any excluded `.ts` file so a
+        // caller relying only on `--format json` can detect the drift, since
+        // it is no longer visible only via `tracing::warn!`.
+        let result = SkillWriteResult {
+            success: true,
+            output_path: "/tmp/SKILL.md".to_string(),
+            bytes_written: 42,
+            tool_count: 1,
+            warnings: vec![
+                "'orphanTool.ts' is not referenced by _meta.json and was excluded from SKILL.md \
+                 (re-run 'generate' to refresh the sidecar)"
+                    .to_string(),
+            ],
+        };
+
+        let output = format_output(&result, OutputFormat::Json).unwrap();
+
+        assert!(
+            output.contains("\"warnings\""),
+            "JSON output must contain a warnings field: {output}"
+        );
+        assert!(
+            output.contains("orphanTool.ts"),
+            "warnings must name the excluded file: {output}"
         );
     }
 

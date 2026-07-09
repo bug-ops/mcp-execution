@@ -328,12 +328,16 @@ impl GeneratorService {
         // Capture file count before moving vfs
         let files_generated = vfs.file_count();
 
-        // Ensure output directory exists (async)
-        tokio::fs::create_dir_all(&pending.output_dir)
-            .await
-            .map_err(|e| {
+        // Ensure the parent of the output directory exists (async). Only the
+        // parent is needed: `export_to_filesystem` publishes `output_dir`
+        // itself atomically (single rename on first generate, stage-then-swap
+        // on regeneration), so pre-creating it here would force the slower
+        // regeneration path even on a brand-new server.
+        if let Some(parent) = pending.output_dir.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 McpError::internal_error(format!("Failed to create output directory: {e}"), None)
             })?;
+        }
 
         // Export to filesystem (blocking operation wrapped in spawn_blocking)
         let output_dir = pending.output_dir.clone();
@@ -481,7 +485,7 @@ impl GeneratorService {
         // Scan and parse tool files. A missing or version-mismatched sidecar reflects the
         // same "not generated / stale directory" caller situation as the `!server_dir.exists()`
         // check above, so it is reported the same way (`invalid_params`), not as a server fault.
-        let tools = scan_tools_directory(&server_dir)
+        let scan_result = scan_tools_directory(&server_dir)
             .await
             .map_err(|e| match e {
                 ScanError::MissingMetadata { .. }
@@ -498,7 +502,7 @@ impl GeneratorService {
                 }
             })?;
 
-        if tools.is_empty() {
+        if scan_result.tools.is_empty() {
             return Err(McpError::invalid_params(
                 format!(
                     "No tool files found in {}. Run generate first.",
@@ -509,8 +513,16 @@ impl GeneratorService {
         }
 
         // Build context
-        let mut result =
-            build_skill_context(&params.server_id, &tools, params.use_case_hints.as_deref());
+        let mut result = build_skill_context(
+            &params.server_id,
+            &scan_result.tools,
+            params.use_case_hints.as_deref(),
+        );
+
+        // Surface non-fatal drift warnings (e.g. `.ts` files excluded for lacking
+        // a sidecar entry) in the structured response, not just server-side
+        // tracing output (issue #161).
+        result.warnings = scan_result.warnings;
 
         // Override skill name if provided
         if let Some(name) = params.skill_name {
@@ -1612,6 +1624,84 @@ mod tests {
         );
         assert!(err.message.contains("Failed to scan tools directory"));
         assert!(err.message.contains("create_issue"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_skill_reports_orphan_ts_file_as_warning() {
+        // Issue #161: a `.ts` file on disk with no matching `_meta.json` entry
+        // is non-fatal, but must be surfaced in the structured JSON-RPC
+        // response's `warnings` field, not just in server-side tracing output.
+        use mcp_execution_core::metadata::{
+            METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
+            ToolMetadata as SidecarToolMetadata,
+        };
+        use mcp_execution_skill::GenerateSkillResult;
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+
+        let target_dir = base_dir.join("test-server");
+        tokio::fs::create_dir_all(&target_dir).await.unwrap();
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: "test-server".to_string(),
+            server_name: "Test Server".to_string(),
+            server_version: "1.0.0".to_string(),
+            tools: vec![SidecarToolMetadata {
+                name: "create_issue".to_string(),
+                typescript_name: "createIssue".to_string(),
+                category: None,
+                keywords: vec![],
+                description: None,
+                parameters: vec![ParameterMetadata {
+                    name: "title".to_string(),
+                    typescript_type: "string".to_string(),
+                    required: true,
+                    description: None,
+                }],
+            }],
+        };
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
+            .await
+            .unwrap();
+        tokio::fs::write(target_dir.join("createIssue.ts"), "export {}")
+            .await
+            .unwrap();
+        // Left over on disk with no sidecar entry — must not be fatal.
+        tokio::fs::write(target_dir.join("orphanTool.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let params = GenerateSkillParams {
+            server_id: "test-server".to_string(),
+            skill_name: None,
+            use_case_hints: None,
+            servers_dir: Some(base_dir),
+        };
+
+        let result = service.generate_skill(Parameters(params)).await;
+
+        assert!(
+            result.is_ok(),
+            "an orphaned .ts file must not fail the call"
+        );
+        let content = result.unwrap();
+        let text_content = content.content[0].as_text().unwrap();
+        let parsed: GenerateSkillResult = serde_json::from_str(&text_content.text).unwrap();
+
+        assert_eq!(
+            parsed.warnings.len(),
+            1,
+            "the orphaned .ts file must be surfaced as a warning"
+        );
+        assert!(
+            parsed.warnings[0].contains("orphanTool.ts"),
+            "warning must name the excluded file: {:?}",
+            parsed.warnings[0]
+        );
     }
 
     // ========================================================================

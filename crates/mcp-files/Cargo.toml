@@ -19,11 +19,11 @@ dirs.workspace = true
 dhat = { workspace = true, optional = true }
 mcp-execution-codegen.workspace = true
 rayon = { workspace = true, optional = true }
+tempfile.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
-tempfile.workspace = true
 
 [features]
 dhat-heap = ["dhat"]

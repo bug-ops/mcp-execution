@@ -333,9 +333,11 @@ async function callMCPTool(server: string, tool: string, params: unknown): Promi
     });
 }
 
-/// Benchmark export with overwrite vs skip.
-fn bench_export_overwrite_behavior(c: &mut Criterion) {
-    let mut group = c.benchmark_group("export_overwrite");
+/// Benchmark re-exporting into a directory that already holds a previous
+/// export (the common `generate` re-run case) vs. exporting into a directory
+/// that does not exist yet (the fast single-rename publish path).
+fn bench_export_fresh_vs_reexport(c: &mut Criterion) {
+    let mut group = c.benchmark_group("export_fresh_vs_reexport");
 
     let mut builder = FilesBuilder::new();
     for i in 0..30 {
@@ -343,38 +345,26 @@ fn bench_export_overwrite_behavior(c: &mut Criterion) {
     }
     let vfs = builder.build().unwrap();
 
-    // Overwrite existing files
-    group.bench_function("overwrite_existing", |b| {
+    group.bench_function("fresh_target", |b| {
         b.iter_batched(
-            || {
-                let temp = TempDir::new().unwrap();
-                // Pre-create files
-                vfs.export_to_filesystem(temp.path()).unwrap();
-                temp
-            },
-            |temp| {
-                let options = ExportOptions::default().with_overwrite(true);
-                vfs.export_to_filesystem_with_options(black_box(temp.path()), &options)
-                    .unwrap();
-                temp
+            || TempDir::new().unwrap().path().join("out"),
+            |target| {
+                vfs.export_to_filesystem(black_box(&target)).unwrap();
+                target
             },
             criterion::BatchSize::SmallInput,
         );
     });
 
-    // Skip existing files
-    group.bench_function("skip_existing", |b| {
+    group.bench_function("reexport_existing_target", |b| {
         b.iter_batched(
             || {
                 let temp = TempDir::new().unwrap();
-                // Pre-create files
                 vfs.export_to_filesystem(temp.path()).unwrap();
                 temp
             },
             |temp| {
-                let options = ExportOptions::default().with_overwrite(false);
-                vfs.export_to_filesystem_with_options(black_box(temp.path()), &options)
-                    .unwrap();
+                vfs.export_to_filesystem(black_box(temp.path())).unwrap();
                 temp
             },
             criterion::BatchSize::SmallInput,
@@ -413,7 +403,7 @@ criterion_group!(
     bench_export_directory_depth,
     bench_export_file_size,
     bench_export_github_scenario,
-    bench_export_overwrite_behavior,
+    bench_export_fresh_vs_reexport,
     bench_export_full_workflow,
 );
 
