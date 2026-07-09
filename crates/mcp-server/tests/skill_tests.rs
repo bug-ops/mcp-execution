@@ -9,6 +9,9 @@ use tokio::fs;
 
 /// Build a `ServerMetadata` sidecar with `count` simple test tools, each with one
 /// required string parameter, and write it as `_meta.json` into `dir`.
+///
+/// Also writes a matching stub `{typescript_name}.ts` file for each tool, since
+/// `scan_tools_directory` now cross-checks the sidecar against files on disk.
 async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
     let meta = ServerMetadata {
         schema_version: METADATA_SCHEMA_VERSION,
@@ -45,6 +48,15 @@ async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
     fs::write(dir.join(METADATA_FILE_NAME), content)
         .await
         .unwrap();
+
+    for tool in &meta.tools {
+        fs::write(
+            dir.join(format!("{}.ts", tool.typescript_name)),
+            "export {}",
+        )
+        .await
+        .unwrap();
+    }
 }
 
 fn to_camel_case(s: &str) -> String {
@@ -218,8 +230,9 @@ async fn test_scan_directory_with_many_tools() {
 
 #[tokio::test]
 async fn test_scan_directory_ignores_stray_files() {
-    // Only `_meta.json` is read; stray `.ts` files, an `index.ts`, or a `_runtime`
-    // directory left over in a server directory must not affect the scan.
+    // Tool metadata itself only ever comes from `_meta.json`; an `index.ts`, a
+    // `_runtime` directory, or an unrelated stray file must not affect the scan
+    // (they are not sidecar-referenced tool files, so at most they are logged).
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
 

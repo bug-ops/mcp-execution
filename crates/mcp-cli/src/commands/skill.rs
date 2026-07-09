@@ -144,7 +144,10 @@ pub async fn run(
         );
     }
 
-    info!("Found {} tool files", tools.len());
+    // `tools.len()` reflects sidecar entries that were cross-checked against an
+    // actual `.ts` file on disk by `scan_tools_directory` (issue #154) — not a
+    // raw sidecar entry count.
+    info!("Verified {} tool files against sidecar", tools.len());
 
     // Step 6: Build skill context
     let hints_ref: Option<Vec<String>> = if hints.is_empty() { None } else { Some(hints) };
@@ -350,6 +353,9 @@ mod tests {
 
     /// Writes a minimal `_meta.json` sidecar with a single tool into `server_dir`,
     /// matching what `mcp-execution-codegen` would emit for a generated server.
+    ///
+    /// Also writes a matching stub `{typescript_name}.ts` file, since
+    /// `scan_tools_directory` cross-checks the sidecar against files on disk.
     fn write_meta_sidecar(server_dir: &Path, server_id: &str, tool_name: &str) {
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
@@ -373,6 +379,7 @@ mod tests {
 
         let content = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(server_dir.join(METADATA_FILE_NAME), content).unwrap();
+        std::fs::write(server_dir.join(format!("{tool_name}.ts")), "export {}").unwrap();
     }
 
     #[test]
@@ -749,6 +756,87 @@ mod tests {
                 result.err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_run_stale_metadata_fails_instead_of_silently_succeeding() {
+        // Issue #154 repro: a `_meta.json` sidecar that has drifted from the
+        // `.ts` files on disk (one entry's file was deleted, an unrelated file
+        // was added) must now make `skill` fail loudly instead of silently
+        // generating a SKILL.md with stale/missing tool references.
+        let temp = TempDir::new().unwrap();
+        let server_dir = temp.path().join("github");
+        std::fs::create_dir(&server_dir).unwrap();
+
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: "github".to_string(),
+            server_name: "GitHub".to_string(),
+            server_version: "1.0.0".to_string(),
+            tools: vec![
+                ToolMetadata {
+                    name: "create_issue".to_string(),
+                    typescript_name: "createIssue".to_string(),
+                    category: Some("issues".to_string()),
+                    keywords: vec!["create".to_string()],
+                    description: Some("Create an issue".to_string()),
+                    parameters: vec![ParameterMetadata {
+                        name: "title".to_string(),
+                        typescript_type: "string".to_string(),
+                        required: true,
+                        description: Some("Issue title".to_string()),
+                    }],
+                },
+                ToolMetadata {
+                    name: "list_repos".to_string(),
+                    typescript_name: "listRepos".to_string(),
+                    category: Some("repos".to_string()),
+                    keywords: vec!["list".to_string()],
+                    description: Some("List repos".to_string()),
+                    parameters: vec![],
+                },
+            ],
+        };
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        std::fs::write(server_dir.join(METADATA_FILE_NAME), content).unwrap();
+
+        // Generate as normal for `list_repos`, but simulate a `.ts` file that
+        // was deleted (or never written, e.g. an interrupted `generate`) for
+        // `create_issue` — this is the drift the sidecar must now catch.
+        std::fs::write(server_dir.join("listRepos.ts"), "export {}").unwrap();
+        // An unrelated `.ts` file left over on disk, not referenced by the
+        // sidecar at all — must not mask the missing-file error above.
+        std::fs::write(server_dir.join("orphanTool.ts"), "export {}").unwrap();
+
+        let output_path = temp.path().join("SKILL.md");
+
+        let result = run(
+            "github".to_string(),
+            Some(temp.path().to_path_buf()),
+            Some(output_path.clone()),
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "drifted sidecar must fail instead of silently succeeding"
+        );
+        let err = result.unwrap_err();
+        // `anyhow::Error`'s `Display` only shows the outer context; the full
+        // chain (including the `ScanError::StaleMetadata` source) is in `{err:?}`.
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("create_issue") || message.contains("createIssue.ts"),
+            "error must identify the tool/file with the missing .ts: {message}"
+        );
+        assert!(
+            !output_path.exists(),
+            "SKILL.md must not be written when the sidecar is stale"
+        );
     }
 
     #[tokio::test]
