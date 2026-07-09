@@ -109,6 +109,9 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// - Absolute paths undergo strict validation (existence, permissions)
 /// - All arguments are validated separately to prevent injection
 /// - Environment variables are checked against forbidden names
+/// - There is no infinite-timeout option: `0` is always rejected, since an
+///   unbounded wait would let a hung server block this non-interactive tool
+///   forever (see the `validate_timeout` design note in this module)
 pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
     // Validate command
     validate_command_string(&config.command, "command")?;
@@ -131,9 +134,10 @@ pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
     }
 
     // Validate timeout bounds. Zero fires immediately and breaks all
-    // discovery; unbounded values re-open the DoS window these timeouts
-    // were introduced to close.
-    // TODO(#145): 0 is rejected; revisit if an infinite-timeout option is needed
+    // discovery; an infinite timeout is deliberately unsupported (see
+    // `validate_timeout` doc comment) because it would let a hung or
+    // malicious server block this non-interactive CLI tool forever,
+    // re-opening the DoS window these timeouts were introduced to close.
     validate_timeout(config.connect_timeout(), "connect_timeout")?;
     validate_timeout(config.discover_timeout(), "discover_timeout")?;
 
@@ -141,6 +145,16 @@ pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
 }
 
 /// Validates that a timeout is within `(0, MAX_TIMEOUT]`.
+///
+/// # Design Note: No Infinite Timeout
+///
+/// A timeout of zero is permanently rejected rather than treated as a
+/// sentinel for "no timeout". This tool spawns subprocesses and connects to
+/// servers non-interactively (CLI and MCP-server modes); an unbounded
+/// connect/discover wait would let a hung or malicious server block the
+/// caller indefinitely, which is exactly the denial-of-service exposure
+/// these timeouts were added to close. Callers that need a longer wait
+/// should raise the value up to `MAX_TIMEOUT` (10 minutes) instead.
 fn validate_timeout(timeout: Duration, field: &str) -> Result<()> {
     if timeout.is_zero() {
         return Err(Error::ValidationError {

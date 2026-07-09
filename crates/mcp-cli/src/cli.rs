@@ -93,7 +93,7 @@ pub enum Commands {
         ///   }
         /// }
         /// ```
-        #[arg(long = "from-config", conflicts_with_all = ["server", "args", "env", "cwd", "http", "sse"])]
+        #[arg(long = "from-config", conflicts_with_all = ["server", "args", "env", "cwd", "http", "sse", "connect_timeout_secs", "discover_timeout_secs"])]
         from_config: Option<String>,
 
         /// Server command (binary name or path)
@@ -130,6 +130,27 @@ pub enum Commands {
         /// Show detailed tool schemas
         #[arg(short, long)]
         detailed: bool,
+
+        /// Override the connection (handshake) timeout, in seconds.
+        ///
+        /// Same field/units as `mcp.json`'s `connectTimeoutSecs`. Must be
+        /// greater than zero and at most 600 seconds (10 minutes); there is
+        /// no infinite-timeout option, since an unbounded wait would let a
+        /// hung server block this command forever.
+        ///
+        /// Conflicts with `--from-config`: to override the timeout for a
+        /// server defined in `mcp.json`, either edit its `connectTimeoutSecs`
+        /// field, or re-run this command without `--from-config` using the
+        /// server's command/args/env directly.
+        #[arg(long = "connect-timeout-secs")]
+        connect_timeout_secs: Option<u64>,
+
+        /// Override the tool discovery timeout, in seconds.
+        ///
+        /// Same field/units as `mcp.json`'s `discoverTimeoutSecs`. Same
+        /// bounds and `--from-config` conflict as `--connect-timeout-secs`.
+        #[arg(long = "discover-timeout-secs")]
+        discover_timeout_secs: Option<u64>,
     },
 
     /// Generate Claude Code skill file from progressive loading tools.
@@ -247,7 +268,7 @@ pub enum Commands {
         ///   }
         /// }
         /// ```
-        #[arg(long = "from-config", conflicts_with_all = ["server", "server_args", "server_env", "server_cwd", "http_url", "sse_url"])]
+        #[arg(long = "from-config", conflicts_with_all = ["server", "server_args", "server_env", "server_cwd", "http_url", "sse_url", "connect_timeout_secs", "discover_timeout_secs"])]
         from_config: Option<String>,
 
         /// Server command (binary name or path)
@@ -294,6 +315,27 @@ pub enum Commands {
         /// Preview files that would be generated without writing to disk
         #[arg(long)]
         dry_run: bool,
+
+        /// Override the connection (handshake) timeout, in seconds.
+        ///
+        /// Same field/units as `mcp.json`'s `connectTimeoutSecs`. Must be
+        /// greater than zero and at most 600 seconds (10 minutes); there is
+        /// no infinite-timeout option, since an unbounded wait would let a
+        /// hung server block this command forever.
+        ///
+        /// Conflicts with `--from-config`: to override the timeout for a
+        /// server defined in `mcp.json`, either edit its `connectTimeoutSecs`
+        /// field, or re-run this command without `--from-config` using the
+        /// server's command/args/env directly.
+        #[arg(long = "connect-timeout-secs")]
+        connect_timeout_secs: Option<u64>,
+
+        /// Override the tool discovery timeout, in seconds.
+        ///
+        /// Same field/units as `mcp.json`'s `discoverTimeoutSecs`. Same
+        /// bounds and `--from-config` conflict as `--connect-timeout-secs`.
+        #[arg(long = "discover-timeout-secs")]
+        discover_timeout_secs: Option<u64>,
     },
 
     /// Manage MCP server connections.
@@ -422,6 +464,56 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parsing_introspect_timeout_overrides() {
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "docker",
+            "--connect-timeout-secs",
+            "5",
+            "--discover-timeout-secs",
+            "90",
+        ]);
+        if let Commands::Introspect {
+            connect_timeout_secs,
+            discover_timeout_secs,
+            ..
+        } = cli.command
+        {
+            assert_eq!(connect_timeout_secs, Some(5));
+            assert_eq!(discover_timeout_secs, Some(90));
+        } else {
+            panic!("Expected Introspect command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_introspect_timeout_conflicts_with_from_config() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "introspect",
+            "--from-config",
+            "github",
+            "--connect-timeout-secs",
+            "5",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_timeout_conflicts_with_from_config() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "generate",
+            "--from-config",
+            "github",
+            "--discover-timeout-secs",
+            "90",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_cli_parsing_generate() {
         let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
         assert!(matches!(cli.command, Commands::Generate { .. }));
@@ -438,6 +530,30 @@ mod tests {
         } = cli.command
         {
             assert_eq!(progressive_output, Some(PathBuf::from("/tmp/output")));
+        } else {
+            panic!("Expected Generate command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_timeout_overrides() {
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "generate",
+            "docker",
+            "--connect-timeout-secs",
+            "5",
+            "--discover-timeout-secs",
+            "90",
+        ]);
+        if let Commands::Generate {
+            connect_timeout_secs,
+            discover_timeout_secs,
+            ..
+        } = cli.command
+        {
+            assert_eq!(connect_timeout_secs, Some(5));
+            assert_eq!(discover_timeout_secs, Some(90));
         } else {
             panic!("Expected Generate command");
         }

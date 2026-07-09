@@ -103,6 +103,12 @@ pub struct ToolMetadata {
 /// * `sse` - SSE transport URL
 /// * `headers` - HTTP headers in KEY=VALUE format
 /// * `detailed` - Whether to show detailed tool schemas
+/// * `connect_timeout_secs` - Connection (handshake) timeout override, in
+///   seconds. Ignored when `from_config` is set (the `mcp.json` entry's
+///   `connectTimeoutSecs` applies instead). Same bounds as `mcp.json`: must
+///   be greater than zero and at most 600 seconds.
+/// * `discover_timeout_secs` - Tool discovery timeout override, in seconds.
+///   Same rules as `connect_timeout_secs`.
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -131,10 +137,12 @@ pub struct ToolMetadata {
 ///     None,
 ///     vec![],
 ///     false,
+///     None,
+///     None,
 ///     OutputFormat::Json
 /// ).await?;
 ///
-/// // HTTP transport
+/// // HTTP transport with a shorter connect timeout
 /// let exit_code = introspect::run(
 ///     None,
 ///     None,
@@ -145,6 +153,8 @@ pub struct ToolMetadata {
 ///     None,
 ///     vec!["Authorization=Bearer token".to_string()],
 ///     false,
+///     Some(5),
+///     None,
 ///     OutputFormat::Json
 /// ).await?;
 /// # Ok(())
@@ -161,6 +171,8 @@ pub async fn run(
     sse: Option<String>,
     headers: Vec<String>,
     detailed: bool,
+    connect_timeout_secs: Option<u64>,
+    discover_timeout_secs: Option<u64>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
@@ -171,7 +183,17 @@ pub async fn run(
         );
         load_server_from_config(&config_name)?
     } else {
-        build_server_config(server, args, env, cwd, http, sse, headers)?
+        build_server_config(
+            server,
+            args,
+            env,
+            cwd,
+            http,
+            sse,
+            headers,
+            connect_timeout_secs,
+            discover_timeout_secs,
+        )?
     };
 
     info!("Introspecting server: {}", server_id);
@@ -521,6 +543,8 @@ mod tests {
             None,
             vec![],
             false,
+            None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -630,6 +654,8 @@ mod tests {
             None,
             vec![],
             false,
+            None,
+            None,
             OutputFormat::Text,
         )
         .await;
@@ -651,6 +677,8 @@ mod tests {
             None,
             vec![],
             false,
+            None,
+            None,
             OutputFormat::Pretty,
         )
         .await;
@@ -672,6 +700,8 @@ mod tests {
             None,
             vec![],
             true, // detailed mode
+            None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -692,6 +722,8 @@ mod tests {
             None,
             vec!["Authorization=Bearer test".to_string()],
             false,
+            None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -714,6 +746,8 @@ mod tests {
             Some("https://localhost:99999/sse".to_string()),
             vec!["X-API-Key=test-key".to_string()],
             false,
+            None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -737,6 +771,8 @@ mod tests {
                 None,
                 vec![],
                 false,
+                None,
+                None,
                 format,
             )
             .await;
@@ -759,6 +795,8 @@ mod tests {
                 None,
                 vec![],
                 true, // detailed
+                None,
+                None,
                 format,
             )
             .await;
@@ -973,6 +1011,8 @@ mod tests {
             None,
             vec![],
             false,
+            None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -1001,6 +1041,8 @@ mod tests {
             None,
             vec![],
             false,
+            None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -1028,6 +1070,8 @@ mod tests {
             None,
             vec![],
             false,
+            None,
+            None,
             OutputFormat::Json,
         )
         .await;
@@ -1039,5 +1083,62 @@ mod tests {
             err_msg.contains("failed to connect") || err_msg.contains("test-server-direct"),
             "Should try direct connection: {err_msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_run_zero_connect_timeout_override_rejected_by_validation() {
+        // A zero override must surface the same connect_timeout validation
+        // error as the mcp.json path, not just a generic connection failure.
+        let result = run(
+            None,
+            Some("nonexistent-server-timeout-test".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            Some(0),
+            None,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let chain_msg = err
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            chain_msg.contains("greater than zero"),
+            "expected connect_timeout validation error in the error chain, got: {chain_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_valid_timeout_overrides_reaches_connection_attempt() {
+        // Valid overrides must not be rejected before the connection attempt.
+        let result = run(
+            None,
+            Some("nonexistent-server-timeout-test-2".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            Some(5),
+            Some(90),
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("failed to connect to server"));
     }
 }

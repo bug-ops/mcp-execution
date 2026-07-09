@@ -241,6 +241,13 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
 /// * `http` - HTTP transport URL
 /// * `sse` - SSE transport URL
 /// * `headers` - HTTP headers in KEY=VALUE format
+/// * `connect_timeout_secs` - Connection (handshake) timeout override, in
+///   seconds. Same semantics as `mcp.json`'s `connectTimeoutSecs`: must be
+///   greater than zero and at most 600 seconds, enforced by
+///   [`validate_server_config`](mcp_execution_core::validate_server_config)
+///   at connect time.
+/// * `discover_timeout_secs` - Tool discovery timeout override, in seconds.
+///   Same semantics as `mcp.json`'s `discoverTimeoutSecs`.
 ///
 /// # Errors
 ///
@@ -265,12 +272,14 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
 ///     None,
 ///     None,
 ///     vec![],
+///     None,
+///     None,
 /// ).unwrap();
 ///
 /// assert_eq!(id.as_str(), "github-mcp-server");
 /// assert_eq!(config.args(), &["stdio"]);
 /// ```
-// TODO(#144): expose connect/discover timeout flags for manual introspect
+#[allow(clippy::too_many_arguments)] // mirrors the CLI's flat argument surface; grouping would add an abstraction for no behavioral benefit
 pub fn build_server_config(
     server: Option<String>,
     args: Vec<String>,
@@ -279,6 +288,8 @@ pub fn build_server_config(
     http: Option<String>,
     sse: Option<String>,
     headers: Vec<String>,
+    connect_timeout_secs: Option<u64>,
+    discover_timeout_secs: Option<u64>,
 ) -> Result<(ServerId, ServerConfig)> {
     // Parse environment variables / headers in KEY=VALUE format
     let parse_key_value = |s: &str, kind: &str| -> Result<(String, String)> {
@@ -293,7 +304,7 @@ pub fn build_server_config(
     };
 
     // Build config based on transport type
-    let (server_id, config) = if let Some(url) = http {
+    let (server_id, mut builder) = if let Some(url) = http {
         // HTTP transport
         let id = ServerId::new(&url);
         let mut builder = ServerConfig::builder().http_transport(url);
@@ -303,7 +314,7 @@ pub fn build_server_config(
             builder = builder.header(key, value);
         }
 
-        (id, builder.build())
+        (id, builder)
     } else if let Some(url) = sse {
         // SSE transport
         let id = ServerId::new(&url);
@@ -314,7 +325,7 @@ pub fn build_server_config(
             builder = builder.header(key, value);
         }
 
-        (id, builder.build())
+        (id, builder)
     } else {
         // Stdio transport (default)
         let command = server.expect("server is required for stdio transport");
@@ -334,10 +345,18 @@ pub fn build_server_config(
             builder = builder.cwd(PathBuf::from(dir));
         }
 
-        (id, builder.build())
+        (id, builder)
     };
 
-    Ok((server_id, config))
+    if let Some(secs) = connect_timeout_secs {
+        builder = builder.connect_timeout(Duration::from_secs(secs));
+    }
+
+    if let Some(secs) = discover_timeout_secs {
+        builder = builder.discover_timeout(Duration::from_secs(secs));
+    }
+
+    Ok((server_id, builder.build()))
 }
 
 #[cfg(test)]
@@ -427,6 +446,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -451,6 +472,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -476,6 +499,8 @@ mod tests {
             Some("https://api.githubcopilot.com/mcp/".to_string()),
             None,
             vec!["Authorization=Bearer token123".to_string()],
+            None,
+            None,
         )
         .unwrap();
 
@@ -497,6 +522,8 @@ mod tests {
             None,
             Some("https://example.com/sse".to_string()),
             vec!["X-API-Key=secret".to_string()],
+            None,
+            None,
         )
         .unwrap();
 
@@ -518,6 +545,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -534,6 +563,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         );
 
         assert!(result.is_err());
@@ -555,6 +586,8 @@ mod tests {
             Some("https://example.com".to_string()),
             None,
             vec!["InvalidHeader".to_string()],
+            None,
+            None,
         );
 
         assert!(result.is_err());
@@ -580,6 +613,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -604,6 +639,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -625,6 +662,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -648,6 +687,8 @@ mod tests {
                 "X-API-Key=secret".to_string(),
                 "Content-Type=application/json".to_string(),
             ],
+            None,
+            None,
         )
         .unwrap();
 
@@ -680,6 +721,8 @@ mod tests {
                 "X-Custom=value=with=equals".to_string(),
                 "X-Query=a=b&c=d".to_string(),
             ],
+            None,
+            None,
         )
         .unwrap();
 
@@ -703,6 +746,8 @@ mod tests {
             None,
             Some("https://sse.example.com/events".to_string()),
             vec!["Authorization=Bearer xyz".to_string()],
+            None,
+            None,
         )
         .unwrap();
 
@@ -725,6 +770,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -742,6 +789,8 @@ mod tests {
             Some("https://example.com".to_string()),
             None,
             vec!["X-Empty=".to_string()],
+            None,
+            None,
         )
         .unwrap();
 
@@ -767,6 +816,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         )
         .unwrap();
 
@@ -794,6 +845,8 @@ mod tests {
             None,
             None,
             vec![],
+            None,
+            None,
         );
 
         assert!(result.is_err());
@@ -815,6 +868,8 @@ mod tests {
             Some("https://example.com".to_string()),
             None,
             vec!["=value".to_string()],
+            None,
+            None,
         );
 
         assert!(result.is_err());
@@ -824,6 +879,72 @@ mod tests {
                 .to_string()
                 .contains("key cannot be empty")
         );
+    }
+
+    #[test]
+    fn test_build_server_config_timeout_override_reaches_core_validation() {
+        // The manual CLI-flag path must fail identically to the mcp.json path:
+        // both end up calling the same `validate_server_config`, so a zero
+        // override must trip the same `connect_timeout` ValidationError.
+        let (_, config) = build_server_config(
+            Some("docker".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            Some(0),
+            None,
+        )
+        .unwrap();
+
+        let result = mcp_execution_core::validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(mcp_execution_core::Error::ValidationError { field, reason }) = result {
+            assert_eq!(field, "connect_timeout");
+            assert!(reason.contains("greater than zero"));
+        } else {
+            panic!("expected ValidationError for connect_timeout");
+        }
+    }
+
+    #[test]
+    fn test_build_server_config_timeout_overrides() {
+        let (_, config) = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            Some(5),
+            Some(90),
+        )
+        .unwrap();
+
+        assert_eq!(config.connect_timeout(), Duration::from_secs(5));
+        assert_eq!(config.discover_timeout(), Duration::from_secs(90));
+    }
+
+    #[test]
+    fn test_build_server_config_default_timeouts_without_overrides() {
+        let (_, config) = build_server_config(
+            Some("server".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.connect_timeout(), Duration::from_secs(30));
+        assert_eq!(config.discover_timeout(), Duration::from_secs(30));
     }
 
     #[test]

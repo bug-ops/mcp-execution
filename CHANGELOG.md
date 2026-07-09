@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the connect/discover timeouts introduced in #120 on a per-server basis via
   `connectTimeoutSecs`/`discoverTimeoutSecs`, instead of being locked to the 30-second defaults.
   Values are bounds-checked (`0 < timeout <= 600s`) by `validate_server_config` (#128).
+- **`mcp-execution-cli`**: `introspect` and `generate` now accept `--connect-timeout-secs` and
+  `--discover-timeout-secs` flags for manually-configured (non-`--from-config`) servers, matching
+  the field names, units, and validation bounds of `mcp.json`'s `connectTimeoutSecs`/
+  `discoverTimeoutSecs`. Both flags conflict with `--from-config`, since that path already reads
+  timeouts from the server's `mcp.json` entry (#144).
+
+### Documentation
+
+- **`mcp-execution-core`**: documented the decision to permanently reject a `0` connect/discover
+  timeout instead of treating it as "no timeout" — an infinite wait would let a hung or malicious
+  server block this tool's non-interactive CLI and MCP-server invocations forever, which is the
+  exact denial-of-service exposure these timeouts were introduced to close. No behavior change;
+  resolves the open question left by #136 (#145).
 
 ### Security
 
