@@ -49,10 +49,12 @@
 //! - **Type-safe**: Full TypeScript types from MCP schemas
 //! - **Discoverable**: grep-friendly headers for tool discovery
 
+pub mod clock;
 pub mod service;
 pub mod state;
 pub mod types;
 
+pub use clock::{Clock, SystemClock};
 pub use service::GeneratorService;
 pub use state::StateManager;
 pub use types::{

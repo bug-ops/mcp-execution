@@ -45,7 +45,7 @@ static DESC_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"@description[ \t]+(.+)").expect("valid regex"));
 static INTERFACE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"interface\s+\w+Params\s*\{([^}]*)\}").expect("valid regex"));
-// TODO(review): INTERFACE_REGEX body truncation — nested-type bodies containing `}` are cut off
+// TODO(#124): INTERFACE_REGEX body truncation — nested-type bodies containing `}` are cut off
 // (e.g., `{ foo: string }` as a property type truncates the interface match early).
 // Suggested action: switch to a balanced-brace parser or accept multi-pass scanning.
 
@@ -291,7 +291,7 @@ pub fn parse_tool_file(content: &str, filename: &str) -> Result<ParsedToolFile, 
 ///
 /// Multi-line property declarations (type wraps to the next line) are not
 /// supported — each property must fit on a single line.
-/// TODO(review): Add multi-line property support if generated TS ever wraps types.
+/// TODO(#125): Add multi-line property support if generated TS ever wraps types.
 fn parse_parameters(content: &str) -> Vec<ParsedParameter> {
     let mut parameters = Vec::new();
 

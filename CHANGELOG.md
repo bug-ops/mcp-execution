@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of silently overwriting one another's generated file and producing a duplicate `index.ts`
   export.
 
+### Changed
+
+- **`mcp-execution-server`**: introduced an injectable `Clock` trait (`SystemClock` in production)
+  for `PendingGeneration` session expiry, replacing direct `Utc::now()` calls. Tests can now inject
+  a fake clock to exercise the 30-minute TTL boundary deterministically instead of rewinding
+  `expires_at` after construction (#121).
+
 ### Fixed
 
 - **`mcp-execution-codegen`**: CLI-generated TypeScript files (`generate` without LLM categorization)

@@ -7,7 +7,9 @@
 use chrono::Duration;
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
-use mcp_execution_server::{CategorizedTool, GeneratorService, PendingGeneration, StateManager};
+use mcp_execution_server::{
+    CategorizedTool, GeneratorService, PendingGeneration, StateManager, SystemClock,
+};
 use rmcp::handler::server::ServerHandler;
 use std::sync::Arc;
 
@@ -70,7 +72,7 @@ async fn test_state_manager_workflow() {
     let output_dir = std::env::temp_dir().join("mcp-server-test");
 
     // Store pending generation
-    let pending = PendingGeneration::new(server_id, server_info, config, output_dir);
+    let pending = PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock);
     let session_id = state.store(pending.clone()).await;
 
     // Verify it's stored
@@ -112,7 +114,8 @@ async fn test_multiple_concurrent_sessions() {
         let config = ServerConfig::builder().command("echo".to_string()).build();
         let output_dir = std::env::temp_dir().join(format!("mcp-test-{i}"));
 
-        let pending = PendingGeneration::new(server_id, server_info, config, output_dir);
+        let pending =
+            PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock);
         let session_id = state.store(pending).await;
         sessions.push(session_id);
     }
@@ -140,7 +143,8 @@ async fn test_state_manager_handles_expiration() {
     let output_dir = std::env::temp_dir().join("mcp-expire-test");
 
     // Create and manually expire a session
-    let mut pending = PendingGeneration::new(server_id, server_info, config, output_dir);
+    let mut pending =
+        PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock);
     pending.expires_at = chrono::Utc::now() - Duration::hours(1);
 
     let session_id = state.store(pending).await;
@@ -208,14 +212,14 @@ async fn test_state_manager_get_without_consuming() {
 #[test]
 fn test_pending_generation_not_expired_initially() {
     let pending = create_test_pending("test");
-    assert!(!pending.is_expired());
+    assert!(!pending.is_expired(&SystemClock));
 }
 
 #[test]
 fn test_pending_generation_expires_correctly() {
     let mut pending = create_test_pending("test");
     pending.expires_at = chrono::Utc::now() - Duration::minutes(1);
-    assert!(pending.is_expired());
+    assert!(pending.is_expired(&SystemClock));
 }
 
 #[test]
@@ -348,5 +352,5 @@ fn create_test_pending(server_id_str: &str) -> PendingGeneration {
     let config = ServerConfig::builder().command("echo".to_string()).build();
     let output_dir = std::env::temp_dir().join(format!("mcp-test-{server_id_str}"));
 
-    PendingGeneration::new(server_id, server_info, config, output_dir)
+    PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock)
 }
