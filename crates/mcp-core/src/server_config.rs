@@ -47,6 +47,21 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Default timeout for establishing an MCP server connection (handshake).
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default timeout for the `list_all_tools` discovery call after connecting.
+const DEFAULT_DISCOVER_TIMEOUT: Duration = Duration::from_secs(30);
+
+const fn default_connect_timeout() -> Duration {
+    DEFAULT_CONNECT_TIMEOUT
+}
+
+const fn default_discover_timeout() -> Duration {
+    DEFAULT_DISCOVER_TIMEOUT
+}
 
 /// Transport type for MCP server communication.
 ///
@@ -173,6 +188,20 @@ pub struct ServerConfig {
     /// - `Content-Type`: Request content type
     #[serde(default)]
     pub headers: HashMap<String, String>,
+
+    /// Timeout for establishing a connection to the server (handshake).
+    ///
+    /// Bounds how long `Introspector::discover_server` waits for the initial
+    /// rmcp `serve` handshake before giving up. Defaults to 30 seconds.
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout: Duration,
+
+    /// Timeout for the tool discovery call after a connection is established.
+    ///
+    /// Bounds how long `Introspector::discover_server` waits for
+    /// `list_all_tools` to respond. Defaults to 30 seconds.
+    #[serde(default = "default_discover_timeout")]
+    pub discover_timeout: Duration,
 }
 
 impl ServerConfig {
@@ -233,6 +262,44 @@ impl ServerConfig {
     pub const fn headers(&self) -> &HashMap<String, String> {
         &self.headers
     }
+
+    /// Returns the connection (handshake) timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("docker".to_string())
+    ///     .build();
+    ///
+    /// assert_eq!(config.connect_timeout(), Duration::from_secs(30));
+    /// ```
+    #[must_use]
+    pub const fn connect_timeout(&self) -> Duration {
+        self.connect_timeout
+    }
+
+    /// Returns the tool discovery timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("docker".to_string())
+    ///     .build();
+    ///
+    /// assert_eq!(config.discover_timeout(), Duration::from_secs(30));
+    /// ```
+    #[must_use]
+    pub const fn discover_timeout(&self) -> Duration {
+        self.discover_timeout
+    }
 }
 
 /// Builder for constructing `ServerConfig` instances.
@@ -258,7 +325,7 @@ impl ServerConfig {
 ///     .header("Authorization".to_string(), "Bearer token".to_string())
 ///     .build();
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ServerConfigBuilder {
     transport: TransportType,
     command: Option<String>,
@@ -267,6 +334,24 @@ pub struct ServerConfigBuilder {
     cwd: Option<PathBuf>,
     url: Option<String>,
     headers: HashMap<String, String>,
+    connect_timeout: Duration,
+    discover_timeout: Duration,
+}
+
+impl Default for ServerConfigBuilder {
+    fn default() -> Self {
+        Self {
+            transport: TransportType::default(),
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: None,
+            url: None,
+            headers: HashMap::new(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            discover_timeout: DEFAULT_DISCOVER_TIMEOUT,
+        }
+    }
 }
 
 impl ServerConfigBuilder {
@@ -489,6 +574,48 @@ impl ServerConfigBuilder {
         self
     }
 
+    /// Sets the connection (handshake) timeout, overriding the 30-second default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("docker".to_string())
+    ///     .connect_timeout(Duration::from_secs(5))
+    ///     .build();
+    ///
+    /// assert_eq!(config.connect_timeout(), Duration::from_secs(5));
+    /// ```
+    #[must_use]
+    pub const fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    /// Sets the tool discovery timeout, overriding the 30-second default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("docker".to_string())
+    ///     .discover_timeout(Duration::from_secs(5))
+    ///     .build();
+    ///
+    /// assert_eq!(config.discover_timeout(), Duration::from_secs(5));
+    /// ```
+    #[must_use]
+    pub const fn discover_timeout(mut self, timeout: Duration) -> Self {
+        self.discover_timeout = timeout;
+        self
+    }
+
     /// Builds the `ServerConfig`.
     ///
     /// # Panics
@@ -552,6 +679,8 @@ impl ServerConfigBuilder {
                     cwd: self.cwd,
                     url: None,
                     headers: HashMap::new(),
+                    connect_timeout: self.connect_timeout,
+                    discover_timeout: self.discover_timeout,
                 })
             }
             TransportType::Http => {
@@ -567,6 +696,8 @@ impl ServerConfigBuilder {
                     cwd: None,
                     url: Some(url),
                     headers: self.headers,
+                    connect_timeout: self.connect_timeout,
+                    discover_timeout: self.discover_timeout,
                 })
             }
             TransportType::Sse => {
@@ -582,6 +713,8 @@ impl ServerConfigBuilder {
                     cwd: None,
                     url: Some(url),
                     headers: self.headers,
+                    connect_timeout: self.connect_timeout,
+                    discover_timeout: self.discover_timeout,
                 })
             }
         }

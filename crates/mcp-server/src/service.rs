@@ -63,8 +63,14 @@ pub struct GeneratorService {
     /// State manager for pending generations
     state: Arc<StateManager>,
 
-    /// MCP server introspector
-    introspector: Arc<Mutex<Introspector>>,
+    /// Per-server-id introspector locks.
+    ///
+    /// Keying the lock by [`ServerId`] means a slow or hung downstream MCP
+    /// server only blocks `introspect_server` calls for that same server id,
+    /// not for unrelated ids across all sessions. The outer map mutex is only
+    /// held long enough to fetch or insert the per-id handle - never across
+    /// the `discover_server` await point.
+    introspectors: Arc<Mutex<HashMap<ServerId, Arc<Mutex<Introspector>>>>>,
 
     /// Tool router for MCP protocol
     #[allow(dead_code)]
@@ -77,9 +83,30 @@ impl GeneratorService {
     pub fn new() -> Self {
         Self {
             state: Arc::new(StateManager::new()),
-            introspector: Arc::new(Mutex::new(Introspector::new())),
+            introspectors: Arc::new(Mutex::new(HashMap::new())),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Returns the per-server-id introspector handle, creating one if absent.
+    ///
+    /// The outer map lock is released before the returned handle is awaited
+    /// on, so discovery of unrelated server ids never contends on it.
+    async fn introspector_for(&self, server_id: &ServerId) -> Arc<Mutex<Introspector>> {
+        let mut introspectors = self.introspectors.lock().await;
+        introspectors
+            .entry(server_id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(Introspector::new())))
+            .clone()
+    }
+
+    /// Evicts the per-server-id introspector handle after use.
+    ///
+    /// `server_id` values are caller-supplied, so without eviction the map
+    /// grows without bound as new ids are introspected. Called after
+    /// `discover_server` completes, regardless of outcome.
+    async fn evict_introspector(&self, server_id: &ServerId) {
+        self.introspectors.lock().await.remove(server_id);
     }
 }
 
@@ -132,16 +159,22 @@ impl GeneratorService {
 
         let config = config_builder.build();
 
-        // Connect and introspect
-        let server_info = {
-            let mut introspector = self.introspector.lock().await;
+        // Connect and introspect, holding only the lock for this server_id
+        let discover_result = {
+            let introspector_handle = self.introspector_for(&server_id).await;
+            let mut introspector = introspector_handle.lock().await;
             introspector
                 .discover_server(server_id.clone(), &config)
                 .await
-                .map_err(|e| {
-                    McpError::internal_error(format!("Failed to introspect server: {e}"), None)
-                })?
         };
+
+        // Evict the per-server-id handle regardless of outcome, so caller-supplied
+        // server_id values can't grow the introspectors map without bound.
+        self.evict_introspector(&server_id).await;
+
+        let server_info = discover_result.map_err(|e| {
+            McpError::internal_error(format!("Failed to introspect server: {e}"), None)
+        })?;
 
         // Extract tool metadata for Claude
         let tools: Vec<ToolMetadata> = server_info
@@ -766,13 +799,13 @@ mod tests {
     #[test]
     fn test_generator_service_new() {
         let service = GeneratorService::new();
-        assert!(service.introspector.try_lock().is_ok());
+        assert!(service.introspectors.try_lock().is_ok());
     }
 
     #[test]
     fn test_generator_service_default() {
         let service = GeneratorService::default();
-        assert!(service.introspector.try_lock().is_ok());
+        assert!(service.introspectors.try_lock().is_ok());
     }
 
     #[test]
@@ -889,6 +922,158 @@ mod tests {
         if let Err(err) = result {
             assert_ne!(err.code, ErrorCode::INVALID_PARAMS);
         }
+    }
+
+    // ========================================================================
+    // Per-server-id locking Tests (issue #120)
+    //
+    // These test the exact `Arc<Mutex<Introspector>>` handles and keyed-lock
+    // pattern that `introspect_server` relies on via `introspector_for`,
+    // rather than driving a real (or fake) subprocess through
+    // `discover_server`. This keeps the tests deterministic and
+    // platform-independent while still exercising the production locking
+    // primitive: `introspect_server` does nothing more than fetch a handle
+    // via `introspector_for` and `.lock().await` it around the
+    // `discover_server` call, so proving the handles behave correctly here
+    // proves the concurrency property end to end.
+    // ========================================================================
+
+    /// `introspect_server` must evict its per-server-id entry from the
+    /// `introspectors` map once `discover_server` completes, regardless of
+    /// outcome - otherwise caller-supplied `server_id`s would grow the map
+    /// without bound.
+    #[tokio::test]
+    async fn test_introspect_server_evicts_map_entry_after_completion() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "evict-after-completion".to_string(),
+            command: "echo".to_string(), // not an MCP server, discover_server fails fast
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+        };
+
+        let result = service.introspect_server(Parameters(params)).await;
+        assert!(
+            result.is_err(),
+            "echo is not an MCP server, expected a connection failure"
+        );
+
+        assert!(
+            service.introspectors.lock().await.is_empty(),
+            "introspectors map should be empty after introspect_server completes, \
+             regardless of success or failure"
+        );
+    }
+
+    /// Same `server_id` must resolve to the same introspector lock, so a
+    /// second `introspect_server` call for that id cannot start
+    /// `discover_server` until the first releases it.
+    #[tokio::test]
+    async fn test_introspector_for_same_id_shares_one_lock() {
+        let service = GeneratorService::new();
+        let server_id = ServerId::new("same-id-lock-test");
+
+        let handle_a = service.introspector_for(&server_id).await;
+        let handle_b = service.introspector_for(&server_id).await;
+
+        assert!(
+            Arc::ptr_eq(&handle_a, &handle_b),
+            "the same server_id must reuse one introspector lock"
+        );
+    }
+
+    /// Different `server_id`s must resolve to independent introspector
+    /// locks, so calls for unrelated ids never contend on the same mutex.
+    #[tokio::test]
+    async fn test_introspector_for_different_ids_get_independent_locks() {
+        let service = GeneratorService::new();
+
+        let handle_a = service
+            .introspector_for(&ServerId::new("diff-id-lock-a"))
+            .await;
+        let handle_b = service
+            .introspector_for(&ServerId::new("diff-id-lock-b"))
+            .await;
+
+        assert!(
+            !Arc::ptr_eq(&handle_a, &handle_b),
+            "different server_ids must get independent introspector locks"
+        );
+    }
+
+    /// Two holders of the *same* per-id lock (as returned by
+    /// `introspector_for` for one `server_id`) must serialize: the second
+    /// critical section cannot start until the first releases the lock, so
+    /// total wall time is roughly additive (~2x the hold time).
+    #[tokio::test]
+    async fn test_same_id_lock_serializes_concurrent_holders() {
+        let service = GeneratorService::new();
+        let server_id = ServerId::new("same-id-timing-test");
+        let hold_time = std::time::Duration::from_millis(150);
+        let serialized_threshold = std::time::Duration::from_millis(250);
+
+        let handle_a = service.introspector_for(&server_id).await;
+        let handle_b = service.introspector_for(&server_id).await;
+
+        let started = std::time::Instant::now();
+        tokio::join!(
+            async {
+                let _guard = handle_a.lock().await;
+                tokio::time::sleep(hold_time).await;
+            },
+            async {
+                let _guard = handle_b.lock().await;
+                tokio::time::sleep(hold_time).await;
+            },
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed >= serialized_threshold,
+            "holders of the same per-id lock should serialize \
+             (expected >= {serialized_threshold:?}, i.e. two back-to-back {hold_time:?} \
+             critical sections); took {elapsed:?}"
+        );
+    }
+
+    /// Two holders of *different* per-id locks (as returned by
+    /// `introspector_for` for different `server_id`s) must not serialize:
+    /// both critical sections run concurrently, so total wall time stays
+    /// close to a single hold, not double it.
+    #[tokio::test]
+    async fn test_different_id_locks_do_not_serialize() {
+        let service = GeneratorService::new();
+        let hold_time = std::time::Duration::from_millis(150);
+        let serialized_threshold = std::time::Duration::from_millis(250);
+
+        let handle_a = service
+            .introspector_for(&ServerId::new("diff-id-timing-a"))
+            .await;
+        let handle_b = service
+            .introspector_for(&ServerId::new("diff-id-timing-b"))
+            .await;
+
+        let started = std::time::Instant::now();
+        tokio::join!(
+            async {
+                let _guard = handle_a.lock().await;
+                tokio::time::sleep(hold_time).await;
+            },
+            async {
+                let _guard = handle_b.lock().await;
+                tokio::time::sleep(hold_time).await;
+            },
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < serialized_threshold,
+            "holders of different per-id locks should not serialize \
+             (expected < {serialized_threshold:?}, i.e. close to a single {hold_time:?} hold); \
+             took {elapsed:?}"
+        );
     }
 
     // ========================================================================

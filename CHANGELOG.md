@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   description when no categorization is available. Previously the tag was omitted, causing
   `mcp-execution-skill` to fall back to uninformative `"{tool_name} tool"` placeholders in
   generated `SKILL.md` files (#94).
+- **`mcp-execution-introspector`**: `Introspector::discover_server` now enforces bounded timeouts on
+  both the connect handshake and the `list_all_tools` discovery call, via new `connect_timeout`/
+  `discover_timeout` fields on `ServerConfig` (30s defaults, configurable through the builder). A hung
+  downstream MCP server no longer blocks discovery indefinitely (#120).
+- **`mcp-execution-server`**: `GeneratorService` now locks introspection per-server-id instead of behind
+  a single global mutex, so a slow or hung server only blocks `introspect_server` calls for that same
+  server id rather than every session. The per-id lock entry is evicted after each call completes to
+  bound memory growth from caller-supplied server ids (#120).
 
 ### Testing
 
