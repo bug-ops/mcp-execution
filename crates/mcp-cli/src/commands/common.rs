@@ -270,7 +270,7 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
 /// assert_eq!(id.as_str(), "github-mcp-server");
 /// assert_eq!(config.args(), &["stdio"]);
 /// ```
-// TODO(critic): expose connect/discover timeout flags for manual introspect
+// TODO(#144): expose connect/discover timeout flags for manual introspect
 pub fn build_server_config(
     server: Option<String>,
     args: Vec<String>,
