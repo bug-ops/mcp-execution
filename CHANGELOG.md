@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-codegen`**: two tools reported with an identical raw name (invalid per the MCP
+  spec but not currently rejected upstream) no longer collapse to a single collision-map entry and
+  silently overwrite one tool's generated file; each now resolves to a distinct, deterministically
+  disambiguated TypeScript identifier, matching the existing numeric-suffix behavior for
+  sanitize-colliding names. Sibling JSON Schema property keys that sanitize to the same TypeScript
+  identifier (e.g. `a-b` and `a.b`) are likewise disambiguated instead of producing a duplicate,
+  non-compiling interface field — both in each tool's top-level `Params` interface
+  (`extract_property_infos`) and in nested object types (`json_schema_to_typescript`) (#129).
 - **`mcp-execution-codegen`**: CLI-generated TypeScript files (`generate` without LLM categorization)
   now always emit an `@description` tag in the header JSDoc, falling back to the tool's own
   description when no categorization is available. Previously the tag was omitted, causing

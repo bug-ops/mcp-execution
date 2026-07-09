@@ -31,7 +31,9 @@
 //! ```
 
 use crate::common::types::{GeneratedCode, GeneratedFile};
-use crate::common::typescript::{extract_properties, sanitize_ts_identifier, to_camel_case};
+use crate::common::typescript::{
+    disambiguate_identifier, extract_properties, sanitize_ts_identifier, to_camel_case,
+};
 use crate::progressive::types::{
     BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolCategorization, ToolContext,
     ToolSummary,
@@ -150,11 +152,8 @@ impl<'a> ProgressiveGenerator<'a> {
         let typescript_names = resolve_typescript_names(&server_info.tools);
 
         // Generate tool files (one per tool)
-        for tool in &server_info.tools {
-            let typescript_name = typescript_names
-                .get(tool.name.as_str())
-                .cloned()
-                .unwrap_or_default();
+        for (idx, tool) in server_info.tools.iter().enumerate() {
+            let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
             let tool_context = self.create_tool_context(server_id, tool, None, typescript_name)?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
@@ -275,10 +274,10 @@ impl<'a> ProgressiveGenerator<'a> {
         let typescript_names = resolve_typescript_names(&server_info.tools);
 
         // Generate tool files (one per tool) with categorization metadata
-        for tool in &server_info.tools {
+        for (idx, tool) in server_info.tools.iter().enumerate() {
             let tool_name = tool.name.as_str();
             let categorization = categorizations.get(tool_name);
-            let typescript_name = typescript_names.get(tool_name).cloned().unwrap_or_default();
+            let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
             let tool_context =
                 self.create_tool_context(server_id, tool, categorization, typescript_name)?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
@@ -393,16 +392,17 @@ impl<'a> ProgressiveGenerator<'a> {
         &self,
         server_info: &ServerInfo,
         categorizations: Option<&HashMap<String, ToolCategorization>>,
-        typescript_names: &HashMap<String, String>,
+        typescript_names: &[String],
     ) -> Result<IndexContext> {
         let tools: Vec<ToolSummary> = server_info
             .tools
             .iter()
-            .map(|tool| {
+            .enumerate()
+            .map(|(idx, tool)| {
                 let tool_name = tool.name.as_str();
                 let cat = categorizations.and_then(|c| c.get(tool_name));
                 ToolSummary {
-                    typescript_name: typescript_names.get(tool_name).cloned().unwrap_or_default(),
+                    typescript_name: typescript_names.get(idx).cloned().unwrap_or_default(),
                     description: sanitize_jsdoc(&tool.description, 256),
                     category: cat.map(|c| sanitize_jsdoc(&c.category, 128)),
                     keywords: cat.map(|c| sanitize_jsdoc(&c.keywords, 256)),
@@ -454,7 +454,10 @@ impl<'a> ProgressiveGenerator<'a> {
     /// Extracts property information from JSON Schema.
     ///
     /// Converts JSON Schema properties into `PropertyInfo` structures
-    /// suitable for template rendering.
+    /// suitable for template rendering. Sibling property names that sanitize to the same
+    /// TypeScript identifier (e.g. `a-b` and `a.b` both becoming `a_b`) are disambiguated
+    /// with a numeric suffix, since these become fields of the same generated `Params`
+    /// interface and an undetected collision would produce a duplicate, non-compiling field.
     ///
     /// # Errors
     ///
@@ -463,6 +466,7 @@ impl<'a> ProgressiveGenerator<'a> {
         let raw_properties = extract_properties(schema);
 
         let mut properties = Vec::new();
+        let mut used_names = HashSet::new();
         for prop in raw_properties {
             let raw_name = prop["name"]
                 .as_str()
@@ -496,8 +500,9 @@ impl<'a> ProgressiveGenerator<'a> {
                 None
             };
 
+            let base_name = sanitize_ts_identifier(&raw_name);
             properties.push(PropertyInfo {
-                name: sanitize_ts_identifier(&raw_name),
+                name: disambiguate_identifier(&base_name, &mut used_names),
                 typescript_type,
                 description,
                 required,
@@ -533,26 +538,25 @@ fn sanitize_ts_string_literal(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
-/// Resolves a collision-free TypeScript identifier for each tool.
+/// Resolves a collision-free TypeScript identifier for each tool, in tool order.
 ///
 /// `sanitize_ts_identifier` can map distinct tool names to the same identifier (e.g.
-/// `foo-bar` and `foo.bar` both become `foo_bar`). Since `typescript_name` doubles as the
+/// `foo-bar` and `foo.bar` both become `foo_bar`), and an MCP server is not guaranteed to
+/// report unique raw tool names in the first place. Since `typescript_name` doubles as the
 /// generated file's basename and its `index.ts` re-export, an undetected collision would
-/// silently overwrite one tool's file and produce a duplicate-export compile error. Colliding
-/// names are disambiguated with a numeric suffix in tool order.
-fn resolve_typescript_names(tools: &[ToolInfo]) -> HashMap<String, String> {
+/// silently overwrite one tool's file and produce a duplicate-export compile error.
+///
+/// The result is keyed by position rather than by raw tool name: two tools sharing an
+/// identical raw name would otherwise collapse to a single map entry, losing one of the two
+/// resolved identifiers even though both were correctly disambiguated. Callers must look up
+/// entries by the tool's index in the same `tools` slice.
+fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
     let mut used = HashSet::new();
-    let mut resolved = HashMap::with_capacity(tools.len());
+    let mut resolved = Vec::with_capacity(tools.len());
 
     for tool in tools {
         let base = sanitize_ts_identifier(&to_camel_case(tool.name.as_str()));
-        let mut candidate = base.clone();
-        let mut suffix = 2;
-        while !used.insert(candidate.clone()) {
-            candidate = format!("{base}_{suffix}");
-            suffix += 1;
-        }
-        resolved.insert(tool.name.as_str().to_string(), candidate);
+        resolved.push(disambiguate_identifier(&base, &mut used));
     }
 
     resolved
@@ -855,6 +859,82 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_property_infos_disambiguates_colliding_sibling_names() {
+        // "a-b" and "a.b" both sanitize to "a_b"; since both become fields of the same
+        // top-level `Params` interface, the collision must be disambiguated rather than
+        // producing a duplicate, non-compiling field.
+        let generator = ProgressiveGenerator::new().unwrap();
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a-b": {"type": "string"},
+                "a.b": {"type": "number"}
+            },
+            "required": []
+        });
+
+        let props = generator.extract_property_infos(&schema).unwrap();
+        let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
+        names.sort_unstable();
+
+        assert_eq!(names, vec!["a_b", "a_b_2"]);
+    }
+
+    #[test]
+    fn test_extract_property_infos_disambiguates_three_way_collision() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a-b": {"type": "string"},
+                "a.b": {"type": "number"},
+                "a b": {"type": "boolean"}
+            },
+            "required": []
+        });
+
+        let props = generator.extract_property_infos(&schema).unwrap();
+        let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
+        names.sort_unstable();
+
+        assert_eq!(names, vec!["a_b", "a_b_2", "a_b_3"]);
+    }
+
+    #[test]
+    fn test_generate_disambiguates_colliding_top_level_params() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools[0].input_schema = json!({
+            "type": "object",
+            "properties": {
+                "a-b": {"type": "string"},
+                "a.b": {"type": "number"}
+            },
+            "required": []
+        });
+
+        let code = generator.generate(&server_info).unwrap();
+        let tool = code
+            .files
+            .iter()
+            .find(|f| f.path == "createIssue.ts")
+            .unwrap();
+
+        assert_eq!(
+            tool.content.matches("a_b:").count() + tool.content.matches("a_b?:").count(),
+            1,
+            "field 'a_b' must appear exactly once in the Params interface: {}",
+            tool.content
+        );
+        assert_eq!(
+            tool.content.matches("a_b_2:").count() + tool.content.matches("a_b_2?:").count(),
+            1,
+            "disambiguated field 'a_b_2' must appear exactly once in the Params interface: {}",
+            tool.content
+        );
+    }
+
+    #[test]
     fn test_generate_sanitizes_property_name_injection() {
         let generator = ProgressiveGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
@@ -985,7 +1065,7 @@ mod tests {
         ];
 
         let resolved = resolve_typescript_names(&tools);
-        let mut names: Vec<&String> = resolved.values().collect();
+        let mut names: Vec<&String> = resolved.iter().collect();
         names.sort();
 
         // All three distinct tool names must resolve to distinct identifiers.
@@ -996,7 +1076,51 @@ mod tests {
             3,
             "collisions must be disambiguated: {names:?}"
         );
-        assert_eq!(resolved["foo-bar"], "foo_bar");
+        assert_eq!(resolved[0], "foo_bar");
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_disambiguates_identical_raw_names() {
+        // Two tools with the exact same raw name are invalid per the MCP spec but must
+        // not be rejected upstream; each must still get a distinct resolved identifier
+        // instead of one silently losing its slot in a raw-name-keyed map.
+        let tools = vec![
+            ToolInfo {
+                name: ToolName::new("dup"),
+                description: "First".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+            ToolInfo {
+                name: ToolName::new("dup"),
+                description: "Second".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+        ];
+
+        let resolved = resolve_typescript_names(&tools);
+
+        assert_eq!(resolved, vec!["dup".to_string(), "dup_2".to_string()]);
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_disambiguates_three_way_identical_raw_names() {
+        let tools: Vec<ToolInfo> = (0..3)
+            .map(|_| ToolInfo {
+                name: ToolName::new("dup"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            })
+            .collect();
+
+        let resolved = resolve_typescript_names(&tools);
+
+        assert_eq!(
+            resolved,
+            vec!["dup".to_string(), "dup_2".to_string(), "dup_3".to_string()]
+        );
     }
 
     #[test]
@@ -1041,6 +1165,55 @@ mod tests {
         );
         assert_eq!(
             index.content.matches("export { foo_bar_2,").count(),
+            1,
+            "index.ts must export the disambiguated second identifier exactly once"
+        );
+    }
+
+    #[test]
+    fn test_generate_disambiguates_identical_raw_tool_names() {
+        // An MCP server reporting two tools with the exact same raw `name` is invalid per
+        // spec but is not currently rejected upstream; generation must not let the second
+        // tool silently overwrite the first tool's file.
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools = vec![
+            ToolInfo {
+                name: ToolName::new("dup"),
+                description: "First".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+            ToolInfo {
+                name: ToolName::new("dup"),
+                description: "Second".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+        ];
+
+        let code = generator.generate(&server_info).unwrap();
+
+        let dup_files: Vec<&str> = code
+            .files
+            .iter()
+            .filter(|f| f.path == "dup.ts" || f.path == "dup_2.ts")
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(
+            dup_files.len(),
+            2,
+            "identical raw tool names must not overwrite each other's file: {dup_files:?}"
+        );
+
+        let index = code.files.iter().find(|f| f.path == "index.ts").unwrap();
+        assert_eq!(
+            index.content.matches("export { dup,").count(),
+            1,
+            "index.ts must export the first tool's identifier exactly once"
+        );
+        assert_eq!(
+            index.content.matches("export { dup_2,").count(),
             1,
             "index.ts must export the disambiguated second identifier exactly once"
         );

@@ -21,6 +21,7 @@
 //! ```
 
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// Converts a snake_case name to camelCase for TypeScript.
 ///
@@ -110,6 +111,24 @@ pub fn sanitize_ts_identifier(s: &str) -> String {
     result
 }
 
+/// Disambiguates `base` against the `used` set by appending a numeric suffix
+/// (`_2`, `_3`, ...) until the candidate is not already present, then reserves the
+/// winning candidate by inserting it into `used`.
+///
+/// Shared by every call site that maps untrusted, sanitized names into a namespace where
+/// distinct source names can collide after sanitization (e.g. sibling schema keys or tool
+/// names) — collisions must be disambiguated deterministically rather than silently
+/// overwriting one another.
+pub(crate) fn disambiguate_identifier(base: &str, used: &mut HashSet<String>) -> String {
+    let mut candidate = base.to_string();
+    let mut suffix = 2;
+    while !used.insert(candidate.clone()) {
+        candidate = format!("{base}_{suffix}");
+        suffix += 1;
+    }
+    candidate
+}
+
 /// Converts JSON Schema type to TypeScript type.
 ///
 /// Maps JSON Schema primitive types to their TypeScript equivalents.
@@ -182,11 +201,13 @@ pub fn json_schema_to_typescript(schema: &Value) -> String {
 
                     if let Some(props) = properties {
                         let mut fields = Vec::new();
+                        let mut used_keys = HashSet::new();
                         for (key, value) in props {
                             let is_required = required.contains(&key.as_str());
                             let optional_marker = if is_required { "" } else { "?" };
                             let ts_type = json_schema_to_typescript(value);
-                            let safe_key = sanitize_ts_identifier(key);
+                            let base_key = sanitize_ts_identifier(key);
+                            let safe_key = disambiguate_identifier(&base_key, &mut used_keys);
                             fields.push(format!("  {safe_key}{optional_marker}: {ts_type};"));
                         }
 
@@ -345,6 +366,93 @@ mod tests {
         assert!(!result.contains("export const pwned"));
         assert!(!result.contains(malicious_key));
         assert!(result.contains(&sanitize_ts_identifier(malicious_key)));
+    }
+
+    #[test]
+    fn test_json_schema_to_typescript_dedups_colliding_sibling_keys() {
+        // "a-b" and "a.b" both sanitize to "a_b"; the second must be disambiguated
+        // rather than producing a duplicate field name in the generated interface.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a-b": {"type": "string"},
+                "a.b": {"type": "number"}
+            },
+            "required": []
+        });
+
+        let result = json_schema_to_typescript(&schema);
+        // Exact field-line matches: a substring count on "a_b" would also match "a_b_2",
+        // so assert on the full `key?: type` field lines instead.
+        assert_eq!(result.matches("a_b?: string").count(), 1, "{result}");
+        assert_eq!(result.matches("a_b_2?: number").count(), 1, "{result}");
+    }
+
+    #[test]
+    fn test_json_schema_to_typescript_dedups_three_way_colliding_sibling_keys() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a-b": {"type": "string"},
+                "a.b": {"type": "number"},
+                "a b": {"type": "boolean"}
+            },
+            "required": []
+        });
+
+        let result = json_schema_to_typescript(&schema);
+        // The `preserve_order` feature is enabled transitively (via schemars/rmcp), so
+        // `serde_json::Map` iterates in insertion order: "a-b" claims the base "a_b" first.
+        assert_eq!(result.matches("a_b?: string").count(), 1, "{result}");
+        assert_eq!(result.matches("a_b_2?: number").count(), 1, "{result}");
+        assert_eq!(result.matches("a_b_3?: boolean").count(), 1, "{result}");
+    }
+
+    #[test]
+    fn test_json_schema_to_typescript_dedups_colliding_keys_in_nested_object() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "outer": {
+                    "type": "object",
+                    "properties": {
+                        "a-b": {"type": "string"},
+                        "a.b": {"type": "number"}
+                    },
+                    "required": []
+                }
+            },
+            "required": []
+        });
+
+        let result = json_schema_to_typescript(&schema);
+        assert!(result.contains("a_b?: string"), "{result}");
+        assert!(result.contains("a_b_2?: number"), "{result}");
+    }
+
+    #[test]
+    fn test_disambiguate_identifier_reuses_base_across_independent_scopes() {
+        // Disambiguation state must not leak between unrelated objects: two sibling nested
+        // objects each independently reusing "a_b" as a field name is not a collision.
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "first": {
+                    "type": "object",
+                    "properties": {"a_b": {"type": "string"}},
+                    "required": []
+                },
+                "second": {
+                    "type": "object",
+                    "properties": {"a_b": {"type": "number"}},
+                    "required": []
+                }
+            },
+            "required": []
+        });
+
+        let result = json_schema_to_typescript(&schema);
+        assert!(!result.contains("a_b_2"), "{result}");
     }
 
     #[test]
