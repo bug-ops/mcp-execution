@@ -12,7 +12,7 @@ MCP server introspection using the official [rmcp](https://docs.rs/rmcp) SDK.
 
 ```toml
 [dependencies]
-mcp-execution-introspector = "0.7"
+mcp-execution-introspector = "0.8"
 ```
 
 Or with cargo-add:

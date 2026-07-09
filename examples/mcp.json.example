@@ -29,6 +29,12 @@
         "@modelcontextprotocol/server-postgres",
         "postgresql://localhost/mydb"
       ]
+    },
+    "slow-server": {
+      "command": "npx",
+      "args": ["-y", "@example/slow-mcp-server"],
+      "connectTimeoutSecs": 60,
+      "discoverTimeoutSecs": 120
     }
   }
 }
