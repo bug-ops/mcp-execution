@@ -113,13 +113,28 @@ impl GeneratorService {
             .clone()
     }
 
-    /// Evicts the per-server-id introspector handle after use.
+    /// Evicts the per-server-id introspector handle after use, but only if
+    /// the map still holds the exact handle the caller obtained.
     ///
     /// `server_id` values are caller-supplied, so without eviction the map
     /// grows without bound as new ids are introspected. Called after
     /// `discover_server` completes, regardless of outcome.
-    async fn evict_introspector(&self, server_id: &ServerId) {
-        self.introspectors.lock().await.remove(server_id);
+    ///
+    /// A caller must pass the same `Arc<Mutex<Introspector>>` it received
+    /// from [`Self::introspector_for`]. Removing by `server_id` alone is a
+    /// TOCTOU bug: if another in-flight call for the same id already evicted
+    /// and a third call inserted a fresh handle, an unconditional `remove`
+    /// would prune that live handle out from under the third call. Comparing
+    /// with [`Arc::ptr_eq`] ensures a caller can only ever evict the entry it
+    /// created.
+    async fn evict_introspector(&self, server_id: &ServerId, handle: &Arc<Mutex<Introspector>>) {
+        let mut introspectors = self.introspectors.lock().await;
+        if let std::collections::hash_map::Entry::Occupied(entry) =
+            introspectors.entry(server_id.clone())
+            && Arc::ptr_eq(entry.get(), handle)
+        {
+            entry.remove();
+        }
     }
 }
 
@@ -181,8 +196,8 @@ impl GeneratorService {
         let config = config_builder.build();
 
         // Connect and introspect, holding only the lock for this server_id
+        let introspector_handle = self.introspector_for(&server_id).await;
         let discover_result = {
-            let introspector_handle = self.introspector_for(&server_id).await;
             let mut introspector = introspector_handle.lock().await;
             introspector
                 .discover_server(server_id.clone(), &config)
@@ -190,8 +205,11 @@ impl GeneratorService {
         };
 
         // Evict the per-server-id handle regardless of outcome, so caller-supplied
-        // server_id values can't grow the introspectors map without bound.
-        self.evict_introspector(&server_id).await;
+        // server_id values can't grow the introspectors map without bound. Only
+        // removes the entry if it is still this exact handle (see
+        // `evict_introspector` docs for why identity matters here).
+        self.evict_introspector(&server_id, &introspector_handle)
+            .await;
 
         let server_info = discover_result.map_err(|e| {
             if e.is_validation_error() {
@@ -1142,6 +1160,75 @@ mod tests {
             "holders of different per-id locks should not serialize \
              (expected < {serialized_threshold:?}, i.e. close to a single {hold_time:?} hold); \
              took {elapsed:?}"
+        );
+    }
+
+    /// Regression test for the TOCTOU eviction bug (issue #130): eviction
+    /// must be identity-checked, not just keyed by `server_id`.
+    ///
+    /// Simulates three overlapping callers for the same `server_id`:
+    /// - A and B both call `introspector_for` while an entry already exists,
+    ///   so (per `test_introspector_for_same_id_shares_one_lock`) they share
+    ///   the exact same `Arc<Mutex<Introspector>>`.
+    /// - A finishes first and evicts, removing the shared entry, while B is
+    ///   still "in flight" (still holding its clone of that same `Arc`).
+    /// - C then arrives, finds the map empty, and gets a brand-new `Arc` -
+    ///   distinct from A/B's.
+    /// - B finally finishes and attempts to evict using its (now stale)
+    ///   handle. Because eviction is identity-checked via `Arc::ptr_eq`, this
+    ///   must be a no-op: C's live entry must survive. Only C's own eviction
+    ///   should remove it.
+    #[tokio::test]
+    async fn test_stale_eviction_does_not_remove_unrelated_entry() {
+        let service = GeneratorService::new();
+        let server_id = ServerId::new("toctou-abc-test");
+
+        // A and B both fetch the handle for the same id before either
+        // evicts, so they end up sharing one Arc (mirrors the "shares one
+        // lock" behavior already covered by
+        // `test_introspector_for_same_id_shares_one_lock`).
+        let handle_a = service.introspector_for(&server_id).await;
+        let handle_b = service.introspector_for(&server_id).await;
+        assert!(
+            Arc::ptr_eq(&handle_a, &handle_b),
+            "A and B must share one introspector handle for the same server_id"
+        );
+
+        // A finishes first and evicts. B is still "in flight", holding its
+        // clone of the now-removed shared Arc.
+        service.evict_introspector(&server_id, &handle_a).await;
+        assert!(
+            service.introspectors.lock().await.is_empty(),
+            "map should be empty right after A's eviction"
+        );
+
+        // C arrives after A's eviction, finds the map empty, and gets a
+        // fresh, distinct handle.
+        let handle_c = service.introspector_for(&server_id).await;
+        assert!(
+            !Arc::ptr_eq(&handle_b, &handle_c),
+            "C must get a handle distinct from A/B's stale one"
+        );
+
+        // B finally finishes and tries to evict using its stale (A/B
+        // shared) handle. This must be a no-op: C's live entry, keyed by
+        // the same server_id, must survive because it is a different Arc.
+        service.evict_introspector(&server_id, &handle_b).await;
+        let introspectors = service.introspectors.lock().await;
+        let current = introspectors
+            .get(&server_id)
+            .expect("C's entry must survive B's stale eviction attempt");
+        assert!(
+            Arc::ptr_eq(current, &handle_c),
+            "the surviving entry must be C's handle, unaffected by B's stale eviction"
+        );
+        drop(introspectors);
+
+        // Only C's own eviction removes its entry.
+        service.evict_introspector(&server_id, &handle_c).await;
+        assert!(
+            service.introspectors.lock().await.is_empty(),
+            "map should be empty after C's own eviction"
         );
     }
 
