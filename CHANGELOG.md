@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/* */` comment (e.g. an MCP server's free-text tool description) corrupting brace-depth tracking
   and dropping every parameter for that tool; and a `{`, `}`, or `;` inside a string-literal type
   value (e.g. an enum-derived union) corrupting extraction or splitting.
+- **`mcp-execution-codegen`**: `resolve_typescript_names` now disambiguates a sanitized tool name
+  that matches a JS/TS reserved word (e.g. `delete`, `typeof`, `eval`, `arguments`) with the same
+  numeric-suffix strategy already used for name collisions. Previously a tool named `delete` or
+  `typeof` produced `export async function delete(...)`, a hard TypeScript/JavaScript syntax
+  error that also broke the generated `index.ts` re-export (#133).
 
 ### Testing
 

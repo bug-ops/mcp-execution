@@ -538,6 +538,62 @@ fn sanitize_ts_string_literal(s: &str) -> String {
         .replace('\n', "\\n")
 }
 
+/// JavaScript/TypeScript reserved words that cannot be used as a function or export
+/// identifier. Generated tool code is always emitted as an ES module, which is implicitly
+/// strict mode, so this includes both the unconditional and strict-mode-only reserved words,
+/// plus `eval`/`arguments`, which strict mode forbids as a `BindingIdentifier` (a function
+/// declaration's name) even though they are not formally reserved words.
+const RESERVED_WORDS: &[&str] = &[
+    "arguments",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "eval",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+];
+
 /// Resolves a collision-free TypeScript identifier for each tool, in tool order.
 ///
 /// `sanitize_ts_identifier` can map distinct tool names to the same identifier (e.g.
@@ -550,8 +606,14 @@ fn sanitize_ts_string_literal(s: &str) -> String {
 /// identical raw name would otherwise collapse to a single map entry, losing one of the two
 /// resolved identifiers even though both were correctly disambiguated. Callers must look up
 /// entries by the tool's index in the same `tools` slice.
+///
+/// `used` is seeded with [`RESERVED_WORDS`] before any tool is processed, so a sanitized name
+/// that exactly matches a JS/TS reserved word (e.g. a tool literally named `delete`) is treated
+/// as already taken by [`disambiguate_identifier`] and gets the same numeric-suffix
+/// disambiguation as a collision: `export async function delete(...)` is a hard syntax error,
+/// so it becomes `delete_2` instead.
 fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
-    let mut used = HashSet::new();
+    let mut used: HashSet<String> = RESERVED_WORDS.iter().map(|&s| s.to_string()).collect();
     let mut resolved = Vec::with_capacity(tools.len());
 
     for tool in tools {
@@ -1120,6 +1182,100 @@ mod tests {
         assert_eq!(
             resolved,
             vec!["dup".to_string(), "dup_2".to_string(), "dup_3".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_disambiguates_reserved_words() {
+        let reserved_tool_names = [
+            "delete",
+            "typeof",
+            "class",
+            "new",
+            "import",
+            "export",
+            "in",
+            "instanceof",
+            "void",
+            "enum",
+            "eval",
+            "arguments",
+        ];
+
+        for name in reserved_tool_names {
+            let tools = vec![ToolInfo {
+                name: ToolName::new(name),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            }];
+
+            let resolved = resolve_typescript_names(&tools);
+            let typescript_name = &resolved[0];
+
+            assert_ne!(
+                typescript_name, name,
+                "reserved word {name} must be disambiguated"
+            );
+            assert!(
+                !RESERVED_WORDS.contains(&typescript_name.as_str()),
+                "resolved name {typescript_name} for tool {name} must not be a reserved word"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_reserved_word_avoids_existing_collision() {
+        let tools = vec![
+            ToolInfo {
+                name: ToolName::new("class"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+            // Must be a hyphen, not an underscore: `to_camel_case` only acts on `_` (it
+            // capitalizes the following character and drops the underscore), so a raw name
+            // of "class_2" would sanitize to "class2", never colliding with the "class"
+            // tool's reserved-word fallback "class_2" and making this test vacuous.
+            // `sanitize_ts_identifier` replaces the hyphen in "class-2" with "_" verbatim
+            // (untouched by `to_camel_case`), so it genuinely sanitizes to the literal
+            // identifier "class_2", producing a real collision to test against.
+            ToolInfo {
+                name: ToolName::new("class-2"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+        ];
+
+        let resolved = resolve_typescript_names(&tools);
+
+        assert_ne!(
+            resolved[0], resolved[1],
+            "a reserved-word tool's fallback name must not collide with an unrelated tool that already claims it"
+        );
+        assert!(!RESERVED_WORDS.contains(&resolved[0].as_str()));
+    }
+
+    #[test]
+    fn test_generate_sanitizes_reserved_word_tool_name() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools = vec![ToolInfo {
+            name: ToolName::new("delete"),
+            description: "Delete something".to_string(),
+            input_schema: json!({}),
+            output_schema: None,
+        }];
+
+        let code = generator.generate(&server_info).unwrap();
+        let tool_file = code.files.iter().find(|f| f.path == "delete_2.ts").unwrap();
+
+        assert!(!tool_file.content.contains("export async function delete("));
+        assert!(
+            tool_file
+                .content
+                .contains("export async function delete_2(")
         );
     }
 
