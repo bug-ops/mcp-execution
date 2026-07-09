@@ -349,16 +349,24 @@ impl<'a> ProgressiveGenerator<'a> {
         // Extract properties from input schema
         let properties = self.extract_property_infos(&tool.input_schema)?;
 
+        let description = sanitize_jsdoc(&tool.description, 256);
+        // Falls back to the tool's own description when no LLM categorization is
+        // available, so the header JSDoc always emits `@description` (issue #94).
+        let short_description = Some(categorization.map_or_else(
+            || description.clone(),
+            |c| sanitize_jsdoc(&c.short_description, 256),
+        ));
+
         Ok(ToolContext {
             server_id: server_id.to_string(),
             name: sanitize_jsdoc(tool.name.as_str(), 256),
             typescript_name,
-            description: sanitize_jsdoc(&tool.description, 256),
+            description,
             input_schema: sanitize_schema_jsdoc_descriptions(tool.input_schema.clone()),
             properties,
             category: categorization.map(|c| sanitize_jsdoc(&c.category, 128)),
             keywords: categorization.map(|c| sanitize_jsdoc(&c.keywords, 256)),
-            short_description: categorization.map(|c| sanitize_jsdoc(&c.short_description, 256)),
+            short_description,
         })
     }
 
@@ -643,6 +651,68 @@ mod tests {
         assert_eq!(
             context.short_description,
             Some("Send a message".to_string())
+        );
+    }
+
+    #[test]
+    fn test_create_tool_context_without_categorization_falls_back_to_description() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let tool = ToolInfo {
+            name: ToolName::new("format_document"),
+            description: "Format document with language-specific rules".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"]
+            }),
+            output_schema: None,
+        };
+
+        let context = generator
+            .create_tool_context("test-server", &tool, None)
+            .unwrap();
+
+        assert_eq!(
+            context.short_description,
+            Some("Format document with language-specific rules".to_string())
+        );
+
+        // The header JSDoc must emit @description even without LLM categorization.
+        let rendered = generator
+            .engine
+            .render("progressive/tool", &context)
+            .unwrap();
+        assert!(rendered.contains("@description Format document with language-specific rules"));
+    }
+
+    #[test]
+    fn test_create_tool_context_input_schema_is_sanitized() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let tool = ToolInfo {
+            name: ToolName::new("send_message"),
+            description: "Sends a message".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "description": "Schema */ injected\nnext",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"]
+            }),
+            output_schema: None,
+        };
+
+        let context = generator
+            .create_tool_context("test-server", &tool, None)
+            .unwrap();
+
+        let expected = sanitize_schema_jsdoc_descriptions(tool.input_schema);
+        assert_eq!(context.input_schema, expected);
+        assert_eq!(
+            context.input_schema["description"],
+            json!("Schema *\\/ injected next")
         );
     }
 

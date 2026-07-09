@@ -40,7 +40,8 @@ pub struct ToolContext {
     pub typescript_name: String,
     /// Human-readable description
     pub description: String,
-    /// JSON Schema for input parameters
+    /// JSON Schema for input parameters, with `description` fields sanitized
+    /// for safe interpolation into JSDoc block comments (see issue #102).
     pub input_schema: serde_json::Value,
     /// Extracted properties for template rendering
     pub properties: Vec<PropertyInfo>,

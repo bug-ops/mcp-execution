@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mcp-execution-codegen`**: CLI-generated TypeScript files (`generate` without LLM categorization)
+  now always emit an `@description` tag in the header JSDoc, falling back to the tool's own
+  description when no categorization is available. Previously the tag was omitted, causing
+  `mcp-execution-skill` to fall back to uninformative `"{tool_name} tool"` placeholders in
+  generated `SKILL.md` files (#94).
+
+### Documentation
+
+- **`mcp-execution-codegen`**: documented that `ToolContext.input_schema` always holds the
+  JSDoc-sanitized schema, and added a regression test locking in that invariant (#102).
+
 ---
 
 ## [0.7.2] - 2026-07-09
