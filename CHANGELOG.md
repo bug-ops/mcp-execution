@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `discoverTimeoutSecs`. Both flags conflict with `--from-config`, since that path already reads
   timeouts from the server's `mcp.json` entry (#144).
 
+### Testing
+
+- **`mcp-execution-introspector`**: added an end-to-end test proving `ServerConfig::env`/
+  `ServerConfig::cwd` actually reach the spawned child process, not merely the config object. The
+  `fixture-slow-mcp-server` test fixture gained an optional fourth CLI arg (a report-file path); at
+  startup, it writes the environment variable value and working directory it observed to that
+  file, closing a coverage gap flagged during review of #146 (#153).
+
 ### Documentation
 
 - **`mcp-execution-core`**: documented the decision to permanently reject a `0` connect/discover

@@ -52,8 +52,9 @@ async fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
 }
 
 /// Polls a file until it has non-empty contents or `timeout` elapses, then
-/// returns those contents. Used to read the fixture's self-reported pid,
-/// which it writes at startup before the configured connect delay.
+/// returns those contents. Used to read the fixture's self-reported startup
+/// data (pid, or observed env/cwd), which it writes at startup before the
+/// configured connect delay.
 async fn wait_for_file_contents(path: &Path, timeout: Duration) -> String {
     let deadline = Instant::now() + timeout;
     loop {
@@ -64,7 +65,7 @@ async fn wait_for_file_contents(path: &Path, timeout: Duration) -> String {
         }
         assert!(
             Instant::now() < deadline,
-            "pid file {} was not written within {timeout:?}",
+            "file {} was not written within {timeout:?}",
             path.display()
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -281,5 +282,58 @@ async fn test_discover_server_success_kills_child_process() {
         wait_for_process_exit(pid, Duration::from_secs(2)).await,
         "expected introspection child process (pid {pid}) to be terminated after \
          a successful discover_server call, but it is still running"
+    );
+}
+
+/// Name of the environment variable the fixture echoes into its env/cwd
+/// report file. Must match the `ENV_MARKER_VAR` constant in
+/// `tests/fixtures/slow_mcp_server.rs`.
+const ENV_MARKER_VAR: &str = "MCP_EXECUTION_TEST_ENV_MARKER";
+
+/// #153 — `ServerConfig::env`/`ServerConfig::cwd` must actually reach the
+/// spawned child process, not merely be stored on the config object. The
+/// fixture's fourth CLI arg is a report-file path it writes, at startup, the
+/// value it observed for [`ENV_MARKER_VAR`] and its own working directory
+/// to - so this test can confirm the child process itself observed the
+/// configured values, rather than only asserting on the `ServerConfig`
+/// struct.
+#[tokio::test]
+async fn test_discover_server_passes_env_and_cwd_to_child_process() {
+    let mut introspector = Introspector::new();
+    let server_id = ServerId::new("test-env-cwd");
+
+    let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
+    let report_file = tempfile::NamedTempFile::new().expect("create temp report file");
+    let report_path = report_file.path().to_path_buf();
+    let configured_cwd = tempfile::tempdir().expect("create temp cwd");
+
+    let config = ServerConfig::builder()
+        .command(FIXTURE_BIN.to_string())
+        .arg("0".to_string()) // no handshake delay
+        .arg("0".to_string()) // no tools/list delay
+        .arg(pid_file.path().display().to_string())
+        .arg(report_path.display().to_string())
+        .env(ENV_MARKER_VAR.to_string(), "issue-153-marker".to_string())
+        .cwd(configured_cwd.path().to_path_buf())
+        .connect_timeout(Duration::from_secs(5))
+        .discover_timeout(Duration::from_secs(5))
+        .build();
+
+    let result = introspector.discover_server(server_id, &config).await;
+    assert!(result.is_ok(), "expected success, got {result:?}");
+
+    let report = wait_for_file_contents(&report_path, Duration::from_secs(2)).await;
+    let mut lines = report.lines();
+    let observed_env = lines.next().unwrap_or_default();
+    let observed_cwd = lines.next().unwrap_or_default();
+
+    assert_eq!(
+        observed_env, "issue-153-marker",
+        "child process did not observe the configured env var"
+    );
+    assert_eq!(
+        std::fs::canonicalize(observed_cwd).expect("observed cwd should exist"),
+        std::fs::canonicalize(configured_cwd.path()).expect("configured cwd should exist"),
+        "child process did not run in the configured working directory"
     );
 }

@@ -20,12 +20,25 @@
 //! the connect delay), letting tests confirm - via the written pid - that
 //! the process was actually terminated after a timeout, rather than merely
 //! asserting on the returned error.
+//!
+//! An optional fourth CLI arg gives another file path; if present, the
+//! fixture writes a two-line report to it immediately on startup (before the
+//! connect delay): the value of the [`ENV_MARKER_VAR`] environment variable
+//! (empty if unset) on the first line, and the process's current working
+//! directory on the second. This lets `tests/timeout_test.rs` assert
+//! that `ServerConfig::env`/`ServerConfig::cwd` actually reach the spawned
+//! child process, rather than only being covered at the config-object level.
 
 use rmcp::model::{ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo};
 use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
 use std::time::Duration;
+
+/// Name of the environment variable the fixture echoes into the env/cwd
+/// report file (see the fourth CLI arg above). Must match the constant of
+/// the same name used by `tests/timeout_test.rs`.
+const ENV_MARKER_VAR: &str = "MCP_EXECUTION_TEST_ENV_MARKER";
 
 struct SlowServer {
     list_tools_delay: Duration,
@@ -60,6 +73,16 @@ async fn main() {
 
     if let Some(pid_file) = std::env::args().nth(3) {
         std::fs::write(pid_file, std::process::id().to_string()).expect("failed to write pid file");
+    }
+
+    if let Some(report_file) = std::env::args().nth(4) {
+        let observed_env = std::env::var(ENV_MARKER_VAR).unwrap_or_default();
+        let observed_cwd = std::env::current_dir().expect("failed to read current directory");
+        std::fs::write(
+            report_file,
+            format!("{observed_env}\n{}", observed_cwd.display()),
+        )
+        .expect("failed to write env/cwd report file");
     }
 
     // Delay before even starting the handshake, so the client's `serve()`
