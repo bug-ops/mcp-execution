@@ -82,9 +82,9 @@ Or add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-mcp-execution-core = "0.7"
-mcp-execution-introspector = "0.7"
-mcp-execution-codegen = "0.7"
+mcp-execution-core = "0.8"
+mcp-execution-introspector = "0.8"
+mcp-execution-codegen = "0.8"
 ```
 
 </details>
@@ -197,7 +197,6 @@ mcp-execution-cli completions bash
 
 - [Progressive Loading Tutorial](examples/progressive-loading-usage.md) - Complete guide
 - [Claude Code Integration](crates/mcp-skill) - SKILL.md generation (`mcp-execution-cli skill`)
-- [Architecture Overview](docs/ARCHITECTURE.md) - System architecture and design
 
 ## Development
 

@@ -47,6 +47,33 @@ cp examples/mcp.json.example ~/.claude/mcp.json
 # Edit with your credentials
 ```
 
+#### Overriding connect/discover timeouts
+
+Slow-starting servers can override the default 30-second connect/discover
+timeouts (bounded to `0 < timeout <= 600` seconds) per server entry in
+`mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "slow-server": {
+      "command": "npx",
+      "args": ["-y", "@example/slow-mcp-server"],
+      "connectTimeoutSecs": 60,
+      "discoverTimeoutSecs": 120
+    }
+  }
+}
+```
+
+For a manually-configured server (not `--from-config`), pass the same
+overrides as CLI flags instead:
+
+```bash
+mcp-execution-cli introspect slow-mcp-server \
+  --connect-timeout-secs 60 --discover-timeout-secs 120
+```
+
 ## What is Progressive Loading?
 
 Progressive loading generates one TypeScript file per MCP tool, enabling AI agents to load only the tools they need:
@@ -237,8 +264,7 @@ Savings:        29,500 tokens (98%)
 ### Getting Help
 
 1. Check [progressive-loading-usage.md](./progressive-loading-usage.md) for detailed guide
-2. See [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for technical details
-3. Open an issue on GitHub
+2. Open an issue on GitHub
 
 ## Contributing Examples
 
@@ -252,5 +278,4 @@ Have a useful example or workflow? Contributions welcome:
 ## See Also
 
 - [Project README](../README.md) - Project overview and installation
-- [Architecture](../docs/ARCHITECTURE.md) - System architecture and design
 - [MCP Specification](https://github.com/modelcontextprotocol/specification) - Protocol specification

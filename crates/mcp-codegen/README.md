@@ -12,7 +12,7 @@ Progressive loading TypeScript code generation for MCP tools. Achieves **98% tok
 
 ```toml
 [dependencies]
-mcp-execution-codegen = "0.7"
+mcp-execution-codegen = "0.8"
 ```
 
 Or with cargo-add:

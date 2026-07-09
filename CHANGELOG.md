@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-09
+
 ### Breaking
 
 - **`mcp-execution-codegen`**, **`mcp-execution-skill`**: generated server directories now
@@ -1471,11 +1473,12 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 ---
 
 **Last Updated**: 2026-07-09
-**Version**: 0.7.2 (Production Ready)
+**Version**: 0.8.0 (Production Ready)
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/bug-ops/mcp-execution/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/bug-ops/mcp-execution/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/bug-ops/mcp-execution/compare/v0.6.6...v0.7.0
