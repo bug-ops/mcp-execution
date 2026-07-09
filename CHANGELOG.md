@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-skill`**, **`mcp-execution-server`**, **`mcp-execution-cli`**: existing
   item-level `#[allow(...)]` attributes now carry a comment explaining the suppression, per the
   `CLAUDE.md` justification requirement (#147).
+- **`mcp-execution-introspector`**: dropped the unused rmcp `transport-child-process` feature.
+  `spawn_introspection_child` now configures the child `tokio::process::Command` directly instead
+  of via `rmcp::transport::ConfigureCommandExt`, which was the last thing requiring the feature
+  after #142 replaced `TokioChildProcess` with a manually spawned stdio pair. Shrinks the dependency
+  tree by dropping `process-wrap`, `nix`, and several Windows-only transitive crates that were only
+  pulled in for that feature (#146).
 
 ### Fixed
 
