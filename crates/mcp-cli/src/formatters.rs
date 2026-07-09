@@ -106,8 +106,8 @@ pub mod pretty {
     ///
     /// # Errors
     ///
-    /// Returns an error if JSON serialization or value formatting fails
-    /// (e.g., if the data contains non-serializable types).
+    /// Returns an error if JSON serialization fails (e.g., if the data
+    /// contains non-serializable types). Value formatting itself cannot fail.
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         // Convert to JSON value first for inspection
         let value = serde_json::to_value(data)?;

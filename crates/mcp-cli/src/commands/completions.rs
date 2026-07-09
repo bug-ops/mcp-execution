@@ -50,7 +50,7 @@ pub fn generate_completions(shell: Shell, cmd: &mut Command) {
 /// # Errors
 ///
 /// This function cannot fail—it always returns `Ok(ExitCode::SUCCESS)`.
-/// Completion generation delegates to clap_complete which handles all error
+/// Completion generation delegates to `clap_complete` which handles all error
 /// cases internally and writes to stdout regardless of format variations.
 ///
 /// # Examples

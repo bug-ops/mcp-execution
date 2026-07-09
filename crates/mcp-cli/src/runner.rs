@@ -21,8 +21,9 @@ use crate::commands;
 ///
 /// # Errors
 ///
-/// Returns an error if the tracing subscriber cannot be initialized
-/// (e.g., when called multiple times in the same process).
+/// This function cannot fail—it always returns `Ok(())`. Multiple calls
+/// in the same process will panic rather than returning an error, but this
+/// is not a recoverable condition and indicates a programming error.
 pub fn init_logging(verbose: bool) -> Result<()> {
     let filter = if verbose {
         EnvFilter::new("debug")
