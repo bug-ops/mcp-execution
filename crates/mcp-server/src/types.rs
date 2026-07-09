@@ -83,7 +83,7 @@ pub struct IntrospectServerResult {
     pub tools_found: usize,
 
     /// List of tools for categorization
-    pub tools: Vec<ToolMetadata>,
+    pub tools: Vec<IntrospectedToolSummary>,
 
     /// Session ID for `save_categorized_tools` call
     pub session_id: Uuid,
@@ -92,12 +92,12 @@ pub struct IntrospectServerResult {
     pub expires_at: DateTime<Utc>,
 }
 
-/// Metadata about a tool for categorization by Claude.
+/// Summary of an introspected tool, returned to Claude for categorization.
 ///
 /// Includes the tool name, description, and parameter names to help
 /// Claude understand the tool's purpose and assign appropriate categories.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct ToolMetadata {
+pub struct IntrospectedToolSummary {
     /// Original tool name
     pub name: String,
 

@@ -38,7 +38,7 @@ pub struct IntrospectionResult {
     /// Server metadata
     pub server: ServerMetadata,
     /// List of available tools
-    pub tools: Vec<ToolMetadata>,
+    pub tools: Vec<ToolDisplay>,
 }
 
 /// Server metadata for display.
@@ -61,12 +61,12 @@ pub struct ServerMetadata {
     pub supports_prompts: bool,
 }
 
-/// Tool metadata for display.
+/// Tool information formatted for CLI display.
 ///
 /// Contains tool information with optional schema details
 /// when detailed output is requested.
 #[derive(Debug, Clone, Serialize)]
-pub struct ToolMetadata {
+pub struct ToolDisplay {
     /// Tool name
     pub name: String,
     /// Tool description
@@ -287,14 +287,14 @@ pub fn build_result(server_info: &ServerInfo, detailed: bool) -> IntrospectionRe
 
 /// Builds tool metadata from tool info.
 ///
-/// Transforms `ToolInfo` into `ToolMetadata` with optional schema details.
+/// Transforms `ToolInfo` into `ToolDisplay` with optional schema details.
 ///
 /// # Arguments
 ///
 /// * `tool_info` - Tool information from introspector
 /// * `detailed` - Whether to include input/output schemas
-fn build_tool_metadata(tool_info: &ToolInfo, detailed: bool) -> ToolMetadata {
-    ToolMetadata {
+fn build_tool_metadata(tool_info: &ToolInfo, detailed: bool) -> ToolDisplay {
+    ToolDisplay {
         name: tool_info.name.as_str().to_string(),
         description: tool_info.description.clone(),
         input_schema: if detailed {
@@ -490,7 +490,7 @@ mod tests {
                 supports_resources: false,
                 supports_prompts: false,
             },
-            tools: vec![ToolMetadata {
+            tools: vec![ToolDisplay {
                 name: "test_tool".to_string(),
                 description: "A test tool".to_string(),
                 input_schema: None,
@@ -518,7 +518,7 @@ mod tests {
                 supports_resources: false,
                 supports_prompts: false,
             },
-            tools: vec![ToolMetadata {
+            tools: vec![ToolDisplay {
                 name: "test_tool".to_string(),
                 description: "A test tool".to_string(),
                 input_schema: Some(json!({"type": "object"})),
@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn test_tool_metadata_empty_description() {
-        let metadata = ToolMetadata {
+        let metadata = ToolDisplay {
             name: "tool".to_string(),
             description: String::new(),
             input_schema: None,
@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn test_tool_metadata_serialization_without_schemas() {
-        let metadata = ToolMetadata {
+        let metadata = ToolDisplay {
             name: "simple_tool".to_string(),
             description: "A simple tool".to_string(),
             input_schema: None,
@@ -962,7 +962,7 @@ mod tests {
     #[test]
     fn test_tool_metadata_long_description() {
         let long_description = "A".repeat(1000);
-        let metadata = ToolMetadata {
+        let metadata = ToolDisplay {
             name: "tool".to_string(),
             description: long_description.clone(),
             input_schema: None,
