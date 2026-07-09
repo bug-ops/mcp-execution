@@ -340,7 +340,38 @@ fn has_path_traversal(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mcp_execution_core::metadata::{
+        METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
+        ToolMetadata,
+    };
     use tempfile::TempDir;
+
+    /// Writes a minimal `_meta.json` sidecar with a single tool into `server_dir`,
+    /// matching what `mcp-execution-codegen` would emit for a generated server.
+    fn write_meta_sidecar(server_dir: &Path, server_id: &str, tool_name: &str) {
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: server_id.to_string(),
+            server_name: server_id.to_string(),
+            server_version: "1.0.0".to_string(),
+            tools: vec![ToolMetadata {
+                name: tool_name.to_string(),
+                typescript_name: tool_name.to_string(),
+                category: Some("testing".to_string()),
+                keywords: vec!["test".to_string()],
+                description: Some(format!("Test tool: {tool_name}")),
+                parameters: vec![ParameterMetadata {
+                    name: "input".to_string(),
+                    typescript_type: "string".to_string(),
+                    required: true,
+                    description: Some("Test input".to_string()),
+                }],
+            }],
+        };
+
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        std::fs::write(server_dir.join(METADATA_FILE_NAME), content).unwrap();
+    }
 
     #[test]
     fn test_resolve_servers_dir_default() {
@@ -447,16 +478,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
-
-        let ts_content = r"/**
- * @tool test
- * @server github
- * @description Test
- * @keywords test
- */
-async function test(x: string): Promise<void> {}
-";
-        std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
+        write_meta_sidecar(&server_dir, "github", "test");
 
         // Try to use path traversal in output path
         let evil_output = temp
@@ -532,6 +554,8 @@ async function test(x: string): Promise<void> {}
         let server_dir = temp.path().join("empty-server");
         std::fs::create_dir(&server_dir).unwrap();
 
+        // No `_meta.json` sidecar: the directory exists but was never generated
+        // (or predates the sidecar), so scanning must hard-error.
         let result = run(
             "empty-server".to_string(),
             Some(temp.path().to_path_buf()),
@@ -548,7 +572,7 @@ async function test(x: string): Promise<void> {}
             result
                 .unwrap_err()
                 .to_string()
-                .contains("No TypeScript tool files found")
+                .contains("Failed to scan tools directory")
         );
     }
 
@@ -557,20 +581,7 @@ async function test(x: string): Promise<void> {}
         let temp = TempDir::new().unwrap();
         let server_dir = temp.path().join("test-server");
         std::fs::create_dir(&server_dir).unwrap();
-
-        // Create a minimal TypeScript file with JSDoc (requires @tool and @server)
-        let ts_content = r"/**
- * @tool test_tool
- * @server test-server
- * @description Test tool description
- * @category testing
- * @keywords test,example
- */
-async function testTool(input: string): Promise<void> {
-    console.log(input);
-}
-";
-        std::fs::write(server_dir.join("test_tool.ts"), ts_content).unwrap();
+        write_meta_sidecar(&server_dir, "test-server", "test_tool");
 
         let output_path = temp.path().join("SKILL.md");
 
@@ -603,17 +614,7 @@ async function testTool(input: string): Promise<void> {
         let temp = TempDir::new().unwrap();
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
-
-        let ts_content = r"/**
- * @tool create_issue
- * @server github
- * @description Create a GitHub issue
- * @category issues
- * @keywords create,issue
- */
-async function createIssue(title: string): Promise<void> {}
-";
-        std::fs::write(server_dir.join("create_issue.ts"), ts_content).unwrap();
+        write_meta_sidecar(&server_dir, "github", "create_issue");
 
         // Use custom output path to avoid conflicts with real files
         let output_path = temp.path().join("SKILL.md");
@@ -641,17 +642,7 @@ async function createIssue(title: string): Promise<void> {}
         let temp = TempDir::new().unwrap();
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
-
-        let ts_content = r"/**
- * @tool list_prs
- * @server github
- * @description List pull requests
- * @category pull-requests
- * @keywords list,prs
- */
-async function listPrs(repo: string): Promise<void> {}
-";
-        std::fs::write(server_dir.join("list_prs.ts"), ts_content).unwrap();
+        write_meta_sidecar(&server_dir, "github", "list_prs");
 
         // Use custom output path to avoid conflicts with real files
         let output_path = temp.path().join("SKILL.md");
@@ -679,16 +670,7 @@ async function listPrs(repo: string): Promise<void> {}
         let temp = TempDir::new().unwrap();
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
-
-        let ts_content = r"/**
- * @tool test
- * @server github
- * @description Test
- * @keywords test
- */
-async function test(x: string): Promise<void> {}
-";
-        std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
+        write_meta_sidecar(&server_dir, "github", "test");
 
         // Create existing output file
         let output_path = temp.path().join("SKILL.md");
@@ -714,16 +696,7 @@ async function test(x: string): Promise<void> {}
         let temp = TempDir::new().unwrap();
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
-
-        let ts_content = r"/**
- * @tool test
- * @server github
- * @description Test
- * @keywords test
- */
-async function test(x: string): Promise<void> {}
-";
-        std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
+        write_meta_sidecar(&server_dir, "github", "test");
 
         // Create existing output file
         let output_path = temp.path().join("SKILL.md");
@@ -752,16 +725,7 @@ async function test(x: string): Promise<void> {}
         let temp = TempDir::new().unwrap();
         let server_dir = temp.path().join("test");
         std::fs::create_dir(&server_dir).unwrap();
-
-        let ts_content = r"/**
- * @tool test
- * @server test
- * @description Test
- * @keywords test
- */
-async function test(x: string): Promise<void> {}
-";
-        std::fs::write(server_dir.join("test.ts"), ts_content).unwrap();
+        write_meta_sidecar(&server_dir, "test", "test");
 
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
             let output_path = temp.path().join(format!("SKILL-{format}.md"));
