@@ -160,6 +160,8 @@ pub struct ToolMetadata {
 /// # Ok(())
 /// # }
 /// ```
+// One argument per CLI flag; clap already destructures flags for us, and
+// grouping them into a struct would only benefit this function, not caller ergonomics.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     from_config: Option<String>,
