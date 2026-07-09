@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `PendingGeneration` session expiry, replacing direct `Utc::now()` calls. Tests can now inject
   a fake clock to exercise the 30-minute TTL boundary deterministically instead of rewinding
   `expires_at` after construction (#121).
+- **`mcp-execution-skill`**, **`mcp-execution-server`**, **`mcp-execution-cli`**: existing
+  item-level `#[allow(...)]` attributes now carry a comment explaining the suppression, per the
+  `CLAUDE.md` justification requirement (#147).
 
 ### Fixed
 
