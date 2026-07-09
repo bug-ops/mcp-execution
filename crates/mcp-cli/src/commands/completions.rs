@@ -36,6 +36,8 @@ pub fn generate_completions(shell: Shell, cmd: &mut Command) {
 
 /// Runs the completions command.
 ///
+/// Generates shell completion scripts for the specified shell type.
+///
 /// # Arguments
 ///
 /// * `shell` - Target shell to generate completions for
@@ -44,6 +46,12 @@ pub fn generate_completions(shell: Shell, cmd: &mut Command) {
 /// # Returns
 ///
 /// Returns `Ok(ExitCode::SUCCESS)` on successful generation.
+///
+/// # Errors
+///
+/// This function cannot fail—it always returns `Ok(ExitCode::SUCCESS)`.
+/// Completion generation delegates to `clap_complete` which handles all error
+/// cases internally and writes to stdout regardless of format variations.
 ///
 /// # Examples
 ///

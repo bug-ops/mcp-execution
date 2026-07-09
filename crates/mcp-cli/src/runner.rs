@@ -12,10 +12,18 @@ use crate::commands;
 /// Initializes logging infrastructure.
 ///
 /// Sets up tracing with appropriate log levels based on verbosity flag.
+/// Writes log messages to stderr.
+///
+/// # Arguments
+///
+/// * `verbose` - If true, sets log level to DEBUG; otherwise uses INFO or
+///   environment variable override via `RUST_LOG`
 ///
 /// # Errors
 ///
-/// Returns an error if logging initialization fails.
+/// This function cannot fail—it always returns `Ok(())`. Multiple calls
+/// in the same process will panic rather than returning an error, but this
+/// is not a recoverable condition and indicates a programming error.
 pub fn init_logging(verbose: bool) -> Result<()> {
     let filter = if verbose {
         EnvFilter::new("debug")
@@ -35,9 +43,19 @@ pub fn init_logging(verbose: bool) -> Result<()> {
 ///
 /// Routes commands to their respective handlers and returns an exit code.
 ///
+/// # Arguments
+///
+/// * `command` - The parsed CLI command to execute
+/// * `output_format` - Output format preference (JSON, text, or pretty)
+///
 /// # Errors
 ///
-/// Returns an error if command execution fails.
+/// Returns an error from the specific command handler if:
+/// - Server configuration is invalid (bad args, env vars, or headers)
+/// - Server connection or introspection fails
+/// - Configuration file is missing or malformed
+/// - File I/O or export operations fail
+/// - Output formatting fails (e.g., serialization errors)
 pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
     match command {
         Commands::Introspect {

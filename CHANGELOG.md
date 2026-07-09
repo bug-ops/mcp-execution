@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`mcp-execution-cli`**: comprehensive `# Errors` documentation for all public CLI functions,
+  including command handlers (`introspect`, `generate`, `skill`, `server`, `setup`, `completions`),
+  utility functions (`init_logging`, `execute_command`, `format_output`, and nested formatter
+  modules), and configuration helpers. Error sections document specific failure conditions such as
+  invalid configuration, missing files, network failures, and serialization errors (#126).
 - **`mcp-execution-cli`**, **`mcp-execution-server`**: `mcp.json` server entries can now override
   the connect/discover timeouts introduced in #120 on a per-server basis via
   `connectTimeoutSecs`/`discoverTimeoutSecs`, instead of being locked to the 30-second defaults.
