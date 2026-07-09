@@ -86,6 +86,8 @@ const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
 /// # Ok(())
 /// # }
 /// ```
+// One argument per CLI flag; clap already destructures flags for us, and
+// grouping them into a struct would only benefit this function, not caller ergonomics.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     server: String,

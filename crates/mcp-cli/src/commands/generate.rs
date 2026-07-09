@@ -55,6 +55,8 @@ struct DryRunResult {
     total_size: usize,
 }
 
+// Converting byte counts to f64 for human-readable KB/MB formatting; precision
+// loss at display magnitude is inconsequential.
 #[allow(clippy::cast_precision_loss)]
 fn format_size(bytes: usize) -> String {
     if bytes < 1024 {
@@ -106,6 +108,8 @@ fn format_size(bytes: usize) -> String {
 /// - Tool introspection fails
 /// - Code generation fails
 /// - File export fails (skipped in dry-run mode)
+// One argument per CLI flag; clap already destructures flags for us, and
+// grouping them into a struct would only benefit this function, not caller ergonomics.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     from_config: Option<String>,
