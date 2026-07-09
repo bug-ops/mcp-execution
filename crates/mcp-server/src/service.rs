@@ -328,12 +328,16 @@ impl GeneratorService {
         // Capture file count before moving vfs
         let files_generated = vfs.file_count();
 
-        // Ensure output directory exists (async)
-        tokio::fs::create_dir_all(&pending.output_dir)
-            .await
-            .map_err(|e| {
+        // Ensure the parent of the output directory exists (async). Only the
+        // parent is needed: `export_to_filesystem` publishes `output_dir`
+        // itself atomically (single rename on first generate, stage-then-swap
+        // on regeneration), so pre-creating it here would force the slower
+        // regeneration path even on a brand-new server.
+        if let Some(parent) = pending.output_dir.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 McpError::internal_error(format!("Failed to create output directory: {e}"), None)
             })?;
+        }
 
         // Export to filesystem (blocking operation wrapped in spawn_blocking)
         let output_dir = pending.output_dir.clone();

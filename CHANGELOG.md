@@ -88,6 +88,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-files`**: `FileSystem::export_to_filesystem` now stages the entire export tree
+  in a sibling temporary directory and publishes it via a single atomic directory rename, instead
+  of writing files directly into the target directory. A process interrupted mid-`generate` (e.g.
+  killed) can no longer leave a partially-written `~/.claude/servers/{id}/` directory — such as an
+  `index.ts` re-exporting a tool file that was never actually written, with no detection — since
+  the target is left exactly as it was (untouched, or absent) until every file has landed in
+  staging. Also adds a best-effort sweep of orphaned staging/displaced directories left behind by a
+  killed prior run, so they no longer accumulate indefinitely next to the target (#159).
 - **`mcp-execution-codegen`**, **`mcp-execution-skill`**: replaced the regex-based re-parsing of
   generated TypeScript tool files with a structured `_meta.json` sidecar
   (`mcp_execution_core::metadata::ServerMetadata`) emitted by `ProgressiveGenerator` and read

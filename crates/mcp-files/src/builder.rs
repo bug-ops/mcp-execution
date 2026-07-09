@@ -229,6 +229,10 @@ impl FilesBuilder {
     /// // Files are now at: ~/.claude/servers/github/createIssue.ts
     /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
+    // TODO(critic): not directory-atomic — needs staging treatment before any
+    // production caller is wired up (currently unused outside this crate's
+    // own tests, so the interrupted-export bug fixed in
+    // `FileSystem::export_to_filesystem` does not apply here yet).
     pub fn build_and_export(self, base_path: impl AsRef<Path>) -> Result<FileSystem> {
         // First, build the VFS to check for errors
         let vfs = self.build()?;
