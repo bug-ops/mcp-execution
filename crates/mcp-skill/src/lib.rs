@@ -17,8 +17,8 @@
 //! use std::path::Path;
 //!
 //! # async fn example() -> Result<(), ScanError> {
-//! let tools = scan_tools_directory(Path::new("~/.claude/servers/github")).await?;
-//! let context = build_skill_context("github", &tools, None);
+//! let result = scan_tools_directory(Path::new("~/.claude/servers/github")).await?;
+//! let context = build_skill_context("github", &result.tools, None);
 //! # Ok(())
 //! # }
 //! ```
@@ -30,7 +30,7 @@ pub mod types;
 
 pub use context::build_skill_context;
 pub use parser::{
-    MAX_FILE_SIZE, MAX_TOOL_FILES, ParsedParameter, ParsedToolFile, ScanError,
+    MAX_FILE_SIZE, MAX_TOOL_FILES, ParsedParameter, ParsedToolFile, ScanError, ScanResult,
     extract_skill_metadata, scan_tools_directory,
 };
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};

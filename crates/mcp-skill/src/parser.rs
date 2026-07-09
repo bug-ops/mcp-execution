@@ -98,6 +98,22 @@ pub enum ScanError {
     },
 }
 
+/// Result of [`scan_tools_directory`]: the parsed tools plus any non-fatal
+/// drift warnings.
+///
+/// A warning does not fail the scan — it flags a `.ts` file on disk that was
+/// excluded from `tools` because the sidecar has no matching entry for it.
+/// Callers that only inspect `tools` would otherwise have no way to detect
+/// this drift short of tailing server-side `tracing` output.
+#[derive(Debug, Clone, Default)]
+pub struct ScanResult {
+    /// Parsed tools, sorted by name.
+    pub tools: Vec<ParsedToolFile>,
+
+    /// Non-fatal warnings, e.g. `.ts` files excluded for lacking a sidecar entry.
+    pub warnings: Vec<String>,
+}
+
 /// Parsed metadata from a server's generated tool set.
 #[derive(Debug, Clone)]
 pub struct ParsedToolFile {
@@ -174,7 +190,8 @@ impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
 /// sidecar entry's `.ts` file is cross-checked for existence on disk to
 /// detect drift between the sidecar and the generated files (see issues
 /// #154, #155): a missing file is a hard error, while an unreferenced `.ts`
-/// file on disk is logged via `tracing::warn!` and omitted from the result.
+/// file on disk is logged via `tracing::warn!`, omitted from the result, and
+/// named in the returned [`ScanResult::warnings`] (see issue #161).
 ///
 /// # Arguments
 ///
@@ -182,7 +199,8 @@ impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
 ///
 /// # Returns
 ///
-/// Vector of `ParsedToolFile`, one per tool in the sidecar, sorted by name.
+/// [`ScanResult`] with one `ParsedToolFile` per tool in the sidecar (sorted
+/// by name) plus any non-fatal drift warnings.
 ///
 /// # Errors
 ///
@@ -198,12 +216,12 @@ impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
 /// use std::path::Path;
 ///
 /// # async fn example() -> Result<(), mcp_execution_skill::ScanError> {
-/// let tools = scan_tools_directory(Path::new("/home/user/.claude/servers/github")).await?;
-/// println!("Found {} tools", tools.len());
+/// let result = scan_tools_directory(Path::new("/home/user/.claude/servers/github")).await?;
+/// println!("Found {} tools", result.tools.len());
 /// # Ok(())
 /// # }
 /// ```
-pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, ScanError> {
+pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
     // Canonicalize the base directory to resolve symlinks and get absolute path
     let canonical_base =
         tokio::fs::canonicalize(dir)
@@ -256,7 +274,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
         });
     }
 
-    verify_tool_files_on_disk(&canonical_base, &meta.tools, &meta_path).await?;
+    let warnings = verify_tool_files_on_disk(&canonical_base, &meta.tools, &meta_path).await?;
 
     let server_id = meta.server_id.clone();
     let mut tools: Vec<ParsedToolFile> = meta
@@ -272,7 +290,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
     // Sort by name for consistent ordering
     tools.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Ok(tools)
+    Ok(ScanResult { tools, warnings })
 }
 
 /// Cross-checks sidecar tool entries against the `.ts` files actually
@@ -283,7 +301,9 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
 /// this returns [`ScanError::StaleMetadata`]. `.ts` files present on disk
 /// but not referenced by the sidecar are not fatal — regenerating tool
 /// files is a normal part of `generate` — but are logged via
-/// `tracing::warn!` so the drift isn't silently dropped from `SKILL.md`.
+/// `tracing::warn!` and returned as human-readable warning strings so the
+/// drift isn't silently dropped from `SKILL.md` or invisible to structured
+/// callers (issue #161).
 ///
 /// # Errors
 ///
@@ -293,7 +313,7 @@ async fn verify_tool_files_on_disk(
     dir: &Path,
     tools: &[mcp_execution_core::metadata::ToolMetadata],
     meta_path: &Path,
-) -> Result<(), ScanError> {
+) -> Result<Vec<String>, ScanError> {
     // Generated aggregator file, not a per-tool file — never expected in the sidecar.
     const INDEX_FILE_NAME: &str = "index.ts";
 
@@ -312,6 +332,7 @@ async fn verify_tool_files_on_disk(
         expected_files.insert(file_name);
     }
 
+    let mut warnings = Vec::new();
     let mut entries = tokio::fs::read_dir(dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
@@ -329,9 +350,13 @@ async fn verify_tool_files_on_disk(
             "found .ts tool file not referenced by _meta.json; it will be omitted from SKILL.md \
              (re-run 'generate' to refresh the sidecar)"
         );
+        warnings.push(format!(
+            "'{file_name}' is not referenced by _meta.json and was excluded from SKILL.md \
+             (re-run 'generate' to refresh the sidecar)"
+        ));
     }
 
-    Ok(())
+    Ok(warnings)
 }
 
 /// Extract skill metadata from SKILL.md content.
@@ -466,7 +491,8 @@ mod tests {
         let meta = sample_metadata(2);
         write_metadata(temp_dir.path(), &meta).await;
 
-        let tools = scan_tools_directory(temp_dir.path()).await.unwrap();
+        let result = scan_tools_directory(temp_dir.path()).await.unwrap();
+        let tools = result.tools;
 
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "tool_0");
@@ -477,6 +503,7 @@ mod tests {
             Some("A parameter".to_string()),
             "parameter descriptions must survive the sidecar round-trip"
         );
+        assert!(result.warnings.is_empty());
     }
 
     #[tokio::test]
@@ -503,7 +530,7 @@ mod tests {
         ];
         write_metadata(temp_dir.path(), &meta).await;
 
-        let tools = scan_tools_directory(temp_dir.path()).await.unwrap();
+        let tools = scan_tools_directory(temp_dir.path()).await.unwrap().tools;
 
         assert_eq!(tools[0].name, "alpha");
         assert_eq!(tools[1].name, "zebra");
@@ -576,6 +603,9 @@ mod tests {
         // does not reference (e.g. left over from a renamed/removed tool) must
         // not be fatal and must not leak into the scan result — it is logged
         // via `tracing::warn!` instead.
+        //
+        // Issue #161: the drift must also be visible in the returned
+        // `ScanResult::warnings`, not just in the tracing log line.
         let temp_dir = TempDir::new().unwrap();
         let meta = sample_metadata(1);
         write_metadata(temp_dir.path(), &meta).await;
@@ -584,14 +614,24 @@ mod tests {
             .await
             .unwrap();
 
-        let tools = scan_tools_directory(temp_dir.path()).await.unwrap();
+        let result = scan_tools_directory(temp_dir.path()).await.unwrap();
 
         assert_eq!(
-            tools.len(),
+            result.tools.len(),
             1,
             "the orphaned .ts file must not be reported as a tool"
         );
-        assert_eq!(tools[0].name, "tool_0");
+        assert_eq!(result.tools[0].name, "tool_0");
+        assert_eq!(
+            result.warnings.len(),
+            1,
+            "the orphaned .ts file must be surfaced as a warning"
+        );
+        assert!(
+            result.warnings[0].contains("orphan.ts"),
+            "warning must name the excluded file: {:?}",
+            result.warnings[0]
+        );
     }
 
     #[tokio::test]
@@ -606,10 +646,14 @@ mod tests {
             .await
             .unwrap();
 
-        let tools = scan_tools_directory(temp_dir.path()).await.unwrap();
+        let result = scan_tools_directory(temp_dir.path()).await.unwrap();
 
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].name, "tool_0");
+        assert_eq!(result.tools.len(), 1);
+        assert_eq!(result.tools[0].name, "tool_0");
+        assert!(
+            result.warnings.is_empty(),
+            "index.ts must not be reported as a warning"
+        );
     }
 
     #[test]
