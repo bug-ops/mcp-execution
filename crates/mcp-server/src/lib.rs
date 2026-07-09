@@ -59,8 +59,8 @@ pub use service::GeneratorService;
 pub use state::StateManager;
 pub use types::{
     CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
-    ListGeneratedServersParams, ListGeneratedServersResult, PendingGeneration,
-    SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolGenerationError, ToolMetadata,
+    IntrospectedToolSummary, ListGeneratedServersParams, ListGeneratedServersResult,
+    PendingGeneration, SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolGenerationError,
 };
 
 // Re-export skill types from mcp-skill crate

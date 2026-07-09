@@ -67,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after #142 replaced `TokioChildProcess` with a manually spawned stdio pair. Shrinks the dependency
   tree by dropping `process-wrap`, `nix`, and several Windows-only transitive crates that were only
   pulled in for that feature (#146).
+- **`mcp-execution-server`**, **`mcp-execution-cli`**: disambiguated the three unrelated
+  `ToolMetadata` structs that shared a name across the workspace. `mcp_execution_server::types::ToolMetadata`
+  (the `introspect_server` tool's response payload) is renamed to `IntrospectedToolSummary`, and
+  `mcp_execution_cli::commands::introspect::ToolMetadata` (CLI display formatting for `introspect`)
+  is renamed to `ToolDisplay`. `mcp_execution_core::metadata::ToolMetadata`, the canonical
+  `_meta.json` sidecar entry, is unchanged. Pure rename, no behavior change, and both renamed types
+  are wire/protocol-invisible (serde serializes by field name only). This is source-breaking for
+  any external library consumer of `mcp-execution-server` or `mcp-execution-cli` — neither crate
+  sets `publish = false` and both types are `pub`-reachable from their crate roots; treat as a
+  minor version bump at 0.7.x per pre-1.0 SemVer convention (#156).
 
 ### Fixed
 

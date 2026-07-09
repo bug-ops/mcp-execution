@@ -9,8 +9,8 @@ use crate::clock::{Clock, SystemClock};
 use crate::state::StateManager;
 use crate::types::{
     CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
-    ListGeneratedServersParams, ListGeneratedServersResult, PendingGeneration,
-    SaveCategorizedToolsParams, SaveCategorizedToolsResult, ToolMetadata,
+    IntrospectedToolSummary, ListGeneratedServersParams, ListGeneratedServersResult,
+    PendingGeneration, SaveCategorizedToolsParams, SaveCategorizedToolsResult,
 };
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::{ServerConfig, ServerId};
@@ -222,13 +222,13 @@ impl GeneratorService {
         })?;
 
         // Extract tool metadata for Claude
-        let tools: Vec<ToolMetadata> = server_info
+        let tools: Vec<IntrospectedToolSummary> = server_info
             .tools
             .iter()
             .map(|tool| {
                 let parameters = extract_parameter_names(&tool.input_schema);
 
-                ToolMetadata {
+                IntrospectedToolSummary {
                     name: tool.name.as_str().to_string(),
                     description: tool.description.clone(),
                     parameters,
