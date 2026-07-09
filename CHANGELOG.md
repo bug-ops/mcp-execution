@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-codegen`**: the header JSDoc block emitted at the top of every generated
+  `index.ts` no longer contains a nested `/* params */` block comment inside its usage example.
+  JS/TS block comments do not nest, so the inner comment's `*/` prematurely closed the outer
+  `/** ... */` doc comment, turning the rest of the file (including `@packageDocumentation`) into
+  top-level code and producing a syntax error in every generated `index.ts`. The placeholder is
+  now the non-comment `{ ...params }` (#139).
 - **`mcp-execution-codegen`**: two tools reported with an identical raw name (invalid per the MCP
   spec but not currently rejected upstream) no longer collapse to a single collision-map entry and
   silently overwrite one tool's generated file; each now resolves to a distinct, deterministically
