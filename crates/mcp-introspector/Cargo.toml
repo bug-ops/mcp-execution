@@ -14,12 +14,27 @@ categories = ["development-tools"]
 [lints]
 workspace = true
 
+[[bin]]
+# Test fixture spawned by tests/timeout_test.rs to simulate a hung MCP server.
+# Not part of the public crate API; only built with `--features test-fixtures`
+# (implied by `--all-features`, which is how CI runs tests).
+name = "fixture-slow-mcp-server"
+path = "tests/fixtures/slow_mcp_server.rs"
+test = false
+doc = false
+required-features = ["test-fixtures"]
+
+[features]
+# Enables the server-side rmcp features needed by the slow-server test fixture,
+# without pulling them into the default build of this (client-only) crate.
+test-fixtures = ["rmcp/server", "rmcp/transport-io"]
+
 [dependencies]
 mcp-execution-core.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]

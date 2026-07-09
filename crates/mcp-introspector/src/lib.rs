@@ -286,19 +286,25 @@ impl Introspector {
             source: Box::new(e),
         })?;
 
-        // Create client using serve pattern
-        let client =
-            ().serve(transport)
-                .await
-                .map_err(|e| Error::ConnectionFailed {
-                    server: server_id.to_string(),
-                    source: Box::new(e),
-                })?;
-
-        // List all tools from server
-        let tool_list = client
-            .list_all_tools()
+        // Create client using serve pattern, bounded by the connect timeout
+        let client = tokio::time::timeout(config.connect_timeout(), ().serve(transport))
             .await
+            .map_err(|_elapsed| Error::Timeout {
+                operation: format!("connect to {server_id}"),
+                duration_secs: config.connect_timeout().as_secs(),
+            })?
+            .map_err(|e| Error::ConnectionFailed {
+                server: server_id.to_string(),
+                source: Box::new(e),
+            })?;
+
+        // List all tools from server, bounded by the discover timeout
+        let tool_list = tokio::time::timeout(config.discover_timeout(), client.list_all_tools())
+            .await
+            .map_err(|_elapsed| Error::Timeout {
+                operation: format!("list_all_tools for {server_id}"),
+                duration_secs: config.discover_timeout().as_secs(),
+            })?
             .map_err(|e| Error::ConnectionFailed {
                 server: server_id.to_string(),
                 source: Box::new(e),
