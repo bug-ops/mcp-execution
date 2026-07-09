@@ -442,8 +442,15 @@ mod tests {
     /// test`, unlike `cargo nextest`, which isolates each test in its own
     /// process). An async-aware mutex, since the guard must stay held across
     /// the `.await` of the code under test.
+    #[cfg(unix)]
     static HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    // Unix-only: redirects `dirs::home_dir()` by mutating `HOME`, which
+    // `dirs` only consults on Unix. On Windows `dirs::home_dir()` resolves
+    // via `SHGetKnownFolderPath(FOLDERID_Profile)`, a Win32 API that reads
+    // the real OS user profile and ignores environment variables entirely
+    // — no env var override can redirect it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_show_server_info_not_found_error_not_duplicated() {
         // Regression test for #164: the "not found" message from
