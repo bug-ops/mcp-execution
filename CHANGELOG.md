@@ -84,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (e.g. a `#[tokio::test]`), that background task could be starved before it ever ran, leaking the
   child process; `cargo nextest run` reported both timeout-firing tests as `LEAK` on every run
   (#132).
+- **`mcp-execution-server`**: `GeneratorService::evict_introspector` now removes a per-server-id
+  introspector entry only if it is still the exact handle the caller obtained from
+  `introspector_for` (`Arc::ptr_eq` compare-and-remove), instead of removing by `server_id` alone.
+  Previously a finishing call could evict a different, still in-flight caller's live entry for the
+  same server id, letting concurrent callers bypass the per-id serialization the lock exists to
+  provide (#130).
 
 ### Testing
 
