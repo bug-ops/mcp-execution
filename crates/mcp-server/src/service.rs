@@ -28,7 +28,7 @@ use rmcp::model::{
 };
 use rmcp::{ErrorData as McpError, tool, tool_handler, tool_router};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -73,6 +73,13 @@ pub struct GeneratorService {
     /// the `discover_server` await point.
     introspectors: Arc<Mutex<HashMap<ServerId, Arc<Mutex<Introspector>>>>>,
 
+    /// Per-output-directory export locks, keyed by the (uncanonicalized)
+    /// output path as supplied to `introspect_server` / stored on the
+    /// pending generation. Same rationale as `introspectors`: keying by the
+    /// contended resource means an export for one `output_dir` never blocks
+    /// an export for a different one.
+    exports: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
+
     /// Clock used to construct pending generations (shared with `state`)
     clock: Arc<dyn Clock>,
 
@@ -98,6 +105,7 @@ impl GeneratorService {
         Self {
             state: Arc::new(StateManager::with_clock(Arc::clone(&clock))),
             introspectors: Arc::new(Mutex::new(HashMap::new())),
+            exports: Arc::new(Mutex::new(HashMap::new())),
             clock,
             tool_router: Self::tool_router(),
         }
@@ -133,6 +141,48 @@ impl GeneratorService {
         let mut introspectors = self.introspectors.lock().await;
         if let std::collections::hash_map::Entry::Occupied(entry) =
             introspectors.entry(server_id.clone())
+            && Arc::ptr_eq(entry.get(), handle)
+        {
+            entry.remove();
+        }
+    }
+
+    /// Returns the per-output-directory export lock, creating one if absent.
+    ///
+    /// Mirrors [`Self::introspector_for`]: the outer map lock is released
+    /// before the returned handle is awaited on, so exports to unrelated
+    /// output directories never contend on it. Holding this lock across an
+    /// [`mcp_execution_files::FileSystem::export_to_filesystem`] call
+    /// serializes any two concurrent `save_categorized_tools` calls for the
+    /// same `output_dir` that overlap while holding the same handle,
+    /// narrowing the in-process trigger for the data-loss race described in
+    /// issue #169. This is not an unconditional guarantee across three or
+    /// more overlapping calls: a call that fetches a fresh handle only
+    /// after an earlier holder has already evicted its own can still run
+    /// concurrently with a still-in-flight call holding the stale handle
+    /// (same eviction-boundary gap as [`Self::evict_introspector`]). The
+    /// age-gated sweep in `mcp-execution-files` is what ultimately prevents
+    /// data loss if that happens.
+    async fn export_lock_for(&self, output_dir: &Path) -> Arc<Mutex<()>> {
+        let mut exports = self.exports.lock().await;
+        exports
+            .entry(output_dir.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    /// Evicts the per-output-directory export lock after use, but only if
+    /// the map still holds the exact handle the caller obtained.
+    ///
+    /// Same identity-checked eviction as [`Self::evict_introspector`] and
+    /// for the same reason: `output_dir` values are caller-supplied, so
+    /// without eviction the map grows without bound, and an unconditional
+    /// `remove` keyed only by path would be a TOCTOU bug against a
+    /// concurrently inserted fresh handle.
+    async fn evict_export_lock(&self, output_dir: &Path, handle: &Arc<Mutex<()>>) {
+        let mut exports = self.exports.lock().await;
+        if let std::collections::hash_map::Entry::Occupied(entry) =
+            exports.entry(output_dir.to_path_buf())
             && Arc::ptr_eq(entry.get(), handle)
         {
             entry.remove();
@@ -339,10 +389,22 @@ impl GeneratorService {
             })?;
         }
 
-        // Export to filesystem (blocking operation wrapped in spawn_blocking)
+        // Export to filesystem (blocking operation wrapped in spawn_blocking).
+        // Held across the export so a second concurrent call for the same
+        // output_dir blocks until the first finishes, rather than racing on
+        // the underlying staging/swap (see `export_lock_for`).
+        let export_lock = self.export_lock_for(&pending.output_dir).await;
+        let export_guard = export_lock.lock().await;
+
         let output_dir = pending.output_dir.clone();
-        tokio::task::spawn_blocking(move || vfs.export_to_filesystem(&output_dir))
-            .await
+        let export_result =
+            tokio::task::spawn_blocking(move || vfs.export_to_filesystem(&output_dir)).await;
+
+        drop(export_guard);
+        self.evict_export_lock(&pending.output_dir, &export_lock)
+            .await;
+
+        export_result
             .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?
             .map_err(|e| McpError::internal_error(format!("Failed to export files: {e}"), None))?;
 
@@ -877,12 +939,14 @@ mod tests {
     fn test_generator_service_new() {
         let service = GeneratorService::new();
         assert!(service.introspectors.try_lock().is_ok());
+        assert!(service.exports.try_lock().is_ok());
     }
 
     #[test]
     fn test_generator_service_default() {
         let service = GeneratorService::default();
         assert!(service.introspectors.try_lock().is_ok());
+        assert!(service.exports.try_lock().is_ok());
     }
 
     #[test]
@@ -1259,6 +1323,78 @@ mod tests {
             service.introspectors.lock().await.is_empty(),
             "map should be empty after C's own eviction"
         );
+    }
+
+    // ========================================================================
+    // Per-output-directory export locking Tests (issue #169)
+    //
+    // Mirrors the `introspector_for` tests above: these exercise the exact
+    // `Arc<Mutex<()>>` handles and keyed-lock pattern that
+    // `save_categorized_tools` relies on via `export_lock_for`, without
+    // driving a real export through the filesystem.
+    // ========================================================================
+
+    /// Same `output_dir` must resolve to the same export lock, so a second
+    /// concurrent export for that directory cannot proceed until the first
+    /// releases it.
+    #[tokio::test]
+    async fn test_export_lock_for_same_output_dir_shares_one_lock() {
+        let service = GeneratorService::new();
+        let output_dir = PathBuf::from("/tmp/same-output-dir-lock-test");
+
+        let handle_a = service.export_lock_for(&output_dir).await;
+        let handle_b = service.export_lock_for(&output_dir).await;
+
+        assert!(
+            Arc::ptr_eq(&handle_a, &handle_b),
+            "the same output_dir must reuse one export lock"
+        );
+    }
+
+    /// Different `output_dir`s must resolve to independent export locks, so
+    /// exports for unrelated directories never contend on the same mutex.
+    #[tokio::test]
+    async fn test_export_lock_for_different_output_dirs_get_independent_locks() {
+        let service = GeneratorService::new();
+
+        let handle_a = service
+            .export_lock_for(&PathBuf::from("/tmp/diff-output-dir-lock-a"))
+            .await;
+        let handle_b = service
+            .export_lock_for(&PathBuf::from("/tmp/diff-output-dir-lock-b"))
+            .await;
+
+        assert!(
+            !Arc::ptr_eq(&handle_a, &handle_b),
+            "different output_dirs must get independent export locks"
+        );
+    }
+
+    /// `evict_export_lock` must be identity-checked, not just keyed by
+    /// `output_dir`, mirroring `test_stale_eviction_does_not_remove_unrelated_entry`.
+    #[tokio::test]
+    async fn test_export_lock_stale_eviction_does_not_remove_unrelated_entry() {
+        let service = GeneratorService::new();
+        let output_dir = PathBuf::from("/tmp/toctou-export-lock-test");
+
+        let handle_a = service.export_lock_for(&output_dir).await;
+        let handle_b = service.export_lock_for(&output_dir).await;
+        assert!(Arc::ptr_eq(&handle_a, &handle_b));
+
+        service.evict_export_lock(&output_dir, &handle_a).await;
+        assert!(service.exports.lock().await.is_empty());
+
+        let handle_c = service.export_lock_for(&output_dir).await;
+        assert!(!Arc::ptr_eq(&handle_b, &handle_c));
+
+        // B's stale eviction attempt must be a no-op: C's live entry survives.
+        service.evict_export_lock(&output_dir, &handle_b).await;
+        let exports = service.exports.lock().await;
+        let current = exports
+            .get(&output_dir)
+            .expect("C's entry must survive B's stale eviction attempt");
+        assert!(Arc::ptr_eq(current, &handle_c));
+        drop(exports);
     }
 
     // ========================================================================

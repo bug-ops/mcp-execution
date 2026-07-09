@@ -66,8 +66,37 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+
+/// Minimum age (by mtime) a staging/stale sibling must have before
+/// [`FileSystem::sweep_stale_artifacts`] will remove it.
+///
+/// A genuinely concurrent sibling export's staging and displaced
+/// directories are kept younger than this: `staging` is freshly created via
+/// `tempfile` for every export, and [`FileSystem::displace_existing_target`]
+/// refreshes `target`'s mtime via [`FileSystem::touch_dir`] immediately
+/// *before* renaming it aside to `displaced` — a rename preserves the
+/// source's mtime, so `displaced` carries that fresh timestamp from the
+/// instant it exists, rather than inheriting `target`'s (typically much
+/// older) original mtime and being immediately sweep-eligible. All of the
+/// work between
+/// creating/refreshing one of these directories and either publishing or
+/// rolling it back happens within a single
+/// `export_to_filesystem_with_options` call, which completes in well under
+/// this window even for large tool sets — assuming that call keeps adding
+/// or removing immediate children of `staging` as it writes, since that is
+/// what keeps its mtime fresh on the filesystems this crate supports.
+/// Gating on age means the sweep can only ever reclaim directories that are
+/// old enough to be leftovers from a process that was killed (e.g.
+/// `SIGKILL`) before it could clean up after itself — never a live
+/// sibling's in-flight artifacts. This is what closes the data-loss race
+/// described in issue #169: previously the sweep matched purely on name, so
+/// a concurrent export of the same target could delete another in-flight
+/// export's staging directory, and — if the timing landed between
+/// `swap_into_place`'s two renames — the displaced original too, defeating
+/// the rollback and permanently losing the target.
+const STALE_ARTIFACT_MIN_AGE: Duration = Duration::from_mins(5);
 
 /// An in-memory virtual filesystem for MCP tool definitions.
 ///
@@ -389,9 +418,20 @@ impl FileSystem {
     /// left exactly as it was — either untouched or, if it did not exist yet,
     /// still absent. See the [module-level docs](self) for details.
     ///
-    /// Concurrent exports of the *same* `base_path` are not supported and may
-    /// race (there is no locking); concurrent exports of different targets
-    /// sharing a parent directory are safe.
+    /// Concurrent exports of the *same* `base_path` from different processes
+    /// are not locked against each other and can still race on the final
+    /// swap — one export's result may be silently overwritten by another's
+    /// (a lost update). The age-gated sweep of orphaned staging/displaced
+    /// directories (`sweep_stale_artifacts`) guarantees neither export's
+    /// staging/displaced directories can be deleted out from under it before
+    /// its own rollback path runs, so this can no longer result in the
+    /// target, its staging directory, and its displaced backup all being
+    /// lost at once. Callers that need stronger-than-last-write-wins
+    /// semantics for the same target should serialize writes themselves
+    /// (e.g. a per-target lock) — see `mcp-execution-server`'s
+    /// `introspector_for` for the pattern this project already uses for a
+    /// similar problem. Concurrent exports of different targets sharing a
+    /// parent directory are safe.
     ///
     /// # Errors
     ///
@@ -633,12 +673,7 @@ impl FileSystem {
         let parent = target.parent().ok_or_else(|| FilesError::InvalidPath {
             path: format!("Target path has no parent directory: {}", target.display()),
         })?;
-        let displaced = parent.join(Self::unique_sibling_name(target));
-
-        fs::rename(target, &displaced).map_err(|e| FilesError::IoError {
-            path: target.display().to_string(),
-            source: e,
-        })?;
+        let displaced = Self::displace_existing_target(target, parent)?;
 
         if let Err(e) = fs::rename(staging_path, target) {
             // Roll back so `target` is never left missing.
@@ -651,6 +686,53 @@ impl FileSystem {
 
         let _ = fs::remove_dir_all(&displaced);
         Ok(())
+    }
+
+    /// Moves an existing `target` aside to a unique sibling path in `parent`
+    /// so the staged directory can be renamed into `target`'s place,
+    /// returning the displaced path.
+    ///
+    /// A directory rename does not reset the renamed directory's own mtime,
+    /// so without an explicit refresh `displaced` would inherit `target`'s
+    /// original mtime — almost always well past [`STALE_ARTIFACT_MIN_AGE`],
+    /// since a target being regenerated has typically existed since a prior
+    /// export. That would make it immediately eligible for a concurrent
+    /// sibling's [`Self::sweep_stale_artifacts`] pass, defeating the age
+    /// gate for exactly the directory [`Self::swap_into_place`]'s own
+    /// rollback depends on (issue #169). [`Self::touch_dir`] refreshes
+    /// `target`'s mtime *before* the rename rather than `displaced`'s
+    /// *after* it, since a rename preserves the source's mtime — so
+    /// `displaced` carries a fresh mtime from the instant it exists, with
+    /// no window in which it is stale even momentarily.
+    fn displace_existing_target(target: &Path, parent: &Path) -> Result<PathBuf> {
+        let displaced = parent.join(Self::unique_sibling_name(target));
+
+        Self::touch_dir(target);
+
+        fs::rename(target, &displaced).map_err(|e| FilesError::IoError {
+            path: target.display().to_string(),
+            source: e,
+        })?;
+
+        Ok(displaced)
+    }
+
+    /// Best-effort refresh of `dir`'s modification time.
+    ///
+    /// Deliberately avoids opening `dir` as a `File` to call
+    /// [`std::fs::File::set_times`], since opening a directory for write
+    /// access is not portable across every platform this crate supports.
+    /// Instead, creating and immediately removing a marker file inside
+    /// `dir` achieves the same effect portably: any filesystem that tracks
+    /// directory mtimes bumps them when an immediate child is added or
+    /// removed. Best-effort like [`Self::sweep_stale_artifacts`]: failure
+    /// (e.g. a read-only directory) is silently ignored rather than failing
+    /// the export.
+    fn touch_dir(dir: &Path) {
+        let marker = dir.join(format!(".mtime-touch-{}", std::process::id()));
+        if fs::File::create(&marker).is_ok() {
+            let _ = fs::remove_file(&marker);
+        }
     }
 
     /// Returns `target`'s file name for use as a namespacing stem in sibling
@@ -697,7 +779,20 @@ impl FileSystem {
     /// Best-effort: this is a hygiene pass, not part of the export's
     /// correctness, so any I/O error while scanning or removing an entry is
     /// silently ignored rather than failing the export.
+    ///
+    /// Only removes entries at least [`STALE_ARTIFACT_MIN_AGE`] old (by
+    /// mtime) — see that constant's doc for why this age gate is what makes
+    /// the sweep safe to run against a concurrently in-flight sibling
+    /// export.
     fn sweep_stale_artifacts(parent: &Path, target: &Path) {
+        Self::sweep_stale_artifacts_older_than(parent, target, STALE_ARTIFACT_MIN_AGE);
+    }
+
+    /// Inner implementation of [`Self::sweep_stale_artifacts`], parameterized
+    /// over the age threshold so tests can exercise the sweep logic without
+    /// backdating real file mtimes (pass [`Duration::ZERO`] to sweep
+    /// unconditionally).
+    fn sweep_stale_artifacts_older_than(parent: &Path, target: &Path, min_age: Duration) {
         let stem = Self::target_stem(target);
         let staging_prefix = Self::staging_prefix(target);
         let stale_prefix = format!(".{stem}.stale-");
@@ -710,8 +805,26 @@ impl FileSystem {
             let is_orphan = entry.file_name().to_str().is_some_and(|name| {
                 name.starts_with(&staging_prefix) || name.starts_with(&stale_prefix)
             });
+            if !is_orphan {
+                continue;
+            }
 
-            if is_orphan {
+            // Too young to be a crash orphan — could be a live sibling
+            // export's in-flight artifacts; leave it for a later sweep once
+            // it ages past `min_age`. Metadata errors (entry vanished,
+            // permission issue) are treated the same way — skip rather than
+            // guess, since this is a best-effort hygiene pass, not part of
+            // export correctness.
+            let old_enough = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|modified| {
+                    SystemTime::now()
+                        .duration_since(modified)
+                        .is_ok_and(|age| age >= min_age)
+                });
+
+            if old_enough {
                 let _ = fs::remove_dir_all(entry.path());
             }
         }
@@ -1185,7 +1298,9 @@ mod tests {
         fs::create_dir_all(&unrelated).unwrap();
         fs::create_dir_all(&other_target_staging).unwrap();
 
-        FileSystem::sweep_stale_artifacts(temp.path(), &target);
+        // Bypass the production age gate (`Duration::ZERO`) to exercise the
+        // name-matching logic in isolation, without backdating real mtimes.
+        FileSystem::sweep_stale_artifacts_older_than(temp.path(), &target, Duration::ZERO);
 
         assert!(!orphan_staging.exists());
         assert!(!orphan_stale.exists());
@@ -1194,18 +1309,37 @@ mod tests {
     }
 
     #[test]
-    fn test_export_sweeps_orphaned_artifacts_from_prior_crash() {
+    fn test_export_does_not_sweep_recent_sibling_artifacts() {
         let temp = TempDir::new().unwrap();
         let target = temp.path().join("out");
         fs::create_dir_all(&target).unwrap();
 
-        // Simulate a `SIGKILL`'d prior run: a staging dir that was never
-        // cleaned up, and a displaced directory from a swap that never
-        // finished removing it.
-        let orphan_staging = temp.path().join(".out.staging-leftover");
-        let orphan_stale = temp.path().join(".out.stale-1-2-3");
-        fs::create_dir_all(orphan_staging.join("nested")).unwrap();
-        fs::create_dir_all(&orphan_stale).unwrap();
+        // Simulate a concurrent sibling export's in-flight staging
+        // directory, built the same way `export_to_filesystem_with_options`
+        // builds it (fresh via `tempfile`).
+        let sibling_staging = tempfile::Builder::new()
+            .prefix(&FileSystem::staging_prefix(&target))
+            .tempdir_in(temp.path())
+            .unwrap();
+        let sibling_staging_path = sibling_staging.path().to_path_buf();
+
+        // Simulate a concurrent sibling export's displaced backup, built the
+        // same way `swap_into_place` builds it: an existing (decoy) target
+        // renamed aside via `displace_existing_target`. Regression test for
+        // issue #169: previously `sweep_stale_artifacts` matched purely by
+        // name, so a real export through this same public entry point would
+        // delete this sibling's staging and displaced directories out from
+        // under it. `decoy_target` is fresh at test time, so this does not
+        // itself exercise the S1 mtime-inheritance defect (a fresh target's
+        // displaced copy would read young even without `touch_dir`) — that
+        // is covered by `displace_existing_target_refreshes_displaced_mtime`
+        // below. This test instead proves the sweep spares young siblings
+        // through the full public `export_to_filesystem` path, not just the
+        // private sweep helper.
+        let decoy_target = temp.path().join("decoy-out");
+        fs::create_dir_all(&decoy_target).unwrap();
+        let sibling_displaced =
+            FileSystem::displace_existing_target(&decoy_target, temp.path()).unwrap();
 
         let vfs = FilesBuilder::new()
             .add_file("/tool.ts", "export {}")
@@ -1213,9 +1347,74 @@ mod tests {
             .unwrap();
         vfs.export_to_filesystem(&target).unwrap();
 
-        assert!(!orphan_staging.exists());
-        assert!(!orphan_stale.exists());
+        assert!(
+            sibling_staging_path.exists(),
+            "too young to be a crash orphan"
+        );
+        assert!(
+            sibling_displaced.exists(),
+            "too young to be a crash orphan (mtime just refreshed)"
+        );
         assert!(target.join("tool.ts").exists());
+    }
+
+    #[test]
+    fn displace_existing_target_refreshes_displaced_mtime() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("out");
+        fs::create_dir_all(&target).unwrap();
+        let target_created_at = fs::metadata(&target).unwrap().modified().unwrap();
+
+        // Give the filesystem's mtime clock room to move past `target`'s
+        // creation time before it gets renamed aside, so the comparison
+        // below can distinguish "displaced kept target's original mtime"
+        // (issue #169's S1 gap: a rename alone does not reset mtime) from
+        // "displaced's mtime was refreshed by `touch_dir`" (the fix).
+        std::thread::sleep(Duration::from_millis(1100));
+
+        let displaced = FileSystem::displace_existing_target(&target, tmp.path()).unwrap();
+        let displaced_modified = fs::metadata(&displaced).unwrap().modified().unwrap();
+
+        assert!(
+            displaced_modified > target_created_at,
+            "displaced's mtime must be refreshed around the rename, not inherited from target"
+        );
+    }
+
+    #[test]
+    fn sweep_stale_artifacts_skips_recent_orphans() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("out");
+
+        let staging = tempfile::Builder::new()
+            .prefix(&FileSystem::staging_prefix(&target))
+            .tempdir_in(tmp.path())
+            .unwrap();
+        let staging_path = staging.path().to_path_buf();
+
+        // Real production threshold: a just-created dir must never be swept.
+        FileSystem::sweep_stale_artifacts(tmp.path(), &target);
+
+        assert!(staging_path.exists(), "a fresh sibling must not be swept");
+    }
+
+    #[test]
+    fn sweep_stale_artifacts_older_than_removes_aged_orphans() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("out");
+
+        let staging = tempfile::Builder::new()
+            .prefix(&FileSystem::staging_prefix(&target))
+            .tempdir_in(tmp.path())
+            .unwrap();
+        let staging_path = staging.keep(); // disown so the assert below is meaningful
+
+        FileSystem::sweep_stale_artifacts_older_than(tmp.path(), &target, Duration::ZERO);
+
+        assert!(
+            !staging_path.exists(),
+            "an orphan past the age threshold must be swept"
+        );
     }
 
     #[test]

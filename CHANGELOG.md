@@ -123,6 +123,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a structured `SetupResult` (Node.js version, MCP config path/found, files made executable) and
   routes it through `format_output`, so `--format json`/`text` produce structured output while the
   default `pretty` format keeps today's human-readable summary (#165).
+- **`mcp-execution-files`**: `FileSystem::sweep_stale_artifacts` (added in #159) now only removes a
+  staging/stale sibling once it is at least 5 minutes old (`STALE_ARTIFACT_MIN_AGE`), instead of
+  matching purely by name. Previously, a concurrent export of the same target could delete another
+  in-flight export's staging directory outright, and — if the timing landed between the final
+  swap's two renames — the displaced original too, defeating the rollback and permanently losing
+  the target with no recovery path. The age gate distinguishes a genuine crash orphan (always well
+  past the window in which a live export completes) from a live sibling's in-flight artifacts.
+  `swap_into_place`'s displaced backup now also has its mtime explicitly refreshed
+  (`FileSystem::touch_dir`) before it is renamed aside, since a rename preserves the source's mtime
+  rather than resetting it — without this, a displaced backup of a long-lived target would inherit
+  that target's (already stale) mtime and be immediately eligible for a concurrent sibling's sweep,
+  leaving the age gate protecting only the staging half of the swap (#169).
+- **`mcp-execution-server`**: `GeneratorService::save_categorized_tools` now serializes concurrent
+  exports to the same `output_dir` behind a keyed `Arc<Mutex<()>>` (mirroring the existing
+  per-server-id `introspectors` lock), so two JSON-RPC calls targeting the same output directory no
+  longer race on the underlying staging/swap (#169).
 - **`mcp-execution-files`**: `FileSystem::export_to_filesystem` now stages the entire export tree
   in a sibling temporary directory and publishes it via a single atomic directory rename, instead
   of writing files directly into the target directory. A process interrupted mid-`generate` (e.g.
