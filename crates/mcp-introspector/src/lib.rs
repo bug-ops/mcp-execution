@@ -44,9 +44,11 @@
 
 use mcp_execution_core::{Error, Result, ServerConfig, ServerId, ToolName, validate_server_config};
 use rmcp::ServiceExt;
-use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
+use rmcp::transport::ConfigureCommandExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::process::Stdio;
+use tokio::process::Child;
 
 /// Information about an MCP server.
 ///
@@ -271,83 +273,39 @@ impl Introspector {
         // Validate server config for security (prevents command injection)
         validate_server_config(config)?;
 
-        // Connect via stdio using rmcp with full configuration
-        let transport = TokioChildProcess::new(
-            tokio::process::Command::new(&config.command).configure(|cmd| {
-                cmd.args(&config.args);
-                cmd.envs(&config.env);
-                if let Some(cwd) = &config.cwd {
-                    cmd.current_dir(cwd);
-                }
-            }),
-        )
-        .map_err(|e| Error::ConnectionFailed {
+        let mut child = spawn_introspection_child(&server_id, config)?;
+        let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
             server: server_id.to_string(),
-            source: Box::new(e),
+            source: Box::new(std::io::Error::other("child stdout was not captured")),
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| Error::ConnectionFailed {
+            server: server_id.to_string(),
+            source: Box::new(std::io::Error::other("child stdin was not captured")),
         })?;
 
-        // Create client using serve pattern, bounded by the connect timeout
-        let client = tokio::time::timeout(config.connect_timeout(), ().serve(transport))
-            .await
-            .map_err(|_elapsed| Error::Timeout {
-                operation: format!("connect to {server_id}"),
-                duration_secs: config.connect_timeout().as_secs(),
-            })?
-            .map_err(|e| Error::ConnectionFailed {
-                server: server_id.to_string(),
-                source: Box::new(e),
-            })?;
+        let discovery = discover_via_stdio(&server_id, config, (stdout, stdin)).await;
 
-        // List all tools from server, bounded by the discover timeout
-        let tool_list = tokio::time::timeout(config.discover_timeout(), client.list_all_tools())
-            .await
-            .map_err(|_elapsed| Error::Timeout {
-                operation: format!("list_all_tools for {server_id}"),
-                duration_secs: config.discover_timeout().as_secs(),
-            })?
-            .map_err(|e| Error::ConnectionFailed {
-                server: server_id.to_string(),
-                source: Box::new(e),
-            })?;
+        // The child process is spawned solely for this discovery round-trip, so it
+        // must be reaped here regardless of outcome. We deliberately kill it
+        // ourselves rather than relying on rmcp's `TokioChildProcess`, whose cleanup
+        // is a `tokio::spawn`-ed background task in `Drop`: under a short-lived
+        // runtime (e.g. `#[tokio::test]`) that task can be starved before it ever
+        // runs, leaking the process (issue #132).
+        if let Err(kill_err) = child.kill().await {
+            tracing::warn!(
+                "failed to terminate introspection child process for {server_id}: {kill_err}"
+            );
+        }
 
-        tracing::debug!(
-            "Server {} responded with {} tools",
-            server_id,
-            tool_list.len()
+        let (tool_list, server_name, server_version, has_resources, has_prompts) = discovery?;
+        let info = build_server_info(
+            &server_id,
+            server_name,
+            server_version,
+            has_resources,
+            has_prompts,
+            tool_list,
         );
-
-        // Extract tools
-        let tools = tool_list
-            .into_iter()
-            .map(|tool| {
-                tracing::trace!("Found tool: {}", tool.name);
-                ToolInfo {
-                    name: ToolName::new(tool.name),
-                    description: tool.description.unwrap_or_default().to_string(),
-                    input_schema: serde_json::Value::Object((*tool.input_schema).clone()),
-                    output_schema: None, // rmcp doesn't provide output schema
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // Extract name, version, and capabilities from the MCP handshake result.
-        // Falls back to the command string / "unknown" if the server did not send peer info.
-        let (server_name, server_version, has_resources, has_prompts) =
-            extract_peer_meta(config, client.peer_info().as_deref());
-
-        let capabilities = ServerCapabilities {
-            supports_tools: !tools.is_empty(),
-            supports_resources: has_resources,
-            supports_prompts: has_prompts,
-        };
-
-        let info = ServerInfo {
-            id: server_id.clone(),
-            name: server_name,
-            version: server_version,
-            tools,
-            capabilities,
-        };
 
         self.servers.insert(server_id, info.clone());
 
@@ -484,6 +442,134 @@ impl Introspector {
 impl Default for Introspector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Spawns the MCP server subprocess used for a single introspection
+/// round-trip, with piped stdin/stdout so it can be driven over stdio.
+///
+/// The caller owns the returned [`Child`] for its full lifetime and is
+/// responsible for terminating it (e.g. via [`Child::kill`]) once
+/// introspection completes; this crate does not keep the process alive for
+/// later tool invocation.
+///
+/// # Errors
+///
+/// Returns [`Error::ConnectionFailed`] if the process cannot be spawned
+/// (e.g. the command does not exist or is not executable).
+fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Result<Child> {
+    tokio::process::Command::new(&config.command)
+        .configure(|cmd| {
+            cmd.args(&config.args);
+            cmd.envs(&config.env);
+            if let Some(cwd) = &config.cwd {
+                cmd.current_dir(cwd);
+            }
+            cmd.stdin(Stdio::piped());
+            cmd.stdout(Stdio::piped());
+        })
+        .spawn()
+        .map_err(|e| Error::ConnectionFailed {
+            server: server_id.to_string(),
+            source: Box::new(e),
+        })
+}
+
+/// Connects to an already-spawned MCP server over `transport` and lists its
+/// tools, with each step bounded by `config`'s configured timeouts.
+///
+/// Returns the discovered tools alongside the handshake-derived server name,
+/// version, and capability flags (resources / prompts support).
+///
+/// # Errors
+///
+/// Returns [`Error::Timeout`] if the connect or discovery step exceeds its
+/// configured timeout, or [`Error::ConnectionFailed`] if the underlying rmcp
+/// connection or request fails.
+async fn discover_via_stdio(
+    server_id: &ServerId,
+    config: &ServerConfig,
+    transport: (tokio::process::ChildStdout, tokio::process::ChildStdin),
+) -> Result<(Vec<rmcp::model::Tool>, String, String, bool, bool)> {
+    // Create client using serve pattern, bounded by the connect timeout
+    let client = tokio::time::timeout(config.connect_timeout(), ().serve(transport))
+        .await
+        .map_err(|_elapsed| Error::Timeout {
+            operation: format!("connect to {server_id}"),
+            duration_secs: config.connect_timeout().as_secs(),
+        })?
+        .map_err(|e| Error::ConnectionFailed {
+            server: server_id.to_string(),
+            source: Box::new(e),
+        })?;
+
+    // List all tools from server, bounded by the discover timeout
+    let tool_list = tokio::time::timeout(config.discover_timeout(), client.list_all_tools())
+        .await
+        .map_err(|_elapsed| Error::Timeout {
+            operation: format!("list_all_tools for {server_id}"),
+            duration_secs: config.discover_timeout().as_secs(),
+        })?
+        .map_err(|e| Error::ConnectionFailed {
+            server: server_id.to_string(),
+            source: Box::new(e),
+        })?;
+
+    // Extract name, version, and capabilities from the MCP handshake result.
+    // Falls back to the command string / "unknown" if the server did not send peer info.
+    let (server_name, server_version, has_resources, has_prompts) =
+        extract_peer_meta(config, client.peer_info().as_deref());
+
+    Ok((
+        tool_list,
+        server_name,
+        server_version,
+        has_resources,
+        has_prompts,
+    ))
+}
+
+/// Assembles a [`ServerInfo`] from the raw tool list and handshake metadata
+/// returned by [`discover_via_stdio`].
+fn build_server_info(
+    server_id: &ServerId,
+    server_name: String,
+    server_version: String,
+    has_resources: bool,
+    has_prompts: bool,
+    tool_list: Vec<rmcp::model::Tool>,
+) -> ServerInfo {
+    tracing::debug!(
+        "Server {} responded with {} tools",
+        server_id,
+        tool_list.len()
+    );
+
+    let tools = tool_list
+        .into_iter()
+        .map(|tool| {
+            tracing::trace!("Found tool: {}", tool.name);
+            ToolInfo {
+                name: ToolName::new(tool.name),
+                description: tool.description.unwrap_or_default().to_string(),
+                input_schema: serde_json::Value::Object((*tool.input_schema).clone()),
+                output_schema: None, // rmcp doesn't provide output schema
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let capabilities = ServerCapabilities {
+        supports_tools: !tools.is_empty(),
+        supports_resources: has_resources,
+        supports_prompts: has_prompts,
+    };
+
+    ServerInfo {
+        id: server_id.clone(),
+        name: server_name,
+        version: server_version,
+        tools,
+        capabilities,
     }
 }
 

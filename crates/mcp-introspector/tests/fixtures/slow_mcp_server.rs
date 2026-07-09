@@ -14,6 +14,12 @@
 //!
 //! Both delays default to 0 (respond immediately) so the fixture can also
 //! serve as a fast, successful server for sanity-check tests.
+//!
+//! An optional third CLI arg gives a file path; if present, the fixture
+//! writes its own OS process id to that file immediately on startup (before
+//! the connect delay), letting tests confirm - via the written pid - that
+//! the process was actually terminated after a timeout, rather than merely
+//! asserting on the returned error.
 
 use rmcp::model::{ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo};
 use rmcp::service::RequestContext;
@@ -51,6 +57,10 @@ fn arg_millis(index: usize) -> u64 {
 async fn main() {
     let connect_delay = Duration::from_millis(arg_millis(1));
     let list_tools_delay = Duration::from_millis(arg_millis(2));
+
+    if let Some(pid_file) = std::env::args().nth(3) {
+        std::fs::write(pid_file, std::process::id().to_string()).expect("failed to write pid file");
+    }
 
     // Delay before even starting the handshake, so the client's `serve()`
     // call blocks waiting for a response - simulating a hung connect phase

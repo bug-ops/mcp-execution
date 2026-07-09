@@ -78,6 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numeric-suffix strategy already used for name collisions. Previously a tool named `delete` or
   `typeof` produced `export async function delete(...)`, a hard TypeScript/JavaScript syntax
   error that also broke the generated `index.ts` re-export (#133).
+- **`mcp-execution-introspector`**: `Introspector::discover_server` now spawns its MCP server child
+  process directly and kills it synchronously once the discovery round-trip finishes, instead of
+  relying on rmcp's `TokioChildProcess` `Drop`-spawned kill task. Under a short-lived tokio runtime
+  (e.g. a `#[tokio::test]`), that background task could be starved before it ever ran, leaking the
+  child process; `cargo nextest run` reported both timeout-firing tests as `LEAK` on every run
+  (#132).
 
 ### Testing
 
