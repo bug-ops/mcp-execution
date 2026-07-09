@@ -23,5 +23,9 @@ tokio = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
 dirs = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [lints]
 workspace = true

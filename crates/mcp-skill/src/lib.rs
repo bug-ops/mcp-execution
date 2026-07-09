@@ -6,7 +6,7 @@
 //! # Architecture
 //!
 //! The skill generation flow:
-//! 1. `parser` - Extracts `JSDoc` metadata from TypeScript files
+//! 1. `parser` - Reads the `_meta.json` sidecar emitted by codegen
 //! 2. `context` - Builds structured context from parsed tools
 //! 3. `template` - Renders Handlebars template with context
 //!
@@ -30,8 +30,8 @@ pub mod types;
 
 pub use context::build_skill_context;
 pub use parser::{
-    MAX_FILE_SIZE, MAX_TOOL_FILES, ParseError, ParsedParameter, ParsedToolFile, ScanError,
-    extract_skill_metadata, parse_tool_file, scan_tools_directory,
+    MAX_FILE_SIZE, MAX_TOOL_FILES, ParsedParameter, ParsedToolFile, ScanError,
+    extract_skill_metadata, scan_tools_directory,
 };
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{

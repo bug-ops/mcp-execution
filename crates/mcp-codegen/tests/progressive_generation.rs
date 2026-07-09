@@ -98,7 +98,8 @@ fn test_progressive_generator_creates_correct_number_of_files() {
     // - 1 index.ts
     // - 1 runtime bridge (_runtime/mcp-bridge.ts)
     // - 1 package.json
-    assert_eq!(code.file_count(), 6);
+    // - 1 _meta.json
+    assert_eq!(code.file_count(), 7);
 }
 
 #[test]
@@ -372,7 +373,8 @@ fn test_progressive_generator_with_empty_server() {
     // - 1 index.ts
     // - 1 runtime bridge
     // - 1 package.json
-    assert_eq!(code.file_count(), 3);
+    // - 1 _meta.json
+    assert_eq!(code.file_count(), 4);
 
     let file_paths: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
     assert!(file_paths.contains(&"index.ts"));

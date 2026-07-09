@@ -1,92 +1,66 @@
 //! Integration tests for skill generation.
 
-use mcp_execution_skill::{
-    ParsedToolFile, build_skill_context, parse_tool_file, scan_tools_directory,
+use mcp_execution_core::metadata::{
+    METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
 };
-use std::fmt::Write;
+use mcp_execution_skill::{ParsedToolFile, ScanError, build_skill_context, scan_tools_directory};
 use tempfile::TempDir;
 use tokio::fs;
 
-/// Create a test TypeScript tool file.
-async fn create_test_tool_file(dir: &std::path::Path, name: &str, category: &str) {
-    let content = format!(
-        r"/**
- * @tool {name}
- * @server test
- * @category {category}
- * @keywords test,{name}
- * @description Test tool: {name}
- */
-
-interface {pascal_name}Params {{
-  required_param: string;
-  optional_param?: number;
-}}
-
-export async function {pascal_name}(params: {pascal_name}Params): Promise<void> {{
-  // Implementation
-}}
-",
-        name = name,
-        category = category,
-        pascal_name = to_pascal_case(name),
-    );
-
-    let filename = format!("{}.ts", to_pascal_case(name));
-    fs::write(dir.join(&filename), content).await.unwrap();
-}
-
-fn to_pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_uppercase().chain(chars).collect()
+/// Build a `ServerMetadata` sidecar with `count` simple test tools, each with one
+/// required string parameter, and write it as `_meta.json` into `dir`.
+async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
+    let meta = ServerMetadata {
+        schema_version: METADATA_SCHEMA_VERSION,
+        server_id: "test".to_string(),
+        server_name: "Test Server".to_string(),
+        server_version: "1.0.0".to_string(),
+        tools: tool_names
+            .iter()
+            .map(|name| ToolMetadata {
+                name: (*name).to_string(),
+                typescript_name: to_camel_case(name),
+                category: Some("test-category".to_string()),
+                keywords: vec!["test".to_string(), (*name).to_string()],
+                description: Some(format!("Test tool: {name}")),
+                parameters: vec![
+                    ParameterMetadata {
+                        name: "required_param".to_string(),
+                        typescript_type: "string".to_string(),
+                        required: true,
+                        description: Some("A required parameter".to_string()),
+                    },
+                    ParameterMetadata {
+                        name: "optional_param".to_string(),
+                        typescript_type: "number".to_string(),
+                        required: false,
+                        description: None,
+                    },
+                ],
             })
-        })
-        .collect()
+            .collect(),
+    };
+
+    let content = serde_json::to_string_pretty(&meta).unwrap();
+    fs::write(dir.join(METADATA_FILE_NAME), content)
+        .await
+        .unwrap();
 }
 
-#[tokio::test]
-async fn test_parse_tool_file_integration() {
-    let content = r"
-/**
- * @tool create_issue
- * @server github
- * @category issues
- * @keywords create,issue,new,bug
- * @description Create a new issue in a repository
- */
-
-interface CreateIssueParams {
-  owner: string;
-  repo: string;
-  title: string;
-  body?: string;
-  labels?: string[];
-}
-
-export async function createIssue(params: CreateIssueParams): Promise<Issue> {
-  // Implementation
-}
-";
-
-    let result = parse_tool_file(content, "createIssue.ts").unwrap();
-
-    assert_eq!(result.name, "create_issue");
-    assert_eq!(result.typescript_name, "createIssue");
-    assert_eq!(result.server_id, "github");
-    assert_eq!(result.category, Some("issues".to_string()));
-    assert_eq!(result.keywords.len(), 4);
-    assert!(result.description.is_some());
-    assert_eq!(result.parameters.len(), 5);
-
-    // Check required vs optional
-    let required_count = result.parameters.iter().filter(|p| p.required).count();
-    let optional_count = result.parameters.iter().filter(|p| !p.required).count();
-
-    assert_eq!(required_count, 3); // owner, repo, title
-    assert_eq!(optional_count, 2); // body, labels
+fn to_camel_case(s: &str) -> String {
+    let mut parts = s.split('_');
+    let Some(first) = parts.next() else {
+        return String::new();
+    };
+    let mut result = first.to_string();
+    for part in parts {
+        let mut chars = part.chars();
+        if let Some(c) = chars.next() {
+            result.push(c.to_ascii_uppercase());
+            result.push_str(chars.as_str());
+        }
+    }
+    result
 }
 
 #[tokio::test]
@@ -94,19 +68,7 @@ async fn test_scan_tools_directory_integration() {
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
 
-    // Create test tool files
-    create_test_tool_file(dir, "create_issue", "issues").await;
-    create_test_tool_file(dir, "list_repos", "repos").await;
-    create_test_tool_file(dir, "get_user", "users").await;
-
-    // Create files that should be skipped
-    fs::write(dir.join("index.ts"), "export * from './createIssue';")
-        .await
-        .unwrap();
-    fs::create_dir(dir.join("_runtime")).await.unwrap();
-    fs::write(dir.join("_runtime/mcp-bridge.ts"), "// Bridge")
-        .await
-        .unwrap();
+    write_metadata_sidecar(dir, &["create_issue", "list_repos", "get_user"]).await;
 
     let tools = scan_tools_directory(dir).await.unwrap();
 
@@ -114,6 +76,35 @@ async fn test_scan_tools_directory_integration() {
     assert!(tools.iter().any(|t| t.name == "create_issue"));
     assert!(tools.iter().any(|t| t.name == "list_repos"));
     assert!(tools.iter().any(|t| t.name == "get_user"));
+
+    let create_issue = tools.iter().find(|t| t.name == "create_issue").unwrap();
+    assert_eq!(create_issue.server_id, "test");
+    assert_eq!(create_issue.category, Some("test-category".to_string()));
+    assert_eq!(create_issue.parameters.len(), 2);
+
+    let required_count = create_issue
+        .parameters
+        .iter()
+        .filter(|p| p.required)
+        .count();
+    let optional_count = create_issue
+        .parameters
+        .iter()
+        .filter(|p| !p.required)
+        .count();
+    assert_eq!(required_count, 1);
+    assert_eq!(optional_count, 1);
+
+    // Issue #141 regression: parameter descriptions must survive the round-trip.
+    let required = create_issue
+        .parameters
+        .iter()
+        .find(|p| p.name == "required_param")
+        .unwrap();
+    assert_eq!(
+        required.description,
+        Some("A required parameter".to_string())
+    );
 }
 
 #[tokio::test]
@@ -158,26 +149,15 @@ async fn test_scan_nonexistent_directory() {
 }
 
 #[tokio::test]
-async fn test_parse_tool_file_missing_required_tags() {
-    // Missing @tool tag
-    let content = r"
-/**
- * @server github
- */
-";
+async fn test_scan_directory_missing_metadata() {
+    // A directory that exists but was never generated with the sidecar (or was
+    // generated by a pre-#141 version) must hard-error rather than silently
+    // report zero tools.
+    let temp_dir = TempDir::new().unwrap();
 
-    let result = parse_tool_file(content, "test.ts");
-    assert!(result.is_err());
+    let result = scan_tools_directory(temp_dir.path()).await;
 
-    // Missing @server tag
-    let content = r"
-/**
- * @tool test
- */
-";
-
-    let result = parse_tool_file(content, "test.ts");
-    assert!(result.is_err());
+    assert!(matches!(result, Err(ScanError::MissingMetadata { .. })));
 }
 
 #[tokio::test]
@@ -215,19 +195,17 @@ Troubleshooting here.
 }
 
 // ============================================================================
-// Large File Handling Tests
+// Large Metadata Handling Tests
 // ============================================================================
 
 #[tokio::test]
-async fn test_scan_directory_with_many_files() {
+async fn test_scan_directory_with_many_tools() {
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
 
-    // Create 50 tool files
-    for i in 0..50 {
-        let tool_name = format!("tool_{i}");
-        create_test_tool_file(dir, &tool_name, "test-category").await;
-    }
+    let tool_names: Vec<String> = (0..50).map(|i| format!("tool_{i}")).collect();
+    let tool_name_refs: Vec<&str> = tool_names.iter().map(String::as_str).collect();
+    write_metadata_sidecar(dir, &tool_name_refs).await;
 
     let tools = scan_tools_directory(dir).await.unwrap();
 
@@ -239,125 +217,29 @@ async fn test_scan_directory_with_many_files() {
 }
 
 #[tokio::test]
-async fn test_scan_directory_with_invalid_files() {
+async fn test_scan_directory_ignores_stray_files() {
+    // Only `_meta.json` is read; stray `.ts` files, an `index.ts`, or a `_runtime`
+    // directory left over in a server directory must not affect the scan.
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
 
-    // Create valid tool file
-    create_test_tool_file(dir, "valid_tool", "category").await;
+    write_metadata_sidecar(dir, &["valid_tool"]).await;
 
-    // Create invalid TypeScript file (missing @tool tag)
-    let invalid_content = r"
-/**
- * @server github
- */
-export function invalid() {}
-";
-    fs::write(dir.join("invalid.ts"), invalid_content)
+    fs::write(dir.join("index.ts"), "export * from './validTool';")
         .await
         .unwrap();
-
-    // Create non-TypeScript file
+    fs::create_dir(dir.join("_runtime")).await.unwrap();
+    fs::write(dir.join("_runtime/mcp-bridge.ts"), "// Bridge")
+        .await
+        .unwrap();
     fs::write(dir.join("readme.txt"), "Not a TypeScript file")
         .await
         .unwrap();
 
     let tools = scan_tools_directory(dir).await.unwrap();
 
-    // Should only parse the valid tool (invalid files are logged but skipped)
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "valid_tool");
-}
-
-#[tokio::test]
-async fn test_scan_directory_skips_index_and_runtime() {
-    let temp_dir = TempDir::new().unwrap();
-    let dir = temp_dir.path();
-
-    // Create valid tool
-    create_test_tool_file(dir, "valid_tool", "category").await;
-
-    // Create index.ts (should be skipped)
-    fs::write(dir.join("index.ts"), "export * from './validTool';")
-        .await
-        .unwrap();
-
-    // Create _runtime directory with file (should be skipped)
-    fs::create_dir(dir.join("_runtime")).await.unwrap();
-    fs::write(dir.join("_runtime/bridge.ts"), "// Runtime bridge")
-        .await
-        .unwrap();
-
-    // Create file starting with _ (should be skipped)
-    create_test_tool_file(dir, "_internal", "category").await;
-    let internal_file = dir.join(format!("{}.ts", to_pascal_case("_internal")));
-    if internal_file.exists() {
-        fs::remove_file(&internal_file).await.ok();
-    }
-    fs::write(dir.join("_internal.ts"), "// Internal")
-        .await
-        .unwrap();
-
-    let tools = scan_tools_directory(dir).await.unwrap();
-
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "valid_tool");
-}
-
-#[tokio::test]
-async fn test_parse_tool_file_large_description() {
-    let long_description = "a".repeat(1000);
-    let content = format!(
-        r"/**
- * @tool test_tool
- * @server github
- * @description {long_description}
- */
-"
-    );
-
-    let result = parse_tool_file(&content, "test.ts").unwrap();
-    assert_eq!(result.description, Some(long_description));
-}
-
-#[tokio::test]
-async fn test_parse_tool_file_many_keywords() {
-    let keywords: Vec<String> = (0..100).map(|i| format!("keyword{i}")).collect();
-    let keywords_str = keywords.join(",");
-
-    let content = format!(
-        r"/**
- * @tool test_tool
- * @server github
- * @keywords {keywords_str}
- */
-"
-    );
-
-    let result = parse_tool_file(&content, "test.ts").unwrap();
-    assert_eq!(result.keywords.len(), 100);
-}
-
-#[tokio::test]
-async fn test_parse_tool_file_many_parameters() {
-    let mut params = String::new();
-    for i in 0..50 {
-        writeln!(params, "  param{i}: string;").unwrap();
-    }
-
-    let content = format!(
-        r"/**
- * @tool test_tool
- * @server github
- */
-
-interface TestToolParams {{
-{params}}}
-"
-    );
-
-    let result = parse_tool_file(&content, "test.ts").unwrap();
-    assert_eq!(result.parameters.len(), 50);
 }
 
 #[tokio::test]
@@ -402,10 +284,9 @@ async fn test_scan_directory_concurrent_access() {
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
 
-    // Create several tool files
-    for i in 0..10 {
-        create_test_tool_file(dir, &format!("tool_{i}"), "category").await;
-    }
+    let tool_names: Vec<String> = (0..10).map(|i| format!("tool_{i}")).collect();
+    let tool_name_refs: Vec<&str> = tool_names.iter().map(String::as_str).collect();
+    write_metadata_sidecar(dir, &tool_name_refs).await;
 
     // Scan the same directory concurrently
     let dir_path = dir.to_path_buf();
@@ -469,26 +350,15 @@ async fn test_scan_directory_permission_denied() {
 }
 
 #[tokio::test]
-async fn test_parse_tool_file_binary_content() {
-    // Try to parse binary content (should fail gracefully)
-    let binary_content = vec![0xFF, 0xFE, 0xFD, 0xFC];
-    let content_str = String::from_utf8_lossy(&binary_content);
-
-    let result = parse_tool_file(&content_str, "binary.ts");
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_scan_directory_too_many_files() {
-    use mcp_execution_skill::{MAX_TOOL_FILES, ScanError};
+async fn test_scan_directory_too_many_tools() {
+    use mcp_execution_skill::MAX_TOOL_FILES;
 
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
 
-    // Create MAX_TOOL_FILES + 1 files (501 files)
-    for i in 0..=MAX_TOOL_FILES {
-        create_test_tool_file(dir, &format!("tool_{i}"), "test").await;
-    }
+    let tool_names: Vec<String> = (0..=MAX_TOOL_FILES).map(|i| format!("tool_{i}")).collect();
+    let tool_name_refs: Vec<&str> = tool_names.iter().map(String::as_str).collect();
+    write_metadata_sidecar(dir, &tool_name_refs).await;
 
     let result = scan_tools_directory(dir).await;
 
@@ -504,41 +374,42 @@ async fn test_scan_directory_too_many_files() {
 
 #[tokio::test]
 async fn test_scan_directory_file_too_large() {
-    use mcp_execution_skill::{MAX_FILE_SIZE, ScanError};
+    use mcp_execution_skill::MAX_FILE_SIZE;
 
     let temp_dir = TempDir::new().unwrap();
     let dir = temp_dir.path();
 
-    // Create a file larger than MAX_FILE_SIZE (1MB)
+    // Create a sidecar larger than MAX_FILE_SIZE (1MB) by padding one tool's description.
     #[allow(clippy::cast_possible_truncation)]
-    let large_content = "a".repeat((MAX_FILE_SIZE as usize) + 1);
+    let large_description = "a".repeat((MAX_FILE_SIZE as usize) + 1);
 
-    // Add minimal valid JSDoc to make it a tool file
-    let content = format!(
-        r"/**
- * @tool large_tool
- * @server test
- * @keywords large
- * @description Large tool for testing
- */
+    let mut meta = ServerMetadata {
+        schema_version: METADATA_SCHEMA_VERSION,
+        server_id: "test".to_string(),
+        server_name: "Test Server".to_string(),
+        server_version: "1.0.0".to_string(),
+        tools: vec![ToolMetadata {
+            name: "large_tool".to_string(),
+            typescript_name: "largeTool".to_string(),
+            category: None,
+            keywords: vec!["large".to_string()],
+            description: Some(String::new()),
+            parameters: vec![],
+        }],
+    };
+    meta.tools[0].description = Some(large_description);
 
-interface LargeToolParams {{
-  param: string;
-}}
-
-{large_content}
-"
-    );
-
-    let large_file = dir.join("LargeTool.ts");
-    fs::write(&large_file, content).await.unwrap();
+    let content = serde_json::to_string_pretty(&meta).unwrap();
+    fs::write(dir.join(METADATA_FILE_NAME), &content)
+        .await
+        .unwrap();
 
     let result = scan_tools_directory(dir).await;
 
     assert!(result.is_err());
     match result.unwrap_err() {
         ScanError::FileTooLarge { path, size, limit } => {
-            assert!(path.contains("LargeTool.ts"));
+            assert!(path.contains(mcp_execution_core::metadata::METADATA_FILE_NAME));
             assert!(size > MAX_FILE_SIZE);
             assert_eq!(limit, MAX_FILE_SIZE);
         }

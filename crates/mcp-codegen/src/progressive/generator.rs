@@ -39,6 +39,9 @@ use crate::progressive::types::{
     ToolSummary,
 };
 use crate::template_engine::TemplateEngine;
+use mcp_execution_core::metadata::{
+    METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
+};
 use mcp_execution_core::{Error, Result};
 use mcp_execution_introspector::{ServerInfo, ToolInfo};
 use std::collections::{HashMap, HashSet};
@@ -150,11 +153,13 @@ impl<'a> ProgressiveGenerator<'a> {
         let mut code = GeneratedCode::new();
         let server_id = server_info.id.as_str();
         let typescript_names = resolve_typescript_names(&server_info.tools);
+        let mut tool_metadata = Vec::with_capacity(server_info.tools.len());
 
         // Generate tool files (one per tool)
         for (idx, tool) in server_info.tools.iter().enumerate() {
             let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
-            let tool_context = self.create_tool_context(server_id, tool, None, typescript_name)?;
+            let tool_context =
+                self.create_tool_context(server_id, tool, None, typescript_name.clone())?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
             code.add_file(GeneratedFile {
@@ -163,6 +168,8 @@ impl<'a> ProgressiveGenerator<'a> {
             });
 
             tracing::debug!("Generated tool file: {}.ts", tool_context.typescript_name);
+
+            tool_metadata.push(self.create_tool_metadata(tool, None, typescript_name)?);
         }
 
         // Generate index.ts
@@ -196,6 +203,11 @@ impl<'a> ProgressiveGenerator<'a> {
         });
 
         tracing::debug!("Generated package.json");
+
+        // Generate _meta.json sidecar with structured tool metadata
+        code.add_file(Self::create_metadata_file(server_info, tool_metadata)?);
+
+        tracing::debug!("Generated {}", METADATA_FILE_NAME);
 
         tracing::info!(
             "Successfully generated {} files for {} (progressive loading)",
@@ -272,6 +284,7 @@ impl<'a> ProgressiveGenerator<'a> {
         let mut code = GeneratedCode::new();
         let server_id = server_info.id.as_str();
         let typescript_names = resolve_typescript_names(&server_info.tools);
+        let mut tool_metadata = Vec::with_capacity(server_info.tools.len());
 
         // Generate tool files (one per tool) with categorization metadata
         for (idx, tool) in server_info.tools.iter().enumerate() {
@@ -279,7 +292,7 @@ impl<'a> ProgressiveGenerator<'a> {
             let categorization = categorizations.get(tool_name);
             let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
             let tool_context =
-                self.create_tool_context(server_id, tool, categorization, typescript_name)?;
+                self.create_tool_context(server_id, tool, categorization, typescript_name.clone())?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
             code.add_file(GeneratedFile {
@@ -292,6 +305,8 @@ impl<'a> ProgressiveGenerator<'a> {
                 tool_context.typescript_name,
                 categorization.map(|c| &c.category)
             );
+
+            tool_metadata.push(self.create_tool_metadata(tool, categorization, typescript_name)?);
         }
 
         // Generate index.ts with category grouping
@@ -329,6 +344,11 @@ impl<'a> ProgressiveGenerator<'a> {
         });
 
         tracing::debug!("Generated package.json");
+
+        // Generate _meta.json sidecar with structured tool metadata
+        code.add_file(Self::create_metadata_file(server_info, tool_metadata)?);
+
+        tracing::debug!("Generated {}", METADATA_FILE_NAME);
 
         tracing::info!(
             "Successfully generated {} files for {} with categorizations (progressive loading)",
@@ -463,6 +483,30 @@ impl<'a> ProgressiveGenerator<'a> {
     ///
     /// Returns error if schema is malformed or type conversion fails.
     fn extract_property_infos(&self, schema: &serde_json::Value) -> Result<Vec<PropertyInfo>> {
+        Ok(self
+            .extract_property_data(schema)?
+            .into_iter()
+            .map(|(info, _raw_description)| info)
+            .collect())
+    }
+
+    /// Extracts property information from JSON Schema, alongside each property's raw
+    /// (un-sanitized) description.
+    ///
+    /// Shares the extraction logic with [`extract_property_infos`](Self::extract_property_infos),
+    /// which only needs the JSDoc-sanitized `PropertyInfo` for template rendering. Consumers
+    /// that need the description as originally authored — e.g. the `_meta.json` sidecar, which
+    /// is JSON consumed by Rust rather than text interpolated into a JS comment — should use
+    /// this method instead, so they are not subject to JSDoc-safety truncation/escaping that
+    /// doesn't apply to their format (issue #141).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if schema is malformed or type conversion fails.
+    fn extract_property_data(
+        &self,
+        schema: &serde_json::Value,
+    ) -> Result<Vec<(PropertyInfo, Option<String>)>> {
         let raw_properties = extract_properties(schema);
 
         let mut properties = Vec::new();
@@ -488,28 +532,117 @@ impl<'a> ProgressiveGenerator<'a> {
 
             // Extract description if available (looked up by the raw schema key, before
             // sanitization, since that's what the input schema is actually keyed by)
-            let description = if let Some(obj) = schema.as_object() {
+            let raw_description = if let Some(obj) = schema.as_object() {
                 obj.get("properties")
                     .and_then(|props| props.as_object())
                     .and_then(|props| props.get(&raw_name))
                     .and_then(|prop_schema| prop_schema.as_object())
                     .and_then(|obj| obj.get("description"))
                     .and_then(|desc| desc.as_str())
-                    .map(|desc| sanitize_jsdoc(desc, 256))
+                    .map(str::to_string)
             } else {
                 None
             };
+            let description = raw_description
+                .as_deref()
+                .map(|desc| sanitize_jsdoc(desc, 256));
 
             let base_name = sanitize_ts_identifier(&raw_name);
-            properties.push(PropertyInfo {
-                name: disambiguate_identifier(&base_name, &mut used_names),
-                typescript_type,
-                description,
-                required,
-            });
+            properties.push((
+                PropertyInfo {
+                    name: disambiguate_identifier(&base_name, &mut used_names),
+                    typescript_type,
+                    description,
+                    required,
+                },
+                raw_description,
+            ));
         }
 
         Ok(properties)
+    }
+
+    /// Builds structured metadata for a single tool, for the `_meta.json` sidecar.
+    ///
+    /// Unlike [`create_tool_context`](Self::create_tool_context), `name`, `description`, and
+    /// parameter descriptions all use the RAW, unsanitized MCP values: the sidecar is a data
+    /// contract consumed by other Rust code, not interpolated into a JSDoc comment, so
+    /// JSDoc-safety sanitization (truncation, `*/`-escaping, newline-flattening) would only
+    /// lose fidelity. Parameter descriptions come from
+    /// [`extract_property_data`](Self::extract_property_data)'s raw half rather than the
+    /// JSDoc-sanitized `PropertyInfo` used for template rendering, which is what fully fixes
+    /// the data loss described in issue #141 (the old regex-based parser could not recover
+    /// parameter descriptions from the generated TypeScript at all).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if schema conversion fails.
+    fn create_tool_metadata(
+        &self,
+        tool: &ToolInfo,
+        categorization: Option<&ToolCategorization>,
+        typescript_name: String,
+    ) -> Result<ToolMetadata> {
+        let properties = self.extract_property_data(&tool.input_schema)?;
+
+        let description = (!tool.description.is_empty()).then(|| tool.description.clone());
+        let category = categorization.map(|c| c.category.clone());
+        let keywords = categorization.map_or_else(Vec::new, |c| {
+            c.keywords
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        });
+
+        Ok(ToolMetadata {
+            name: tool.name.as_str().to_string(),
+            typescript_name,
+            category,
+            keywords,
+            description,
+            parameters: properties
+                .into_iter()
+                .map(|(p, raw_description)| ParameterMetadata {
+                    name: p.name,
+                    typescript_type: p.typescript_type,
+                    required: p.required,
+                    description: raw_description,
+                })
+                .collect(),
+        })
+    }
+
+    /// Builds the `_meta.json` sidecar file from per-tool metadata already collected
+    /// during the tool-file generation loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the metadata cannot be serialized to JSON (should not happen
+    /// with these plain-data types).
+    fn create_metadata_file(
+        server_info: &ServerInfo,
+        tools: Vec<ToolMetadata>,
+    ) -> Result<GeneratedFile> {
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: server_info.id.as_str().to_string(),
+            server_name: server_info.name.clone(),
+            server_version: server_info.version.clone(),
+            tools,
+        };
+
+        let content =
+            serde_json::to_string_pretty(&meta).map_err(|e| Error::SerializationError {
+                message: format!("failed to serialize {METADATA_FILE_NAME}"),
+                source: Some(e),
+            })?;
+
+        Ok(GeneratedFile {
+            path: METADATA_FILE_NAME.to_string(),
+            content,
+        })
     }
 }
 
@@ -726,7 +859,8 @@ mod tests {
         // - 1 index.ts
         // - 1 runtime bridge
         // - 1 package.json
-        assert_eq!(code.file_count(), 5);
+        // - 1 _meta.json
+        assert_eq!(code.file_count(), 6);
 
         // Check tool files exist
         let tool_files: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
@@ -736,6 +870,162 @@ mod tests {
         assert!(tool_files.contains(&"index.ts"));
         assert!(tool_files.contains(&"_runtime/mcp-bridge.ts"));
         assert!(tool_files.contains(&"package.json"));
+        assert!(tool_files.contains(&"_meta.json"));
+    }
+
+    #[test]
+    fn test_generate_meta_json_preserves_parameter_descriptions() {
+        // Issue #141 regression: the old regex-based skill parser could not recover
+        // parameter descriptions from generated TypeScript at all. The `_meta.json`
+        // sidecar must carry them through faithfully.
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let code = generator.generate(&server_info).unwrap();
+        let meta_file = code.files.iter().find(|f| f.path == "_meta.json").unwrap();
+        let meta: ServerMetadata = serde_json::from_str(&meta_file.content).unwrap();
+
+        assert_eq!(meta.schema_version, METADATA_SCHEMA_VERSION);
+        assert_eq!(meta.server_id, "test-server");
+        assert_eq!(meta.server_name, "Test Server");
+        assert_eq!(meta.server_version, "1.0.0");
+        assert_eq!(meta.tools.len(), 2);
+
+        let create_issue = meta
+            .tools
+            .iter()
+            .find(|t| t.name == "create_issue")
+            .unwrap();
+        assert_eq!(create_issue.typescript_name, "createIssue");
+        let title = create_issue
+            .parameters
+            .iter()
+            .find(|p| p.name == "title")
+            .unwrap();
+        assert_eq!(title.description, Some("Issue title".to_string()));
+        assert!(title.required);
+    }
+
+    #[test]
+    fn test_generate_with_categories_meta_json_includes_categorization() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let mut categorizations = HashMap::new();
+        categorizations.insert(
+            "create_issue".to_string(),
+            ToolCategorization {
+                category: "issues".to_string(),
+                keywords: "create, issue , new".to_string(),
+                short_description: "Create a new issue".to_string(),
+            },
+        );
+
+        let code = generator
+            .generate_with_categories(&server_info, &categorizations)
+            .unwrap();
+        let meta_file = code.files.iter().find(|f| f.path == "_meta.json").unwrap();
+        let meta: ServerMetadata = serde_json::from_str(&meta_file.content).unwrap();
+
+        let create_issue = meta
+            .tools
+            .iter()
+            .find(|t| t.name == "create_issue")
+            .unwrap();
+        assert_eq!(create_issue.category, Some("issues".to_string()));
+        assert_eq!(
+            create_issue.keywords,
+            vec!["create".to_string(), "issue".to_string(), "new".to_string()]
+        );
+
+        let update_issue = meta
+            .tools
+            .iter()
+            .find(|t| t.name == "update_issue")
+            .unwrap();
+        assert!(update_issue.category.is_none());
+        assert!(update_issue.keywords.is_empty());
+    }
+
+    #[test]
+    fn test_generate_meta_json_parameter_description_is_raw_not_jsdoc_sanitized() {
+        // Issue #141 regression (critic S1): the sidecar is JSON consumed by Rust, not a JS
+        // comment, so its parameter descriptions must NOT go through `sanitize_jsdoc`'s
+        // truncation/escaping/newline-flattening — only the `.ts` template's JSDoc comment
+        // needs that treatment.
+        let raw_description = format!(
+            "Matches C-style /* */ comment blocks.\nSecond line follows. {}",
+            "x".repeat(300)
+        );
+        assert!(raw_description.contains("*/"));
+        assert!(raw_description.contains('\n'));
+        assert!(raw_description.chars().count() > 256);
+
+        let server_info = ServerInfo {
+            id: ServerId::new("test-server"),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: vec![ToolInfo {
+                name: ToolName::new("send_message"),
+                description: "Sends a message".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "notes": {
+                            "type": "string",
+                            "description": raw_description
+                        }
+                    },
+                    "required": []
+                }),
+                output_schema: None,
+            }],
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        };
+
+        let generator = ProgressiveGenerator::new().unwrap();
+        let code = generator.generate(&server_info).unwrap();
+
+        // The sidecar carries the raw, untruncated, unescaped, non-flattened description.
+        let meta_file = code.files.iter().find(|f| f.path == "_meta.json").unwrap();
+        let meta: ServerMetadata = serde_json::from_str(&meta_file.content).unwrap();
+        let send_message = meta
+            .tools
+            .iter()
+            .find(|t| t.name == "send_message")
+            .unwrap();
+        let notes = send_message
+            .parameters
+            .iter()
+            .find(|p| p.name == "notes")
+            .unwrap();
+        assert_eq!(notes.description, Some(raw_description.clone()));
+
+        // The `.ts` template's JSDoc comment still uses the sanitized form, since it IS
+        // embedded in a JS comment.
+        let ts_file = code
+            .files
+            .iter()
+            .find(|f| f.path == "sendMessage.ts")
+            .unwrap();
+        assert!(
+            !ts_file.content.contains(raw_description.as_str()),
+            "the .ts file must not contain the raw, un-sanitized description verbatim"
+        );
+        assert!(
+            ts_file.content.contains("*\\/"),
+            "the .ts file must escape '*/' to avoid closing the JSDoc comment early"
+        );
+        assert!(
+            !ts_file
+                .content
+                .contains("Matches C-style /* */ comment blocks.\nSecond"),
+            "the .ts file must flatten newlines within the description to spaces"
+        );
     }
 
     #[test]

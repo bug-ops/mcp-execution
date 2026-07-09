@@ -48,6 +48,38 @@ fn test_export_and_verify_content() {
     assert_eq!(manifest_content, r#"{"version": "1.0.0", "tools": 2}"#);
 }
 
+/// The `_meta.json` sidecar (issue #141) is an underscore-prefixed JSON file,
+/// generated the same way as any other `GeneratedFile`. It must ride through
+/// `FilesBuilder::from_generated_code` and `export_to_filesystem` unchanged,
+/// with no extension- or prefix-based filtering along the way.
+#[test]
+fn test_meta_json_sidecar_survives_export() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut code = GeneratedCode::new();
+    code.add_file(GeneratedFile {
+        path: "index.ts".to_string(),
+        content: "export {};".to_string(),
+    });
+    code.add_file(GeneratedFile {
+        path: "_meta.json".to_string(),
+        content: r#"{"schema_version":1,"server_id":"github"}"#.to_string(),
+    });
+
+    let vfs = FilesBuilder::from_generated_code(code, "/github")
+        .build_and_export(temp_dir.path())
+        .unwrap();
+
+    assert_eq!(vfs.file_count(), 2);
+    assert!(vfs.exists("/github/_meta.json"));
+
+    let meta_path = temp_dir.path().join("github/_meta.json");
+    assert!(meta_path.exists(), "_meta.json must be written to disk");
+
+    let content = fs::read_to_string(&meta_path).unwrap();
+    assert_eq!(content, r#"{"schema_version":1,"server_id":"github"}"#);
+}
+
 /// Test GitHub server structure with 30 tools
 #[test]
 fn test_export_github_server_structure() {
