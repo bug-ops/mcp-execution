@@ -93,12 +93,16 @@ pub struct ValidationResult {
 ///
 /// # Arguments
 ///
-/// * `action` - Server management action
+/// * `action` - Server management action (List, Info, or Validate)
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
 ///
-/// Returns an error if the server operation fails.
+/// Returns an error if:
+/// - The configuration file cannot be read or is malformed
+/// - A named server is not found in the configuration
+/// - Server introspection (for Info action) fails to connect
+/// - Output formatting fails (serialization error)
 ///
 /// # Examples
 ///
