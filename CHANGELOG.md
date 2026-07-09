@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mcp-execution-cli`**, **`mcp-execution-server`**: `mcp.json` server entries can now override
+  the connect/discover timeouts introduced in #120 on a per-server basis via
+  `connectTimeoutSecs`/`discoverTimeoutSecs`, instead of being locked to the 30-second defaults.
+  Values are bounds-checked (`0 < timeout <= 600s`) by `validate_server_config` (#128).
+
 ### Security
 
 - **`mcp-execution-codegen`**: tool names, server IDs, and JSON Schema property keys are now

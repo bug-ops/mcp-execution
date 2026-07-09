@@ -338,6 +338,8 @@ mod tests {
             command: "node".to_string(),
             args: Vec::new(),
             env: HashMap::default(),
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
         assert_eq!(build_command_string(&entry), "node");
     }
@@ -348,6 +350,8 @@ mod tests {
             command: "node".to_string(),
             args: vec!["/path/to/server.js".to_string(), "--verbose".to_string()],
             env: HashMap::default(),
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
         };
         assert_eq!(
             build_command_string(&entry),
