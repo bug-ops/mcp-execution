@@ -68,6 +68,8 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
             sse,
             headers,
             detailed,
+            connect_timeout_secs,
+            discover_timeout_secs,
         } => {
             commands::introspect::run(
                 from_config,
@@ -79,6 +81,8 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
                 sse,
                 headers,
                 detailed,
+                connect_timeout_secs,
+                discover_timeout_secs,
                 output_format,
             )
             .await
@@ -114,6 +118,8 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
             name,
             progressive_output,
             dry_run,
+            connect_timeout_secs,
+            discover_timeout_secs,
         } => {
             commands::generate::run(
                 from_config,
@@ -127,6 +133,8 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
                 name,
                 progressive_output,
                 dry_run,
+                connect_timeout_secs,
+                discover_timeout_secs,
                 output_format,
             )
             .await
