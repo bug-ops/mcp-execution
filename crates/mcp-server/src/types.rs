@@ -5,6 +5,7 @@
 //! - `save_categorized_tools`: Generate TypeScript files with categorization
 //! - `list_generated_servers`: List all servers with generated files
 
+use crate::clock::Clock;
 use chrono::{DateTime, Utc};
 use mcp_execution_core::{ServerConfig, ServerId};
 use mcp_execution_introspector::ServerInfo;
@@ -254,10 +255,15 @@ impl PendingGeneration {
 
     /// Creates a new pending generation session.
     ///
+    /// The session's `created_at`/`expires_at` are derived from `clock.now()`,
+    /// so tests can inject a fake clock instead of rewinding `expires_at`
+    /// after construction. Production callers should pass [`SystemClock`](crate::clock::SystemClock).
+    ///
     /// # Examples
     ///
     /// ```
     /// use mcp_execution_server::types::PendingGeneration;
+    /// use mcp_execution_server::clock::SystemClock;
     /// use mcp_execution_core::{ServerId, ServerConfig};
     /// use mcp_execution_introspector::ServerInfo;
     /// use std::path::PathBuf;
@@ -276,6 +282,7 @@ impl PendingGeneration {
     ///     server_info,
     ///     config,
     ///     output_dir,
+    ///     &SystemClock,
     /// );
     /// # }
     /// ```
@@ -285,8 +292,9 @@ impl PendingGeneration {
         server_info: ServerInfo,
         config: ServerConfig,
         output_dir: PathBuf,
+        clock: &dyn Clock,
     ) -> Self {
-        let now = Utc::now();
+        let now = clock.now();
         Self {
             server_id,
             server_info,
@@ -297,12 +305,13 @@ impl PendingGeneration {
         }
     }
 
-    /// Checks if this session has expired.
+    /// Checks if this session has expired, using `clock.now()` as the current time.
     ///
     /// # Examples
     ///
     /// ```
     /// use mcp_execution_server::types::PendingGeneration;
+    /// use mcp_execution_server::clock::SystemClock;
     /// # use mcp_execution_core::{ServerId, ServerConfig};
     /// # use mcp_execution_introspector::ServerInfo;
     /// # use std::path::PathBuf;
@@ -313,25 +322,63 @@ impl PendingGeneration {
     ///     server_info,
     ///     ServerConfig::builder().command("echo".to_string()).build(),
     ///     PathBuf::from("/tmp"),
+    ///     &SystemClock,
     /// );
     ///
-    /// assert!(!pending.is_expired());
+    /// assert!(!pending.is_expired(&SystemClock));
     /// # }
     /// ```
     #[must_use]
-    pub fn is_expired(&self) -> bool {
-        Utc::now() > self.expires_at
+    pub fn is_expired(&self, clock: &dyn Clock) -> bool {
+        clock.now() > self.expires_at
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::{SystemClock, TestClock};
 
     #[test]
     fn test_pending_generation_not_expired() {
         let pending = create_test_pending();
-        assert!(!pending.is_expired());
+        assert!(!pending.is_expired(&SystemClock));
+    }
+
+    #[test]
+    fn test_pending_generation_not_expired_at_exact_boundary() {
+        let clock = TestClock::new(Utc::now());
+        let pending = create_test_pending_with_clock(&clock);
+
+        // `is_expired` uses strict `>`, so the exact expiry instant is not expired.
+        clock.advance(chrono::Duration::minutes(
+            PendingGeneration::DEFAULT_TIMEOUT_MINUTES,
+        ));
+        assert!(!pending.is_expired(&clock));
+    }
+
+    #[test]
+    fn test_pending_generation_not_expired_one_second_before_boundary() {
+        let clock = TestClock::new(Utc::now());
+        let pending = create_test_pending_with_clock(&clock);
+
+        clock.advance(
+            chrono::Duration::minutes(PendingGeneration::DEFAULT_TIMEOUT_MINUTES)
+                - chrono::Duration::seconds(1),
+        );
+        assert!(!pending.is_expired(&clock));
+    }
+
+    #[test]
+    fn test_pending_generation_expired_one_second_after_boundary() {
+        let clock = TestClock::new(Utc::now());
+        let pending = create_test_pending_with_clock(&clock);
+
+        clock.advance(
+            chrono::Duration::minutes(PendingGeneration::DEFAULT_TIMEOUT_MINUTES)
+                + chrono::Duration::seconds(1),
+        );
+        assert!(pending.is_expired(&clock));
     }
 
     #[test]
@@ -347,8 +394,12 @@ mod tests {
         let _deserialized: CategorizedTool = serde_json::from_str(&json).unwrap();
     }
 
-    // Test helper
+    // Test helpers
     fn create_test_pending() -> PendingGeneration {
+        create_test_pending_with_clock(&SystemClock)
+    }
+
+    fn create_test_pending_with_clock(clock: &dyn Clock) -> PendingGeneration {
         use mcp_execution_core::ToolName;
         use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
@@ -372,6 +423,6 @@ mod tests {
         let config = ServerConfig::builder().command("echo".to_string()).build();
         let output_dir = PathBuf::from("/tmp/test");
 
-        PendingGeneration::new(server_id, server_info, config, output_dir)
+        PendingGeneration::new(server_id, server_info, config, output_dir, clock)
     }
 }

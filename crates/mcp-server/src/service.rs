@@ -5,6 +5,7 @@
 //! 2. `save_categorized_tools` - Generate TypeScript files with categorization
 //! 3. `list_generated_servers` - List all servers with generated files
 
+use crate::clock::{Clock, SystemClock};
 use crate::state::StateManager;
 use crate::types::{
     CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
@@ -72,18 +73,30 @@ pub struct GeneratorService {
     /// the `discover_server` await point.
     introspectors: Arc<Mutex<HashMap<ServerId, Arc<Mutex<Introspector>>>>>,
 
+    /// Clock used to construct pending generations (shared with `state`)
+    clock: Arc<dyn Clock>,
+
     /// Tool router for MCP protocol
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
 impl GeneratorService {
-    /// Creates a new generator service.
+    /// Creates a new generator service using the real system clock.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_clock(Arc::new(SystemClock))
+    }
+
+    /// Creates a new generator service backed by a custom clock.
+    ///
+    /// Used in tests to inject a fake clock so session expiry can be
+    /// exercised deterministically.
+    fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
-            state: Arc::new(StateManager::new()),
+            state: Arc::new(StateManager::with_clock(Arc::clone(&clock))),
             introspectors: Arc::new(Mutex::new(HashMap::new())),
+            clock,
             tool_router: Self::tool_router(),
         }
     }
@@ -192,8 +205,13 @@ impl GeneratorService {
             .collect();
 
         // Store pending generation
-        let pending =
-            PendingGeneration::new(server_id, server_info.clone(), config, output_dir.clone());
+        let pending = PendingGeneration::new(
+            server_id,
+            server_info.clone(),
+            config,
+            output_dir.clone(),
+            self.clock.as_ref(),
+        );
 
         let session_id = self.state.store(pending.clone()).await;
 
@@ -1125,6 +1143,7 @@ mod tests {
             server_info,
             ServerConfig::builder().command("echo".to_string()).build(),
             PathBuf::from("/tmp/test"),
+            &SystemClock,
         );
 
         let session_id = service.state.store(pending).await;
@@ -1150,6 +1169,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_categorized_tools_expired_session() {
+        use crate::clock::TestClock;
         use chrono::Duration;
 
         let service = GeneratorService::new();
@@ -1168,17 +1188,73 @@ mod tests {
             tools: vec![],
         };
 
-        let mut pending = PendingGeneration::new(
+        // Inject a clock fixed an hour in the past so `expires_at` is already
+        // behind us, instead of rewinding `expires_at` after construction.
+        let past_clock = TestClock::new(Utc::now() - Duration::hours(1));
+        let pending = PendingGeneration::new(
             server_id,
             server_info,
             ServerConfig::builder().command("echo".to_string()).build(),
             PathBuf::from("/tmp/test"),
+            &past_clock,
         );
 
-        // Manually expire it
-        pending.expires_at = Utc::now() - Duration::hours(1);
+        let session_id = service.state.store(pending).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    /// Proves `GeneratorService::with_clock` actually drives session expiry end
+    /// to end through `save_categorized_tools`: a session stored while the
+    /// shared clock is fresh must become unreachable once that same clock (not
+    /// the real wall clock) is advanced past the TTL. This exercises the
+    /// `Arc<dyn Clock>` shared between `GeneratorService` and its
+    /// `StateManager` (`with_clock` clones the same `Arc` into both).
+    #[tokio::test]
+    async fn test_shared_clock_drives_save_categorized_tools_expiry() {
+        use crate::clock::TestClock;
+        use chrono::Duration;
+
+        let start = Utc::now();
+        let clock = Arc::new(TestClock::new(start));
+        let service = GeneratorService::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+
+        let server_id = ServerId::new("test");
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: server_id.clone(),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![],
+        };
+
+        let pending = PendingGeneration::new(
+            server_id,
+            server_info,
+            ServerConfig::builder().command("echo".to_string()).build(),
+            PathBuf::from("/tmp/test"),
+            clock.as_ref(),
+        );
 
         let session_id = service.state.store(pending).await;
+
+        // Advance the service's own shared clock, not the real wall clock, past the TTL.
+        clock.advance(
+            Duration::minutes(PendingGeneration::DEFAULT_TIMEOUT_MINUTES) + Duration::seconds(1),
+        );
 
         let params = SaveCategorizedToolsParams {
             session_id,

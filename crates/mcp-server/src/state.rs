@@ -4,6 +4,7 @@
 //! and `save_categorized_tools` calls. Sessions expire after 30 minutes and
 //! are cleaned up lazily on each operation.
 
+use crate::clock::{Clock, SystemClock};
 use crate::types::PendingGeneration;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use uuid::Uuid;
 /// ```
 /// use mcp_execution_server::state::StateManager;
 /// use mcp_execution_server::types::PendingGeneration;
+/// use mcp_execution_server::clock::SystemClock;
 /// use mcp_execution_core::{ServerId, ServerConfig};
 /// use mcp_execution_introspector::ServerInfo;
 /// use std::path::PathBuf;
@@ -43,6 +45,7 @@ use uuid::Uuid;
 ///     server_info,
 ///     ServerConfig::builder().command("npx".to_string()).build(),
 ///     PathBuf::from("/tmp/output"),
+///     &SystemClock,
 /// );
 ///
 /// // Store and get session ID
@@ -53,16 +56,35 @@ use uuid::Uuid;
 /// assert!(retrieved.is_some());
 /// # }
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StateManager {
     pending: Arc<RwLock<HashMap<Uuid, PendingGeneration>>>,
+    clock: Arc<dyn Clock>,
+}
+
+impl Default for StateManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StateManager {
-    /// Creates a new state manager.
+    /// Creates a new state manager using the real system clock.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_clock(Arc::new(SystemClock))
+    }
+
+    /// Creates a new state manager backed by a custom clock.
+    ///
+    /// Used in tests to inject a fake clock so session expiry can be
+    /// exercised deterministically.
+    #[must_use]
+    pub(crate) fn with_clock(clock: Arc<dyn Clock>) -> Self {
+        Self {
+            pending: Arc::new(RwLock::new(HashMap::new())),
+            clock,
+        }
     }
 
     /// Stores a pending generation and returns a session ID.
@@ -88,7 +110,8 @@ impl StateManager {
         let mut pending = self.pending.write().await;
 
         // Clean up expired sessions
-        pending.retain(|_, g| !g.is_expired());
+        let clock = self.clock.as_ref();
+        pending.retain(|_, g| !g.is_expired(clock));
 
         pending.insert(session_id, generation);
         session_id
@@ -125,13 +148,14 @@ impl StateManager {
             let mut pending = self.pending.write().await;
 
             // Clean up expired sessions
-            pending.retain(|_, g| !g.is_expired());
+            let clock = self.clock.as_ref();
+            pending.retain(|_, g| !g.is_expired(clock));
 
             pending.remove(&session_id)?
         };
 
         // Verify not expired (lock already released)
-        if generation.is_expired() {
+        if generation.is_expired(self.clock.as_ref()) {
             return None;
         }
 
@@ -166,9 +190,10 @@ impl StateManager {
     /// ```
     pub async fn get(&self, session_id: Uuid) -> Option<PendingGeneration> {
         let pending = self.pending.read().await;
+        let clock = self.clock.as_ref();
         pending
             .get(&session_id)
-            .filter(|g| !g.is_expired())
+            .filter(|g| !g.is_expired(clock))
             .cloned()
     }
 
@@ -186,7 +211,8 @@ impl StateManager {
     /// ```
     pub async fn pending_count(&self) -> usize {
         let pending = self.pending.read().await;
-        pending.values().filter(|g| !g.is_expired()).count()
+        let clock = self.clock.as_ref();
+        pending.values().filter(|g| !g.is_expired(clock)).count()
     }
 
     /// Cleans up all expired sessions.
@@ -207,7 +233,8 @@ impl StateManager {
     pub async fn cleanup_expired(&self) -> usize {
         let mut pending = self.pending.write().await;
         let before = pending.len();
-        pending.retain(|_, g| !g.is_expired());
+        let clock = self.clock.as_ref();
+        pending.retain(|_, g| !g.is_expired(clock));
         before - pending.len()
     }
 }
@@ -215,13 +242,17 @@ impl StateManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::{SystemClock, TestClock};
     use crate::types::PendingGeneration;
-    use chrono::{Duration, Utc};
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use mcp_execution_introspector::ServerInfo;
     use std::path::PathBuf;
 
     fn create_test_pending() -> PendingGeneration {
+        create_test_pending_with_clock(&SystemClock)
+    }
+
+    fn create_test_pending_with_clock(clock: &dyn Clock) -> PendingGeneration {
         use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
         let server_id = ServerId::new("test");
@@ -244,13 +275,15 @@ mod tests {
         let config = ServerConfig::builder().command("echo".to_string()).build();
         let output_dir = PathBuf::from("/tmp/test");
 
-        PendingGeneration::new(server_id, server_info, config, output_dir)
+        PendingGeneration::new(server_id, server_info, config, output_dir, clock)
     }
 
+    /// Builds an already-expired pending generation by constructing it with a
+    /// clock fixed an hour in the past, instead of rewinding `expires_at`
+    /// after construction.
     fn create_expired_pending() -> PendingGeneration {
-        let mut pending = create_test_pending();
-        pending.expires_at = Utc::now() - Duration::hours(1);
-        pending
+        let past_clock = TestClock::new(chrono::Utc::now() - chrono::Duration::hours(1));
+        create_test_pending_with_clock(&past_clock)
     }
 
     #[tokio::test]
@@ -340,6 +373,42 @@ mod tests {
 
         let removed = state.cleanup_expired().await;
         assert_eq!(removed, 1); // One expired session removed
+    }
+
+    /// Proves `StateManager` consults the clock it was constructed with (not a
+    /// hardcoded `SystemClock`): a session created and stored while the shared
+    /// clock is fresh must flip to expired across `get`/`pending_count`/
+    /// `cleanup_expired`/`take` once that same clock is moved past the TTL —
+    /// real wall-clock time barely advances during the test, so this would fail
+    /// if any of those call sites silently used `SystemClock` instead of
+    /// `self.clock`.
+    #[tokio::test]
+    async fn test_shared_clock_drives_expiry() {
+        let start = chrono::Utc::now();
+        let clock = Arc::new(TestClock::new(start));
+        let state = StateManager::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+
+        let pending = create_test_pending_with_clock(clock.as_ref());
+        let session_id = state.store(pending).await;
+
+        // Fresh session is visible while the clock is still within the TTL window.
+        assert!(state.get(session_id).await.is_some());
+        assert_eq!(state.pending_count().await, 1);
+
+        // Jump the shared clock straight past the 30-minute boundary.
+        clock.set(
+            start
+                + chrono::Duration::minutes(PendingGeneration::DEFAULT_TIMEOUT_MINUTES)
+                + chrono::Duration::seconds(1),
+        );
+
+        assert!(
+            state.get(session_id).await.is_none(),
+            "expiry should track the injected clock, not Utc::now()"
+        );
+        assert_eq!(state.pending_count().await, 0);
+        assert_eq!(state.cleanup_expired().await, 1);
+        assert!(state.take(session_id).await.is_none());
     }
 
     #[tokio::test]
