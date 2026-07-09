@@ -157,6 +157,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously a finishing call could evict a different, still in-flight caller's live entry for the
   same server id, letting concurrent callers bypass the per-id serialization the lock exists to
   provide (#130).
+- **`mcp-execution-skill`**: `scan_tools_directory` now cross-checks each `_meta.json` sidecar entry
+  against the `.ts` file it should have produced. A tool listed in the sidecar whose `.ts` file is
+  missing (e.g. deleted manually, or an interrupted `generate` run) now fails with
+  `ScanError::StaleMetadata` instead of silently being included in `SKILL.md` for a tool that no
+  longer exists. A `.ts` file present on disk but not referenced by the sidecar (e.g. added
+  manually) is not fatal but is now logged via `tracing::warn!` instead of being silently dropped.
+  The `skill` CLI command's log line also no longer implies a raw file count; it reports the number
+  of tools verified against the sidecar (#154, #155).
 
 ### Testing
 

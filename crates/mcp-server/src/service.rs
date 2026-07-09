@@ -484,7 +484,9 @@ impl GeneratorService {
         let tools = scan_tools_directory(&server_dir)
             .await
             .map_err(|e| match e {
-                ScanError::MissingMetadata { .. } | ScanError::UnsupportedSchema { .. } => {
+                ScanError::MissingMetadata { .. }
+                | ScanError::UnsupportedSchema { .. }
+                | ScanError::StaleMetadata { .. } => {
                     McpError::invalid_params(format!("Failed to scan tools directory: {e}"), None)
                 }
                 ScanError::Io(_)
@@ -1547,6 +1549,69 @@ mod tests {
              server directory, and must be reported the same way"
         );
         assert!(err.message.contains("Failed to scan tools directory"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_skill_stale_metadata_missing_ts_file() {
+        use mcp_execution_core::metadata::{
+            METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
+            ToolMetadata as SidecarToolMetadata,
+        };
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+
+        // Sidecar references a tool whose `.ts` file was never written (or was
+        // deleted) — the drift `StaleMetadata` (issues #154/#155) exists to
+        // catch, routed through the `generate_skill` MCP tool this time.
+        let target_dir = base_dir.join("test-server");
+        tokio::fs::create_dir_all(&target_dir).await.unwrap();
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: "test-server".to_string(),
+            server_name: "Test Server".to_string(),
+            server_version: "1.0.0".to_string(),
+            tools: vec![SidecarToolMetadata {
+                name: "create_issue".to_string(),
+                typescript_name: "createIssue".to_string(),
+                category: None,
+                keywords: vec![],
+                description: None,
+                parameters: vec![ParameterMetadata {
+                    name: "title".to_string(),
+                    typescript_type: "string".to_string(),
+                    required: true,
+                    description: None,
+                }],
+            }],
+        };
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
+            .await
+            .unwrap();
+        // Deliberately do not write `createIssue.ts`.
+
+        let params = GenerateSkillParams {
+            server_id: "test-server".to_string(),
+            skill_name: None,
+            use_case_hints: None,
+            servers_dir: Some(base_dir),
+        };
+
+        let result = service.generate_skill(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.code,
+            ErrorCode::INVALID_PARAMS,
+            "stale metadata is the same 'not generated / drifted directory' caller situation \
+             as a missing sidecar, and must be reported the same way"
+        );
+        assert!(err.message.contains("Failed to scan tools directory"));
+        assert!(err.message.contains("create_issue"));
     }
 
     // ========================================================================

@@ -80,6 +80,22 @@ pub enum ScanError {
     /// Sidecar file too large to process.
     #[error("file too large: {path} ({size} bytes exceeds {limit} limit)")]
     FileTooLarge { path: String, size: u64, limit: u64 },
+
+    /// A tool listed in the `_meta.json` sidecar has no corresponding `.ts`
+    /// file on disk.
+    ///
+    /// This indicates the sidecar and the generated TypeScript files have
+    /// drifted apart — e.g. the file was deleted manually, or a `generate`
+    /// run was interrupted before writing it.
+    #[error(
+        "stale metadata: tool '{tool}' is listed in {sidecar_path} but its file '{expected_file}' \
+         is missing (re-run 'generate' to regenerate this server)"
+    )]
+    StaleMetadata {
+        tool: String,
+        expected_file: String,
+        sidecar_path: String,
+    },
 }
 
 /// Parsed metadata from a server's generated tool set.
@@ -152,8 +168,13 @@ impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
 ///
 /// Reads the structured metadata sidecar written by `mcp-execution-codegen`
 /// and maps each tool entry into a [`ParsedToolFile`]. Unlike the former
-/// regex-based `.ts` scanner, this does not enumerate or read any generated
-/// TypeScript source — the sidecar is the single source of truth.
+/// regex-based `.ts` scanner, tool metadata (name, category, keywords,
+/// parameters) is never re-parsed from generated TypeScript source — the
+/// sidecar remains the single source of truth for that. However, each
+/// sidecar entry's `.ts` file is cross-checked for existence on disk to
+/// detect drift between the sidecar and the generated files (see issues
+/// #154, #155): a missing file is a hard error, while an unreferenced `.ts`
+/// file on disk is logged via `tracing::warn!` and omitted from the result.
 ///
 /// # Arguments
 ///
@@ -166,8 +187,9 @@ impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
 /// # Errors
 ///
 /// Returns `ScanError` if the directory doesn't exist, the sidecar is
-/// missing or malformed, or the sidecar's tool count exceeds
-/// [`MAX_TOOL_FILES`].
+/// missing or malformed, the sidecar's tool count exceeds
+/// [`MAX_TOOL_FILES`], or a sidecar entry's `.ts` file is missing from disk
+/// ([`ScanError::StaleMetadata`]).
 ///
 /// # Examples
 ///
@@ -234,6 +256,8 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
         });
     }
 
+    verify_tool_files_on_disk(&canonical_base, &meta.tools, &meta_path).await?;
+
     let server_id = meta.server_id.clone();
     let mut tools: Vec<ParsedToolFile> = meta
         .tools
@@ -249,6 +273,65 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<Vec<ParsedToolFile>, Sca
     tools.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(tools)
+}
+
+/// Cross-checks sidecar tool entries against the `.ts` files actually
+/// present in `dir`, guarding against drift between `_meta.json` and the
+/// generated TypeScript output (see issues #154, #155).
+///
+/// Every sidecar entry must have a matching `{typescript_name}.ts` file, or
+/// this returns [`ScanError::StaleMetadata`]. `.ts` files present on disk
+/// but not referenced by the sidecar are not fatal — regenerating tool
+/// files is a normal part of `generate` — but are logged via
+/// `tracing::warn!` so the drift isn't silently dropped from `SKILL.md`.
+///
+/// # Errors
+///
+/// Returns `ScanError::Io` if the directory cannot be read, or
+/// `ScanError::StaleMetadata` if a sidecar entry's `.ts` file is missing.
+async fn verify_tool_files_on_disk(
+    dir: &Path,
+    tools: &[mcp_execution_core::metadata::ToolMetadata],
+    meta_path: &Path,
+) -> Result<(), ScanError> {
+    // Generated aggregator file, not a per-tool file — never expected in the sidecar.
+    const INDEX_FILE_NAME: &str = "index.ts";
+
+    let mut expected_files: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(tools.len());
+
+    for tool in tools {
+        let file_name = format!("{}.ts", tool.typescript_name);
+        if !dir.join(&file_name).is_file() {
+            return Err(ScanError::StaleMetadata {
+                tool: tool.name.clone(),
+                expected_file: file_name,
+                sidecar_path: sanitize_path_for_error(meta_path),
+            });
+        }
+        expected_files.insert(file_name);
+    }
+
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("ts") {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+            continue;
+        };
+        if file_name == INDEX_FILE_NAME || expected_files.contains(file_name) {
+            continue;
+        }
+        tracing::warn!(
+            file = %file_name,
+            "found .ts tool file not referenced by _meta.json; it will be omitted from SKILL.md \
+             (re-run 'generate' to refresh the sidecar)"
+        );
+    }
+
+    Ok(())
 }
 
 /// Extract skill metadata from SKILL.md content.
@@ -357,11 +440,22 @@ mod tests {
         }
     }
 
+    /// Writes `_meta.json` plus a matching stub `.ts` file for each tool, since
+    /// `scan_tools_directory` cross-checks the sidecar against files on disk.
     async fn write_metadata(dir: &Path, meta: &ServerMetadata) {
         let content = serde_json::to_string_pretty(meta).unwrap();
         tokio::fs::write(dir.join(METADATA_FILE_NAME), content)
             .await
             .unwrap();
+
+        for tool in &meta.tools {
+            tokio::fs::write(
+                dir.join(format!("{}.ts", tool.typescript_name)),
+                "export {}",
+            )
+            .await
+            .unwrap();
+        }
     }
 
     #[tokio::test]
@@ -413,6 +507,132 @@ mod tests {
 
         assert_eq!(tools[0].name, "alpha");
         assert_eq!(tools[1].name, "zebra");
+    }
+
+    #[tokio::test]
+    async fn test_scan_tools_directory_stale_metadata_missing_ts_file() {
+        // Issue #154/#155 regression: a sidecar entry whose `.ts` file was
+        // deleted (or never written, e.g. an interrupted `generate`) must be
+        // reported instead of silently vanishing from `SKILL.md`.
+        let temp_dir = TempDir::new().unwrap();
+        let meta = sample_metadata(1);
+        // Write only the sidecar, not the tool's `.ts` file.
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), content)
+            .await
+            .unwrap();
+
+        let result = scan_tools_directory(temp_dir.path()).await;
+
+        match result {
+            Err(ScanError::StaleMetadata {
+                tool,
+                expected_file,
+                ..
+            }) => {
+                assert_eq!(tool, "tool_0");
+                assert_eq!(expected_file, "tool0.ts");
+            }
+            other => panic!("expected StaleMetadata, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scan_tools_directory_stale_metadata_reports_first_missing_in_sidecar_order() {
+        // With multiple tools in the sidecar, only some of which have a missing
+        // `.ts` file, the check short-circuits on the first missing entry in
+        // sidecar order rather than scanning every tool up front.
+        let temp_dir = TempDir::new().unwrap();
+        let meta = sample_metadata(3);
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), content)
+            .await
+            .unwrap();
+
+        // Only write the `.ts` file for the middle tool; `tool_0` and `tool_2`
+        // are both missing, but `tool_0` is first in sidecar order.
+        tokio::fs::write(temp_dir.path().join("tool1.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let result = scan_tools_directory(temp_dir.path()).await;
+
+        match result {
+            Err(ScanError::StaleMetadata {
+                tool,
+                expected_file,
+                ..
+            }) => {
+                assert_eq!(tool, "tool_0");
+                assert_eq!(expected_file, "tool0.ts");
+            }
+            other => panic!("expected StaleMetadata for tool_0, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scan_tools_directory_extra_ts_file_excluded_from_result() {
+        // Issue #154/#155 regression: a `.ts` file on disk that the sidecar
+        // does not reference (e.g. left over from a renamed/removed tool) must
+        // not be fatal and must not leak into the scan result — it is logged
+        // via `tracing::warn!` instead.
+        let temp_dir = TempDir::new().unwrap();
+        let meta = sample_metadata(1);
+        write_metadata(temp_dir.path(), &meta).await;
+
+        tokio::fs::write(temp_dir.path().join("orphan.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let tools = scan_tools_directory(temp_dir.path()).await.unwrap();
+
+        assert_eq!(
+            tools.len(),
+            1,
+            "the orphaned .ts file must not be reported as a tool"
+        );
+        assert_eq!(tools[0].name, "tool_0");
+    }
+
+    #[tokio::test]
+    async fn test_scan_tools_directory_index_ts_not_treated_as_extra() {
+        // `index.ts` is the generated aggregator file and is never listed in
+        // the sidecar; its presence alone must not affect the scan result.
+        let temp_dir = TempDir::new().unwrap();
+        let meta = sample_metadata(1);
+        write_metadata(temp_dir.path(), &meta).await;
+
+        tokio::fs::write(temp_dir.path().join("index.ts"), "export * from './tool0';")
+            .await
+            .unwrap();
+
+        let tools = scan_tools_directory(temp_dir.path()).await.unwrap();
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "tool_0");
+    }
+
+    #[test]
+    fn test_stale_metadata_error_message_tells_user_to_regenerate() {
+        let err = ScanError::StaleMetadata {
+            tool: "create_issue".to_string(),
+            expected_file: "createIssue.ts".to_string(),
+            sidecar_path: "~/.claude/servers/github/_meta.json".to_string(),
+        };
+
+        let message = err.to_string();
+        assert!(
+            message.contains("create_issue"),
+            "message must name the affected tool"
+        );
+        assert!(
+            message.contains("createIssue.ts"),
+            "message must name the missing file"
+        );
+        assert!(
+            message.contains("re-run 'generate'"),
+            "message must tell the user how to fix it: {message}"
+        );
     }
 
     #[tokio::test]
