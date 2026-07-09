@@ -140,7 +140,7 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
             .await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
-        Commands::Setup => commands::setup::run().await,
+        Commands::Setup => commands::setup::run(output_format).await,
         Commands::Completions { shell } => {
             use crate::cli::Cli;
             use clap::CommandFactory;

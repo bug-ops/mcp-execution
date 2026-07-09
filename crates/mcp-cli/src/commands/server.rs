@@ -178,8 +178,7 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
 ///
 /// Connects to the server and introspects its capabilities, tools, and status.
 async fn show_server_info(server: String, output_format: OutputFormat) -> Result<ExitCode> {
-    let (server_id, server_config, entry) = get_mcp_server(&server)
-        .with_context(|| format!("server '{server}' not found in ~/.claude/mcp.json"))?;
+    let (server_id, server_config, entry) = get_mcp_server(&server)?;
 
     let command = build_command_string(&entry);
 
@@ -436,6 +435,76 @@ mod tests {
         let json = serde_json::to_string(&tool).unwrap();
         assert!(json.contains("send_message"));
         assert!(json.contains("Sends a message"));
+    }
+
+    /// Serializes tests that mutate the `HOME` env var so they cannot race
+    /// each other when run in the same process (e.g. under plain `cargo
+    /// test`, unlike `cargo nextest`, which isolates each test in its own
+    /// process). An async-aware mutex, since the guard must stay held across
+    /// the `.await` of the code under test.
+    #[cfg(unix)]
+    static HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    // Unix-only: redirects `dirs::home_dir()` by mutating `HOME`, which
+    // `dirs` only consults on Unix. On Windows `dirs::home_dir()` resolves
+    // via `SHGetKnownFolderPath(FOLDERID_Profile)`, a Win32 API that reads
+    // the real OS user profile and ignores environment variables entirely
+    // — no env var override can redirect it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_show_server_info_not_found_error_not_duplicated() {
+        // Regression test for #164: the "not found" message from
+        // `get_mcp_server` must propagate unwrapped, not get re-wrapped by
+        // an equivalent, less complete `with_context` in `show_server_info`.
+        //
+        // Hermetic: HOME is pointed at a temp dir with a controlled
+        // mcp.json that defines an unrelated server, so the "not found"
+        // branch inside `get_mcp_server` is deterministically reached
+        // regardless of the executing machine's real HOME. Without this, a
+        // clean CI runner with no `~/.claude/mcp.json` at all would instead
+        // fail earlier at the "read config file" step, and the regression
+        // this test exists to catch would never actually be exercised.
+        let _guard = HOME_ENV_LOCK.lock().await;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("mcp.json"),
+            r#"{"mcpServers": {"unrelated": {"command": "node"}}}"#,
+        )
+        .unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
+        // reads or writes `HOME` while the guard is held.
+        unsafe {
+            std::env::set_var("HOME", temp.path());
+        }
+
+        let result = run(
+            ServerAction::Info {
+                server: "nonexistent-server".to_string(),
+            },
+            OutputFormat::Json,
+        )
+        .await;
+
+        // SAFETY: see above.
+        unsafe {
+            match &original_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        assert!(result.is_err());
+        let message = format!("{:#}", result.unwrap_err());
+        assert_eq!(
+            message.matches("not found in ~/.claude/mcp.json").count(),
+            1,
+            "expected exactly one not-found message in the error chain, got: {message}"
+        );
     }
 
     #[test]

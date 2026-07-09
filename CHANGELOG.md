@@ -105,6 +105,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-cli`**: the default `pretty` output formatter hand-wrapped string values and
+  object keys in literal quotes without JSON-escaping embedded `"`, `\`, newlines, or other control
+  characters, producing invalid JSON output whenever a formatted string or key contained them (e.g.
+  `server validate` against an unknown server, whose message embeds a multi-line, quote-containing
+  error; or `introspect --detailed`, which renders `input_schema` property keys supplied by the
+  remote MCP server). Both string values and object keys are now serialized through
+  `serde_json::to_string` before colorizing, matching the escaping already used by the `json`/`text`
+  formatters (#163).
+- **`mcp-execution-cli`**: `server info` on an unknown server printed the lookup failure twice — an
+  incomplete `with_context` message wrapping the complete, hint-bearing error already produced by
+  `get_mcp_server` — resulting in a redundant, confusing "Caused by" chain. `show_server_info` now
+  propagates `get_mcp_server`'s error directly, matching the pattern already used by
+  `introspect`/`generate` (#164).
+- **`mcp-execution-cli`**: `setup` ignored the global `--format` flag and always printed fixed,
+  colorless, human-oriented text via bare `println!`, unlike every other subcommand. It now returns
+  a structured `SetupResult` (Node.js version, MCP config path/found, files made executable) and
+  routes it through `format_output`, so `--format json`/`text` produce structured output while the
+  default `pretty` format keeps today's human-readable summary (#165).
 - **`mcp-execution-files`**: `FileSystem::export_to_filesystem` now stages the entire export tree
   in a sibling temporary directory and publishes it via a single atomic directory rename, instead
   of writing files directly into the target directory. A process interrupted mid-`generate` (e.g.
