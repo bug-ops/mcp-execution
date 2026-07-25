@@ -39,7 +39,7 @@ import { callMCPTool } from './_runtime/mcp-bridge.ts';
 export async function {{typescript_name}}(
   params: {{typescript_name}}Params
 ): Promise<{{typescript_name}}Result> {
-  return await callMCPTool('{{{server_id_literal}}}', '{{{name_literal}}}', params);
+  return (await callMCPTool('{{{server_id_literal}}}', '{{{name_literal}}}', params)) as {{typescript_name}}Result;
 }
 
 /**
@@ -49,7 +49,8 @@ export async function {{typescript_name}}(
  * {{input_schema.description}}
 {{/if}}
  */
-export interface {{typescript_name}}Params {
+{{!-- type alias, not interface: only aliases get an implicit index signature for Record<string, unknown> --}}
+export type {{typescript_name}}Params = {
 {{#each properties}}
   {{#if description}}
   /**
@@ -62,7 +63,7 @@ export interface {{typescript_name}}Params {
   {{name}}?: {{{typescript_type}}};
 {{/if}}
 {{/each}}
-}
+};
 
 /**
  * Result type for {{typescript_name}} tool.
@@ -70,6 +71,7 @@ export interface {{typescript_name}}Params {
  * The structure of the result depends on the specific tool implementation.
  * Refer to the MCP server documentation for details.
  */
+{{!-- TODO(critic): Result is declared as Record<string, unknown> but callMCPTool returns string for text content and arrays for JSON lists — see #176 discussion --}}
 export interface {{typescript_name}}Result {
   [key: string]: unknown;
 }

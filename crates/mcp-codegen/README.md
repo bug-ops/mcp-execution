@@ -75,17 +75,17 @@ Each tool file includes full TypeScript interfaces:
 export async function createIssue(
   params: CreateIssueParams
 ): Promise<CreateIssueResult> {
-  return await callMCPTool('github', 'create_issue', params);
+  return (await callMCPTool('github', 'create_issue', params)) as CreateIssueResult;
 }
 
-export interface CreateIssueParams {
+export type CreateIssueParams = {
   /** Repository in format "owner/repo" */
   repo: string;
   /** Issue title */
   title: string;
   /** Issue body (optional) */
   body?: string;
-}
+};
 ```
 
 ## Features

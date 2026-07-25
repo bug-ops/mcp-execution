@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mcp-execution-codegen`**: generated tool wrappers now pass `tsc --noEmit`. The `Params`
+  declaration in `tool.ts.hbs` is emitted as a `type` alias instead of an `interface`, since
+  interfaces are never structurally assignable to `callMCPTool`'s `Record<string, unknown>`
+  parameter without an explicit index signature. The wrapper's return statement now casts
+  `callMCPTool`'s `unknown` result to the tool's `Result` type, since `unknown` is never
+  assignable to a concrete type without a cast regardless of declaration kind (#176).
+  Note: this cast satisfies the compiler but does not validate the runtime shape — the
+  `Result` type stays declared as `Record<string, unknown>` even though `callMCPTool` can
+  also return a bare `string` (text content) or an array (JSON-list payloads); widening
+  `Result` to match reality is tracked as a follow-up, out of scope for this fix.
+
 ## [0.8.0] - 2026-07-09
 
 ### Breaking
