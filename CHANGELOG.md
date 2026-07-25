@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-core`**, **`mcp-execution-introspector`**: `--http`/`--sse` transports
+  actually connect now, instead of failing validation with a misleading "command cannot be
+  empty" `SecurityViolation` before the transport type was ever consulted (#180).
+  `validate_server_config` now dispatches on `TransportType`: stdio configs keep today's
+  command/args/env checks, while Http/Sse configs are validated for a present `url` (checked
+  here rather than assumed enforced by the builder, since a hand-edited `mcp.json` can bypass
+  it via serde defaults), an `http://`/`https://` scheme, and control-character-free header
+  names/values — header *values* are never included in error messages, since they routinely
+  carry bearer tokens. `Introspector::discover_server` now branches on transport and connects
+  Http/Sse configs via rmcp's `StreamableHttpClientTransport`; `TransportType::Sse` is routed
+  through the same client as `TransportType::Http`, since rmcp 2.2 has no separate legacy SSE
+  client (the MCP spec unified HTTP+SSE into "Streamable HTTP" in 2025-03-26). Also fixes the
+  server-name fallback (used when a server sends no handshake `peer_info`) falling back to
+  `config.url()` instead of the always-empty `config.command` for Http/Sse configs.
+
+- **`mcp-execution-cli`**: `generate --http`/`--sse` no longer derives the server id from the
+  raw URL. Once Http/Sse configs can actually reach `generate` (see above), a raw-URL id broke
+  `mcp_execution_skill::validate_server_id`'s lowercase/digit/hyphen requirement (making the
+  generated directory unusable by `cli skill`/`mcp-server`), could carry a `..` path segment
+  into `PathBuf::join`, and — for a URL with `user:token@host` userinfo — leaked the credential
+  into a directory name and generated `tool.ts` source. `build_server_config` now derives the
+  id from a sanitized slug (host + path only, via the `url` crate; userinfo is structurally
+  excluded) instead. On a URL that fails to parse entirely (e.g. a mistyped port such as
+  `https://user:pass@host:99999/x`), the raw input is discarded rather than sanitized-and-reused,
+  since the earlier version's fallback still leaked credential-shaped substrings into the id
+  logged before validation gets a chance to reject the URL.
+
+- **`mcp-execution-core`**: `validate_network_config` (Http/Sse validation) hardening —
+  header names differing only by case (e.g. `Authorization` vs `authorization`) are now
+  rejected as duplicates instead of silently collapsing into one nondeterministic entry once
+  converted to `http::HeaderName`; the `http://`/`https://` scheme check is now case-insensitive
+  per RFC 3986; and header names are now validated against the RFC 7230 `token` charset instead
+  of only rejecting control characters, so a space/`:`/`@` in a header name is caught here with
+  a clear message instead of failing later inside `http::HeaderName` construction with an
+  opaque error.
+
+### Added
+
+- **`mcp-execution-introspector`**: new `test-fixtures`-gated dependency on
+  `rmcp/transport-streamable-http-server` and dev-dependencies on `axum` and `tokio-util`,
+  backing an in-process Streamable HTTP test server used to exercise the new HTTP/SSE
+  discovery path end-to-end (tool listing, handshake metadata, header propagation, and
+  connect/discover timeouts).
+
+- **`mcp-execution-cli`**: new dependency on `url` (already resolved transitively via
+  `rmcp`→`reqwest`, so no new crate enters the dependency tree), used to parse Http/Sse URLs
+  into a safe server-id slug.
+
 - **`mcp-execution-codegen`**: generated tool wrappers now pass `tsc --noEmit`. The `Params`
   declaration in `tool.ts.hbs` is emitted as a `type` alias instead of an `interface`, since
   interfaces are never structurally assignable to `callMCPTool`'s `Record<string, unknown>`

@@ -6,9 +6,11 @@
 //!
 //! # Architecture
 //!
-//! The introspector connects to MCP servers via stdio transport and uses rmcp's
-//! `ServiceExt` trait to query server capabilities. Discovered information is
-//! stored locally for subsequent code generation phases.
+//! The introspector connects to MCP servers via stdio (subprocess) or
+//! Streamable HTTP transport (used for both `TransportType::Http` and
+//! `TransportType::Sse`) and uses rmcp's `ServiceExt` trait to query server
+//! capabilities. Discovered information is stored locally for subsequent
+//! code generation phases.
 //!
 //! # Examples
 //!
@@ -42,8 +44,13 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
-use mcp_execution_core::{Error, Result, ServerConfig, ServerId, ToolName, validate_server_config};
+use http::{HeaderName, HeaderValue};
+use mcp_execution_core::{
+    Error, Result, ServerConfig, ServerId, ToolName, TransportType, validate_server_config,
+};
 use rmcp::ServiceExt;
+use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -272,31 +279,14 @@ impl Introspector {
         // Validate server config for security (prevents command injection)
         validate_server_config(config)?;
 
-        let mut child = spawn_introspection_child(&server_id, config)?;
-        let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
-            server: server_id.to_string(),
-            source: Box::new(std::io::Error::other("child stdout was not captured")),
-        })?;
-        let stdin = child.stdin.take().ok_or_else(|| Error::ConnectionFailed {
-            server: server_id.to_string(),
-            source: Box::new(std::io::Error::other("child stdin was not captured")),
-        })?;
+        let (tool_list, server_name, server_version, has_resources, has_prompts) =
+            match config.transport() {
+                TransportType::Stdio => discover_via_stdio_process(&server_id, config).await?,
+                TransportType::Http | TransportType::Sse => {
+                    discover_via_http(&server_id, config).await?
+                }
+            };
 
-        let discovery = discover_via_stdio(&server_id, config, (stdout, stdin)).await;
-
-        // The child process is spawned solely for this discovery round-trip, so it
-        // must be reaped here regardless of outcome. We deliberately kill it
-        // ourselves rather than relying on rmcp's `TokioChildProcess`, whose cleanup
-        // is a `tokio::spawn`-ed background task in `Drop`: under a short-lived
-        // runtime (e.g. `#[tokio::test]`) that task can be starved before it ever
-        // runs, leaking the process (issue #132).
-        if let Err(kill_err) = child.kill().await {
-            tracing::warn!(
-                "failed to terminate introspection child process for {server_id}: {kill_err}"
-            );
-        }
-
-        let (tool_list, server_name, server_version, has_resources, has_prompts) = discovery?;
         let info = build_server_info(
             &server_id,
             server_name,
@@ -472,6 +462,44 @@ fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Res
     })
 }
 
+/// Spawns the stdio introspection child, drives discovery over it, and tears
+/// it down afterward.
+///
+/// # Errors
+///
+/// Returns [`Error::ConnectionFailed`] if the process cannot be spawned or its
+/// stdio pipes are unavailable, or propagates errors from [`discover_via_stdio`].
+async fn discover_via_stdio_process(
+    server_id: &ServerId,
+    config: &ServerConfig,
+) -> Result<(Vec<rmcp::model::Tool>, String, String, bool, bool)> {
+    let mut child = spawn_introspection_child(server_id, config)?;
+    let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
+        server: server_id.to_string(),
+        source: Box::new(std::io::Error::other("child stdout was not captured")),
+    })?;
+    let stdin = child.stdin.take().ok_or_else(|| Error::ConnectionFailed {
+        server: server_id.to_string(),
+        source: Box::new(std::io::Error::other("child stdin was not captured")),
+    })?;
+
+    let discovery = discover_via_stdio(server_id, config, (stdout, stdin)).await;
+
+    // The child process is spawned solely for this discovery round-trip, so it
+    // must be reaped here regardless of outcome. We deliberately kill it
+    // ourselves rather than relying on rmcp's `TokioChildProcess`, whose cleanup
+    // is a `tokio::spawn`-ed background task in `Drop`: under a short-lived
+    // runtime (e.g. `#[tokio::test]`) that task can be starved before it ever
+    // runs, leaking the process (issue #132).
+    if let Err(kill_err) = child.kill().await {
+        tracing::warn!(
+            "failed to terminate introspection child process for {server_id}: {kill_err}"
+        );
+    }
+
+    discovery
+}
+
 /// Connects to an already-spawned MCP server over `transport` and lists its
 /// tools, with each step bounded by `config`'s configured timeouts.
 ///
@@ -514,6 +542,93 @@ async fn discover_via_stdio(
 
     // Extract name, version, and capabilities from the MCP handshake result.
     // Falls back to the command string / "unknown" if the server did not send peer info.
+    let (server_name, server_version, has_resources, has_prompts) =
+        extract_peer_meta(config, client.peer_info().as_deref());
+
+    Ok((
+        tool_list,
+        server_name,
+        server_version,
+        has_resources,
+        has_prompts,
+    ))
+}
+
+/// Connects to an MCP server over Streamable HTTP and lists its tools, with
+/// each step bounded by `config`'s configured timeouts.
+///
+/// Used for both [`TransportType::Http`] and [`TransportType::Sse`]: rmcp 2.2
+/// has a single client transport for network MCP servers ("Streamable
+/// HTTP"), which superseded the standalone SSE transport in the 2025-03-26
+/// MCP spec revision. There is no legacy SSE-only client to fall back to.
+///
+/// # Errors
+///
+/// Returns [`Error::Timeout`] if the connect or discovery step exceeds its
+/// configured timeout, or [`Error::ConnectionFailed`] if a header cannot be
+/// constructed, or the underlying rmcp connection or request fails (this
+/// includes a reserved-header collision, e.g. a caller-supplied `Accept`
+/// header, which rmcp rejects as `StreamableHttpError::ReservedHeaderConflict`).
+async fn discover_via_http(
+    server_id: &ServerId,
+    config: &ServerConfig,
+) -> Result<(Vec<rmcp::model::Tool>, String, String, bool, bool)> {
+    // `validate_server_config` (called by the caller) already guarantees `url`
+    // is `Some` for Http/Sse transports.
+    let url = config
+        .url()
+        .expect("url validated as present by validate_server_config");
+
+    let mut custom_headers = HashMap::new();
+    for (name, value) in config.headers() {
+        let header_name =
+            HeaderName::try_from(name.as_str()).map_err(|e| Error::ConnectionFailed {
+                server: server_id.to_string(),
+                source: Box::new(e),
+            })?;
+        let header_value =
+            HeaderValue::try_from(value.as_str()).map_err(|e| Error::ConnectionFailed {
+                server: server_id.to_string(),
+                source: Box::new(e),
+            })?;
+        custom_headers.insert(header_name, header_value);
+    }
+
+    // Type parameter inferred as `reqwest::Client`: `StreamableHttpClientTransportConfig`'s
+    // `from_config` is an inherent method defined only on that one specialization of
+    // `StreamableHttpClientTransport<C>`, so this crate does not need to depend on `reqwest`
+    // directly or name `reqwest::Client` to select it.
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(url).custom_headers(custom_headers),
+    );
+
+    let client = tokio::time::timeout(config.connect_timeout(), ().serve(transport))
+        .await
+        .map_err(|_elapsed| Error::Timeout {
+            operation: format!("connect to {server_id}"),
+            duration_secs: config.connect_timeout().as_secs(),
+        })?
+        .map_err(|e| Error::ConnectionFailed {
+            server: server_id.to_string(),
+            source: Box::new(e),
+        })?;
+
+    let tool_list = tokio::time::timeout(config.discover_timeout(), client.list_all_tools())
+        .await
+        .map_err(|_elapsed| Error::Timeout {
+            operation: format!("list_all_tools for {server_id}"),
+            duration_secs: config.discover_timeout().as_secs(),
+        })?
+        .map_err(|e| Error::ConnectionFailed {
+            server: server_id.to_string(),
+            source: Box::new(e),
+        })?;
+
+    // Extract name, version, and capabilities from the MCP handshake result.
+    // Dropping `client` here triggers `WorkerTransport`'s drop guard, which
+    // cancels the worker task; a cancelled worker cannot itself issue a
+    // session-DELETE request, so no explicit disconnect happens on this path
+    // — the server-side session simply expires on its own timeout instead.
     let (server_name, server_version, has_resources, has_prompts) =
         extract_peer_meta(config, client.peer_info().as_deref());
 
@@ -573,14 +688,21 @@ fn build_server_info(
 /// Extracts server name, version, resource support, and prompt support from
 /// the MCP handshake result (`peer_info`).
 ///
-/// Falls back to `(config.command, "unknown", false, false)` when the server
-/// did not send peer information (i.e. `peer_info` is `None`).
+/// Falls back to `(fallback_server_name(config), "unknown", false, false)`
+/// when the server did not send peer information (i.e. `peer_info` is `None`).
 fn extract_peer_meta(
     config: &ServerConfig,
     peer_info: Option<&rmcp::model::InitializeResult>,
 ) -> (String, String, bool, bool) {
     peer_info.map_or_else(
-        || (config.command.clone(), "unknown".to_string(), false, false),
+        || {
+            (
+                fallback_server_name(config),
+                "unknown".to_string(),
+                false,
+                false,
+            )
+        },
         |info| {
             (
                 info.server_info.name.clone(),
@@ -590,6 +712,18 @@ fn extract_peer_meta(
             )
         },
     )
+}
+
+/// Picks a display name for a server that sent no `peer_info` on handshake.
+///
+/// Prefers `config.command` (stdio transport); falls back to `config.url()`
+/// since Http/Sse transports always leave `command` empty.
+fn fallback_server_name(config: &ServerConfig) -> String {
+    if config.command.is_empty() {
+        config.url().unwrap_or_default().to_string()
+    } else {
+        config.command.clone()
+    }
 }
 
 #[cfg(test)]
@@ -878,6 +1012,19 @@ mod tests {
         let (name, _, _, _) = extract_peer_meta(&config, None);
 
         assert_eq!(name, "fallback-binary");
+    }
+
+    /// Incidental fix: for Http/Sse configs `command` is always empty, so the
+    /// fallback name must come from `url`, not silently be `""`.
+    #[test]
+    fn test_extract_peer_meta_fallback_name_is_url_for_http_transport() {
+        let config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build();
+
+        let (name, _, _, _) = extract_peer_meta(&config, None);
+
+        assert_eq!(name, "https://api.example.com/mcp");
     }
 
     /// Fallback: `peer_info` is `None` — version falls back to `"unknown"`

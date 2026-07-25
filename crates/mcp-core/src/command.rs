@@ -31,7 +31,7 @@
 //! assert!(validate_server_config(&config).is_err());
 //! ```
 
-use crate::{Error, Result, ServerConfig};
+use crate::{Error, Result, ServerConfig, TransportType};
 use std::path::Path;
 use std::time::Duration;
 
@@ -53,15 +53,16 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
 /// slow-starting servers configured via `mcp.json`.
 const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 
-/// Validates a `ServerConfig` for safe subprocess execution.
+/// Validates a `ServerConfig` for safe execution, dispatching on transport type.
 ///
-/// This function performs comprehensive security validation to prevent
-/// command injection attacks. It validates:
+/// This function performs comprehensive security validation before a config is
+/// used to connect to a server. It validates:
 ///
-/// 1. **Command**: Can be absolute path (with existence/permission checks) or binary name
-/// 2. **Arguments**: Each arg checked for shell metacharacters
-/// 3. **Environment**: Variables checked for dangerous names
-/// 4. **Timeouts**: `connect_timeout`/`discover_timeout` checked against bounds
+/// 1. **Stdio transport**: command (absolute path or binary name), arguments, and
+///    environment variables.
+/// 2. **Http/Sse transport**: URL presence and scheme, and HTTP header names/values.
+/// 3. **Timeouts**: `connect_timeout`/`discover_timeout` checked against bounds,
+///    for all transports.
 ///
 /// # Security Rules
 ///
@@ -69,6 +70,8 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// - **Forbidden env names**: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`
 /// - **Absolute paths**: Must exist and be executable
 /// - **Binary names**: Allowed (resolved via PATH at runtime)
+/// - **URL scheme**: Must be `http://` or `https://`
+/// - **Header names/values**: Must not contain control characters
 /// - **Timeout bounds**: `connect_timeout`/`discover_timeout` must be greater than zero and at
 ///   most `MAX_TIMEOUT` (600s)
 ///
@@ -79,8 +82,10 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// - Command/args contain shell metacharacters
 /// - Absolute path does not exist or is not executable
 /// - Environment variable name is forbidden
+/// - URL scheme is not `http://`/`https://`, or a header name/value contains control characters
 ///
 /// Returns `Error::ValidationError` if:
+/// - URL is missing for Http/Sse transport
 /// - `connect_timeout` or `discover_timeout` is zero
 /// - `connect_timeout` or `discover_timeout` exceeds `MAX_TIMEOUT` (600s)
 ///
@@ -101,6 +106,12 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 ///     .env("LD_PRELOAD".to_string(), "/evil.so".to_string())
 ///     .build();
 /// assert!(validate_server_config(&config).is_err());
+///
+/// // Valid: HTTP transport
+/// let config = ServerConfig::builder()
+///     .http_transport("https://api.example.com/mcp".to_string())
+///     .build();
+/// assert!(validate_server_config(&config).is_ok());
 /// ```
 ///
 /// # Security Considerations
@@ -109,10 +120,33 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// - Absolute paths undergo strict validation (existence, permissions)
 /// - All arguments are validated separately to prevent injection
 /// - Environment variables are checked against forbidden names
+/// - Header values are never echoed into error messages, since they routinely
+///   carry secrets such as bearer tokens
 /// - There is no infinite-timeout option: `0` is always rejected, since an
 ///   unbounded wait would let a hung server block this non-interactive tool
 ///   forever (see the `validate_timeout` design note in this module)
 pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
+    match config.transport() {
+        TransportType::Stdio => validate_stdio_config(config)?,
+        TransportType::Http | TransportType::Sse => validate_network_config(config)?,
+    }
+
+    // Validate timeout bounds. Zero fires immediately and breaks all
+    // discovery; an infinite timeout is deliberately unsupported (see
+    // `validate_timeout` doc comment) because it would let a hung or
+    // malicious server block this non-interactive CLI tool forever,
+    // re-opening the DoS window these timeouts were introduced to close.
+    validate_timeout(config.connect_timeout(), "connect_timeout")?;
+    validate_timeout(config.discover_timeout(), "discover_timeout")?;
+
+    Ok(())
+}
+
+/// Validates the stdio-transport-specific fields of a `ServerConfig`.
+///
+/// Checks the command (absolute path or binary name), arguments, and
+/// environment variables for command-injection risks.
+fn validate_stdio_config(config: &ServerConfig) -> Result<()> {
     // Validate command
     validate_command_string(&config.command, "command")?;
 
@@ -133,14 +167,127 @@ pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
         validate_env_name(env_name)?;
     }
 
-    // Validate timeout bounds. Zero fires immediately and breaks all
-    // discovery; an infinite timeout is deliberately unsupported (see
-    // `validate_timeout` doc comment) because it would let a hung or
-    // malicious server block this non-interactive CLI tool forever,
-    // re-opening the DoS window these timeouts were introduced to close.
-    validate_timeout(config.connect_timeout(), "connect_timeout")?;
-    validate_timeout(config.discover_timeout(), "discover_timeout")?;
+    Ok(())
+}
 
+/// Validates the Http/Sse-transport-specific fields of a `ServerConfig`.
+///
+/// `url` is `Option` at the type level and `#[serde(default)]`, so a
+/// hand-edited `mcp.json` with `"transport": "http"` and no `url` key
+/// deserializes successfully, bypassing `ServerConfigBuilder::try_build`'s
+/// "url required" check. This function is the actual enforcement point.
+fn validate_network_config(config: &ServerConfig) -> Result<()> {
+    let url = config.url().ok_or_else(|| Error::ValidationError {
+        field: "url".to_string(),
+        reason: "url is required for http/sse transport".to_string(),
+    })?;
+
+    validate_url_scheme(url)?;
+
+    // `http::HeaderName` lowercases on parse, so two headers that differ only
+    // in case (e.g. "Authorization" and "authorization") collapse into a
+    // single entry with a nondeterministic winner once converted — reject
+    // that here rather than letting it silently drop a header downstream.
+    let mut seen_header_names = std::collections::HashSet::new();
+    for (name, value) in config.headers() {
+        validate_header_name_string(name)?;
+        validate_header_value_string(name, value)?;
+        if !seen_header_names.insert(name.to_ascii_lowercase()) {
+            return Err(Error::SecurityViolation {
+                reason: format!("duplicate header name (case-insensitive): '{name}'"),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Validates that a URL uses the `http://` or `https://` scheme.
+///
+/// This is defense in depth: rejects `file://`, `unix://`, and similar
+/// schemes at the `mcp-core` validation boundary rather than relying on the
+/// HTTP client to reject them. The scheme comparison is case-insensitive per
+/// RFC 3986 (`HTTP://host` is a valid URL, not a different scheme).
+fn validate_url_scheme(url: &str) -> Result<()> {
+    let is_valid = url.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    });
+    if is_valid {
+        Ok(())
+    } else {
+        Err(Error::SecurityViolation {
+            reason: "url must use the http:// or https:// scheme".to_string(),
+        })
+    }
+}
+
+/// Returns `true` if `value` contains an ASCII or Unicode control character
+/// (including `\r`, `\n`, and NUL), which could otherwise be used to smuggle
+/// extra header lines into an HTTP request.
+fn contains_control_char(value: &str) -> bool {
+    value.chars().any(char::is_control)
+}
+
+/// Returns `true` if `c` is a valid RFC 7230 `tchar` (the charset allowed in
+/// an HTTP header field name).
+const fn is_header_name_tchar(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '!' | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | '-'
+                | '.'
+                | '^'
+                | '_'
+                | '`'
+                | '|'
+                | '~'
+        )
+}
+
+/// Validates an HTTP header name against the RFC 7230 `token` charset.
+///
+/// A plain control-character check is not tight enough: a space, `:`, or `@`
+/// is not a control character but is still an invalid header-name character
+/// that would otherwise pass here and fail later inside `http::HeaderName`
+/// construction with an opaque error that omits the offending name. The
+/// header name itself is not a secret, so it is safe to include in the error
+/// message.
+fn validate_header_name_string(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::SecurityViolation {
+            reason: "header name cannot be empty".to_string(),
+        });
+    }
+    if !name.chars().all(is_header_name_tchar) {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "header name '{name}' contains characters outside the allowed HTTP token charset"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Validates an HTTP header value for control characters.
+///
+/// # Security
+///
+/// The header *value* routinely carries secrets (e.g. bearer tokens), so it
+/// must never appear in the returned error's reason string — only the header
+/// *name* is included.
+fn validate_header_value_string(name: &str, value: &str) -> Result<()> {
+    if contains_control_char(value) {
+        return Err(Error::SecurityViolation {
+            reason: format!("value for header '{name}' contains control characters"),
+        });
+    }
     Ok(())
 }
 
@@ -636,5 +783,208 @@ mod tests {
         assert!(validate_env_name("LD_DEBUG").is_ok()); // Not in list
         assert!(validate_env_name("MY_PATH").is_ok()); // Not exact match
         assert!(validate_env_name("DYLD").is_ok()); // No underscore, not prefix match
+    }
+
+    // ── Http/Sse transport validation ────────────────────────────────────────
+
+    #[test]
+    fn test_validate_server_config_http_valid() {
+        let config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_sse_valid() {
+        let config = ServerConfig::builder()
+            .sse_transport("https://api.example.com/sse".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_http_with_valid_headers() {
+        let config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header("Authorization".to_string(), "Bearer token123".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_ok());
+    }
+
+    /// Constructs an Http-transport config missing `url` via deserialization
+    /// rather than the builder, since `try_build()` already refuses this and
+    /// would mask the bug this test guards against: a hand-edited `mcp.json`
+    /// with `"transport": "http"` and no `url` key deserializes fine because
+    /// every field is `#[serde(default)]`.
+    fn deserialize_http_config_missing_url() -> ServerConfig {
+        serde_json::from_str(r#"{"transport": "http"}"#).expect("valid ServerConfig JSON")
+    }
+
+    #[test]
+    fn test_validate_server_config_http_missing_url_rejected() {
+        let config = deserialize_http_config_missing_url();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::ValidationError { field, reason }) = result {
+            assert_eq!(field, "url");
+            assert!(reason.contains("required"));
+        } else {
+            panic!("expected ValidationError for missing url");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_sse_missing_url_rejected() {
+        let config: ServerConfig =
+            serde_json::from_str(r#"{"transport": "sse"}"#).expect("valid ServerConfig JSON");
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::ValidationError { field, .. }) = result {
+            assert_eq!(field, "url");
+        } else {
+            panic!("expected ValidationError for missing url");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_non_http_scheme() {
+        for url in [
+            "file:///etc/passwd",
+            "unix:///tmp/socket",
+            "ftp://host/path",
+        ] {
+            let config = ServerConfig::builder()
+                .http_transport(url.to_string())
+                .build();
+            let result = validate_server_config(&config);
+            assert!(result.is_err(), "should reject scheme: {url}");
+            if let Err(Error::SecurityViolation { reason }) = result {
+                assert!(reason.contains("http://") || reason.contains("https://"));
+            } else {
+                panic!("expected SecurityViolation for url: {url}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_accepts_case_insensitive_scheme() {
+        for url in ["HTTP://api.example.com/mcp", "HTTPS://api.example.com/mcp"] {
+            let config = ServerConfig::builder()
+                .http_transport(url.to_string())
+                .build();
+            assert!(
+                validate_server_config(&config).is_ok(),
+                "should accept case-insensitive scheme: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_scheme_lookalike() {
+        // "httpsomething" must not be accepted as a loose prefix match of "http".
+        let config = ServerConfig::builder()
+            .http_transport("httpsomething://api.example.com/mcp".to_string())
+            .build();
+        assert!(validate_server_config(&config).is_err());
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_duplicate_header_case_insensitive() {
+        let mut config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build();
+        config
+            .headers
+            .insert("Authorization".to_string(), "Bearer one".to_string());
+        config
+            .headers
+            .insert("authorization".to_string(), "Bearer two".to_string());
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("duplicate header"));
+        } else {
+            panic!("expected SecurityViolation for duplicate header name");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_header_name_with_invalid_tchar() {
+        // Space, ':', and '@' are not control characters but are still
+        // invalid HTTP header-name characters (outside RFC 7230's `token`).
+        for bad_name in ["X Bad Header", "X:Bad", "X@Bad"] {
+            let mut config = ServerConfig::builder()
+                .http_transport("https://api.example.com/mcp".to_string())
+                .build();
+            config
+                .headers
+                .insert(bad_name.to_string(), "value".to_string());
+
+            let result = validate_server_config(&config);
+            assert!(result.is_err(), "should reject header name: {bad_name}");
+            if let Err(Error::SecurityViolation { reason }) = result {
+                assert!(reason.contains("header name"));
+            } else {
+                panic!("expected SecurityViolation for header name: {bad_name}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_control_char_in_header_name() {
+        let mut config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build();
+        config
+            .headers
+            .insert("X-Bad\r\nHeader".to_string(), "value".to_string());
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("header name"));
+        } else {
+            panic!("expected SecurityViolation for header name");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_control_char_in_header_value() {
+        let config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header(
+                "Authorization".to_string(),
+                "Bearer sekrit\r\nX-Injected: evil".to_string(),
+            )
+            .build();
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("Authorization"));
+            // The header VALUE must never appear in the error message.
+            assert!(!reason.contains("sekrit"));
+            assert!(!reason.contains("X-Injected"));
+        } else {
+            panic!("expected SecurityViolation for header value");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_timeout_bounds_still_enforced() {
+        let config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .connect_timeout(std::time::Duration::ZERO)
+            .build();
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::ValidationError { field, .. }) = result {
+            assert_eq!(field, "connect_timeout");
+        } else {
+            panic!("expected ValidationError for connect_timeout");
+        }
     }
 }

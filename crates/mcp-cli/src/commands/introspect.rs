@@ -711,9 +711,11 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Port 99999 exceeds `u16::MAX`, so this always fails at the transport
+    /// layer (`InvalidPort`) rather than actually reaching a network peer —
+    /// deterministic without a live server.
     #[tokio::test]
     async fn test_run_http_transport() {
-        // Test HTTP transport with invalid URL
         let result = run(
             None,
             None,
@@ -731,13 +733,30 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("failed to connect to server"));
+        let err = result.unwrap_err();
+        let chain_msg = err
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        // Regression guard for #180: before the fix, every Http/Sse config
+        // failed validation with this misleading message before the
+        // transport was ever consulted. Asserting its absence (not just that
+        // *some* error occurred) is what gives this test signal.
+        assert!(
+            !chain_msg.contains("command cannot be empty"),
+            "must not regress to the pre-#180 empty-command validation error: {chain_msg}"
+        );
+        assert!(
+            chain_msg.contains("MCP server connection failed"),
+            "expected a real connection-layer failure, got: {chain_msg}"
+        );
     }
 
+    /// See `test_run_http_transport` — same deterministic-failure rationale.
     #[tokio::test]
     async fn test_run_sse_transport() {
-        // Test SSE transport with invalid URL
         let result = run(
             None,
             None,
@@ -755,8 +774,21 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("failed to connect to server"));
+        let err = result.unwrap_err();
+        let chain_msg = err
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        assert!(
+            !chain_msg.contains("command cannot be empty"),
+            "must not regress to the pre-#180 empty-command validation error: {chain_msg}"
+        );
+        assert!(
+            chain_msg.contains("MCP server connection failed"),
+            "expected a real connection-layer failure, got: {chain_msg}"
+        );
     }
 
     #[tokio::test]
