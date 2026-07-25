@@ -31,7 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into `PathBuf::join`, and — for a URL with `user:token@host` userinfo — leaked the credential
   into a directory name and generated `tool.ts` source. `build_server_config` now derives the
   id from a sanitized slug (host + path only, via the `url` crate; userinfo is structurally
-  excluded) instead.
+  excluded) instead. On a URL that fails to parse entirely (e.g. a mistyped port such as
+  `https://user:pass@host:99999/x`), the raw input is discarded rather than sanitized-and-reused,
+  since the earlier version's fallback still leaked credential-shaped substrings into the id
+  logged before validation gets a chance to reject the URL.
 
 - **`mcp-execution-core`**: `validate_network_config` (Http/Sse validation) hardening —
   header names differing only by case (e.g. `Authorization` vs `authorization`) are now
