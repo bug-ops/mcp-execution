@@ -39,6 +39,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+url = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]

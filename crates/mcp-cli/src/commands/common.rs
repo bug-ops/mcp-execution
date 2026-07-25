@@ -9,6 +9,10 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use url::Url;
+
+/// Fallback slug used when a URL sanitizes down to nothing (e.g. no host).
+const FALLBACK_SERVER_ID_SLUG: &str = "http-server";
 
 /// MCP configuration file structure (`~/.claude/mcp.json`).
 ///
@@ -306,7 +310,7 @@ pub fn build_server_config(
     // Build config based on transport type
     let (server_id, mut builder) = if let Some(url) = http {
         // HTTP transport
-        let id = ServerId::new(&url);
+        let id = derive_server_id_from_url(&url);
         let mut builder = ServerConfig::builder().http_transport(url);
 
         for header in headers {
@@ -317,7 +321,7 @@ pub fn build_server_config(
         (id, builder)
     } else if let Some(url) = sse {
         // SSE transport
-        let id = ServerId::new(&url);
+        let id = derive_server_id_from_url(&url);
         let mut builder = ServerConfig::builder().sse_transport(url);
 
         for header in headers {
@@ -357,6 +361,64 @@ pub fn build_server_config(
     }
 
     Ok((server_id, builder.build()))
+}
+
+/// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from
+/// an Http/Sse transport URL.
+///
+/// Using the raw URL as the id (the previous behavior) is unsafe once Http/Sse
+/// configs can actually reach `generate`: the id flows into a directory name
+/// under `~/.claude/servers/{id}/` and into generated `tool.ts` literals, so a
+/// raw URL there breaks `mcp_execution_skill::validate_server_id`'s
+/// lowercase/digit/hyphen requirement, can smuggle `..` path segments through
+/// `PathBuf::join`, and — if the URL carries `user:token@host` userinfo —
+/// leaks the credential into a directory name and generated source.
+///
+/// Only `host` and `path` are used (never `userinfo`, so credentials are
+/// structurally excluded). The result is lowercased, every run of characters
+/// outside `[a-z0-9-]` collapses to a single `-`, and leading/trailing `-` are
+/// trimmed. Falls back to [`FALLBACK_SERVER_ID_SLUG`] if the URL fails to
+/// parse or the result would otherwise be empty (e.g. a bare `https://` URL
+/// with no host). The slug is truncated to fit `validate_server_id`'s length
+/// limit.
+fn derive_server_id_from_url(url: &str) -> ServerId {
+    // Mirrors the private `mcp_execution_skill::types::MAX_SERVER_ID_LENGTH`;
+    // duplicated here since that constant isn't exported, and enforced by
+    // this module's tests calling `mcp_execution_skill::validate_server_id`
+    // on the derived slug.
+    const MAX_SERVER_ID_LENGTH: usize = 64;
+
+    // On parse failure, fall through to the empty-slug case below rather than
+    // sanitizing the raw string: a URL that failed to parse is about to be
+    // rejected by `validate_url_scheme`/the connection attempt anyway, and
+    // preserving any part of it here would defeat the credential-exclusion
+    // guarantee above for inputs like `https://user:pass@evil.com:99999/x`
+    // (a mistyped port is a realistic `Url::parse` failure, not just an
+    // adversarial one).
+    let host_and_path = Url::parse(url)
+        .ok()
+        .map(|parsed| format!("{}{}", parsed.host_str().unwrap_or_default(), parsed.path()))
+        .unwrap_or_default();
+
+    let mut slug = String::with_capacity(host_and_path.len());
+    for ch in host_and_path.chars() {
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_ascii_lowercase() || lower.is_ascii_digit() {
+            slug.push(lower);
+        } else if slug.chars().next_back().is_some_and(|last| last != '-') {
+            slug.push('-');
+        }
+    }
+
+    let slug = slug.trim_matches('-');
+    let slug = &slug[..slug.len().min(MAX_SERVER_ID_LENGTH)];
+    let slug = slug.trim_end_matches('-');
+
+    ServerId::new(if slug.is_empty() {
+        FALLBACK_SERVER_ID_SLUG
+    } else {
+        slug
+    })
 }
 
 #[cfg(test)]
@@ -504,7 +566,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(id.as_str(), "https://api.githubcopilot.com/mcp/");
+        assert_eq!(id.as_str(), "api-githubcopilot-com-mcp");
         assert_eq!(config.url(), Some("https://api.githubcopilot.com/mcp/"));
         assert_eq!(
             config.headers().get("Authorization"),
@@ -527,7 +589,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(id.as_str(), "https://example.com/sse");
+        assert_eq!(id.as_str(), "example-com-sse");
         assert_eq!(config.url(), Some("https://example.com/sse"));
         assert_eq!(
             config.headers().get("X-API-Key"),
@@ -751,7 +813,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(id.as_str(), "https://sse.example.com/events");
+        assert_eq!(id.as_str(), "sse-example-com-events");
         assert_eq!(config.url(), Some("https://sse.example.com/events"));
         assert_eq!(
             config.headers().get("Authorization"),
@@ -1042,5 +1104,159 @@ mod tests {
             config.mcp_servers.is_empty(),
             "missing mcpServers key must produce empty map, not error"
         );
+    }
+
+    // ── derive_server_id_from_url (review S1: raw-URL server ids are unsafe) ──
+
+    #[test]
+    fn test_derive_server_id_from_url_basic() {
+        assert_eq!(
+            derive_server_id_from_url("https://api.githubcopilot.com/mcp/").as_str(),
+            "api-githubcopilot-com-mcp"
+        );
+        assert_eq!(
+            derive_server_id_from_url("https://example.com/sse").as_str(),
+            "example-com-sse"
+        );
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_strips_credentials() {
+        // Userinfo (credentials) must never end up in the derived id: it flows
+        // into a directory name and generated tool.ts source.
+        let id = derive_server_id_from_url("https://user:sekrit-token@api.example.com/mcp");
+        assert!(!id.as_str().contains("sekrit"));
+        assert!(!id.as_str().contains("user"));
+        assert_eq!(id.as_str(), "api-example-com-mcp");
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_rejects_path_traversal_chars() {
+        // `..` segments must not survive into the id (which is later joined
+        // into a filesystem path via PathBuf::join).
+        let id = derive_server_id_from_url("https://api.example.com/../../etc/passwd");
+        assert!(!id.as_str().contains(".."));
+        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_join_never_escapes_base_dir() {
+        // Literal reproduction of how `generate.rs` uses the id: joined onto
+        // a base directory. Since the sanitized slug can only ever contain
+        // `[a-z0-9-]`, `PathBuf::join` can never interpret a component of it
+        // as `..` or an absolute-path override, regardless of what path
+        // segments were present in the original URL.
+        let base_dir = PathBuf::from("/home/user/.claude/servers");
+        let malicious_urls = [
+            "https://api.example.com/../../../../etc/passwd",
+            "https://api.example.com/..%2f..%2fescape",
+            "https://api.example.com/./././escape",
+        ];
+
+        for url in malicious_urls {
+            let id = derive_server_id_from_url(url);
+            let joined = base_dir.join(id.as_str());
+            assert!(
+                joined.starts_with(&base_dir),
+                "joining derived id {:?} (from {url:?}) onto {base_dir:?} escaped it: {joined:?}",
+                id.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_normalizes_case() {
+        assert_eq!(
+            derive_server_id_from_url("https://API.Example.COM/MCP").as_str(),
+            "api-example-com-mcp"
+        );
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_truncates_to_length_limit() {
+        let long_path = "a".repeat(200);
+        let id = derive_server_id_from_url(&format!("https://example.com/{long_path}"));
+        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_falls_back_when_empty() {
+        // `Url::parse` accepts "..." as a (degenerate but valid) host, so
+        // this genuinely exercises the "parsed OK, but sanitizes to nothing"
+        // path, not the parse-failure path covered by the test below.
+        let id = derive_server_id_from_url("https://...");
+        assert_eq!(id.as_str(), FALLBACK_SERVER_ID_SLUG);
+        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_falls_back_on_unparseable_url() {
+        // On a `Url::parse` failure the raw input is discarded entirely
+        // (never sanitized-and-reused) — every unparseable URL maps to the
+        // same fixed fallback slug, regardless of its content.
+        for unparseable in ["not a url at all", "", "://", "!!!"] {
+            let id = derive_server_id_from_url(unparseable);
+            assert_eq!(
+                id.as_str(),
+                FALLBACK_SERVER_ID_SLUG,
+                "input {unparseable:?} should fall back to the default slug"
+            );
+        }
+    }
+
+    /// Regression test for the credential leak the second review round found:
+    /// a URL with a mistyped port (a realistic user typo, not an attack) is a
+    /// `Url::parse` failure. Before the fix, the fallback sanitized the raw
+    /// string instead of discarding it, so `user`/`pass` survived into the id
+    /// — which is logged via `info!("Introspecting server: {}", ..)` before
+    /// `validate_server_config` ever gets a chance to reject the URL.
+    #[test]
+    fn test_derive_server_id_from_url_unparseable_credential_bearing_url_leaks_nothing() {
+        let id = derive_server_id_from_url("https://user:pass@evil.com:99999/x");
+        assert_eq!(id.as_str(), FALLBACK_SERVER_ID_SLUG);
+        assert!(!id.as_str().contains("user"));
+        assert!(!id.as_str().contains("pass"));
+        assert!(!id.as_str().contains("evil"));
+    }
+
+    #[test]
+    fn test_derive_server_id_from_url_always_passes_validate_server_id() {
+        let urls = [
+            "https://api.githubcopilot.com/mcp/",
+            "https://example.com/sse",
+            "https://user:token@host.example.com/mcp?query=1#frag",
+            "https://HOST.EXAMPLE.COM/Path/With/Mixed_Case",
+            "https://127.0.0.1:8443/mcp",
+            "https://example.com/../../escape",
+            "https://",
+            "not-a-url",
+        ];
+        for url in urls {
+            let id = derive_server_id_from_url(url);
+            assert!(
+                mcp_execution_skill::validate_server_id(id.as_str()).is_ok(),
+                "derived id {:?} from url {url:?} must satisfy validate_server_id",
+                id.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_server_config_http_id_passes_validate_server_id() {
+        let (id, _config) = build_server_config(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://user:token@api.example.com/mcp/../secret".to_string()),
+            None,
+            vec![],
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(!id.as_str().contains("token"));
     }
 }

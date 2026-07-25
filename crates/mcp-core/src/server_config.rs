@@ -176,6 +176,11 @@ pub struct ServerConfig {
     /// **Only used for HTTP transport.**
     ///
     /// Example: `https://api.example.com/mcp`
+    ///
+    /// This crate does not apply SSRF allowlisting to this URL — it is
+    /// treated like a `curl` target, appropriate for a local CLI tool.
+    /// Embedders that expose this config in a multi-tenant or server context
+    /// should apply their own URL allowlisting before connecting.
     #[serde(default)]
     pub url: Option<String>,
 
