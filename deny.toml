@@ -24,6 +24,8 @@ allow = [
     "Apache-2.0 WITH LLVM-exception", # Used by some LLVM/Rust tooling
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "ISC",                            # Used by the aws-lc-rs TLS backend pulled in via rustls
+    "CDLA-Permissive-2.0",            # Mozilla root certificate data bundled by webpki-root-certs
     "Unicode-3.0",
     "Zlib",                           # Compression libraries
     "BSL-1.0",                        # Boost Software License
