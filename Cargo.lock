@@ -911,6 +911,7 @@ dependencies = [
  "mcp-execution-introspector",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 

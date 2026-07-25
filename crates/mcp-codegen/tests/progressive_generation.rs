@@ -7,6 +7,7 @@ use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::{ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
+use std::process::Command;
 
 /// Creates a mock server info for testing.
 fn create_test_server_info() -> ServerInfo {
@@ -155,10 +156,11 @@ fn test_progressive_tool_file_structure() {
         "Missing function export"
     );
 
-    // Should contain parameter interface
+    // Should contain parameter type alias (not an interface — interfaces are not
+    // structurally assignable to Record<string, unknown>, which callMCPTool requires)
     assert!(
-        content.contains("export interface createIssueParams"),
-        "Missing Params interface"
+        content.contains("export type createIssueParams = {"),
+        "Missing Params type alias"
     );
 
     // Should contain result interface
@@ -169,6 +171,13 @@ fn test_progressive_tool_file_structure() {
 
     // Should call callMCPTool
     assert!(content.contains("callMCPTool"), "Missing callMCPTool call");
+
+    // Should cast callMCPTool's `unknown` return to the Result type — `unknown` is never
+    // assignable to a concrete type without a cast, regardless of interface vs type alias
+    assert!(
+        content.contains(") as createIssueResult;"),
+        "Missing cast of callMCPTool's return value to createIssueResult"
+    );
 
     // Should include server_id and tool name
     assert!(
@@ -494,5 +503,115 @@ fn test_progressive_tool_with_complex_types() {
     assert!(
         content.contains("enabled?: boolean"),
         "Missing boolean type"
+    );
+}
+
+/// Regression guard for #176: generated tool wrappers must actually type-check under
+/// `tsc --strict --noEmit`, not merely contain the right substrings. Type-checks the real
+/// generated `createIssue.ts` against a minimal stub of `callMCPTool` (mirroring the
+/// signature declared in `runtime-bridge.ts.hbs`) rather than the full runtime bridge, so
+/// the test stays offline and doesn't depend on `@types/node` being installed.
+///
+/// Skips (does not fail) when `tsc` is not on `PATH`, since the TypeScript toolchain isn't
+/// guaranteed to be present in every environment this suite runs in.
+#[test]
+fn test_generated_tool_passes_tsc_noemit() {
+    if Command::new("tsc").arg("--version").output().is_err() {
+        eprintln!("skipping test_generated_tool_passes_tsc_noemit: `tsc` not found on PATH");
+        return;
+    }
+
+    // Guard against the stub below silently going stale if callMCPTool's signature changes.
+    let bridge_template = include_str!("../templates/progressive/runtime-bridge.ts.hbs");
+    assert!(
+        bridge_template.contains("params: Record<string, unknown>")
+            && bridge_template.contains("): Promise<unknown> {"),
+        "callMCPTool signature in runtime-bridge.ts.hbs changed — update the stub in \
+         test_generated_tool_passes_tsc_noemit to match"
+    );
+
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+
+    let tool_file = code
+        .files
+        .iter()
+        .find(|f| f.path == "createIssue.ts")
+        .expect("createIssue.ts not found");
+    let package_json = code
+        .files
+        .iter()
+        .find(|f| f.path == "package.json")
+        .expect("package.json not found");
+
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+
+    std::fs::write(dir.path().join("createIssue.ts"), &tool_file.content)
+        .expect("Failed to write createIssue.ts");
+    // Real package.json declares `"type": "module"`, which is what makes `import.meta.url`
+    // in the generated CLI-mode block legal under NodeNext module resolution.
+    std::fs::write(dir.path().join("package.json"), &package_json.content)
+        .expect("Failed to write package.json");
+    // Minimal ambient declaration for the subset of the Node `process` global the generated
+    // CLI-mode block references, so the test doesn't depend on `@types/node` being installed.
+    std::fs::write(
+        dir.path().join("globals.d.ts"),
+        "declare const process: {\n\
+         \x20\x20argv: string[];\n\
+         \x20\x20exit(code?: number): never;\n\
+         };\n",
+    )
+    .expect("Failed to write globals.d.ts");
+
+    let runtime_dir = dir.path().join("_runtime");
+    std::fs::create_dir_all(&runtime_dir).expect("Failed to create _runtime dir");
+    std::fs::write(
+        runtime_dir.join("mcp-bridge.ts"),
+        "export async function callMCPTool(\n\
+         \x20\x20serverId: string,\n\
+         \x20\x20toolName: string,\n\
+         \x20\x20params: Record<string, unknown>\n\
+         ): Promise<unknown> {\n\
+         \x20\x20void serverId;\n\
+         \x20\x20void toolName;\n\
+         \x20\x20void params;\n\
+         \x20\x20return undefined;\n\
+         }\n",
+    )
+    .expect("Failed to write mcp-bridge.ts stub");
+
+    std::fs::write(
+        dir.path().join("tsconfig.json"),
+        r#"{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"]
+}
+"#,
+    )
+    .expect("Failed to write tsconfig.json");
+
+    let output = Command::new("tsc")
+        .arg("--noEmit")
+        .arg("-p")
+        .arg(dir.path().join("tsconfig.json"))
+        .output()
+        .expect("Failed to run tsc");
+
+    assert!(
+        output.status.success(),
+        "tsc --noEmit failed on generated createIssue.ts:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
