@@ -211,6 +211,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against a malicious command/binary itself or code the spawned server executes once running
   (#221 item 1).
 
+- **`mcp-execution-core`**: added a shared `untrusted` module (`sanitize_untrusted_text`,
+  `wrap_untrusted_block`) that neutralizes MCP-server-supplied tool metadata (name,
+  description, keywords, category, parameter names) before it is embedded into any
+  downstream output. `sanitize_untrusted_text` strips all Unicode control characters plus
+  the U+2028/U+2029 line separators and caps length at `MAX_UNTRUSTED_FIELD_LEN`;
+  `wrap_untrusted_block` HTML/XML-entity-escapes the body and wraps it in a delimited
+  `<untrusted-data>` block with a "data, not instructions" preamble, so the delimiter
+  itself cannot be forged by the wrapped content. Applied at every point untrusted tool
+  metadata is first ingested or returned to a caller: `mcp-execution-skill`'s
+  `build_skill_context` (fixes SKILL.md rendering a raw tool description/category as
+  unescaped Markdown, which could inject a heading or fenced code block indistinguishable
+  from the skill's own authored instructions — the file is auto-loaded as trusted guidance
+  on every future invocation) and `build_generation_prompt` (fixes the `generate_skill`
+  prompt embedding tool metadata with no delimiter, allowing prompt injection against the
+  LLM that authors the resulting `SKILL.md`), and `mcp-execution-server`'s
+  `introspect_server` (fixes the earliest hop in the pipeline, where a downstream server's
+  raw tool metadata reached the calling LLM before any categorization step). Tool-name
+  comparisons in `save_categorized_tools` are sanitized identically to keep validation in
+  sync with what `introspect_server` displays (#298, #292, #288).
+
 - **`mcp-execution-core`**: `validate_network_config`'s duplicate-header-name check echoed the
   raw header name verbatim in its `SecurityViolation` reason, even though the check only runs
   after `validate_header_name_string` has already accepted the name as RFC 7230 `token`-charset

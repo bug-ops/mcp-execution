@@ -40,6 +40,7 @@ mod types;
 
 pub mod cli;
 pub mod metadata;
+pub mod untrusted;
 
 // Re-export error types
 pub use error::{Error, Result};
