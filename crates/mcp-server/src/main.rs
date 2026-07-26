@@ -39,7 +39,8 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::io::AsyncRead;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio_util::codec::{FramedRead, FramedWrite};
+use tokio_util::bytes::BytesMut;
+use tokio_util::codec::{Decoder, FramedRead, FramedWrite};
 use tokio_util::sync::PollSemaphore;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -118,6 +119,102 @@ fn attach_permit(
     message
 }
 
+/// Outcome of decoding one line through [`RecoveringCodec`]: either a successfully
+/// parsed message, a line that was rejected (oversized or malformed), or input the
+/// inner codec consumed without producing a message — e.g. a non-standard line its
+/// compatibility handling chooses to ignore, or another buffered chunk of an
+/// in-progress oversized-line discard. All three keep the stream going; only
+/// `Message` reaches admission or a caller.
+///
+/// `Message` is boxed because `RxJsonRpcMessage` is far larger than the other variants;
+/// an enum is sized by its largest variant, so without the `Box` every `DecodedFrame`
+/// value — even a `Skipped` one — would pay `RxJsonRpcMessage`'s size. `Malformed`
+/// carries the original [`JsonRpcMessageCodecError`] rather than a pre-rendered
+/// `String` so logging it stays as lazy as the `Err` path it replaced (formatted only
+/// if the log level is enabled) and so it can't grow past this enum's own size — a
+/// `Serde` error's `Display` embeds the untruncated offending line, which for a
+/// pre-rendered `String` could otherwise approach [`MAX_REQUEST_LINE_SIZE`].
+enum DecodedFrame {
+    Message(Box<RxJsonRpcMessage<RoleServer>>),
+    Malformed(JsonRpcMessageCodecError),
+    Skipped,
+}
+
+/// Wraps [`JsonRpcMessageCodec`] so an outcome that would otherwise leave
+/// `tokio_util`'s `FramedImpl` believing the stream needs a fresh read — a recoverable
+/// decode failure, or the inner codec silently ignoring a non-standard line — is
+/// instead folded into an `Ok` item, so a request already sitting in the buffer right
+/// behind such a line is decoded on the very next poll instead of stalling until more
+/// bytes arrive (possibly forever, if the peer is otherwise idle; #273).
+///
+/// Two independent `FramedImpl` behaviors (`framed_impl.rs` in `tokio-util` 0.7.18)
+/// motivate this, both of which clear its internal `is_readable` flag so the poll
+/// after either one skips `decode()` and issues a real `poll_read` instead of
+/// rescanning the already-buffered bytes:
+/// - After a `Decoder::decode` `Err`, the *next* poll unconditionally clears
+///   `is_readable` while returning the mandatory sentinel `None`.
+/// - On *every* `Ok(None)`, `is_readable` is cleared unconditionally — including when
+///   the inner codec's own non-standard-message compatibility handling
+///   (`try_parse_with_compatibility` in rmcp's `async_rw.rs`) has already consumed and
+///   discarded a line via `Ok(None)` without decoding anything from it.
+///
+/// [`JsonRpcMessageCodecError::MaxLineLengthExceeded`] and `::Serde` mean "one bad
+/// line" and are folded to `Malformed`; unknown future non-exhaustive variants are
+/// folded the same way, consistent with these two. `::Io` means the underlying reader
+/// itself is broken (e.g. a closed or orphaned fd erroring on every poll) and is left
+/// as a real `Err` — `Decoder::Error = std::io::Error` makes this the only variant
+/// that can still surface that way — matching the prior `stdio()` transport's
+/// behavior on a read error; folding it too would spin the task at 100% CPU forever.
+/// An `Ok(None)` whose call left the buffer shorter than it started is folded to
+/// `Skipped`; an `Ok(None)` that left the buffer unchanged (no full line buffered yet)
+/// passes through unchanged, since that is the ordinary "need more bytes" case every
+/// `Decoder` uses. The wrapped codec instance is reused across calls (never
+/// reconstructed), since `MaxLineLengthExceeded`'s `is_discarding` skip-state lives
+/// inside it.
+///
+/// The buffer-shrink check is a behavioral inference about `JsonRpcMessageCodec`, not
+/// a contract `rmcp` or `tokio_util` documents or guarantees: it holds because the
+/// inner codec's current implementation always advances the buffer past any line it
+/// consumes, whether or not that line becomes a decoded item. A future `rmcp` version
+/// that instead tracked a consumed line via an internal cursor without shrinking the
+/// buffer would silently reopen the #273 gap `Skipped` closes here — re-verify this
+/// assumption against `JsonRpcMessageCodec::decode`'s implementation on any `rmcp`
+/// upgrade.
+struct RecoveringCodec(JsonRpcMessageCodec<RxJsonRpcMessage<RoleServer>>);
+
+impl RecoveringCodec {
+    fn fold(
+        result: Result<Option<RxJsonRpcMessage<RoleServer>>, JsonRpcMessageCodecError>,
+        len_before: usize,
+        len_after: usize,
+    ) -> std::io::Result<Option<DecodedFrame>> {
+        match result {
+            Ok(Some(message)) => Ok(Some(DecodedFrame::Message(Box::new(message)))),
+            Ok(None) if len_after < len_before => Ok(Some(DecodedFrame::Skipped)),
+            Ok(None) => Ok(None),
+            Err(JsonRpcMessageCodecError::Io(error)) => Err(error),
+            Err(other) => Ok(Some(DecodedFrame::Malformed(other))),
+        }
+    }
+}
+
+impl Decoder for RecoveringCodec {
+    type Item = DecodedFrame;
+    type Error = std::io::Error;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<DecodedFrame>> {
+        let len_before = buf.len();
+        let result = self.0.decode(buf);
+        Self::fold(result, len_before, buf.len())
+    }
+
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<DecodedFrame>> {
+        let len_before = buf.len();
+        let result = self.0.decode_eof(buf);
+        Self::fold(result, len_before, buf.len())
+    }
+}
+
 /// Wraps a size-bounded [`FramedRead`] so one oversized or malformed line drops that
 /// request without ending the session, while a genuine I/O error still ends it; also
 /// gates admission of decoded requests behind `concurrency_limit` so `rmcp`'s
@@ -125,19 +222,9 @@ fn attach_permit(
 /// pipelining client. Callers own the [`Semaphore`], so tests can inspect
 /// `available_permits` directly instead of relying on the stream's internal state.
 ///
-/// `tokio_util`'s `FramedImpl` treats any `Decoder::decode` error as terminal: the poll
-/// immediately after an `Err` unconditionally returns `None`, which `Stream` consumers
-/// (including `rmcp`'s transport) read as end-of-stream. `JsonRpcMessageCodecError`
-/// carries both cases through that same `Err` channel, so they must be told apart:
-/// [`JsonRpcMessageCodecError::MaxLineLengthExceeded`] and `::Serde` mean "one bad line",
-/// and we swallow the mandatory sentinel `None` that follows to keep the connection
-/// alive; `::Io` means the underlying reader itself is broken (e.g. a closed or
-/// orphaned fd erroring on every poll), and re-swallowing it would spin the task at
-/// 100% CPU forever, so it is left fatal, matching the prior `stdio()` transport's
-/// behavior on a read error. The enum is `#[non_exhaustive]`; unknown future variants
-/// are treated as recoverable, consistent with the two known non-I/O cases.
-///
-/// The concurrency gate runs strictly after this error recovery, so a rejected
+/// Recoverable decode failures are handled by [`RecoveringCodec`] (see its doc comment
+/// for why this stream never observes the `tokio_util` "stranded buffered request"
+/// stall). The concurrency gate runs strictly after that recovery, so a rejected
 /// oversized or malformed line never consumes a permit. Admission uses
 /// [`PollSemaphore::poll_acquire`] rather than a bare [`tokio::sync::Semaphore::acquire`]
 /// future: `poll_fn` is driven from inside `rmcp`'s `tokio::select!` alongside a
@@ -188,9 +275,8 @@ where
 {
     let mut framed = FramedRead::new(
         reader,
-        JsonRpcMessageCodec::<RxJsonRpcMessage<RoleServer>>::new_with_max_length(max_length),
+        RecoveringCodec(JsonRpcMessageCodec::new_with_max_length(max_length)),
     );
-    let mut recovering_from_error = false;
     let mut semaphore = PollSemaphore::new(concurrency_limit);
     let mut pending_admission: VecDeque<RxJsonRpcMessage<RoleServer>> = VecDeque::new();
     stream::poll_fn(move |cx| {
@@ -223,27 +309,25 @@ where
             }
 
             return match framed.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(message @ JsonRpcMessage::Request(_)))) => {
-                    recovering_from_error = false;
-                    pending_admission.push_back(message);
-                    continue;
-                }
-                Poll::Ready(Some(Ok(message))) => {
-                    recovering_from_error = false;
+                Poll::Ready(Some(Ok(DecodedFrame::Message(message)))) => {
+                    let message = *message;
+                    if matches!(message, JsonRpcMessage::Request(_)) {
+                        pending_admission.push_back(message);
+                        continue;
+                    }
                     Poll::Ready(Some(message))
                 }
-                Poll::Ready(Some(Err(JsonRpcMessageCodecError::Io(error)))) => {
-                    tracing::error!(%error, "stdin read failed; ending session");
-                    Poll::Ready(None)
+                Poll::Ready(Some(Ok(DecodedFrame::Malformed(reason)))) => {
+                    tracing::warn!(%reason, "dropping oversized or malformed request line");
+                    continue;
+                }
+                Poll::Ready(Some(Ok(DecodedFrame::Skipped))) => {
+                    tracing::trace!("inner codec consumed input without producing a message");
+                    continue;
                 }
                 Poll::Ready(Some(Err(error))) => {
-                    tracing::warn!(%error, "dropping oversized or malformed request line");
-                    recovering_from_error = true;
-                    continue;
-                }
-                Poll::Ready(None) if recovering_from_error => {
-                    recovering_from_error = false;
-                    continue;
+                    tracing::error!(%error, "stdin read failed; ending session");
+                    Poll::Ready(None)
                 }
                 Poll::Ready(None) if !pending_admission.is_empty() => {
                     // Genuine EOF, but earlier-decoded requests are still queued
@@ -414,6 +498,39 @@ mod tests {
         }
     }
 
+    /// `AsyncRead` that yields a fixed script of chunks in order, then `Poll::Pending`
+    /// forever — an open-but-currently-idle connection, unlike [`Script`]'s clean EOF.
+    ///
+    /// This distinction matters for #273 regression coverage: on a clean EOF,
+    /// `tokio_util`'s `FramedImpl` calls `decode_eof` on the remaining buffered bytes
+    /// regardless of `is_readable`, which decodes a trailing buffered request anyway and
+    /// would mask the stall entirely. Only a reader that stays open (no EOF, no further
+    /// bytes) exercises the `is_readable`-cleared path the bug lives in.
+    struct ScriptThenIdle {
+        chunks: Vec<Vec<u8>>,
+        idx: usize,
+    }
+
+    impl AsyncRead for ScriptThenIdle {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            if self.idx < self.chunks.len() {
+                let chunk = self.chunks[self.idx].clone();
+                self.idx += 1;
+                debug_assert!(
+                    chunk.len() <= buf.remaining(),
+                    "test fixture chunk exceeds the reader's spare buffer capacity"
+                );
+                buf.put_slice(&chunk);
+                return Poll::Ready(Ok(()));
+            }
+            Poll::Pending
+        }
+    }
+
     /// Number of times [`ErrAfter`] returns a real error before giving up and
     /// signaling EOF. Bounds the fixture itself so that if a regression ever makes
     /// `bounded_request_stream` treat an I/O error as recoverable again, the resulting
@@ -471,6 +588,130 @@ mod tests {
             stream.next().await.is_none(),
             "stream ends cleanly at EOF after the valid message"
         );
+    }
+
+    #[tokio::test]
+    async fn oversized_line_and_valid_request_in_one_chunk_do_not_stall() {
+        // Regression test for #273: unlike `recovers_from_oversized_lines_and_keeps_serving`
+        // above (which delivers the bad and good lines as *separate* `poll_read` calls, and
+        // so accidentally gives `FramedImpl` the extra read it needs to recover), this
+        // delivers both lines in a single chunk so the valid request is already fully
+        // buffered behind the oversized one before any decoding happens. Before the fix,
+        // `tokio_util`'s `is_readable` flag was left cleared after unwinding the mandatory
+        // sentinel `None` following the codec error, so the next poll issued a real
+        // `poll_read` instead of rescanning the buffer, and the buffered valid request
+        // never decoded until further bytes arrived — `ScriptThenIdle` never delivers
+        // any, staying open (`Poll::Pending`) instead of signaling EOF, since EOF would
+        // mask the bug via `decode_eof`. `next_or_timeout` fails loudly if that stall
+        // recurs.
+        let mut one_chunk = oversized_line();
+        one_chunk.extend(valid_request_line(1));
+        let script = ScriptThenIdle {
+            chunks: vec![one_chunk],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        let message = next_or_timeout(&mut stream)
+            .await
+            .expect("the valid request sharing a chunk with the oversized line must decode without waiting for more input");
+        assert_eq!(request_id(&message), 1);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_and_valid_request_in_one_chunk_do_not_stall() {
+        // Same #273 regression as `oversized_line_and_valid_request_in_one_chunk_do_not_stall`,
+        // but for a `Serde` decode error instead of `MaxLineLengthExceeded` — the debugger's
+        // diagnosis confirmed both error variants hit the identical `has_errored` unwind path
+        // in `tokio_util`, so both need coverage.
+        let mut one_chunk = b"not valid json\n".to_vec();
+        one_chunk.extend(valid_request_line(1));
+        let script = ScriptThenIdle {
+            chunks: vec![one_chunk],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        let message = next_or_timeout(&mut stream)
+            .await
+            .expect("the valid request sharing a chunk with the malformed line must decode without waiting for more input");
+        assert_eq!(request_id(&message), 1);
+    }
+
+    #[tokio::test]
+    async fn multiple_malformed_lines_then_valid_request_in_one_chunk_do_not_stall() {
+        // Edge case beyond the single-bad-line regressions above: several
+        // consecutive malformed/oversized lines must all be folded to
+        // `DecodedFrame::Malformed` and looped past within the *same* poll,
+        // not just one. If the loop only handled one `Malformed` per poll
+        // before returning `Pending`, this would stall exactly like #273
+        // since `ScriptThenIdle` never delivers another chunk.
+        let mut one_chunk = oversized_line();
+        one_chunk.extend(b"not valid json\n");
+        one_chunk.extend(oversized_line());
+        one_chunk.extend(valid_request_line(1));
+        let script = ScriptThenIdle {
+            chunks: vec![one_chunk],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        let message = next_or_timeout(&mut stream).await.expect(
+            "the valid request behind three consecutive malformed lines in one chunk must decode without waiting for more input",
+        );
+        assert_eq!(request_id(&message), 1);
+    }
+
+    #[tokio::test]
+    async fn chunk_with_only_malformed_lines_and_no_valid_request_stays_pending() {
+        // Edge case: a chunk containing *only* malformed lines and no valid
+        // request at all. There is no buffered valid request to strand, so
+        // this isn't the #273 stall itself, but it confirms the stream
+        // correctly reports `Pending` (waiting for more input) rather than
+        // erroneously ending the stream or erroring once every malformed
+        // line in the buffer has been discarded.
+        let mut one_chunk = oversized_line();
+        one_chunk.extend(b"not valid json\n");
+        let script = ScriptThenIdle {
+            chunks: vec![one_chunk],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        match Pin::new(&mut stream).poll_next(&mut cx) {
+            Poll::Pending => {}
+            Poll::Ready(item) => panic!(
+                "expected Poll::Pending after discarding only-malformed lines with no valid request behind them, got Some={}",
+                item.is_some()
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn ignored_notification_and_valid_request_in_one_chunk_do_not_stall() {
+        // A second, distinct entrance to the same #273 stall class: a well-formed JSON
+        // line that rmcp's own compatibility layer silently ignores as non-standard
+        // (`try_parse_with_compatibility` in `async_rw.rs` returns `Ok(None)` after
+        // consuming the line) also left `tokio_util`'s `is_readable` cleared, since
+        // `FramedImpl` clears it on *every* `Ok(None)`, not only after a `Decoder::Err`.
+        // No oversized or malformed data is needed to trigger it. `{"jsonrpc":"1.0",...}`
+        // has a JSON-RPC version rmcp's compatibility handling does not recognize as a
+        // standard request, so it is consumed and dropped rather than decoded.
+        let mut one_chunk = br#"{"jsonrpc":"1.0","method":"foo"}"#.to_vec();
+        one_chunk.push(b'\n');
+        one_chunk.extend(valid_request_line(1));
+        let script = ScriptThenIdle {
+            chunks: vec![one_chunk],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        let message = next_or_timeout(&mut stream)
+            .await
+            .expect("the valid request sharing a chunk with an ignored non-standard line must decode without waiting for more input");
+        assert_eq!(request_id(&message), 1);
     }
 
     #[tokio::test]
