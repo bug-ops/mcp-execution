@@ -74,6 +74,36 @@ mcp-execution-cli introspect slow-mcp-server \
   --connect-timeout-secs 60 --discover-timeout-secs 120
 ```
 
+#### HTTP and SSE servers in `mcp.json`
+
+Remote servers can be defined alongside stdio servers in the same file by
+setting `"type"` and `"url"` instead of `"command"`:
+
+```json
+{
+  "mcpServers": {
+    "local-server": {
+      "command": "npx",
+      "args": ["-y", "@example/local-mcp-server"]
+    },
+    "remote-http": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN_HERE"
+      }
+    },
+    "remote-sse": {
+      "type": "sse",
+      "url": "https://example.com/sse"
+    }
+  }
+}
+```
+
+`"type"` defaults to `"stdio"` when `"command"` is set, so existing stdio-only
+configs keep working unchanged.
+
 ## What is Progressive Loading?
 
 Progressive loading generates one TypeScript file per MCP tool, enabling AI agents to load only the tools they need:

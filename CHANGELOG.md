@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`mcp-execution-cli`**: `McpServerEntry` no longer has `command`/`args`/`env` fields
+  directly; they now live under a new `transport: McpTransport` field (`Stdio { command, args,
+  env, cwd }` / `Http { url, headers }` / `Sse { url, headers }`), since a single stdio-shaped
+  struct could not represent the http/sse `mcp.json` entries fixed below. `build_server_config`
+  now takes a `TransportArgs` (built via `TransportArgs::from_flags`) plus the two timeout
+  overrides, replacing its previous nine positional parameters; `introspect::run` and
+  `generate::run` keep their existing flat parameter lists and build `TransportArgs`
+  internally.
+
 ### Fixed
+
+- **`mcp-execution-cli`**: a `~/.claude/mcp.json` mixing stdio entries with http/sse entries
+  (`{"type": "http", "url": "...", ...}`, no `command` key) failed to deserialize the *entire*
+  file with a misleading "missing field `command`" error, since `McpServerEntry` hardcoded a
+  stdio-only shape (#210). Server entries are now a proper discriminated union: `"type"`
+  defaults to `stdio` when `command` is present or `http` when `url` is present (so existing
+  stdio entries without a `"type"` key keep parsing unchanged), and cross-field mistakes (e.g.
+  an http entry with `command`, or an entry with neither `command` nor `type`+`url`) produce a
+  message naming the offending field(s) instead of a generic parse failure. Unrecognized keys
+  (e.g. Claude Code's own `disabled`/`alwaysAllow`/`description`) are logged via `tracing::warn!`
+  and otherwise ignored rather than hard-failing, since `mcp.json` is shared with other MCP
+  clients. Http/sse entries loaded via `--from-config` now also work end-to-end (previously only
+  reachable via `--http`/`--sse`), keeping the config's map key as the `ServerId`.
+
+- **`mcp-execution-cli`**: `build_server_config` panicked (`.expect("server is required for
+  stdio transport")`) when called directly with `server`/`http`/`sse` all unset — previously
+  only prevented by clap's CLI-level validation, so any other caller (e.g. a library consumer)
+  could crash the process (#194). It now returns `Err` via the new `TransportArgs::from_flags`,
+  which is the single place enforcing "exactly one transport selected".
 
 - **`mcp-execution-core`**, **`mcp-execution-introspector`**: `--http`/`--sse` transports
   actually connect now, instead of failing validation with a misleading "command cannot be

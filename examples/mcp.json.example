@@ -35,6 +35,17 @@
       "args": ["-y", "@example/slow-mcp-server"],
       "connectTimeoutSecs": 60,
       "discoverTimeoutSecs": 120
+    },
+    "remote-http": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN_HERE"
+      }
+    },
+    "remote-sse": {
+      "type": "sse",
+      "url": "https://example.com/sse"
     }
   }
 }

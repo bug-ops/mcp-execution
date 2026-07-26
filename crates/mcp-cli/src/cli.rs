@@ -81,7 +81,7 @@ pub enum Commands {
         /// When specified, all other server configuration options are ignored.
         /// The server must be defined in ~/.claude/mcp.json with matching name.
         ///
-        /// Example mcp.json:
+        /// Example mcp.json (stdio and http entries can be mixed freely):
         /// ```json
         /// {
         ///   "mcpServers": {
@@ -89,6 +89,11 @@ pub enum Commands {
         ///       "command": "docker",
         ///       "args": ["run", "-i", "--rm", "..."],
         ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
+        ///     },
+        ///     "remote": {
+        ///       "type": "http",
+        ///       "url": "https://api.example.com/mcp",
+        ///       "headers": {"Authorization": "Bearer ..."}
         ///     }
         ///   }
         /// }
@@ -256,7 +261,7 @@ pub enum Commands {
         /// When specified, all other server configuration options are ignored.
         /// The server must be defined in ~/.claude/mcp.json with matching name.
         ///
-        /// Example mcp.json:
+        /// Example mcp.json (stdio and http entries can be mixed freely):
         /// ```json
         /// {
         ///   "mcpServers": {
@@ -264,6 +269,11 @@ pub enum Commands {
         ///       "command": "docker",
         ///       "args": ["run", "-i", "--rm", "..."],
         ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
+        ///     },
+        ///     "remote": {
+        ///       "type": "http",
+        ///       "url": "https://api.example.com/mcp",
+        ///       "headers": {"Authorization": "Bearer ..."}
         ///     }
         ///   }
         /// }

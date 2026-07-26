@@ -6,7 +6,7 @@
 //! 2. Generates TypeScript files for progressive loading (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
-use super::common::{build_server_config, load_server_from_config};
+use super::common::{TransportArgs, build_server_config, load_server_from_config};
 use anyhow::{Context, Result};
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
@@ -134,17 +134,8 @@ pub async fn run(
         );
         load_server_from_config(&config_name)?
     } else {
-        build_server_config(
-            server,
-            args,
-            env,
-            cwd,
-            http,
-            sse,
-            headers,
-            connect_timeout_secs,
-            discover_timeout_secs,
-        )?
+        let transport = TransportArgs::from_flags(server, args, env, cwd, http, sse, headers)?;
+        build_server_config(transport, connect_timeout_secs, discover_timeout_secs)?
     };
 
     info!("Connecting to MCP server: {}", server_id);
