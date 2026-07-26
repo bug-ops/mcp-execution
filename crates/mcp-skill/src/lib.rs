@@ -32,11 +32,12 @@ pub mod types;
 pub use context::build_skill_context;
 pub use output_path::{OutputPathError, resolve_skill_output_path};
 pub use parser::{
-    MAX_FILE_SIZE, MAX_TOOL_FILES, ParsedParameter, ParsedToolFile, ScanError, ScanResult,
-    extract_skill_metadata, sanitize_path_for_error, scan_tools_directory,
+    MAX_FILE_SIZE, MAX_FRONTMATTER_SIZE, MAX_TOOL_FILES, ParsedParameter, ParsedToolFile,
+    ScanError, ScanResult, SkillMetadataError, extract_skill_metadata, sanitize_path_for_error,
+    scan_tools_directory,
 };
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{
-    GenerateSkillParams, GenerateSkillResult, SaveSkillParams, SaveSkillResult, SkillCategory,
-    SkillMetadata, SkillTool, ToolExample, validate_server_id,
+    GenerateSkillParams, GenerateSkillResult, SaveSkillParams, SaveSkillResult, ServerIdError,
+    SkillCategory, SkillMetadata, SkillTool, ToolExample, validate_server_id,
 };

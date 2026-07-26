@@ -350,9 +350,13 @@ Generate a SKILL.md file with the following structure:
    ```yaml
    ---
    name: {skill_name}
-   description: [One-sentence description of what this skill enables]
+   description: "[One-sentence description of what this skill enables]"
    ---
    ```
+
+   The `description` value MUST be double-quoted, even if it contains no
+   special characters. An unquoted value containing `:` or `#` is invalid or
+   silently truncated YAML.
 
 2. **Introduction** (1-2 paragraphs):
    - What this server/skill does

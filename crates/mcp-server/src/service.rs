@@ -277,7 +277,8 @@ impl GeneratorService {
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format
-        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
+        validate_server_id(&params.server_id)
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         // Extract server_id before consuming params
         let server_id_str = params.server_id;
@@ -717,7 +718,8 @@ impl GeneratorService {
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format and length
-        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
+        validate_server_id(&params.server_id)
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         // Determine servers directory
         let servers_dir = params.servers_dir.unwrap_or_else(|| {
@@ -827,6 +829,15 @@ impl GeneratorService {
     /// bounded by [`MAX_SKILL_CONTENT_SIZE`] (100KB), so it is not worth
     /// pursuing genuine interruptibility (e.g. a hand-rolled chunked write)
     /// for the marginal benefit.
+    ///
+    /// The synchronous YAML frontmatter parse that runs before the write
+    /// (`extract_skill_metadata`) is a separate concern: `serde_norway` is not
+    /// linear-time on pathologically nested input, so bounding only the
+    /// overall [`MAX_SKILL_CONTENT_SIZE`] would not bound parse latency. It is
+    /// `extract_skill_metadata`'s own `MAX_FRONTMATTER_SIZE` cap (8KB) on the
+    /// extracted `---`-delimited block, applied before parsing, that keeps
+    /// this handler's blocking work small regardless of `content`'s overall
+    /// size — not the 100KB content bound.
     #[tool(
         description = "Save generated SKILL.md content to ~/.claude/skills/{server_id}/. Use after Claude generates skill content from generate_skill context."
     )]
@@ -835,7 +846,8 @@ impl GeneratorService {
         Parameters(params): Parameters<SaveSkillParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format and length
-        validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
+        validate_server_id(&params.server_id)
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         // Validate content size (DoS protection)
         if params.content.len() > MAX_SKILL_CONTENT_SIZE {
@@ -2668,6 +2680,36 @@ mod tests {
 
         // Verify file was written under the confined base directory
         assert!(output_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_save_skill_quoted_description_with_colon_round_trips() {
+        // `GENERATION_INSTRUCTIONS` (mcp-execution-skill) tells the model to always
+        // double-quote `description`, since an unquoted value containing `:` is
+        // invalid YAML (`serde_norway` errors instead of the old regex, which
+        // captured the whole line regardless). Pin that a quoted description
+        // containing a colon round-trips through `save_skill` unchanged.
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = SaveSkillParams {
+            server_id: "test".to_string(),
+            content: "---\nname: test-skill\ndescription: \"GitHub: issues and CI\"\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
+            output_path: None,
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params)).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text = content.content[0].as_text().unwrap();
+        let parsed: SaveSkillResult = serde_json::from_str(&text.text).unwrap();
+
+        assert_eq!(parsed.metadata.description, "GitHub: issues and CI");
     }
 
     #[tokio::test]
