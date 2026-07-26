@@ -48,10 +48,12 @@
 //!     .build().unwrap();
 //! ```
 
+use crate::path::sanitize_path_for_error;
+use crate::redact::{RedactedItems, RedactedMapValues, RedactedUrl};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Default timeout for establishing an MCP server connection (handshake).
@@ -117,15 +119,26 @@ pub enum TransportType {
 /// connection; `mcp_execution_introspector::Introspector::discover_server` does this as
 /// defense-in-depth even though its own callers always go through the builder.
 ///
-/// `headers` and `env` routinely carry secrets (e.g. an `Authorization: Bearer
-/// <token>` header, or a `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable),
-/// so this type's [`Debug`] implementation is hand-written to redact their
-/// *values* while keeping keys visible — a legitimately configured key (a
-/// chosen header or env var name, e.g. `"Authorization"`) is not itself a
-/// secret and remains useful for debugging. This mirrors the discipline
-/// already applied to header values in `command.rs`'s
-/// `validate_header_value_string`, which never echoes a header value into an
-/// error message.
+/// `headers`, `env`, `args`, and `url` routinely carry secrets (e.g. an
+/// `Authorization: Bearer <token>` header, a `GITHUB_PERSONAL_ACCESS_TOKEN`
+/// environment variable, an `--api-key sk-...`-style argument, or a
+/// `?token=`-style query string), so this type's [`Debug`] implementation is
+/// hand-written to redact them:
+///
+/// - `headers`/`env`: keys stay visible, values are replaced — a legitimately
+///   configured key (a chosen header or env var name, e.g. `"Authorization"`)
+///   is not itself a secret and remains useful for debugging. This mirrors
+///   the discipline already applied to header values in `command.rs`'s
+///   `validate_header_value_string`, which never echoes a header value into
+///   an error message.
+/// - `args`: every entry is replaced wholesale (via [`crate::RedactedItems`])
+///   since an argument has no key/value split to preserve half of.
+/// - `url`: userinfo credentials and any query string are stripped (via
+///   [`crate::RedactedUrl`]); scheme, host, and path stay readable.
+/// - `command`/`cwd`: passed through [`crate::sanitize_path_for_error`] —
+///   not a secret, but an absolute path leaks the OS username, and the
+///   program name itself (`docker`, `npx`) is worth keeping readable for
+///   telling server entries apart in a log.
 ///
 /// This is a narrower guarantee than `command.rs`'s header-*name* validation
 /// errors, which redact the name too: those fire on input that has not yet
@@ -184,6 +197,31 @@ pub enum TransportType {
 /// let debug_output = format!("{config:?}");
 /// assert!(debug_output.contains("Authorization"));
 /// assert!(!debug_output.contains("sk-secret-value"));
+/// ```
+///
+/// Debug output redacts `args` wholesale and strips URL userinfo/query,
+/// while keeping `command` and the URL host/path readable:
+///
+/// ```
+/// use mcp_execution_core::ServerConfig;
+///
+/// let config = ServerConfig::builder()
+///     .command("docker".to_string())
+///     .arg("--api-key".to_string())
+///     .arg("sk-secret-arg".to_string())
+///     .build();
+///
+/// let debug_output = format!("{config:?}");
+/// assert!(debug_output.contains("docker"));
+/// assert!(!debug_output.contains("sk-secret-arg"));
+///
+/// let config = ServerConfig::builder()
+///     .http_transport("https://user:sk-secret@api.example.com/mcp?token=sk-secret".to_string())
+///     .build();
+///
+/// let debug_output = format!("{config:?}");
+/// assert!(debug_output.contains("api.example.com/mcp"));
+/// assert!(!debug_output.contains("sk-secret"));
 /// ```
 ///
 /// [`validate_server_config`]: fn.validate_server_config.html
@@ -274,33 +312,19 @@ pub struct ServerConfig {
     pub discover_timeout: Duration,
 }
 
-/// Debug-formats a `String`-valued map with keys visible and every value
-/// replaced by a fixed placeholder.
-///
-/// Used by `ServerConfig` and `ServerConfigBuilder`'s [`Debug`] impls for
-/// `headers` and `env`, both of which routinely carry secrets (bearer
-/// tokens, API keys). See the redaction note on [`ServerConfig`]'s own doc
-/// comment for why.
-struct RedactedValues<'a>(&'a HashMap<String, String>);
-
-impl fmt::Debug for RedactedValues<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_map()
-            .entries(self.0.keys().map(|key| (key, "<redacted>")))
-            .finish()
-    }
-}
-
 impl fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServerConfig")
             .field("transport", &self.transport)
-            .field("command", &self.command)
-            .field("args", &self.args)
-            .field("env", &RedactedValues(&self.env))
-            .field("cwd", &self.cwd)
-            .field("url", &self.url)
-            .field("headers", &RedactedValues(&self.headers))
+            .field(
+                "command",
+                &sanitize_path_for_error(Path::new(&self.command)),
+            )
+            .field("args", &RedactedItems(&self.args))
+            .field("env", &RedactedMapValues(&self.env))
+            .field("cwd", &self.cwd.as_deref().map(sanitize_path_for_error))
+            .field("url", &self.url.as_deref().map(RedactedUrl))
+            .field("headers", &RedactedMapValues(&self.headers))
             .field("connect_timeout", &self.connect_timeout)
             .field("discover_timeout", &self.discover_timeout)
             .finish()
@@ -450,12 +474,18 @@ impl fmt::Debug for ServerConfigBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServerConfigBuilder")
             .field("transport", &self.transport)
-            .field("command", &self.command)
-            .field("args", &self.args)
-            .field("env", &RedactedValues(&self.env))
-            .field("cwd", &self.cwd)
-            .field("url", &self.url)
-            .field("headers", &RedactedValues(&self.headers))
+            .field(
+                "command",
+                &self
+                    .command
+                    .as_deref()
+                    .map(|command| sanitize_path_for_error(Path::new(command))),
+            )
+            .field("args", &RedactedItems(&self.args))
+            .field("env", &RedactedMapValues(&self.env))
+            .field("cwd", &self.cwd.as_deref().map(sanitize_path_for_error))
+            .field("url", &self.url.as_deref().map(RedactedUrl))
+            .field("headers", &RedactedMapValues(&self.headers))
             .field("connect_timeout", &self.connect_timeout)
             .field("discover_timeout", &self.discover_timeout)
             .finish()
@@ -1098,6 +1128,60 @@ mod tests {
         assert!(debug_str.contains("GITHUB_PERSONAL_ACCESS_TOKEN"));
         // The value must never appear.
         assert!(!debug_str.contains("ghp_supersecretvalue"));
+    }
+
+    #[test]
+    fn test_server_config_debug_redacts_args() {
+        let secret = "sk-live-secret-arg-value";
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg("--api-key".to_string())
+            .arg(secret.to_string())
+            .build()
+            .unwrap();
+
+        let debug_str = format!("{config:?}");
+        assert!(!debug_str.contains(secret));
+    }
+
+    #[test]
+    fn test_server_config_debug_redacts_url_userinfo_and_query() {
+        let secret = "hunter2";
+        let config = ServerConfig::builder()
+            .http_transport(format!(
+                "https://user:{secret}@api.example.com/mcp?token={secret}"
+            ))
+            .build()
+            .unwrap();
+
+        let debug_str = format!("{config:?}");
+        assert!(!debug_str.contains(secret));
+        // Host/path stay readable.
+        assert!(debug_str.contains("api.example.com/mcp"));
+    }
+
+    #[test]
+    fn test_server_config_builder_debug_redacts_args() {
+        let secret = "sk-live-secret-arg-value";
+        let builder = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg("--api-key".to_string())
+            .arg(secret.to_string());
+
+        let debug_str = format!("{builder:?}");
+        assert!(!debug_str.contains(secret));
+    }
+
+    #[test]
+    fn test_server_config_builder_debug_redacts_url_userinfo_and_query() {
+        let secret = "hunter2";
+        let builder = ServerConfig::builder().url(format!(
+            "https://user:{secret}@api.example.com/mcp?token={secret}"
+        ));
+
+        let debug_str = format!("{builder:?}");
+        assert!(!debug_str.contains(secret));
+        assert!(debug_str.contains("api.example.com/mcp"));
     }
 
     #[test]

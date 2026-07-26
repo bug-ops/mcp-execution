@@ -4,7 +4,10 @@
 //! and loading MCP server definitions from `~/.claude/mcp.json`.
 
 use anyhow::{Context, Result, bail};
-use mcp_execution_core::{Error as CoreError, ServerConfig, ServerConfigBuilder, ServerId};
+use mcp_execution_core::{
+    Error as CoreError, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl,
+    ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt;
@@ -47,8 +50,8 @@ pub struct McpConfig {
 /// assert!(matches!(transport, McpTransport::Http { .. }));
 /// ```
 ///
-/// Debug output redacts header/env values but keeps keys, mirroring
-/// `mcp_execution_core::ServerConfig`:
+/// Debug output redacts header/env values (keeping keys), `args` wholesale,
+/// and URL userinfo/query strings, mirroring `mcp_execution_core::ServerConfig`:
 ///
 /// ```
 /// use mcp_execution_cli::commands::common::McpTransport;
@@ -92,23 +95,6 @@ pub enum McpTransport {
     },
 }
 
-/// Debug-formats a `String`-valued map with keys visible and every value
-/// replaced by a fixed placeholder.
-///
-/// Mirrors `mcp_execution_core::ServerConfig`'s redaction convention: `env`
-/// and `headers` here are populated straight from `~/.claude/mcp.json` and
-/// routinely carry secrets (bearer tokens, API keys) before this crate ever
-/// validates them.
-struct RedactedValues<'a>(&'a HashMap<String, String>);
-
-impl fmt::Debug for RedactedValues<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_map()
-            .entries(self.0.keys().map(|key| (key, "<redacted>")))
-            .finish()
-    }
-}
-
 impl fmt::Debug for McpTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -119,20 +105,20 @@ impl fmt::Debug for McpTransport {
                 cwd,
             } => f
                 .debug_struct("Stdio")
-                .field("command", command)
-                .field("args", args)
-                .field("env", &RedactedValues(env))
-                .field("cwd", cwd)
+                .field("command", &sanitize_path_for_error(Path::new(command)))
+                .field("args", &RedactedItems(args))
+                .field("env", &RedactedMapValues(env))
+                .field("cwd", &cwd.as_deref().map(sanitize_path_for_error))
                 .finish(),
             Self::Http { url, headers } => f
                 .debug_struct("Http")
-                .field("url", url)
-                .field("headers", &RedactedValues(headers))
+                .field("url", &RedactedUrl(url))
+                .field("headers", &RedactedMapValues(headers))
                 .finish(),
             Self::Sse { url, headers } => f
                 .debug_struct("Sse")
-                .field("url", url)
-                .field("headers", &RedactedValues(headers))
+                .field("url", &RedactedUrl(url))
+                .field("headers", &RedactedMapValues(headers))
                 .finish(),
         }
     }
@@ -180,7 +166,14 @@ impl TransportTag {
 /// rather than hard-failing, since `~/.claude/mcp.json` is shared with other
 /// MCP clients that store keys this project doesn't model (`disabled`,
 /// `alwaysAllow`, ...).
-#[derive(Debug, Deserialize)]
+///
+/// This is a raw landing zone for the same `mcp.json` data [`McpTransport`]
+/// carries, so its hand-written [`Debug`] impl applies the identical
+/// redaction: `command`/`cwd` sanitized, `args` redacted wholesale, `url`
+/// stripped of userinfo/query, `env`/`headers` values redacted (keys kept),
+/// and `extra` values redacted (keys kept) since they are arbitrary JSON
+/// this project has not validated.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", rename = "McpServerEntry")]
 struct RawMcpServerEntry {
     #[serde(rename = "type")]
@@ -198,6 +191,51 @@ struct RawMcpServerEntry {
     discover_timeout_secs: Option<u64>,
     #[serde(flatten)]
     extra: HashMap<String, serde_json::Value>,
+}
+
+/// Debug-formats an `extra`-style unknown-fields map with keys visible and
+/// every value replaced by [`REDACTED_PLACEHOLDER`].
+///
+/// `extra` holds arbitrary JSON from a shared `mcp.json` this project
+/// doesn't validate — treated as secret-shaped for the same reason
+/// [`RedactedMapValues`] treats `env`/`headers` values that way.
+struct RedactedExtra<'a>(&'a HashMap<String, serde_json::Value>);
+
+impl fmt::Debug for RedactedExtra<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|key| (key, REDACTED_PLACEHOLDER)))
+            .finish()
+    }
+}
+
+impl fmt::Debug for RawMcpServerEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawMcpServerEntry")
+            .field("transport_type", &self.transport_type)
+            .field(
+                "command",
+                &self
+                    .command
+                    .as_deref()
+                    .map(|command| sanitize_path_for_error(Path::new(command))),
+            )
+            .field("args", &RedactedItems(&self.args))
+            .field("env", &RedactedMapValues(&self.env))
+            .field(
+                "cwd",
+                &self
+                    .cwd
+                    .as_deref()
+                    .map(|cwd| sanitize_path_for_error(Path::new(cwd))),
+            )
+            .field("url", &self.url.as_deref().map(RedactedUrl))
+            .field("headers", &RedactedMapValues(&self.headers))
+            .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field("discover_timeout_secs", &self.discover_timeout_secs)
+            .field("extra", &RedactedExtra(&self.extra))
+            .finish()
+    }
 }
 
 /// Resolves the `url`/`command` pair for an http-like (`http` or `sse`)
@@ -631,24 +669,6 @@ pub enum TransportArgs {
     },
 }
 
-/// Debug-formats a list of raw `KEY=VALUE` CLI argument strings, replacing
-/// every entry wholesale with a fixed placeholder.
-///
-/// Unlike `RedactedValues` (which redacts only the value half of an
-/// already-split map), these strings are pre-`parse_key_value` and may not
-/// even contain a `=` — the whole string can be the secret with no
-/// discernible key, per that function's own doc comment — so the entire
-/// entry is replaced rather than just a value half.
-struct RedactedList<'a>(&'a [String]);
-
-impl fmt::Debug for RedactedList<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list()
-            .entries(self.0.iter().map(|_| "<redacted>"))
-            .finish()
-    }
-}
-
 impl fmt::Debug for TransportArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -659,20 +679,24 @@ impl fmt::Debug for TransportArgs {
                 cwd,
             } => f
                 .debug_struct("Stdio")
-                .field("command", command)
-                .field("args", args)
-                .field("env", &RedactedList(env))
-                .field("cwd", cwd)
+                .field("command", &sanitize_path_for_error(Path::new(command)))
+                .field("args", &RedactedItems(args))
+                .field("env", &RedactedItems(env))
+                .field(
+                    "cwd",
+                    &cwd.as_deref()
+                        .map(|cwd| sanitize_path_for_error(Path::new(cwd))),
+                )
                 .finish(),
             Self::Http { url, headers } => f
                 .debug_struct("Http")
-                .field("url", url)
-                .field("headers", &RedactedList(headers))
+                .field("url", &RedactedUrl(url))
+                .field("headers", &RedactedItems(headers))
                 .finish(),
             Self::Sse { url, headers } => f
                 .debug_struct("Sse")
-                .field("url", url)
-                .field("headers", &RedactedList(headers))
+                .field("url", &RedactedUrl(url))
+                .field("headers", &RedactedItems(headers))
                 .finish(),
         }
     }
@@ -1368,6 +1392,93 @@ mod tests {
         assert!(!stdio_debug.contains(secret_body));
         assert!(!stdio_debug.contains("GITHUB_TOKEN"));
         assert!(stdio_debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn test_mcp_transport_debug_redacts_args() {
+        let secret = "sk-live-secret";
+        let transport = McpTransport::Stdio {
+            command: "node".to_string(),
+            args: vec!["--api-key".to_string(), secret.to_string()],
+            env: HashMap::new(),
+            cwd: None,
+        };
+
+        let debug_output = format!("{transport:?}");
+        assert!(!debug_output.contains(secret));
+    }
+
+    #[test]
+    fn test_mcp_transport_debug_redacts_url_userinfo_and_query() {
+        let secret = "hunter2";
+        let http = McpTransport::Http {
+            url: format!("https://user:{secret}@api.example.com/mcp?token={secret}"),
+            headers: HashMap::new(),
+        };
+        let http_debug = format!("{http:?}");
+        assert!(!http_debug.contains(secret));
+        assert!(http_debug.contains("api.example.com/mcp"));
+
+        let sse = McpTransport::Sse {
+            url: format!("https://user:{secret}@api.example.com/sse?token={secret}"),
+            headers: HashMap::new(),
+        };
+        let sse_debug = format!("{sse:?}");
+        assert!(!sse_debug.contains(secret));
+        assert!(sse_debug.contains("api.example.com/sse"));
+    }
+
+    #[test]
+    fn test_transport_args_debug_redacts_args() {
+        let secret = "sk-live-secret";
+        let stdio = TransportArgs::Stdio {
+            command: "node".to_string(),
+            args: vec!["--api-key".to_string(), secret.to_string()],
+            env: vec![],
+            cwd: None,
+        };
+
+        let debug_output = format!("{stdio:?}");
+        assert!(!debug_output.contains(secret));
+    }
+
+    #[test]
+    fn test_transport_args_debug_redacts_url_userinfo_and_query() {
+        let secret = "hunter2";
+        let http = TransportArgs::Http {
+            url: format!("https://user:{secret}@api.example.com/mcp?token={secret}"),
+            headers: vec![],
+        };
+        let http_debug = format!("{http:?}");
+        assert!(!http_debug.contains(secret));
+        assert!(http_debug.contains("api.example.com/mcp"));
+    }
+
+    #[test]
+    fn test_raw_mcp_server_entry_debug_redacts_secret_shaped_fields() {
+        let secret = "sk-live-secret";
+        let entry = RawMcpServerEntry {
+            transport_type: Some(TransportTag::Stdio),
+            command: Some("node".to_string()),
+            args: vec!["--api-key".to_string(), secret.to_string()],
+            env: HashMap::from([("GITHUB_TOKEN".to_string(), secret.to_string())]),
+            cwd: None,
+            url: None,
+            headers: HashMap::new(),
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+            extra: HashMap::from([(
+                "someUnknownSecret".to_string(),
+                serde_json::Value::String(secret.to_string()),
+            )]),
+        };
+
+        let debug_output = format!("{entry:?}");
+        assert!(!debug_output.contains(secret));
+        // Keys stay visible for debugging.
+        assert!(debug_output.contains("GITHUB_TOKEN"));
+        assert!(debug_output.contains("someUnknownSecret"));
+        assert!(debug_output.contains("node"));
     }
 
     #[test]

@@ -34,6 +34,7 @@
 mod command;
 mod error;
 mod path;
+mod redact;
 mod server_config;
 mod types;
 
@@ -56,3 +57,6 @@ pub use command::{
 
 // Re-export path helpers shared by confinement checks
 pub use path::{sanitize_path_for_error, validate_path_segment};
+
+// Re-export Debug-redaction helpers shared by secret-shaped fields
+pub use redact::{REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl};
