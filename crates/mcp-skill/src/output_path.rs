@@ -428,6 +428,7 @@ mod tests {
     /// used for `symlinked_parent_directory_escape_is_rejected` below, one
     /// level up.
     #[tokio::test]
+    #[cfg(unix)]
     async fn symlinked_server_id_directory_escape_is_rejected() {
         let base = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
@@ -444,6 +445,7 @@ mod tests {
     /// S2 regression guard, now running through the unified walk shared
     /// with the `server_id` (S4) and final-component (S1) checks.
     #[tokio::test]
+    #[cfg(unix)]
     async fn symlinked_parent_directory_escape_is_rejected() {
         let base = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
@@ -466,6 +468,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn symlinked_file_escape_is_rejected() {
         let base = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
@@ -485,6 +488,7 @@ mod tests {
     /// S1 regression guard, now running through the unified walk shared
     /// with the `server_id` (S4) and intermediate-component (S2) checks.
     #[tokio::test]
+    #[cfg(unix)]
     async fn dangling_symlink_at_final_component_is_rejected() {
         // Regression for the bypass where `canonicalize` fails on a symlink
         // whose target doesn't exist, and the old code fell through to
