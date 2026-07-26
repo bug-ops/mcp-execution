@@ -30,6 +30,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   functions, not a fix for a reachable live-server exploit: a schema arriving over the wire is
   already bounded to well under this cap by `serde_json`'s own default deserialization
   recursion limit before it ever reaches these functions (#303).
+- **`mcp-execution-codegen`**: a tool whose name sanitized to `index` (literally `index`, or a
+  case-insensitive variant like `Index`/`INDEX`) had its generated `.ts` file silently
+  overwritten by the always-emitted `index.ts` re-export, permanently losing the tool's own
+  generated code — and on a case-insensitive filesystem (macOS APFS, Windows NTFS by default),
+  a case-variant name like `Index` collided with `index.ts` too, since the two are the same file
+  there regardless of case; two tools named e.g. `Index` and `index` collided with each other the
+  same way. `resolve_typescript_names` now disambiguates output filenames case-insensitively
+  (against JS/TS reserved words, this generator's own reserved output filenames, and each other),
+  while still emitting each tool's original casing, so a colliding name gets the same
+  numeric-suffix disambiguation (`index_2`, `Index_2`, ...) a genuine same-case collision already
+  received — this also incidentally disambiguates any two tool names that differ only by case
+  (e.g. `getUser`/`GetUser`), not just names colliding with a reserved name (#312).
+- **`mcp-execution-server`**: `save_categorized_tools` built its codegen categorization map
+  keyed by the *display* form of a tool name Claude was shown by `introspect_server`
+  (control-character-sanitized, and — for a name containing `&`/`<`/`>` — additionally
+  entity-escaped as part of delimiting untrusted MCP metadata), while codegen looks up
+  categorization by the tool's *raw* name. For any tool name containing a control character,
+  line terminator, or `&`/`<`/`>`, this desync silently dropped its category, keywords, and
+  short description with no error surfaced. `save_categorized_tools` now resolves each
+  `categorized_tools` entry to its raw tool name before building the categorization map, so
+  identity comparisons stay keyed by what Claude actually saw while codegen lookups stay keyed
+  by the raw value. Several refinements to that resolution: a caller may echo back either the
+  literally-shown escaped form (`a&lt;b`) or the same name with `&`/`<`/`>` entities decoded
+  back to their original characters (`a<b`) — `wrap_untrusted_block`'s own preamble invites
+  exactly that decoding, and only accepting the escaped form would have hard-rejected
+  previously-working input; if two distinct raw tool names ever sanitize to the same display
+  form, that shared form is now rejected explicitly as ambiguous rather than a last-write-wins
+  map silently misattributing one tool's categorization to the other; and duplicate-entry
+  detection now dedups on each entry's *resolved raw name* rather than its submitted display
+  string, since a single raw tool can legitimately be named by either of its two display forms —
+  deduping on the submitted string alone missed a caller submitting both forms for the same tool,
+  letting the second entry silently overwrite the first's categorization (#307).
 
 - **`mcp-execution-skill`**: `scan_tools_directory` discarded the real `io::Error` from both of
   its `canonicalize` calls (the server directory and the `_meta.json` sidecar) and mislabeled
@@ -47,6 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented `tsconfig.json` leaf-configuration behavior in `mcp-codegen` crate docs and README: generated `tsconfig.json` is not intended to be `extends`-ed (silent `noEmit` inheritance), is regenerated on every `generate` run, and the generated package should be executed or type-checked as a separate process rather than merged into the consumer's own TypeScript compilation (#258).
 
 ### Breaking
+
+- **`mcp-execution-codegen`**: `GeneratedCode::add_file` now returns
+  `Result<(), mcp_execution_core::Error>` instead of `()`. Adding a file at a path already
+  present in the collection now returns `Error::DuplicateGeneratedFilePath` instead of silently
+  overwriting the earlier entry, so a future gap in reserved-name handling (like #312) fails
+  loudly instead of losing a generated file with no signal to the caller. All in-tree call sites
+  (`mcp-codegen`'s own generator, `mcp-files`'s `FilesBuilder`) have been updated.
 
 - **`mcp-execution-files`**: `FilesError::is_not_found()`, `is_not_directory()`,
   `is_invalid_path()`, and `is_io_error()`, and `FilePath::is_dir_path()` removed — none had any
