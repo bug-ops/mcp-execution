@@ -8,6 +8,7 @@ use mcp_execution_core::{
     Error as CoreError, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl,
     ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
 };
+use mcp_execution_skill::MAX_SERVER_ID_LENGTH;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt;
@@ -894,12 +895,6 @@ pub(crate) fn resolve_server_config(
 /// with no host). The slug is truncated to fit `validate_server_id`'s length
 /// limit.
 fn derive_server_id_from_url(url: &str) -> ServerId {
-    // Mirrors the private `mcp_execution_skill::types::MAX_SERVER_ID_LENGTH`;
-    // duplicated here since that constant isn't exported, and enforced by
-    // this module's tests calling `mcp_execution_skill::validate_server_id`
-    // on the derived slug.
-    const MAX_SERVER_ID_LENGTH: usize = 64;
-
     // On parse failure, fall through to the empty-slug case below rather than
     // sanitizing the raw string: a URL that failed to parse is about to be
     // rejected by `validate_url_scheme`/the connection attempt anyway, and

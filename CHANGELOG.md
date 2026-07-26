@@ -339,6 +339,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-codegen`**: `ProgressiveGenerator::generate` now delegates to
+  `generate_with_categories` with an empty categorization map instead of duplicating the same
+  eight-step file-generation pipeline (#279). Fixed a regression this introduced along the way:
+  `create_index_context`'s category-grouping branch keyed off `Option`-ness rather than emptiness,
+  so `Some(&HashMap::new())` synthesized a spurious `uncategorized` group in `index.ts` that
+  `generate`'s prior hand-rolled pipeline (which passed `None`) never produced. Now filtered on
+  emptiness so an empty-but-`Some` map behaves identically to `None`, restoring `generate`'s
+  original `index.ts` output byte-for-byte; this also fixes the same latent bug in
+  `mcp-execution-server`'s `generate_with_categorization`, which could already be called with an
+  empty categorization map.
+- **`mcp-execution-cli`**: `derive_server_id_from_url` now imports `MAX_SERVER_ID_LENGTH` from
+  `mcp-execution-skill` instead of hand-copying a private local constant of the same value (#278).
 - **`mcp-execution-server`, `mcp-execution-skill`**: fields with a documented numeric bound
   (`CategorizedTool`'s `name`/`category`/`keywords`/`short_description`,
   `SaveCategorizedToolsParams::categorized_tools`, `IntrospectServerParams`'s `server_id`/
