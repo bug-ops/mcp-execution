@@ -1153,6 +1153,22 @@ fn build_server_info(
 /// `description`, and serialized `input_schema`/`output_schema` size (denial-of-service
 /// protection, CWE-400) against a malicious or misbehaving MCP server.
 ///
+/// `(*tool.input_schema).clone()` below, and both `serde_json::to_vec` calls, walk the
+/// schema's full tree recursively with no depth limit of their own (`Value`'s `Clone` impl and
+/// its `Serialize` implementation are both unconditionally recursive) — the same class of
+/// unguarded recursion `mcp-execution-codegen`'s `MAX_SCHEMA_RECURSION_DEPTH` defends against
+/// (issue #303). That cap is not duplicated here because it doesn't need to be: by the time a
+/// `Tool` reaches this function, `tool.input_schema`/`tool.output_schema` were already produced
+/// by deserializing this server's `tools/list` response (via this crate's own JSON-RPC decoder
+/// for the stdio transport, or `rmcp`'s HTTP transport for the HTTP/SSE case), and `serde_json`
+/// enforces its own default recursion limit (128) while deserializing — nothing in this
+/// workspace's dependency tree raises or disables it (no `disable_recursion_limit`/
+/// `unbounded_depth`). A schema nested deep enough to threaten a recursive `clone`/serialize
+/// here would already have failed to deserialize into a `Tool` in the first place, surfacing as
+/// a recoverable parse error rather than reaching this function. See
+/// `mcp_execution_codegen::common::typescript::MAX_SCHEMA_RECURSION_DEPTH`'s docs for the
+/// measured reachable-depth ceiling this reasoning is based on.
+///
 /// # Errors
 ///
 /// Returns [`Error::ResourceLimitExceeded`] if the tool's name exceeds [`MAX_TOOL_NAME_LEN`],

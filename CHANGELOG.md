@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mcp-execution-codegen`**: new `pub` constant `common::typescript::MAX_SCHEMA_RECURSION_DEPTH`
+  (128) bounding how deep `json_schema_to_typescript` and the JSDoc description sanitizer will
+  recurse into a schema before treating the remainder of a branch as opaque, as defense-in-depth
+  for direct callers of those two functions — a caller can hand either one an arbitrarily deep
+  `serde_json::Value` built by hand, which has no depth limit of its own the way a schema
+  deserialized from an MCP server's `tools/list` response does. This does not extend to the rest
+  of the `ProgressiveGenerator::generate`/`generate_with_categories` pipeline, which has other
+  unguarded recursive touches on the same schema (a raw `Value::Clone` before the sanitizer
+  runs, later re-serialization/Handlebars rendering, and eventual `Drop`) that this constant
+  does not cover (#303).
+
 ### Fixed
+
+- **`mcp-execution-codegen`**: `json_schema_to_typescript` and the JSDoc description sanitizer
+  recursed into a tool's `input_schema` with no depth limit, and the only existing guard bounded
+  the schema's serialized byte size rather than its nesting depth. Both functions now stop
+  recursing past `MAX_SCHEMA_RECURSION_DEPTH` and treat the remainder of the branch as opaque
+  instead of continuing to descend. This is defense-in-depth for direct callers of these two
+  functions, not a fix for a reachable live-server exploit: a schema arriving over the wire is
+  already bounded to well under this cap by `serde_json`'s own default deserialization
+  recursion limit before it ever reaches these functions (#303).
 
 - **`mcp-execution-skill`**: `scan_tools_directory` discarded the real `io::Error` from both of
   its `canonicalize` calls (the server directory and the `_meta.json` sidecar) and mislabeled
