@@ -25,6 +25,17 @@ use crate::commands;
 /// This function cannot fail—it always returns `Ok(())`. Multiple calls
 /// in the same process will panic rather than returning an error, but this
 /// is not a recoverable condition and indicates a programming error.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::runner;
+///
+/// // `no_run`: this installs a process-global tracing subscriber, which
+/// // panics if called more than once in the same process.
+/// runner::init_logging(false)?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn init_logging(verbose: bool) -> Result<()> {
     let filter = if verbose {
         EnvFilter::new("debug")
@@ -45,7 +56,7 @@ pub fn init_logging(verbose: bool) -> Result<()> {
 /// Routes commands to their respective handlers. On success, returns the exit
 /// code reported by the handler. If the handler fails, the error is printed
 /// to stderr and classified into a semantic [`ExitCode`] via
-/// [`classify_exit_code`] rather than propagated — this lets `main` always
+/// `classify_exit_code` rather than propagated — this lets `main` always
 /// turn the result into a process exit code without falling back to anyhow's
 /// default behavior of collapsing every `Err` to exit code 1.
 ///
@@ -59,6 +70,22 @@ pub fn init_logging(verbose: bool) -> Result<()> {
 /// This function does not propagate command execution failures as `Err` —
 /// see above. It is fallible in signature to match this crate's convention
 /// of using `Result` consistently across command handlers.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::cli::Commands;
+/// use mcp_execution_cli::runner;
+/// use mcp_execution_core::cli::OutputFormat;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let exit_code = runner::execute_command(
+///     Commands::Setup,
+///     OutputFormat::Pretty,
+/// ).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
     let result = match command {
         Commands::Introspect {
@@ -159,11 +186,25 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
 }
 
 /// Prints `err` to stderr (matching anyhow's default `main`-error format) and
-/// classifies it into a semantic [`ExitCode`] via [`classify_exit_code`].
+/// classifies it into a semantic [`ExitCode`] via `classify_exit_code`.
 ///
 /// Shared by [`execute_command`] (command-handler failures) and `main`
 /// (pre-dispatch failures, e.g. an invalid `--format` value), so every
 /// failure this CLI can produce is reported and exits the same way.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::runner;
+/// use mcp_execution_core::Error as CoreError;
+/// use mcp_execution_core::cli::ExitCode;
+///
+/// let err = anyhow::Error::from(CoreError::InvalidArgument(
+///     "invalid output format: 'xml' (expected: json, text, or pretty)".to_string(),
+/// ));
+/// assert_eq!(runner::report_and_classify(&err), ExitCode::INVALID_INPUT);
+/// ```
+#[must_use]
 pub fn report_and_classify(err: &anyhow::Error) -> ExitCode {
     eprintln!("Error: {err:?}");
     classify_exit_code(err)

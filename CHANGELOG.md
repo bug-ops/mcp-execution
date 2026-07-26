@@ -94,6 +94,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   maps before `build()`/`try_build()` is called, derived `Debug` over them too and gets the same
   treatment, reusing the private `RedactedValues` helper introduced for `ServerConfig`.
 
+- **`mcp-execution-cli`**: `McpTransport`'s `Http`/`Sse` variants derived a plain `Debug`, so
+  their `headers` map — populated straight from `~/.claude/mcp.json` and routinely holding a real
+  `Authorization: Bearer <token>` — was printed in full by `format!("{transport:?}")`; the
+  `list_mcp_servers` doc example even modeled `println!("{}: {:?}", name, entry.transport)` as
+  safe usage. `McpTransport` now has a hand-written `Debug` impl mirroring
+  `mcp_execution_core::ServerConfig`'s convention: `headers`/`env` keys stay visible, every value
+  is replaced with `<redacted>`. `McpServerEntry` keeps deriving `Debug` and inherits the
+  redaction through its `transport` field (#229). `TransportArgs` — the CLI-flag mirror of
+  `McpTransport`, holding raw unparsed `KEY=VALUE` strings in `env`/`headers` before
+  `parse_key_value` ever splits them — had the identical derived-`Debug` leak and gets the same
+  treatment, replacing each entry wholesale with `<redacted>` (there is no validated key yet to
+  keep visible) (#229).
+
+- **`mcp-execution-core`**: `validate_command_string`'s forbidden-shell-metacharacter error
+  echoed the full offending command/argument value verbatim, even though the same function
+  validates CLI arguments that routinely carry secrets (e.g. a misparsed `--api-key sk-...`
+  value). The error message no longer includes the value, matching the "value omitted as it may
+  be secret-shaped" convention already used by the header validation checks in this file (#229).
+
 - **`mcp-execution-server`**: `list_generated_servers`'s `base_dir` parameter was used verbatim
   to build a `read_dir` scan, so a caller could point it anywhere the process could read (e.g.
   `/etc`) and get back a directory listing — subdirectory names, per-subdirectory `.ts` file
@@ -124,8 +143,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mcp-execution-server` and `mcp-execution-cli` that only formatted the error via `Display` are
   unaffected; call sites that passed the error directly to `McpError::invalid_params` now call
   `.to_string()` first (#196).
+- **`mcp-execution-cli`**: `main.rs` no longer redeclares its own private copy of `actions`,
+  `commands`, and `formatters` alongside `lib.rs`'s public copy — the two module trees were
+  compiled twice with different visibility topologies. `cli` and `runner` (previously reachable
+  only from the bin target) moved into the library's module tree, and `main.rs` is now a thin
+  entry point that calls into `mcp_execution_cli` instead of declaring its own `mod` tree.
+  `mcp_execution_cli::cli` and `mcp_execution_cli::runner` are now genuine public API surface
+  (`pub mod cli`, `pub mod runner`) — not just an internal restructure — exposing `Cli`,
+  `Commands`, and the command-execution/exit-code-classification entry points for external
+  testing, consistent with the existing `actions`/`commands`/`formatters` modules. `runner`'s
+  three newly-public functions (`init_logging`, `execute_command`, `report_and_classify`) gained
+  `# Examples` doctests, per this crate's existing convention of a runnable example on every
+  public item (#188).
+- **`mcp-execution-cli`**: removed five clippy crate-level `#[allow(...)]` attributes
+  (`format_push_string`, `cast_possible_truncation`, `missing_errors_doc`, `unnecessary_wraps`,
+  `unnecessary_literal_unwrap`) from `lib.rs` that no longer suppress anything now that the
+  module tree compiles once instead of twice; verified vacuous via `cargo clippy -p
+  mcp-execution-cli --all-targets --all-features -- -D warnings` with all seven allows removed
+  and the resulting errors inspected. `unused_async` and `needless_collect` remain, as they
+  still fire; both now carry an explanatory comment per this project's `#[allow(...)]`
+  justification convention.
+- **`mcp-execution-cli`**: removed the unused `criterion`, `dhat`, `dialoguer`, and `toml`
+  entries from `[dependencies]` — none are referenced anywhere in the crate and it has no
+  `benches/` or `examples/` directory. Removed the unused `static_assertions`, `dialoguer`, and
+  `toml` entries from the root `[workspace.dependencies]` table, none of which any crate in the
+  workspace still referenced (#193).
 
 ### Fixed
+
+- **`mcp-execution-codegen`**: the generated runtime bridge (`_runtime/mcp-bridge.ts`) attached a
+  fresh `stdout` listener per `callMCPTool` call and resolved on the first complete JSON-RPC
+  message with an `id`, without checking that the `id` matched the request it sent. Two
+  concurrent calls to the same server raced on the shared stream, so one caller could receive
+  another's response (#232). The bridge now spawns a single shared response dispatcher per
+  connection that demultiplexes incoming messages by request id into a per-connection pending
+  map, so each call only ever resolves with its own response; entries are removed on
+  resolve/reject/timeout so the map cannot grow unbounded. Related hardening: `getConnection`
+  now caches the in-flight connection-setup promise (not just the resolved connection), so
+  concurrent calls on a cold server share one spawn instead of racing to spawn duplicate
+  processes; pending requests are rejected on the process `close` event rather than `exit` (Node
+  emits `exit` before stdio has fully drained, which could spuriously reject a request whose
+  response was still in the OS pipe buffer); stdout is read via `setEncoding('utf8')` instead of
+  manually concatenating `Buffer` chunks, so multi-byte UTF-8 characters split across chunk
+  boundaries no longer corrupt into unparseable replacement characters; a stdin write error no
+  longer leaks its pending-request entry, and a `stdin` error listener rejects the connection's
+  pending requests immediately (rather than only logging) so a broken pipe fails fast instead of
+  waiting out the full request timeout; a stdout stream error now also evicts the connection from
+  the server cache so a broken connection isn't reused and left to hang all subsequent requests.
+  Every cache eviction (on `close`, process `error`, stdout `error`, or stdin `error`) now checks
+  that the cache still points at the exact connection attempt being torn down before deleting it,
+  so a stale teardown can no longer race a concurrent reconnect and delete a newer, live
+  connection out from under it — leaving its process both running and unreachable. A bare JSON
+  primitive line (e.g. a lone `null`) from the server is now dropped like any other
+  non-response line instead of crashing the host process, since checking for an `id` property on
+  a non-object value threw a `TypeError` when only wrapped in a `try`/`catch` that covered
+  `JSON.parse` alone. The stale-connection liveness check also inspects `signalCode` (not just
+  `exitCode`), so a process killed by signal is no longer misclassified as alive.
+  `closeAllConnections` (used by the `SIGINT`/`SIGTERM` handlers) now signals every tracked child
+  process synchronously and immediately, then lets in-flight connection attempts settle
+  concurrently, instead of `await`-ing each cached connection sequentially first — which could
+  stall shutdown behind a single slow-initializing server for up to the full request timeout and
+  delay killing every other server behind it.
 
 - **`mcp-execution-skill`**: `extract_skill_metadata` parsed a `SKILL.md`'s YAML frontmatter with
   hand-rolled, single-line regexes, so a `description: |`/`description: >` block scalar had its
