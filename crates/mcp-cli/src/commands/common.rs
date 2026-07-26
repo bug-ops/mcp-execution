@@ -445,6 +445,15 @@ pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 ///
 /// Returns an error if the config file is missing, malformed, or the named
 /// server is not present.
+///
+/// Deliberately does *not* validate `name` against
+/// [`validate_server_id`](mcp_execution_skill::validate_server_id): this
+/// function is shared by `introspect` and `server list`/`server show`, which
+/// have no need for `name` to be a filesystem-safe slug — only `generate`
+/// turns it into a directory name, so that check lives at `generate`'s own
+/// sink (`resolve_server_dir_name`) instead. Enforcing it here would hard-fail
+/// `introspect --from-config` for entirely legitimate `mcp.json` keys that
+/// aren't already `[a-z0-9-]` (e.g. `claude_ai_Gmail`).
 pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
     let config = load_mcp_config()?;
 
@@ -821,7 +830,7 @@ pub(crate) fn build_server_config(
     discover_timeout_secs: Option<u64>,
 ) -> Result<(ServerId, ServerConfig)> {
     let server_id = match &transport {
-        TransportArgs::Stdio { command, .. } => ServerId::new(command),
+        TransportArgs::Stdio { command, .. } => derive_server_id_from_path_or_name(command),
         TransportArgs::Http { url, .. } | TransportArgs::Sse { url, .. } => {
             derive_server_id_from_url(url)
         }
@@ -960,39 +969,21 @@ pub(crate) fn resolve_server_config(raw: RawServerArgs) -> Result<(ServerId, Ser
     }
 }
 
-/// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from
-/// an Http/Sse transport URL.
+/// Lowercases `input`, collapses every run of characters outside
+/// `[a-z0-9-]` to a single `-`, and trims leading/trailing `-`, producing a
+/// filesystem- and `validate_server_id`-safe [`ServerId`] slug.
 ///
-/// Using the raw URL as the id (the previous behavior) is unsafe once Http/Sse
-/// configs can actually reach `generate`: the id flows into a directory name
-/// under `~/.claude/servers/{id}/` and into generated `tool.ts` literals, so a
-/// raw URL there breaks `mcp_execution_skill::validate_server_id`'s
-/// lowercase/digit/hyphen requirement, can smuggle `..` path segments through
-/// `PathBuf::join`, and — if the URL carries `user:token@host` userinfo —
-/// leaks the credential into a directory name and generated source.
-///
-/// Only `host` and `path` are used (never `userinfo`, so credentials are
-/// structurally excluded). The result is lowercased, every run of characters
-/// outside `[a-z0-9-]` collapses to a single `-`, and leading/trailing `-` are
-/// trimmed. Falls back to [`FALLBACK_SERVER_ID_SLUG`] if the URL fails to
-/// parse or the result would otherwise be empty (e.g. a bare `https://` URL
-/// with no host). The slug is truncated to fit `validate_server_id`'s length
-/// limit.
-fn derive_server_id_from_url(url: &str) -> ServerId {
-    // On parse failure, fall through to the empty-slug case below rather than
-    // sanitizing the raw string: a URL that failed to parse is about to be
-    // rejected by `validate_url_scheme`/the connection attempt anyway, and
-    // preserving any part of it here would defeat the credential-exclusion
-    // guarantee above for inputs like `https://user:pass@evil.com:99999/x`
-    // (a mistyped port is a realistic `Url::parse` failure, not just an
-    // adversarial one).
-    let host_and_path = Url::parse(url)
-        .ok()
-        .map(|parsed| format!("{}{}", parsed.host_str().unwrap_or_default(), parsed.path()))
-        .unwrap_or_default();
-
-    let mut slug = String::with_capacity(host_and_path.len());
-    for ch in host_and_path.chars() {
+/// Shared by [`derive_server_id_from_url`] (applied to a URL's host+path) and
+/// [`derive_server_id_from_path_or_name`] (applied directly to a stdio
+/// command or `--name` override). Since path separators (`/`, `\`) and `.`
+/// are outside the whitelist, they can never survive into the slug — a
+/// leading `/` or a `..` segment is dropped entirely rather than preserved,
+/// which is what makes this safe to use directly on untrusted filesystem-path-shaped
+/// input. Falls back to [`FALLBACK_SERVER_ID_SLUG`] if the result would
+/// otherwise be empty, and truncates to `MAX_SERVER_ID_LENGTH`.
+fn slugify(input: &str) -> ServerId {
+    let mut slug = String::with_capacity(input.len());
+    for ch in input.chars() {
         let lower = ch.to_ascii_lowercase();
         if lower.is_ascii_lowercase() || lower.is_ascii_digit() {
             slug.push(lower);
@@ -1010,6 +1001,52 @@ fn derive_server_id_from_url(url: &str) -> ServerId {
     } else {
         slug
     })
+}
+
+/// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from
+/// an Http/Sse transport URL.
+///
+/// Using the raw URL as the id (the previous behavior) is unsafe once Http/Sse
+/// configs can actually reach `generate`: the id flows into a directory name
+/// under `~/.claude/servers/{id}/` and into generated `tool.ts` literals, so a
+/// raw URL there breaks `mcp_execution_skill::validate_server_id`'s
+/// lowercase/digit/hyphen requirement, can smuggle `..` path segments through
+/// `PathBuf::join`, and — if the URL carries `user:token@host` userinfo —
+/// leaks the credential into a directory name and generated source.
+///
+/// Only `host` and `path` are used (never `userinfo`, so credentials are
+/// structurally excluded) before delegating to [`slugify`].
+fn derive_server_id_from_url(url: &str) -> ServerId {
+    // On parse failure, fall through to the empty-slug case below rather than
+    // sanitizing the raw string: a URL that failed to parse is about to be
+    // rejected by `validate_url_scheme`/the connection attempt anyway, and
+    // preserving any part of it here would defeat the credential-exclusion
+    // guarantee above for inputs like `https://user:pass@evil.com:99999/x`
+    // (a mistyped port is a realistic `Url::parse` failure, not just an
+    // adversarial one).
+    let host_and_path = Url::parse(url)
+        .ok()
+        .map(|parsed| format!("{}{}", parsed.host_str().unwrap_or_default(), parsed.path()))
+        .unwrap_or_default();
+
+    slugify(&host_and_path)
+}
+
+/// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from
+/// a stdio transport command or a `--name` override.
+///
+/// `command`/`name` are attacker-influenced (a CLI argument, or free text an
+/// operator might paste from a shared script) and — unlike an Http/Sse URL —
+/// commonly *are* legitimate filesystem paths (e.g. `./bin/my-server` or
+/// `/usr/local/bin/mcp-server`). Constructing `ServerId` directly from them
+/// (the previous behavior) is unsafe because the id flows unmodified into a
+/// directory name under `~/.claude/servers/{id}/`
+/// (`base_dir.join(&server_dir_name)`): a leading `/` makes `PathBuf::join`
+/// discard `base_dir` entirely, and `..` segments walk back out of it.
+/// Delegates to [`slugify`], which strips path separators and `..` by
+/// construction.
+pub(crate) fn derive_server_id_from_path_or_name(raw: &str) -> ServerId {
+    slugify(raw)
 }
 
 #[cfg(test)]
@@ -2270,6 +2307,98 @@ mod tests {
         assert!(!id.as_str().contains("token"));
     }
 
+    // ── derive_server_id_from_path_or_name / issue #311 (stdio command and
+    // `--name` override are also joined onto a filesystem base directory and
+    // must be sanitized the same way `derive_server_id_from_url` already is) ──
+
+    #[test]
+    fn test_derive_server_id_from_path_or_name_rejects_parent_traversal() {
+        let id = derive_server_id_from_path_or_name("../../../../etc/passwd");
+        assert!(!id.as_str().contains(".."));
+        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_derive_server_id_from_path_or_name_rejects_absolute_path() {
+        let id = derive_server_id_from_path_or_name("/etc/cron.d/evil");
+        assert!(!id.as_str().starts_with('/'));
+        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_derive_server_id_from_path_or_name_join_never_escapes_base_dir() {
+        // Literal reproduction of how `generate.rs` uses the id: joined onto
+        // a base directory via `PathBuf::join`, which discards the base
+        // entirely if the joined component is absolute. Since the sanitized
+        // slug can only ever contain `[a-z0-9-]`, that can never happen.
+        let base_dir = PathBuf::from("/home/user/.claude/servers");
+        let malicious_inputs = [
+            "../../../../etc/passwd",
+            "/etc/cron.d/evil",
+            "/../../escape",
+            "..",
+            "./../escape",
+        ];
+
+        for input in malicious_inputs {
+            let id = derive_server_id_from_path_or_name(input);
+            let joined = base_dir.join(id.as_str());
+            assert!(
+                joined.starts_with(&base_dir),
+                "joining derived id {:?} (from {input:?}) onto {base_dir:?} escaped it: {joined:?}",
+                id.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn test_derive_server_id_from_path_or_name_preserves_ordinary_commands() {
+        // Ordinary stdio commands (already lowercase alnum-hyphen) must be
+        // unaffected by sanitization.
+        assert_eq!(
+            derive_server_id_from_path_or_name("github-mcp-server").as_str(),
+            "github-mcp-server"
+        );
+        assert_eq!(
+            derive_server_id_from_path_or_name("docker").as_str(),
+            "docker"
+        );
+    }
+
+    #[test]
+    fn test_derive_server_id_from_path_or_name_strips_path_components() {
+        // A legitimate absolute/relative binary path still produces a safe,
+        // single-segment id rather than being rejected outright.
+        let id = derive_server_id_from_path_or_name("/usr/local/bin/mcp-server");
+        assert_eq!(id.as_str(), "usr-local-bin-mcp-server");
+        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn test_build_server_config_stdio_traversal_command_never_escapes_base_dir() {
+        // Regression test for #311: a stdio `command` used to flow straight
+        // into `ServerId::new` unsanitized, then into a directory name under
+        // `~/.claude/servers/{id}/`. Covers both a relative command
+        // containing `..` (skips `ServerConfigBuilder`'s absolute-path
+        // existence check entirely) and a legitimate absolute path (which
+        // must exist to pass that check, so `/bin/sh` is used) — both are
+        // realistic stdio `command` shapes.
+        let base_dir = PathBuf::from("/home/user/.claude/servers");
+        for command in ["../../../../etc/passwd", "/bin/sh"] {
+            let (id, _config) =
+                build_server_config(stdio_transport(command, vec![], vec![], None), None, None)
+                    .unwrap();
+
+            assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+            let joined = base_dir.join(id.as_str());
+            assert!(
+                joined.starts_with(&base_dir),
+                "joining derived id {:?} (from command {command:?}) escaped {base_dir:?}: {joined:?}",
+                id.as_str()
+            );
+        }
+    }
+
     /// Serializes tests in this module that mutate the `HOME` env var so
     /// they cannot race each other when run in the same process (relevant
     /// under plain `cargo test`, which runs a crate's tests in one process;
@@ -2336,5 +2465,47 @@ mod tests {
             entry.transport,
             McpTransport::Stdio { ref command, .. } if command == "node"
         ));
+    }
+
+    /// Regression test for #311 review S4: `get_mcp_server` must accept a
+    /// legitimate `mcp.json` key that isn't already `[a-z0-9-]` (mixed case,
+    /// underscores) — it is shared by `introspect`/`server`, which have no
+    /// need for the id to be a filesystem-safe slug. Only `generate`'s own
+    /// sink (`resolve_server_dir_name` in `generate.rs`) enforces that
+    /// constraint, since only `generate` turns the id into a directory name.
+    #[cfg(unix)]
+    #[test]
+    fn test_get_mcp_server_accepts_non_slug_shaped_config_key() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("mcp.json"),
+            r#"{"mcpServers": {"claude_ai_Gmail": {"command": "node", "args": ["server.js"]}}}"#,
+        )
+        .unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
+        // reads or writes `HOME` while the guard is held.
+        unsafe {
+            std::env::set_var("HOME", temp.path());
+        }
+
+        let get_result = get_mcp_server("claude_ai_Gmail");
+
+        // SAFETY: see above.
+        unsafe {
+            match &original_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let (id, _config, _entry) =
+            get_result.expect("get_mcp_server must not reject a non-slug-shaped mcp.json key");
+        assert_eq!(id.as_str(), "claude_ai_Gmail");
     }
 }

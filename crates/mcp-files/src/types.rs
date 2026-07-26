@@ -91,6 +91,19 @@ pub enum FilesError {
         /// The configured maximum allowed for this resource.
         limit: usize,
     },
+
+    /// An export target's canonicalized parent directory resolved outside a
+    /// caller-supplied confinement base directory (see
+    /// [`ExportOptions::with_confine_to`](crate::ExportOptions::with_confine_to)),
+    /// e.g. because it was built by joining an unsanitized identifier
+    /// containing `..` segments or an absolute path onto the intended base.
+    #[error("path {path} escapes base directory {base}")]
+    PathEscapesBase {
+        /// The canonicalized path that resolved outside `base`.
+        path: String,
+        /// The base directory `path` was required to resolve inside.
+        base: String,
+    },
 }
 
 impl FilesError {

@@ -250,6 +250,7 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
             | FilesError::InvalidPath { .. }
             | FilesError::PathNotAbsolute { .. }
             | FilesError::InvalidPathComponent { .. }
+            | FilesError::PathEscapesBase { .. }
             | FilesError::IoError { .. } => ExitCode::ERROR,
         };
     }
