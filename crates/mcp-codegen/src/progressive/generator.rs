@@ -109,6 +109,8 @@ const PACKAGE_JSON: &str = "{\"type\":\"module\",\"devDependencies\":{\"@types/n
 
 /// Contents of the generated `tsconfig.json`.
 ///
+/// ## Implementation rationale (for maintainers)
+///
 /// Tool files import the runtime bridge with an explicit `.ts` extension (see
 /// `tool.ts.hbs`), which requires `allowImportingTsExtensions`. TypeScript requires `noEmit`
 /// (or a declaration/emit setting) whenever `allowImportingTsExtensions` is set, since that
@@ -121,6 +123,29 @@ const PACKAGE_JSON: &str = "{\"type\":\"module\",\"devDependencies\":{\"@types/n
 /// --noEmit` fails with `TS2591`/`TS2503` under TS 7 even with `@types/node` correctly
 /// installed, unless `types` names it explicitly. Listing it explicitly works identically
 /// under both major versions.
+///
+/// ## Consumer guidance (intended behavior for users)
+///
+/// **This is a leaf configuration, not intended to be extended.** If a consumer's own
+/// `tsconfig.json` uses `"extends"` to reference the generated one, `"noEmit": true` will be
+/// inherited silently, preventing their own build from emitting output. **Do not extend this
+/// file.**
+///
+/// **This file is regenerated on every `generate` call.** Any manual edits are lost when
+/// `mcp-execution generate` runs again, the same as `package.json`. Treat the generated
+/// `tsconfig.json` as read-only.
+///
+/// **How to use the generated package:** The generated TypeScript files are a standalone
+/// package meant to be executed or type-checked as a separate process, not merged into your
+/// own TypeScript compilation:
+/// - Execute the generated code directly via a TS-aware runtime: `tsx` (for Node.js),
+///   `deno`, or Node.js's native type-stripping (when available).
+/// - Or type-check it independently: run `tsc -p <generated-dir>` as a separate build step,
+///   without merging it into your own `include`-based program.
+/// - If your own build uses a bundler (esbuild, swc, Vite, etc.) that doesn't enforce
+///   TypeScript's `noEmit` constraint, you may be able to bundle the generated files
+///   alongside your code (consult your bundler's documentation for mixing `noEmit`
+///   and emitting configurations).
 const TSCONFIG_JSON: &str = r#"{
   "compilerOptions": {
     "target": "ES2022",

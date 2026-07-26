@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::actions::ServerAction;
-use mcp_execution_core::RedactedItems;
 use mcp_execution_core::cli::OutputFormat;
+use mcp_execution_core::{RedactedItems, RedactedUrl};
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -55,13 +55,14 @@ pub struct Cli {
     pub format: OutputFormat,
 }
 
-// Hand-written to redact `Commands::Introspect`'s `env`/`headers` and
-// `Commands::Generate`'s `server_env`/`server_headers` — these carry raw,
-// unparsed `KEY=VALUE` secrets (tokens, API keys) straight from argv, before
-// `TransportArgs`/`McpTransport` ever get a chance to redact them. Mirrors
-// `commands::common::TransportArgs`'s `Debug` impl and reuses
-// `mcp_execution_core::RedactedItems` rather than duplicating the redaction
-// logic.
+// Hand-written to redact `Commands::Introspect`'s `env`/`headers`/`http`/`sse`
+// and `Commands::Generate`'s `server_env`/`server_headers`/`http_url`/
+// `sse_url` — these carry raw, unparsed `KEY=VALUE` secrets and URLs (which
+// may embed credentials, e.g. `https://user:token@host/mcp`) straight from
+// argv, before `TransportArgs`/`McpTransport` ever get a chance to redact
+// them. Mirrors `commands::common::TransportArgs`'s `Debug` impl and reuses
+// `mcp_execution_core::RedactedItems`/`RedactedUrl` rather than duplicating
+// the redaction logic.
 impl fmt::Debug for Cli {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Destructuring (rather than `&self.field`) turns a field added to
@@ -476,8 +477,8 @@ impl fmt::Debug for Commands {
                 .field("args", args)
                 .field("env", &RedactedItems(env))
                 .field("cwd", cwd)
-                .field("http", http)
-                .field("sse", sse)
+                .field("http", &http.as_deref().map(RedactedUrl))
+                .field("sse", &sse.as_deref().map(RedactedUrl))
                 .field("headers", &RedactedItems(headers))
                 .field("detailed", detailed)
                 .field("connect_timeout_secs", connect_timeout_secs)
@@ -520,8 +521,8 @@ impl fmt::Debug for Commands {
                 .field("server_args", server_args)
                 .field("server_env", &RedactedItems(server_env))
                 .field("server_cwd", server_cwd)
-                .field("http_url", http_url)
-                .field("sse_url", sse_url)
+                .field("http_url", &http_url.as_deref().map(RedactedUrl))
+                .field("sse_url", &sse_url.as_deref().map(RedactedUrl))
                 .field("server_headers", &RedactedItems(server_headers))
                 .field("name", name)
                 .field("progressive_output", progressive_output)
@@ -991,5 +992,65 @@ mod tests {
         let cli = Cli::parse_from(["mcp-cli", "introspect", "docker", "--arg=stdio"]);
         let debug_output = format!("{:?}", cli.command);
         assert!(debug_output.contains("stdio"));
+    }
+
+    #[test]
+    fn test_commands_debug_redacts_introspect_http_url() {
+        let secret = "sk-verySECRETtoken1234567890";
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "--http",
+            &format!("https://user:{secret}@host.example.com/mcp?token={secret}"),
+        ]);
+
+        let debug_output = format!("{:?}", cli.command);
+        assert!(!debug_output.contains(secret));
+        assert!(debug_output.contains("host.example.com/mcp"));
+    }
+
+    #[test]
+    fn test_commands_debug_redacts_introspect_sse_url() {
+        let secret = "sk-verySECRETtoken1234567890";
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "--sse",
+            &format!("https://user:{secret}@host.example.com/mcp?token={secret}"),
+        ]);
+
+        let debug_output = format!("{:?}", cli.command);
+        assert!(!debug_output.contains(secret));
+        assert!(debug_output.contains("host.example.com/mcp"));
+    }
+
+    #[test]
+    fn test_commands_debug_redacts_generate_http_url() {
+        let secret = "sk-verySECRETtoken1234567890";
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "generate",
+            "--http",
+            &format!("https://user:{secret}@host.example.com/mcp?token={secret}"),
+        ]);
+
+        let debug_output = format!("{:?}", cli.command);
+        assert!(!debug_output.contains(secret));
+        assert!(debug_output.contains("host.example.com/mcp"));
+    }
+
+    #[test]
+    fn test_commands_debug_redacts_generate_sse_url() {
+        let secret = "sk-verySECRETtoken1234567890";
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "generate",
+            "--sse",
+            &format!("https://user:{secret}@host.example.com/mcp?token={secret}"),
+        ]);
+
+        let debug_output = format!("{:?}", cli.command);
+        assert!(!debug_output.contains(secret));
+        assert!(debug_output.contains("host.example.com/mcp"));
     }
 }
