@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use mcp_execution_core::{Error as CoreError, ServerConfig, ServerConfigBuilder, ServerId};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
@@ -45,7 +46,24 @@ pub struct McpConfig {
 /// };
 /// assert!(matches!(transport, McpTransport::Http { .. }));
 /// ```
-#[derive(Debug, Clone)]
+///
+/// Debug output redacts header/env values but keeps keys, mirroring
+/// `mcp_execution_core::ServerConfig`:
+///
+/// ```
+/// use mcp_execution_cli::commands::common::McpTransport;
+/// use std::collections::HashMap;
+///
+/// let transport = McpTransport::Http {
+///     url: "https://api.example.com/mcp".to_string(),
+///     headers: HashMap::from([("Authorization".to_string(), "Bearer sk-secret".to_string())]),
+/// };
+///
+/// let debug_output = format!("{transport:?}");
+/// assert!(debug_output.contains("Authorization"));
+/// assert!(!debug_output.contains("sk-secret"));
+/// ```
+#[derive(Clone)]
 pub enum McpTransport {
     /// Stdio transport: spawn a subprocess and speak MCP over stdin/stdout.
     Stdio {
@@ -72,6 +90,52 @@ pub enum McpTransport {
         /// HTTP headers sent with every request (e.g. `Authorization`).
         headers: HashMap<String, String>,
     },
+}
+
+/// Debug-formats a `String`-valued map with keys visible and every value
+/// replaced by a fixed placeholder.
+///
+/// Mirrors `mcp_execution_core::ServerConfig`'s redaction convention: `env`
+/// and `headers` here are populated straight from `~/.claude/mcp.json` and
+/// routinely carry secrets (bearer tokens, API keys) before this crate ever
+/// validates them.
+struct RedactedValues<'a>(&'a HashMap<String, String>);
+
+impl fmt::Debug for RedactedValues<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|key| (key, "<redacted>")))
+            .finish()
+    }
+}
+
+impl fmt::Debug for McpTransport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => f
+                .debug_struct("Stdio")
+                .field("command", command)
+                .field("args", args)
+                .field("env", &RedactedValues(env))
+                .field("cwd", cwd)
+                .finish(),
+            Self::Http { url, headers } => f
+                .debug_struct("Http")
+                .field("url", url)
+                .field("headers", &RedactedValues(headers))
+                .finish(),
+            Self::Sse { url, headers } => f
+                .debug_struct("Sse")
+                .field("url", url)
+                .field("headers", &RedactedValues(headers))
+                .finish(),
+        }
+    }
 }
 
 /// Individual MCP server configuration entry from `mcp.json`.
@@ -311,6 +375,8 @@ pub fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)
 /// ```no_run
 /// use mcp_execution_cli::commands::common::list_mcp_servers;
 ///
+/// // `McpTransport`'s `Debug` impl redacts `headers`/`env` values, so
+/// // printing an entry this way never leaks secrets read from mcp.json.
 /// for (name, entry) in list_mcp_servers().unwrap() {
 ///     println!("{}: {:?}", name, entry.transport);
 /// }
@@ -517,7 +583,26 @@ fn parse_key_value(s: &str, kind: &str) -> Result<(String, String)> {
 /// };
 /// assert!(matches!(transport, TransportArgs::Stdio { .. }));
 /// ```
-#[derive(Debug, Clone)]
+///
+/// Debug output redacts `env`/`headers` entries wholesale, not just a value
+/// half — these are raw, unparsed `KEY=VALUE` strings, and per
+/// `parse_key_value`'s own doc comment the whole string may be the secret
+/// with no discernible key:
+///
+/// ```
+/// use mcp_execution_cli::commands::common::TransportArgs;
+///
+/// let transport = TransportArgs::Http {
+///     url: "https://api.example.com/mcp".to_string(),
+///     headers: vec!["Authorization=Bearer sk-secret".to_string()],
+/// };
+///
+/// let debug_output = format!("{transport:?}");
+/// assert!(!debug_output.contains("sk-secret"));
+/// assert!(!debug_output.contains("Authorization"));
+/// assert!(debug_output.contains("<redacted>"));
+/// ```
+#[derive(Clone)]
 pub enum TransportArgs {
     /// Stdio transport (default): raw CLI flags.
     Stdio {
@@ -544,6 +629,53 @@ pub enum TransportArgs {
         /// HTTP headers in `KEY=VALUE` format.
         headers: Vec<String>,
     },
+}
+
+/// Debug-formats a list of raw `KEY=VALUE` CLI argument strings, replacing
+/// every entry wholesale with a fixed placeholder.
+///
+/// Unlike `RedactedValues` (which redacts only the value half of an
+/// already-split map), these strings are pre-`parse_key_value` and may not
+/// even contain a `=` — the whole string can be the secret with no
+/// discernible key, per that function's own doc comment — so the entire
+/// entry is replaced rather than just a value half.
+struct RedactedList<'a>(&'a [String]);
+
+impl fmt::Debug for RedactedList<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+impl fmt::Debug for TransportArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => f
+                .debug_struct("Stdio")
+                .field("command", command)
+                .field("args", args)
+                .field("env", &RedactedList(env))
+                .field("cwd", cwd)
+                .finish(),
+            Self::Http { url, headers } => f
+                .debug_struct("Http")
+                .field("url", url)
+                .field("headers", &RedactedList(headers))
+                .finish(),
+            Self::Sse { url, headers } => f
+                .debug_struct("Sse")
+                .field("url", url)
+                .field("headers", &RedactedList(headers))
+                .finish(),
+        }
+    }
 }
 
 impl TransportArgs {
@@ -1120,6 +1252,122 @@ mod tests {
             !format!("{err:?}").contains(secret),
             "error chain leaked the raw secret: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_mcp_transport_debug_redacts_headers_http() {
+        // Regression test for #229: `McpTransport::Http`/`Sse` carry real
+        // bearer tokens read from `~/.claude/mcp.json`; the plain derived
+        // `Debug` used to echo them verbatim. Asserting on the bare
+        // `sk-...` substring (not just the exact original string) catches
+        // an impl that truncates instead of replacing the value.
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let secret = format!("Bearer {secret_body}");
+        let transport = McpTransport::Http {
+            url: "https://api.example.com/mcp".to_string(),
+            headers: HashMap::from([("Authorization".to_string(), secret.clone())]),
+        };
+
+        let debug_output = format!("{transport:?}");
+        assert!(debug_output.contains("Authorization"));
+        assert!(debug_output.contains("<redacted>"));
+        assert!(!debug_output.contains(&secret));
+        assert!(!debug_output.contains(secret_body));
+    }
+
+    #[test]
+    fn test_mcp_transport_debug_redacts_headers_sse() {
+        // Regression test for #229/M1: the `Sse` arm is copy-pasted from
+        // `Http` and had no dedicated coverage.
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let secret = format!("Bearer {secret_body}");
+        let transport = McpTransport::Sse {
+            url: "https://api.example.com/sse".to_string(),
+            headers: HashMap::from([("Authorization".to_string(), secret.clone())]),
+        };
+
+        let debug_output = format!("{transport:?}");
+        assert!(debug_output.contains("Authorization"));
+        assert!(debug_output.contains("<redacted>"));
+        assert!(!debug_output.contains(&secret));
+        assert!(!debug_output.contains(secret_body));
+    }
+
+    #[test]
+    fn test_mcp_transport_debug_redacts_env() {
+        let secret_body = "ghp_verySECRETtoken1234567890abcdef";
+        let transport = McpTransport::Stdio {
+            command: "node".to_string(),
+            args: vec![],
+            env: HashMap::from([("GITHUB_TOKEN".to_string(), secret_body.to_string())]),
+            cwd: None,
+        };
+
+        let debug_output = format!("{transport:?}");
+        assert!(debug_output.contains("GITHUB_TOKEN"));
+        assert!(debug_output.contains("<redacted>"));
+        assert!(!debug_output.contains(secret_body));
+    }
+
+    #[test]
+    fn test_mcp_server_entry_debug_redacts_via_transport() {
+        // `McpServerEntry` derives `Debug`, so it must inherit the
+        // redaction through `McpTransport`'s custom impl rather than
+        // needing its own.
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let secret = format!("Bearer {secret_body}");
+        let entry = McpServerEntry {
+            transport: McpTransport::Http {
+                url: "https://api.example.com/mcp".to_string(),
+                headers: HashMap::from([("Authorization".to_string(), secret.clone())]),
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+
+        let debug_output = format!("{entry:?}");
+        assert!(debug_output.contains("Authorization"));
+        assert!(!debug_output.contains(&secret));
+        assert!(!debug_output.contains(secret_body));
+    }
+
+    #[test]
+    fn test_transport_args_debug_redacts_headers_and_env() {
+        // Regression test for #229/S1: `TransportArgs` is the CLI-flag
+        // mirror of `McpTransport` and holds raw, unparsed `KEY=VALUE`
+        // strings; its derived `Debug` used to echo them verbatim.
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let header_entry = format!("Authorization=Bearer {secret_body}");
+        let http = TransportArgs::Http {
+            url: "https://api.example.com/mcp".to_string(),
+            headers: vec![header_entry.clone()],
+        };
+        let http_debug = format!("{http:?}");
+        assert!(!http_debug.contains(&header_entry));
+        assert!(!http_debug.contains(secret_body));
+        assert!(!http_debug.contains("Authorization"));
+        assert!(http_debug.contains("<redacted>"));
+
+        let sse = TransportArgs::Sse {
+            url: "https://api.example.com/sse".to_string(),
+            headers: vec![header_entry.clone()],
+        };
+        let sse_debug = format!("{sse:?}");
+        assert!(!sse_debug.contains(&header_entry));
+        assert!(!sse_debug.contains(secret_body));
+
+        let env_entry = format!("GITHUB_TOKEN={secret_body}");
+        let stdio = TransportArgs::Stdio {
+            command: "node".to_string(),
+            args: vec![],
+            env: vec![env_entry.clone()],
+            cwd: None,
+        };
+        let stdio_debug = format!("{stdio:?}");
+        assert!(!stdio_debug.contains(&env_entry));
+        assert!(!stdio_debug.contains(secret_body));
+        assert!(!stdio_debug.contains("GITHUB_TOKEN"));
+        assert!(stdio_debug.contains("<redacted>"));
     }
 
     #[test]
