@@ -988,6 +988,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directly could panic or silently drop a valid response when a whitespace-only line was split
   across two reads.
 
+- **`mcp-execution-server`**: `bounded_request_stream`'s `RecoveringCodec` had the same
+  blank-line log-amplification issue fixed for the introspector's symmetric decoder above
+  (#284, same class as #275/#282): a blank or whitespace-only stdin line produced a `Serde`
+  decode error that was folded into `DecodedFrame::Malformed` and logged via
+  `tracing::warn!("dropping oversized or malformed request line")` on every occurrence. Ported
+  the same read-only, resumable peek approach, so a blank line is now folded to the existing
+  log-free `DecodedFrame::Skipped` path instead; genuinely malformed non-empty lines still warn,
+  unchanged.
+
 ### Added
 
 - **`mcp-execution-cli`**: `generate` now prints a "Next step: run 'npm install' in the
