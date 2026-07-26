@@ -384,7 +384,17 @@ mod tests {
     #[tokio::test]
     async fn absolute_output_dir_is_rejected() {
         let base = TempDir::new().unwrap();
-        let err = resolve_output_dir(base.path(), "my-server", Some(Path::new("/etc")))
+        // A bare `/etc`-style path has no drive prefix, so `Path::is_absolute()` is false
+        // for it on Windows (see `windows_root_relative_path_cannot_escape_base` below,
+        // which covers that case separately via the `Escape` variant); use a path that is
+        // genuinely absolute on the current platform so this test exercises `AbsolutePath`
+        // specifically.
+        let absolute = if cfg!(windows) {
+            r"C:\Windows\System32\config"
+        } else {
+            "/etc"
+        };
+        let err = resolve_output_dir(base.path(), "my-server", Some(Path::new(absolute)))
             .await
             .unwrap_err();
         assert!(matches!(err, OutputDirError::AbsolutePath { .. }));

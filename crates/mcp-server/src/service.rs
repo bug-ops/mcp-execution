@@ -1499,12 +1499,20 @@ mod tests {
         let service =
             GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
 
+        // A bare `/etc`-style path has no drive prefix, so `Path::is_absolute()` is false
+        // for it on Windows; use a path that is genuinely absolute on the current platform
+        // so this test exercises the early `AbsolutePath` rejection.
+        let absolute = if cfg!(windows) {
+            r"C:\Windows\System32\config"
+        } else {
+            "/etc"
+        };
         let params = IntrospectServerParams {
             server_id: "abs-output-dir-test".to_string(),
             command: "echo".to_string(),
             args: vec![],
             env: HashMap::new(),
-            output_dir: Some(PathBuf::from("/etc")),
+            output_dir: Some(PathBuf::from(absolute)),
             connect_timeout_secs: None,
             discover_timeout_secs: None,
         };
