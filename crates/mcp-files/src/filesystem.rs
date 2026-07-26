@@ -593,7 +593,7 @@ impl FileSystem {
     /// publishing — mid-write, or by a parallel write failing partway
     /// through — leaves `base_path` exactly as it was before this call; this
     /// does not cover a kill during the publish step itself, which carries
-    /// the same narrow window [`Self::swap_into_place`] documents. As a
+    /// the same narrow window `swap_into_place` documents. As a
     /// consequence of sharing that mechanism, `base_path` is now replaced
     /// wholesale rather than merged into: any pre-existing file under
     /// `base_path` that is absent from this `FileSystem` is deleted, exactly
