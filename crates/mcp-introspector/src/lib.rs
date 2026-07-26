@@ -819,14 +819,14 @@ fn build_server_info(
 }
 
 /// Converts a single raw [`rmcp::model::Tool`] into a [`ToolInfo`], bounding its `name`,
-/// `description`, and serialized `input_schema` size (denial-of-service protection, CWE-400)
-/// against a malicious or misbehaving MCP server.
+/// `description`, and serialized `input_schema`/`output_schema` size (denial-of-service
+/// protection, CWE-400) against a malicious or misbehaving MCP server.
 ///
 /// # Errors
 ///
 /// Returns [`Error::ResourceLimitExceeded`] if the tool's name exceeds [`MAX_TOOL_NAME_LEN`],
-/// its description exceeds [`MAX_TOOL_DESCRIPTION_LEN`], or its serialized input schema
-/// exceeds [`MAX_SCHEMA_SIZE_BYTES`].
+/// its description exceeds [`MAX_TOOL_DESCRIPTION_LEN`], or its serialized input or output
+/// schema exceeds [`MAX_SCHEMA_SIZE_BYTES`].
 fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
     let name = tool.name.to_string();
     tracing::trace!("Found tool: {name}");
@@ -861,11 +861,26 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
         });
     }
 
+    let output_schema = tool
+        .output_schema
+        .map(|schema| serde_json::Value::Object((*schema).clone()));
+    if let Some(ref schema) = output_schema {
+        // Same pathological-serialization treatment as input_schema above.
+        let schema_size = serde_json::to_vec(schema).map_or(usize::MAX, |bytes| bytes.len());
+        if schema_size > MAX_SCHEMA_SIZE_BYTES {
+            return Err(Error::ResourceLimitExceeded {
+                resource: format!("output_schema size for tool '{name}'"),
+                actual: schema_size,
+                limit: MAX_SCHEMA_SIZE_BYTES,
+            });
+        }
+    }
+
     Ok(ToolInfo {
         name: ToolName::new(name),
         description,
         input_schema,
-        output_schema: None, // rmcp doesn't provide output schema
+        output_schema,
     })
 }
 
@@ -1267,6 +1282,44 @@ mod tests {
             .len()
     }
 
+    /// Like [`make_raw_tool`], but carries the padded schema as `outputSchema` (with a fixed,
+    /// minimal `inputSchema`) so output-schema bound tests can be built independently of the
+    /// input-schema ones.
+    fn make_raw_tool_with_output_schema(
+        name: &str,
+        description: &str,
+        padding_len: usize,
+    ) -> rmcp::model::Tool {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "padding": "a".repeat(padding_len),
+            },
+        });
+        let serde_json::Value::Object(schema_obj) = schema else {
+            unreachable!()
+        };
+
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "description": description,
+            "inputSchema": {"type": "object"},
+            "outputSchema": schema_obj,
+        }))
+        .expect("valid rmcp::model::Tool JSON")
+    }
+
+    /// Serialized byte size of the `output_schema` produced by
+    /// [`make_raw_tool_with_output_schema`] for a given `padding_len`, used to compute
+    /// exact-boundary test inputs.
+    fn output_schema_size_for_padding(padding_len: usize) -> usize {
+        let tool = make_raw_tool_with_output_schema("tool", "d", padding_len);
+        let schema = tool.output_schema.expect("output schema set");
+        serde_json::to_vec(&serde_json::Value::Object((*schema).clone()))
+            .expect("schema serializes")
+            .len()
+    }
+
     /// `build_server_info`'s own `tool_list.len() > MAX_TOOL_COUNT` check is no longer what
     /// protects `discover_server` in practice — `list_tools_bounded` (see the integration test
     /// `tests/tool_count_bound_test.rs`) now bails out mid-pagination before ever handing
@@ -1381,6 +1434,73 @@ mod tests {
 
         let result = build_tool_info(tool);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_build_tool_info_rejects_output_schema_one_byte_over_max_size() {
+        let overhead = output_schema_size_for_padding(0);
+        let padding_len = MAX_SCHEMA_SIZE_BYTES - overhead + 1;
+        let tool = make_raw_tool_with_output_schema("tool", "d", padding_len);
+
+        let result = build_tool_info(tool);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
+    }
+
+    #[test]
+    fn test_build_tool_info_accepts_output_schema_at_exact_max_size() {
+        let overhead = output_schema_size_for_padding(0);
+        let padding_len = MAX_SCHEMA_SIZE_BYTES - overhead;
+        assert_eq!(
+            output_schema_size_for_padding(padding_len),
+            MAX_SCHEMA_SIZE_BYTES,
+            "test setup should hit the cap exactly"
+        );
+        let tool = make_raw_tool_with_output_schema("tool", "d", padding_len);
+
+        let result = build_tool_info(tool);
+        assert!(result.is_ok());
+    }
+
+    // ── output_schema propagation (issue #254) ───────────────────────────────
+
+    #[test]
+    fn test_build_tool_info_propagates_output_schema() {
+        let tool: rmcp::model::Tool = serde_json::from_value(serde_json::json!({
+            "name": "tool",
+            "description": "d",
+            "inputSchema": {"type": "object"},
+            "outputSchema": {"type": "string"},
+        }))
+        .expect("valid rmcp::model::Tool JSON");
+
+        let result = build_tool_info(tool).expect("within resource limits");
+        assert_eq!(
+            result.output_schema,
+            Some(serde_json::json!({"type": "string"}))
+        );
+    }
+
+    #[test]
+    fn test_build_tool_info_leaves_output_schema_none_when_absent() {
+        let tool = make_raw_tool("tool", "d", 0);
+
+        let result = build_tool_info(tool).expect("within resource limits");
+        assert!(result.output_schema.is_none());
+    }
+
+    #[test]
+    fn test_build_tool_info_propagates_empty_object_output_schema() {
+        let tool: rmcp::model::Tool = serde_json::from_value(serde_json::json!({
+            "name": "tool",
+            "description": "d",
+            "inputSchema": {"type": "object"},
+            "outputSchema": {},
+        }))
+        .expect("valid rmcp::model::Tool JSON");
+
+        let result = build_tool_info(tool).expect("within resource limits");
+        assert_eq!(result.output_schema, Some(serde_json::json!({})));
     }
 
     /// All four values are correct simultaneously when `peer_info` is fully populated

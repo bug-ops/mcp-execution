@@ -26,11 +26,13 @@ pub const MAX_PENDING_SESSIONS: usize = 1000;
 
 /// Approximate upper bound on a single session's in-memory footprint: up to
 /// `mcp_execution_introspector::MAX_TOOL_COUNT` tools, each up to `MAX_TOOL_NAME_LEN` +
-/// `MAX_TOOL_DESCRIPTION_LEN` + `MAX_SCHEMA_SIZE_BYTES`. Used only to derive
-/// [`MAX_TOTAL_PENDING_BYTES`] below.
+/// `MAX_TOOL_DESCRIPTION_LEN` + two independently-bounded schemas (`input_schema` and
+/// `output_schema`, each up to `MAX_SCHEMA_SIZE_BYTES` — see `mcp_execution_introspector`'s
+/// `build_tool_info`). Used only to derive [`MAX_TOTAL_PENDING_BYTES`] below.
 const MAX_SINGLE_SESSION_BYTES: usize = mcp_execution_introspector::MAX_TOOL_COUNT
     * (mcp_execution_introspector::MAX_TOOL_NAME_LEN
         + mcp_execution_introspector::MAX_TOOL_DESCRIPTION_LEN
+        + mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES
         + mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES);
 
 /// Maximum combined approximate memory footprint of every pending session at once
