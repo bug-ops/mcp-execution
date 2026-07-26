@@ -144,6 +144,10 @@ impl<'a> ProgressiveGenerator<'a> {
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(
+        skip_all,
+        fields(server_id = %server_info.id, tool_count = server_info.tools.len())
+    )]
     pub fn generate(&self, server_info: &ServerInfo) -> Result<GeneratedCode> {
         tracing::info!(
             "Generating progressive loading code for server: {}",
@@ -271,6 +275,10 @@ impl<'a> ProgressiveGenerator<'a> {
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(
+        skip_all,
+        fields(server_id = %server_info.id, tool_count = server_info.tools.len())
+    )]
     pub fn generate_with_categories(
         &self,
         server_info: &ServerInfo,

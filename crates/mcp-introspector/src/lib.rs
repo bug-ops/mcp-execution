@@ -278,6 +278,7 @@ impl Introspector {
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(skip_all, fields(server_id = %server_id))]
     pub async fn discover_server(
         &mut self,
         server_id: ServerId,
@@ -293,22 +294,14 @@ impl Introspector {
         // constructed.
         validate_server_config(config)?;
 
-        let (tool_list, server_name, server_version, has_resources, has_prompts) =
-            match config.transport() {
-                TransportType::Stdio => discover_via_stdio_process(&server_id, config).await?,
-                TransportType::Http | TransportType::Sse => {
-                    discover_via_http(&server_id, config).await?
-                }
-            };
+        let discovery = match config.transport() {
+            TransportType::Stdio => discover_via_stdio_process(&server_id, config).await?,
+            TransportType::Http | TransportType::Sse => {
+                discover_via_http(&server_id, config).await?
+            }
+        };
 
-        let info = build_server_info(
-            &server_id,
-            server_name,
-            server_version,
-            has_resources,
-            has_prompts,
-            tool_list,
-        );
+        let info = build_server_info(&server_id, discovery.peer_meta, discovery.tools);
 
         self.servers.insert(server_id, info.clone());
 
@@ -448,6 +441,39 @@ impl Default for Introspector {
     }
 }
 
+/// Server name, version, and feature-support flags extracted from an MCP
+/// handshake result.
+///
+/// Replaces a positional `(String, String, bool, bool)` tuple that was
+/// previously threaded through [`extract_peer_meta`] and its callers, where a
+/// transposition of the two same-typed trailing `bool` fields would type-check
+/// silently and produce wrong [`ServerCapabilities`] values (issue #207).
+#[derive(Debug)]
+struct PeerMeta {
+    /// Human-readable server name from the handshake (or a fallback).
+    server_name: String,
+    /// Server version string from the handshake (or `"unknown"`).
+    server_version: String,
+    /// Whether the server advertised resource support.
+    has_resources: bool,
+    /// Whether the server advertised prompt support.
+    has_prompts: bool,
+}
+
+/// Tools and handshake metadata discovered from a single introspection
+/// round-trip.
+///
+/// Replaces a positional `(Vec<Tool>, String, String, bool, bool)` tuple
+/// previously returned by [`discover_via_stdio_process`], [`discover_via_stdio`],
+/// and [`discover_via_http`] (issue #207).
+#[derive(Debug)]
+struct DiscoveryResult {
+    /// Tools reported by the server.
+    tools: Vec<rmcp::model::Tool>,
+    /// Handshake-derived server metadata and capability flags.
+    peer_meta: PeerMeta,
+}
+
 /// Spawns the MCP server subprocess used for a single introspection
 /// round-trip, with piped stdin/stdout so it can be driven over stdio.
 ///
@@ -497,7 +523,7 @@ fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Res
 async fn discover_via_stdio_process(
     server_id: &ServerId,
     config: &ServerConfig,
-) -> Result<(Vec<rmcp::model::Tool>, String, String, bool, bool)> {
+) -> Result<DiscoveryResult> {
     let mut child = spawn_introspection_child(server_id, config)?;
     let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
         server: server_id.to_string(),
@@ -540,7 +566,7 @@ async fn discover_via_stdio(
     server_id: &ServerId,
     config: &ServerConfig,
     transport: (tokio::process::ChildStdout, tokio::process::ChildStdin),
-) -> Result<(Vec<rmcp::model::Tool>, String, String, bool, bool)> {
+) -> Result<DiscoveryResult> {
     // Create client using serve pattern, bounded by the connect timeout
     let client = tokio::time::timeout(config.connect_timeout(), ().serve(transport))
         .await
@@ -567,16 +593,12 @@ async fn discover_via_stdio(
 
     // Extract name, version, and capabilities from the MCP handshake result.
     // Falls back to the command string / "unknown" if the server did not send peer info.
-    let (server_name, server_version, has_resources, has_prompts) =
-        extract_peer_meta(config, client.peer_info().as_deref());
+    let peer_meta = extract_peer_meta(config, client.peer_info().as_deref());
 
-    Ok((
-        tool_list,
-        server_name,
-        server_version,
-        has_resources,
-        has_prompts,
-    ))
+    Ok(DiscoveryResult {
+        tools: tool_list,
+        peer_meta,
+    })
 }
 
 /// Connects to an MCP server over Streamable HTTP and lists its tools, with
@@ -594,10 +616,7 @@ async fn discover_via_stdio(
 /// constructed, or the underlying rmcp connection or request fails (this
 /// includes a reserved-header collision, e.g. a caller-supplied `Accept`
 /// header, which rmcp rejects as `StreamableHttpError::ReservedHeaderConflict`).
-async fn discover_via_http(
-    server_id: &ServerId,
-    config: &ServerConfig,
-) -> Result<(Vec<rmcp::model::Tool>, String, String, bool, bool)> {
+async fn discover_via_http(server_id: &ServerId, config: &ServerConfig) -> Result<DiscoveryResult> {
     // `ServerConfigBuilder::build` already guarantees `url` is `Some` for
     // Http/Sse transports — no `ServerConfig` can exist otherwise.
     let url = config
@@ -654,26 +673,20 @@ async fn discover_via_http(
     // cancels the worker task; a cancelled worker cannot itself issue a
     // session-DELETE request, so no explicit disconnect happens on this path
     // — the server-side session simply expires on its own timeout instead.
-    let (server_name, server_version, has_resources, has_prompts) =
-        extract_peer_meta(config, client.peer_info().as_deref());
+    let peer_meta = extract_peer_meta(config, client.peer_info().as_deref());
 
-    Ok((
-        tool_list,
-        server_name,
-        server_version,
-        has_resources,
-        has_prompts,
-    ))
+    Ok(DiscoveryResult {
+        tools: tool_list,
+        peer_meta,
+    })
 }
 
 /// Assembles a [`ServerInfo`] from the raw tool list and handshake metadata
-/// returned by [`discover_via_stdio`].
+/// returned by [`discover_server`](Introspector::discover_server)'s stdio or
+/// HTTP/SSE discovery path.
 fn build_server_info(
     server_id: &ServerId,
-    server_name: String,
-    server_version: String,
-    has_resources: bool,
-    has_prompts: bool,
+    peer_meta: PeerMeta,
     tool_list: Vec<rmcp::model::Tool>,
 ) -> ServerInfo {
     tracing::debug!(
@@ -697,44 +710,41 @@ fn build_server_info(
 
     let capabilities = ServerCapabilities {
         supports_tools: !tools.is_empty(),
-        supports_resources: has_resources,
-        supports_prompts: has_prompts,
+        supports_resources: peer_meta.has_resources,
+        supports_prompts: peer_meta.has_prompts,
     };
 
     ServerInfo {
         id: server_id.clone(),
-        name: server_name,
-        version: server_version,
+        name: peer_meta.server_name,
+        version: peer_meta.server_version,
         tools,
         capabilities,
     }
 }
 
 /// Extracts server name, version, resource support, and prompt support from
-/// the MCP handshake result (`peer_info`).
+/// the MCP handshake result (`peer_info`) into a [`PeerMeta`].
 ///
-/// Falls back to `(fallback_server_name(config), "unknown", false, false)`
-/// when the server did not send peer information (i.e. `peer_info` is `None`).
+/// Falls back to `PeerMeta { server_name: fallback_server_name(config), server_version:
+/// "unknown", has_resources: false, has_prompts: false }` when the server did not send
+/// peer information (i.e. `peer_info` is `None`).
 fn extract_peer_meta(
     config: &ServerConfig,
     peer_info: Option<&rmcp::model::InitializeResult>,
-) -> (String, String, bool, bool) {
+) -> PeerMeta {
     peer_info.map_or_else(
-        || {
-            (
-                fallback_server_name(config),
-                "unknown".to_string(),
-                false,
-                false,
-            )
+        || PeerMeta {
+            server_name: fallback_server_name(config),
+            server_version: "unknown".to_string(),
+            has_resources: false,
+            has_prompts: false,
         },
-        |info| {
-            (
-                info.server_info.name.clone(),
-                info.server_info.version.clone(),
-                info.capabilities.resources.is_some(),
-                info.capabilities.prompts.is_some(),
-            )
+        |info| PeerMeta {
+            server_name: info.server_info.name.clone(),
+            server_version: info.server_info.version.clone(),
+            has_resources: info.capabilities.resources.is_some(),
+            has_prompts: info.capabilities.prompts.is_some(),
         },
     )
 }
@@ -970,10 +980,10 @@ mod tests {
         let config = test_config("my-server-binary");
         let peer = make_peer_info("Handshake Name", "0.0.0", false, false);
 
-        let (name, _, _, _) = extract_peer_meta(&config, Some(&peer));
+        let meta = extract_peer_meta(&config, Some(&peer));
 
-        assert_eq!(name, "Handshake Name");
-        assert_ne!(name, "my-server-binary");
+        assert_eq!(meta.server_name, "Handshake Name");
+        assert_ne!(meta.server_name, "my-server-binary");
     }
 
     /// #79 — version must come from the handshake, not the hardcoded "unknown"
@@ -982,10 +992,10 @@ mod tests {
         let config = test_config("cmd");
         let peer = make_peer_info("Server", "3.1.4", false, false);
 
-        let (_, version, _, _) = extract_peer_meta(&config, Some(&peer));
+        let meta = extract_peer_meta(&config, Some(&peer));
 
-        assert_eq!(version, "3.1.4");
-        assert_ne!(version, "unknown");
+        assert_eq!(meta.server_version, "3.1.4");
+        assert_ne!(meta.server_version, "unknown");
     }
 
     /// #80 — `supports_resources` reflects `capabilities.resources` being `Some`
@@ -994,9 +1004,9 @@ mod tests {
         let config = test_config("cmd");
         let peer = make_peer_info("S", "1.0", true, false);
 
-        let (_, _, has_resources, _) = extract_peer_meta(&config, Some(&peer));
+        let meta = extract_peer_meta(&config, Some(&peer));
 
-        assert!(has_resources);
+        assert!(meta.has_resources);
     }
 
     /// #80 — `supports_resources` is false when `capabilities.resources` is `None`
@@ -1005,9 +1015,9 @@ mod tests {
         let config = test_config("cmd");
         let peer = make_peer_info("S", "1.0", false, false);
 
-        let (_, _, has_resources, _) = extract_peer_meta(&config, Some(&peer));
+        let meta = extract_peer_meta(&config, Some(&peer));
 
-        assert!(!has_resources);
+        assert!(!meta.has_resources);
     }
 
     /// Bonus — `supports_prompts` reflects `capabilities.prompts` being `Some`
@@ -1016,9 +1026,9 @@ mod tests {
         let config = test_config("cmd");
         let peer = make_peer_info("S", "1.0", false, true);
 
-        let (_, _, _, has_prompts) = extract_peer_meta(&config, Some(&peer));
+        let meta = extract_peer_meta(&config, Some(&peer));
 
-        assert!(has_prompts);
+        assert!(meta.has_prompts);
     }
 
     /// Bonus — `supports_prompts` is false when `capabilities.prompts` is `None`
@@ -1027,9 +1037,9 @@ mod tests {
         let config = test_config("cmd");
         let peer = make_peer_info("S", "1.0", false, false);
 
-        let (_, _, _, has_prompts) = extract_peer_meta(&config, Some(&peer));
+        let meta = extract_peer_meta(&config, Some(&peer));
 
-        assert!(!has_prompts);
+        assert!(!meta.has_prompts);
     }
 
     /// Fallback: `peer_info` is `None` — name falls back to `config.command`
@@ -1037,9 +1047,9 @@ mod tests {
     fn test_extract_peer_meta_fallback_name_is_command() {
         let config = test_config("fallback-binary");
 
-        let (name, _, _, _) = extract_peer_meta(&config, None);
+        let meta = extract_peer_meta(&config, None);
 
-        assert_eq!(name, "fallback-binary");
+        assert_eq!(meta.server_name, "fallback-binary");
     }
 
     /// Incidental fix: for Http/Sse configs `command` is always empty, so the
@@ -1051,9 +1061,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let (name, _, _, _) = extract_peer_meta(&config, None);
+        let meta = extract_peer_meta(&config, None);
 
-        assert_eq!(name, "https://api.example.com/mcp");
+        assert_eq!(meta.server_name, "https://api.example.com/mcp");
     }
 
     /// Fallback: `peer_info` is `None` — version falls back to `"unknown"`
@@ -1061,9 +1071,9 @@ mod tests {
     fn test_extract_peer_meta_fallback_version_is_unknown() {
         let config = test_config("cmd");
 
-        let (_, version, _, _) = extract_peer_meta(&config, None);
+        let meta = extract_peer_meta(&config, None);
 
-        assert_eq!(version, "unknown");
+        assert_eq!(meta.server_version, "unknown");
     }
 
     /// Fallback: `peer_info` is `None` — capabilities are all false
@@ -1071,10 +1081,10 @@ mod tests {
     fn test_extract_peer_meta_fallback_capabilities_false() {
         let config = test_config("cmd");
 
-        let (_, _, has_resources, has_prompts) = extract_peer_meta(&config, None);
+        let meta = extract_peer_meta(&config, None);
 
-        assert!(!has_resources);
-        assert!(!has_prompts);
+        assert!(!meta.has_resources);
+        assert!(!meta.has_prompts);
     }
 
     /// All four values are correct simultaneously when `peer_info` is fully populated
@@ -1083,11 +1093,11 @@ mod tests {
         let config = test_config("binary");
         let peer = make_peer_info("Full Server", "2.0.0", true, true);
 
-        let (name, version, has_resources, has_prompts) = extract_peer_meta(&config, Some(&peer));
+        let meta = extract_peer_meta(&config, Some(&peer));
 
-        assert_eq!(name, "Full Server");
-        assert_eq!(version, "2.0.0");
-        assert!(has_resources);
-        assert!(has_prompts);
+        assert_eq!(meta.server_name, "Full Server");
+        assert_eq!(meta.server_version, "2.0.0");
+        assert!(meta.has_resources);
+        assert!(meta.has_prompts);
     }
 }

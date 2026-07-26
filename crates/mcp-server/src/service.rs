@@ -211,6 +211,7 @@ impl GeneratorService {
     ///
     /// The outer map lock is released before the returned handle is awaited
     /// on, so discovery of unrelated server ids never contends on it.
+    #[tracing::instrument(skip_all, fields(server_id = %server_id))]
     async fn introspector_for(&self, server_id: &ServerId) -> Arc<Mutex<Introspector>> {
         let mut introspectors = self.introspectors.lock().await;
         introspectors
@@ -233,6 +234,7 @@ impl GeneratorService {
     /// would prune that live handle out from under the third call. Comparing
     /// with [`Arc::ptr_eq`] ensures a caller can only ever evict the entry it
     /// created.
+    #[tracing::instrument(skip_all, fields(server_id = %server_id))]
     async fn evict_introspector(&self, server_id: &ServerId, handle: &Arc<Mutex<Introspector>>) {
         let mut introspectors = self.introspectors.lock().await;
         if let std::collections::hash_map::Entry::Occupied(entry) =
@@ -259,6 +261,7 @@ impl GeneratorService {
     /// (same eviction-boundary gap as [`Self::evict_introspector`]). The
     /// age-gated sweep in `mcp-execution-files` is what ultimately prevents
     /// data loss if that happens.
+    #[tracing::instrument(skip_all, fields(output_dir = %output_dir.display()))]
     async fn export_lock_for(&self, output_dir: &Path) -> Arc<Mutex<()>> {
         let mut exports = self.exports.lock().await;
         exports
@@ -275,6 +278,7 @@ impl GeneratorService {
     /// without eviction the map grows without bound, and an unconditional
     /// `remove` keyed only by path would be a TOCTOU bug against a
     /// concurrently inserted fresh handle.
+    #[tracing::instrument(skip_all, fields(output_dir = %output_dir.display()))]
     async fn evict_export_lock(&self, output_dir: &Path, handle: &Arc<Mutex<()>>) {
         let mut exports = self.exports.lock().await;
         if let std::collections::hash_map::Entry::Occupied(entry) =
@@ -307,21 +311,38 @@ impl GeneratorService {
     /// filesystem-touching confinement walk (see
     /// [`crate::output_dir::resolve_output_dir`]) runs later, in `save_categorized_tools`,
     /// immediately before the generated files are written (issue #216).
+    // This function stacks `#[tool]` (rmcp's macro, which boxes the async body) under
+    // `#[tracing::instrument]`. That combination only produces a span covering the full
+    // call (not just future construction) because tracing-attributes' async-fn detection
+    // heuristic happens to match rmcp's current codegen shape; it is not guaranteed by
+    // either crate's public contract. The concurrency test below
+    // (`test_introspect_server_concurrent_calls_do_not_cross_contaminate_server_id`) is the
+    // regression guard for this: it asserts every `Discovering MCP server` event carries
+    // exactly 2 `server_id` values in its full span scope (this span's plus the nested
+    // `discover_server` span's). If the heuristic ever stops matching, this span no
+    // longer covers the async body, its `server_id` field is never recorded, and the
+    // count drops to 1, failing the assertion.
     #[tool(
         description = "Connect to an MCP server, discover its tools, and return metadata for categorization. Returns a session ID for use with save_categorized_tools."
     )]
+    #[tracing::instrument(skip_all, fields(server_id = tracing::field::Empty))]
     async fn introspect_server(
         &self,
         Parameters(params): Parameters<IntrospectServerParams>,
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
-        // Validate server_id format
+        // Validate server_id format. Deliberate: the `server_id` span field stays `Empty`
+        // on this early return rather than recording the raw, unvalidated input — logging
+        // an attacker-controlled string into a structured field before it's validated risks
+        // log injection, so an empty field on this path is accepted as a trade-off, not an
+        // oversight.
         validate_server_id(&params.server_id)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         // Extract server_id before consuming params
         let server_id_str = params.server_id;
         let server_id = ServerId::new(&server_id_str);
+        tracing::Span::current().record("server_id", tracing::field::display(&server_id));
 
         // Reject an obviously malformed output_dir (absolute, or containing `..`) with fast
         // feedback, without touching the filesystem: no directory is created here, and the raw
@@ -455,6 +476,7 @@ impl GeneratorService {
     #[tool(
         description = "Generate progressive loading TypeScript files using Claude's categorization. Requires session_id from a previous introspect_server call."
     )]
+    #[tracing::instrument(skip_all, fields(server_id = tracing::field::Empty))]
     async fn save_categorized_tools(
         &self,
         Parameters(params): Parameters<SaveCategorizedToolsParams>,
@@ -466,6 +488,7 @@ impl GeneratorService {
                 None,
             )
         })?;
+        tracing::Span::current().record("server_id", tracing::field::display(&pending.server_id));
 
         // Validate categorized tools match introspected tools
         let introspected_names: HashSet<_> = pending
@@ -783,14 +806,17 @@ impl GeneratorService {
     #[tool(
         description = "Analyze generated TypeScript files and return context for Claude to create a SKILL.md file. Returns tool metadata, categories, and a generation prompt."
     )]
+    #[tracing::instrument(skip_all, fields(server_id = tracing::field::Empty))]
     async fn generate_skill(
         &self,
         Parameters(params): Parameters<GenerateSkillParams>,
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
-        // Validate server_id format and length
+        // Validate server_id format and length. As in `introspect_server`, the span
+        // field is only recorded once validation succeeds (see the comment there).
         validate_server_id(&params.server_id)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        tracing::Span::current().record("server_id", tracing::field::display(&params.server_id));
 
         // Determine servers directory
         let servers_dir = params.servers_dir.unwrap_or_else(|| {
@@ -912,13 +938,16 @@ impl GeneratorService {
     #[tool(
         description = "Save generated SKILL.md content to ~/.claude/skills/{server_id}/. Use after Claude generates skill content from generate_skill context."
     )]
+    #[tracing::instrument(skip_all, fields(server_id = tracing::field::Empty))]
     async fn save_skill(
         &self,
         Parameters(params): Parameters<SaveSkillParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate server_id format and length
+        // Validate server_id format and length. As in `introspect_server`, the span
+        // field is only recorded once validation succeeds (see the comment there).
         validate_server_id(&params.server_id)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        tracing::Span::current().record("server_id", tracing::field::display(&params.server_id));
 
         // Validate content size (DoS protection)
         if params.content.len() > MAX_SKILL_CONTENT_SIZE {
@@ -1860,6 +1889,227 @@ mod tests {
              (expected < {serialized_threshold:?}, i.e. close to a single {hold_time:?} hold); \
              took {elapsed:?}"
         );
+    }
+
+    /// Regression test for spec 004-tracing-instrument-spans's SC-004: concurrent
+    /// `introspect_server` calls for different `server_id`s must not cross-contaminate
+    /// the `server_id` span field. This is also the regression guard for the
+    /// `#[tool]`+`#[tracing::instrument]` stacking risk noted in the comment above
+    /// `introspect_server`: if tracing-attributes' async-fn-detection heuristic ever
+    /// stops matching rmcp's codegen shape, `introspect_server`'s span stops covering
+    /// the actual async body, so its `server_id` field is never recorded and it drops
+    /// out of the scope of every event emitted underneath it - the "exactly 2
+    /// `server_id` values in scope" assertion below then fails.
+    ///
+    /// Both calls target a nonexistent command so `discover_server` fails fast, before
+    /// any real subprocess I/O; the call's outcome is irrelevant here, only the
+    /// span-field correlation of the tracing events emitted along the way. Each call
+    /// runs in its own `tokio::spawn`ed task, released at the same instant via a
+    /// `Barrier`, on a multi-thread runtime, so both are concurrently scheduled
+    /// rather than driven one after the other by an inline `join!`. This does not
+    /// guarantee genuine wall-clock overlap - tokio's per-worker LIFO fast path
+    /// commonly runs the woken sibling task back-to-back on the same thread as the
+    /// waking one - but the property under test (correct span-stack correlation of
+    /// two differently-tagged concurrent calls) holds either way: whether the two
+    /// calls truly interleave or run sequentially on one worker, a stale or
+    /// mismatched `server_id` leaking from one call's span stack into the other's
+    /// events is exactly what the assertions below detect.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_introspect_server_concurrent_calls_do_not_cross_contaminate_server_id() {
+        use std::sync::{Arc, Mutex};
+        use tokio::sync::Barrier;
+        use tracing::field::{Field, Visit};
+        use tracing::span;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::LookupSpan;
+
+        /// Span extension holding the `server_id` field value once recorded (spans
+        /// declared with `fields(server_id = tracing::field::Empty)` start without
+        /// one, until a later `Span::current().record(...)` call fills it in).
+        struct SpanServerId(String);
+
+        #[derive(Default)]
+        struct FieldCapture {
+            server_id: Option<String>,
+            message: Option<String>,
+        }
+
+        impl Visit for FieldCapture {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                match field.name() {
+                    "server_id" => self.server_id = Some(format!("{value:?}")),
+                    "message" => self.message = Some(format!("{value:?}")),
+                    _ => {}
+                }
+            }
+        }
+
+        /// (event message, every `server_id` field found across the event's full span
+        /// scope, innermost to outermost) pairs captured so far.
+        type CapturedEvents = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
+        /// For every event carrying a `message` field, records the `server_id` field of
+        /// *every* span in the event's scope, not just the nearest one. Collecting all
+        /// of them (instead of stopping at the first match) is what makes this a
+        /// genuine regression guard: the `Discovering MCP server` event's scope
+        /// includes both `discover_server`'s own span and its parent
+        /// `introspect_server` span, so if `introspect_server`'s span silently stopped
+        /// covering the async body, its `server_id` field would never be recorded and
+        /// it would vanish from this list - dropping the count from 2 to 1 - even
+        /// though `discover_server`'s own span still resolves correctly on its own.
+        struct CorrelationLayer {
+            events: CapturedEvents,
+        }
+
+        impl<S> Layer<S> for CorrelationLayer
+        where
+            S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+        {
+            fn on_new_span(
+                &self,
+                attrs: &span::Attributes<'_>,
+                id: &span::Id,
+                ctx: Context<'_, S>,
+            ) {
+                let mut visitor = FieldCapture::default();
+                attrs.record(&mut visitor);
+                if let (Some(server_id), Some(span_ref)) = (visitor.server_id, ctx.span(id)) {
+                    span_ref.extensions_mut().insert(SpanServerId(server_id));
+                }
+            }
+
+            fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, S>) {
+                let mut visitor = FieldCapture::default();
+                values.record(&mut visitor);
+                if let (Some(server_id), Some(span_ref)) = (visitor.server_id, ctx.span(id)) {
+                    span_ref.extensions_mut().insert(SpanServerId(server_id));
+                }
+            }
+
+            fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+                let mut visitor = FieldCapture::default();
+                event.record(&mut visitor);
+                let Some(message) = visitor.message else {
+                    return;
+                };
+                let server_ids: Vec<String> = ctx
+                    .event_scope(event)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|span_ref| {
+                        span_ref
+                            .extensions()
+                            .get::<SpanServerId>()
+                            .map(|s| s.0.clone())
+                    })
+                    .collect();
+                self.events.lock().unwrap().push((message, server_ids));
+            }
+        }
+
+        let events: CapturedEvents = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(CorrelationLayer {
+            events: events.clone(),
+        });
+        // `set_default` only overrides the calling thread's thread-local dispatcher;
+        // the two calls below run as separate tasks that a multi-thread runtime can
+        // schedule onto other worker threads, so the subscriber must be installed
+        // process-wide instead. Because it is process-wide and never uninstalled,
+        // sibling tests that also emit "Discovering MCP server" events (in this
+        // process under plain `cargo test`, or in other tests entirely if this one
+        // ran outside nextest's per-test process isolation) can reach this layer
+        // too; isolation here comes from the `discovery_events` filter below
+        // matching on this test's own `corr-test-a`/`corr-test-b` ids, not from any
+        // assumption about process sharing. This test's process installs no other
+        // global subscriber, so the call itself cannot panic.
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("no global tracing subscriber should be set yet in this test process");
+
+        let service = GeneratorService::new();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let make_params = |server_id: &str| IntrospectServerParams {
+            server_id: server_id.to_string(),
+            command: "definitely-not-a-real-mcp-server-command-xyz".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+
+        // Each call runs as its own spawned task (not an inline future polled by
+        // `join!`) so the multi-thread runtime is free to run them on separate
+        // worker threads; the `Barrier` releases both tasks at the same instant
+        // instead of relying on scheduler luck. The runtime may still schedule both
+        // onto the same worker back-to-back (tokio's LIFO fast path) - see this
+        // test's doc comment above for why that does not weaken it.
+        let spawn_call = |server_id: &str| {
+            let service = service.clone();
+            let barrier = barrier.clone();
+            let params = make_params(server_id);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                service
+                    .introspect_server(Parameters(params), CancellationToken::new())
+                    .await
+            })
+        };
+
+        let task_a = spawn_call("corr-test-a");
+        let task_b = spawn_call("corr-test-b");
+
+        let (result_a, result_b) = tokio::join!(task_a, task_b);
+        let result_a = result_a.expect("call a task panicked");
+        let result_b = result_b.expect("call b task panicked");
+
+        // The nonexistent command means discovery always fails - only the tracing
+        // side effects are under test.
+        assert!(result_a.is_err());
+        assert!(result_b.is_err());
+
+        let captured: Vec<(String, Vec<String>)> = events.lock().unwrap().clone();
+        let discovery_events: Vec<_> = captured
+            .iter()
+            .filter(|(message, _)| {
+                message.contains("Discovering MCP server")
+                    && (message.contains("corr-test-a") || message.contains("corr-test-b"))
+            })
+            .collect();
+
+        assert_eq!(
+            discovery_events.len(),
+            2,
+            "expected one 'Discovering MCP server' event per concurrent call, got {discovery_events:?}"
+        );
+
+        for (message, server_ids) in &discovery_events {
+            // The message text embeds `server_id` via plain string interpolation,
+            // entirely independent of tracing's span machinery - it is ground truth
+            // for which call actually produced the event.
+            let expected = if message.contains("corr-test-a") {
+                "corr-test-a"
+            } else if message.contains("corr-test-b") {
+                "corr-test-b"
+            } else {
+                panic!("event message did not embed either server_id: {message}");
+            };
+
+            assert_eq!(
+                server_ids.len(),
+                2,
+                "event {message:?} should carry exactly 2 server_id values across its \
+                 span scope (discover_server's own span plus the outer introspect_server \
+                 span); got {server_ids:?} - introspect_server's span likely stopped \
+                 covering the async body"
+            );
+            assert!(
+                server_ids.iter().all(|id| id == expected),
+                "event {message:?} carried span server_id values {server_ids:?}, but its \
+                 own message text says it was produced by {expected:?} - cross-contamination \
+                 between concurrent server_id spans"
+            );
+        }
     }
 
     /// Regression test for the TOCTOU eviction bug (issue #130): eviction
