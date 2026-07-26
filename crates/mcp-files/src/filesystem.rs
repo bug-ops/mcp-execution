@@ -505,7 +505,8 @@ impl FileSystem {
         self.check_export_bounds()?;
 
         let target = base_path.as_ref();
-        let (staging, canonical_staging) = self.stage_export(target)?;
+        let (staging, canonical_staging) =
+            self.stage_export(target, options.confine_to.as_deref())?;
 
         // Phase 3: Write all files into the staging directory. If this fails,
         // `staging` is dropped here and its `Drop` impl removes the partial
@@ -530,9 +531,10 @@ impl FileSystem {
     /// # Errors
     ///
     /// Returns an error if `target` has no parent directory, the parent does
-    /// not exist, or the staging directory cannot be created or
-    /// canonicalized.
-    fn stage_export(&self, target: &Path) -> Result<(TempDir, PathBuf)> {
+    /// not exist, `confine_to` is set and either it or the parent fails to
+    /// canonicalize or the canonicalized parent is outside `confine_to`, or
+    /// the staging directory cannot be created or canonicalized.
+    fn stage_export(&self, target: &Path, confine_to: Option<&Path>) -> Result<(TempDir, PathBuf)> {
         let parent = target.parent().ok_or_else(|| FilesError::InvalidPath {
             path: format!("Target path has no parent directory: {}", target.display()),
         })?;
@@ -541,6 +543,10 @@ impl FileSystem {
             return Err(FilesError::FileNotFound {
                 path: parent.display().to_string(),
             });
+        }
+
+        if let Some(base_dir) = confine_to {
+            Self::verify_confinement(parent, base_dir)?;
         }
 
         // Best-effort cleanup of orphaned staging/displaced directories left
@@ -580,6 +586,44 @@ impl FileSystem {
         Self::create_directories(&dirs)?;
 
         Ok((staging, canonical_staging))
+    }
+
+    /// Verifies that `parent` (an export target's parent directory, already
+    /// confirmed to exist by [`Self::stage_export`]) resolves inside
+    /// `base_dir` once both are canonicalized.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FilesError::IoError`] (not [`FilesError::PathEscapesBase`])
+    /// if `base_dir` or `parent` cannot be canonicalized — that failure is a
+    /// plain I/O problem (missing directory, permission denied, ...)
+    /// unrelated to whether `parent` is confined, and disguising it as a
+    /// security rejection would mislead a caller into thinking a path
+    /// escaped when the check never actually ran. [`FilesError::PathEscapesBase`]
+    /// is reserved for the case where both canonicalize successfully but
+    /// `parent` is not inside `base_dir`.
+    fn verify_confinement(parent: &Path, base_dir: &Path) -> Result<()> {
+        let canonical_base = base_dir
+            .canonicalize()
+            .map_err(|source| FilesError::IoError {
+                path: base_dir.display().to_string(),
+                source,
+            })?;
+        let canonical_parent = parent
+            .canonicalize()
+            .map_err(|source| FilesError::IoError {
+                path: parent.display().to_string(),
+                source,
+            })?;
+
+        if canonical_parent.starts_with(&canonical_base) {
+            Ok(())
+        } else {
+            Err(FilesError::PathEscapesBase {
+                path: canonical_parent.display().to_string(),
+                base: canonical_base.display().to_string(),
+            })
+        }
     }
 
     /// Exports VFS contents using parallel writes (requires 'parallel' feature).
@@ -634,7 +678,7 @@ impl FileSystem {
         self.check_export_bounds()?;
 
         let target = base_path.as_ref();
-        let (staging, canonical_staging) = self.stage_export(target)?;
+        let (staging, canonical_staging) = self.stage_export(target, None)?;
 
         // Write files in parallel into the staging directory. If this fails,
         // `staging` is dropped here and its `Drop` impl removes the partial
@@ -1017,6 +1061,8 @@ impl Default for FileSystem {
 pub struct ExportOptions {
     /// Use atomic writes (write to temp file, then rename)
     pub atomic: bool,
+    /// Optional confinement base directory; see [`Self::with_confine_to`].
+    confine_to: Option<PathBuf>,
 }
 
 impl ExportOptions {
@@ -1024,15 +1070,48 @@ impl ExportOptions {
     ///
     /// Defaults:
     /// - atomic: true (safer)
+    /// - `confine_to`: unset (no confinement check)
     #[must_use]
     pub const fn new() -> Self {
-        Self { atomic: true }
+        Self {
+            atomic: true,
+            confine_to: None,
+        }
     }
 
     /// Sets whether to use atomic writes.
     #[must_use]
     pub const fn with_atomic_writes(mut self, atomic: bool) -> Self {
         self.atomic = atomic;
+        self
+    }
+
+    /// Requires the export target to resolve inside `base_dir`.
+    ///
+    /// Defense-in-depth against a caller passing a `target` built by joining
+    /// untrusted input onto a base directory: `PathBuf::join` silently
+    /// discards the base entirely when the joined component is absolute, and
+    /// `..` segments can walk back out of it even for a relative join. Once
+    /// `target`'s parent directory exists, both it and `base_dir` are
+    /// canonicalized: if either canonicalization fails (missing directory,
+    /// permission denied, ...), the export fails with [`FilesError::IoError`];
+    /// if both succeed but the canonicalized parent is not inside the
+    /// canonicalized `base_dir`, the export fails with
+    /// [`FilesError::PathEscapesBase`]. Callers are expected to validate
+    /// untrusted input at its source; this exists to fail loudly rather than
+    /// silently escape if a future caller doesn't.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_files::ExportOptions;
+    /// use std::path::PathBuf;
+    ///
+    /// let options = ExportOptions::new().with_confine_to(PathBuf::from("/home/user/.claude/servers"));
+    /// ```
+    #[must_use]
+    pub fn with_confine_to(mut self, base_dir: impl Into<PathBuf>) -> Self {
+        self.confine_to = Some(base_dir.into());
         self
     }
 }
@@ -1626,6 +1705,101 @@ mod tests {
             .filter(|entry| entry.path() != target)
             .collect();
         assert!(siblings.is_empty(), "unexpected siblings: {siblings:?}");
+    }
+
+    // ── ExportOptions::with_confine_to / issue #311 defense-in-depth ──
+
+    #[test]
+    fn test_export_with_confine_to_allows_target_inside_base_dir() {
+        let temp = TempDir::new().unwrap();
+        let base_dir = temp.path().join("base");
+        fs::create_dir_all(&base_dir).unwrap();
+        let target = base_dir.join("server-a");
+
+        let vfs = FilesBuilder::new()
+            .add_file("/tool.ts", "export {}")
+            .build()
+            .unwrap();
+
+        let options = ExportOptions::new().with_confine_to(&base_dir);
+        vfs.export_to_filesystem_with_options(&target, &options)
+            .unwrap();
+
+        assert!(target.join("tool.ts").exists());
+    }
+
+    #[test]
+    fn test_export_with_confine_to_rejects_target_outside_base_dir() {
+        // Reproduces #311 at the `mcp-files` layer: a `target` whose parent
+        // is not inside `base_dir` must be rejected rather than silently
+        // written, even though the parent directory itself exists.
+        let temp = TempDir::new().unwrap();
+        let base_dir = temp.path().join("base");
+        fs::create_dir_all(&base_dir).unwrap();
+        let escaped_target = temp.path().join("escaped");
+
+        let vfs = FilesBuilder::new()
+            .add_file("/tool.ts", "export {}")
+            .build()
+            .unwrap();
+
+        let options = ExportOptions::new().with_confine_to(&base_dir);
+        let result = vfs.export_to_filesystem_with_options(&escaped_target, &options);
+
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), FilesError::PathEscapesBase { .. }),
+            "expected PathEscapesBase"
+        );
+        assert!(
+            !escaped_target.exists(),
+            "nothing should be written outside base_dir"
+        );
+    }
+
+    #[test]
+    fn test_export_with_confine_to_reports_io_error_not_path_escapes_base_when_base_dir_missing() {
+        // Regression test for #311 review S3: a `base_dir` that fails to
+        // canonicalize (e.g. it does not exist — a caller bug, not an
+        // attempted escape) must surface as `FilesError::IoError`, not be
+        // misclassified as `PathEscapesBase`.
+        let temp = TempDir::new().unwrap();
+        let base_dir = temp.path().join("does-not-exist");
+        let target = temp.path().join("target");
+
+        let vfs = FilesBuilder::new()
+            .add_file("/tool.ts", "export {}")
+            .build()
+            .unwrap();
+
+        let options = ExportOptions::new().with_confine_to(&base_dir);
+        let result = vfs.export_to_filesystem_with_options(&target, &options);
+
+        match result.unwrap_err() {
+            FilesError::IoError { path, .. } => {
+                assert_eq!(path, base_dir.display().to_string());
+            }
+            other => panic!("expected IoError attributed to base_dir, got {other:?}"),
+        }
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn test_export_without_confine_to_is_unaffected() {
+        // Default options (no confinement configured) preserve prior
+        // behavior: any target with an existing parent is accepted.
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("anywhere");
+
+        let vfs = FilesBuilder::new()
+            .add_file("/tool.ts", "export {}")
+            .build()
+            .unwrap();
+
+        vfs.export_to_filesystem_with_options(&target, &ExportOptions::default())
+            .unwrap();
+
+        assert!(target.join("tool.ts").exists());
     }
 
     #[test]

@@ -6,15 +6,16 @@
 //! 2. Generates TypeScript files for progressive loading (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
-use super::common::{RawServerArgs, resolve_server_config};
+use super::common::{RawServerArgs, derive_server_id_from_path_or_name, resolve_server_config};
 use crate::formatters::escape_display;
 use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_core::{ServerConfig, ServerId};
-use mcp_execution_files::FilesBuilder;
+use mcp_execution_files::{ExportOptions, FilesBuilder};
 use mcp_execution_introspector::{Introspector, ServerInfo};
+use mcp_execution_skill::validate_server_id;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -115,6 +116,12 @@ pub async fn run(
     dry_run: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
+    // Captured before `raw` is consumed below: an id resolved from
+    // `--from-config` without a `--name` override is the one case
+    // `resolve_server_dir_name` isn't a redundant backstop for (see its doc
+    // comment) — `--name` always overrides `server_info.id`, so if it was
+    // given the id came from its own, already-validated value instead.
+    let id_from_unvalidated_config_key = raw.from_config.is_some() && name.is_none();
     let (server_id, server_config) = resolve_server_config(raw)?;
 
     let server_info = discover_server_info(server_id, &server_config, name.as_deref()).await?;
@@ -124,7 +131,7 @@ pub async fn run(
         return Ok(ExitCode::SUCCESS);
     }
 
-    let server_dir_name = server_info.id.to_string();
+    let server_dir_name = resolve_server_dir_name(&server_info, id_from_unvalidated_config_key)?;
     let generated_code = generate_code(&server_info)?;
 
     let base_dir = resolve_base_dir(output_dir)?;
@@ -144,12 +151,29 @@ pub async fn run(
 ///
 /// # Errors
 ///
-/// Returns an error if the connection or tool discovery fails.
+/// Returns an error if `name` fails [`validate_server_id`](mcp_execution_skill::validate_server_id),
+/// or if the connection or tool discovery fails.
 async fn discover_server_info(
     server_id: ServerId,
     server_config: &ServerConfig,
     name: Option<&str>,
 ) -> Result<ServerInfo> {
+    // Validated up front, before spending a network round trip: unlike a
+    // stdio command (sanitized via `derive_server_id_from_path_or_name`
+    // because it commonly *is* a legitimate path), `--name` is documented as
+    // overriding the id to match an identity the caller already has in mind
+    // (typically an `mcp.json` key) — silently rewriting an invalid value
+    // (e.g. stripping `..`/`/`) would produce a directory name the caller
+    // didn't ask for and that may no longer match anything, so it is
+    // rejected outright instead.
+    let override_id = name
+        .map(|custom_name| {
+            validate_server_id(custom_name)
+                .with_context(|| format!("invalid --name '{custom_name}'"))
+                .map(|()| ServerId::new(custom_name))
+        })
+        .transpose()?;
+
     info!("Connecting to MCP server: {}", server_id);
 
     let mut introspector = Introspector::new();
@@ -164,10 +188,10 @@ async fn discover_server_info(
         server_info.name
     );
 
-    // Override server_info.id with custom name if provided
-    // This ensures generated code uses the correct server_id that matches mcp.json
-    if let Some(custom_name) = name {
-        server_info.id = ServerId::new(custom_name);
+    // Override server_info.id with custom name if provided.
+    // This ensures generated code uses the correct server_id that matches mcp.json.
+    if let Some(id) = override_id {
+        server_info.id = id;
     }
 
     Ok(server_info)
@@ -190,6 +214,62 @@ fn generate_code(server_info: &ServerInfo) -> Result<GeneratedCode> {
     );
 
     Ok(generated_code)
+}
+
+/// Resolves `server_info.id` to a directory name, guaranteeing it is safe to
+/// join onto `base_dir`.
+///
+/// This is `generate`'s own sink — the single point where the id is turned
+/// into a directory name — rather than a shared helper like
+/// [`get_mcp_server`](super::common::get_mcp_server), because `generate` is
+/// the only command that needs the id to be a filesystem-safe slug;
+/// `introspect`/`server` read the same `mcp.json` key without that
+/// constraint (#311).
+///
+/// For the stdio arm (`derive_server_id_from_path_or_name`), the http/sse arm
+/// (`derive_server_id_from_url`), and `--name` (its own `validate_server_id`
+/// check in `discover_server_info`), this check is a redundant backstop:
+/// each of those already guarantees the id is valid before it ever reaches
+/// here, so failing here for one of them would indicate a bug in that arm's
+/// own check, not in the user's input. It is **not** redundant for
+/// `--from-config` without a `--name` override — `get_mcp_server` is
+/// deliberately unvalidated (shared by commands that don't need a
+/// filesystem-safe id), so `is_from_unvalidated_config_key` being `true`
+/// means this is the *sole* enforcement point for that arm. Do not delete
+/// this check on the theory that every arm upstream already covers it — that
+/// theory is false for `--from-config`, and removing it would silently
+/// reopen #311 for that specific case.
+///
+/// # Errors
+///
+/// Returns an error if `server_info.id` fails
+/// [`validate_server_id`](mcp_execution_skill::validate_server_id). When
+/// `is_from_unvalidated_config_key` is `true`, the error names
+/// `~/.claude/mcp.json` and suggests the `--name` override (with a
+/// filesystem-safe slug derived from the offending id) as a fix, since the
+/// fault is the user's config, not this tool. Otherwise it is framed as an
+/// internal error, since reaching it would mean one of the other arms' own
+/// checks has a bug.
+fn resolve_server_dir_name(
+    server_info: &ServerInfo,
+    is_from_unvalidated_config_key: bool,
+) -> Result<String> {
+    let server_dir_name = server_info.id.to_string();
+    validate_server_id(&server_dir_name).map_err(|source| {
+        if is_from_unvalidated_config_key {
+            let suggested_name = derive_server_id_from_path_or_name(&server_dir_name);
+            anyhow::anyhow!(
+                "server '{server_dir_name}' in ~/.claude/mcp.json is not a valid directory name \
+                 ({source}); use --name {suggested_name} to override it"
+            )
+        } else {
+            anyhow::Error::from(source).context(format!(
+                "internal error: resolved server id '{server_dir_name}' is not a valid \
+                 directory name"
+            ))
+        }
+    })?;
+    Ok(server_dir_name)
 }
 
 /// Resolves the base directory generated servers are exported under, defaulting to
@@ -303,7 +383,13 @@ fn export_generated_code(
     // stage-then-swap on regeneration), so pre-creating it here would just
     // force the slower regeneration path even on a brand-new server.
     std::fs::create_dir_all(base_dir).context("failed to create output directory")?;
-    vfs.export_to_filesystem(output_path)
+    // Defense-in-depth: `output_path` is built by joining a server-id-derived
+    // directory name onto `base_dir` (see `derive_server_id_from_path_or_name`,
+    // which is the primary guard); confining the export here means a future
+    // caller that skips that sanitization fails loudly instead of writing
+    // outside `base_dir`.
+    let options = ExportOptions::new().with_confine_to(base_dir);
+    vfs.export_to_filesystem_with_options(output_path, &options)
         .context("failed to export files to filesystem")?;
 
     Ok(())
@@ -683,5 +769,129 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("failed to introspect MCP server"));
+    }
+
+    // ── issue #311 (S1): `--name` override must be rejected outright when
+    // invalid, not silently rewritten into a different id ──
+
+    #[tokio::test]
+    async fn test_name_override_rejects_traversal_and_absolute_paths() {
+        // Regression test for #311: the `--name` override used to construct
+        // `ServerId::new(custom_name)` directly with no validation at all, so
+        // a malicious `--name` flowed unmodified into a directory name under
+        // `~/.claude/servers/{id}/`. Unlike a stdio command (sanitized, since
+        // it commonly *is* a legitimate path), `--name` is meant to match an
+        // identity the caller already has in mind, so it must be rejected
+        // rather than silently transformed. Validation happens before any
+        // connection attempt, so this never reaches the network.
+        let server_config = ServerConfig::builder()
+            .command("nonexistent-command-for-name-validation-test".to_string())
+            .build()
+            .unwrap();
+
+        for bad_name in [
+            "../../../../etc/passwd",
+            "/etc/cron.d/evil",
+            "..",
+            "UPPER_CASE",
+        ] {
+            let result =
+                discover_server_info(ServerId::new("placeholder"), &server_config, Some(bad_name))
+                    .await;
+
+            assert!(
+                result.is_err(),
+                "expected --name {bad_name:?} to be rejected"
+            );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("invalid --name"),
+                "expected a validation error for {bad_name:?}, got: {err_msg}"
+            );
+        }
+    }
+
+    // ── issue #311 (S4): `resolve_server_dir_name` is the sink-level
+    // invariant check, independent of which arm produced `server_info.id` ──
+
+    #[test]
+    fn test_resolve_server_dir_name_accepts_valid_id() {
+        let server_info = create_mock_server_info();
+        assert_eq!(
+            resolve_server_dir_name(&server_info, false).unwrap(),
+            "test-server"
+        );
+    }
+
+    #[test]
+    fn test_resolve_server_dir_name_rejects_traversal_and_absolute_ids() {
+        // Even though every arm that constructs `server_info.id` already
+        // guarantees this holds, this sink-level check must independently
+        // reject an unsafe id rather than trust its caller.
+        for bad_id in ["../../../../etc/passwd", "/etc/cron.d/evil", "UPPER_CASE"] {
+            let mut server_info = create_mock_server_info();
+            server_info.id = ServerId::new(bad_id);
+
+            let result = resolve_server_dir_name(&server_info, false);
+            assert!(result.is_err(), "expected id {bad_id:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn test_resolve_server_dir_name_non_config_error_is_framed_as_internal() {
+        // Regression test for #311 review M10/M11: when the id did NOT come
+        // from an unvalidated `--from-config` lookup, reaching this check at
+        // all would mean one of the other arms' own validation has a bug —
+        // the error must say so, not blame a user-supplied mcp.json key that
+        // was never involved.
+        let mut server_info = create_mock_server_info();
+        server_info.id = ServerId::new("UPPER_CASE");
+
+        let err = resolve_server_dir_name(&server_info, false).unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("internal error"), "got: {err_msg}");
+        assert!(!err_msg.contains("mcp.json"), "got: {err_msg}");
+    }
+
+    #[test]
+    fn test_resolve_server_dir_name_from_config_error_names_mcp_json_and_suggests_name_override() {
+        // Regression test for #311 review M10: a `claude_ai_Gmail`-style
+        // legitimate mcp.json key fails `validate_server_id`'s stricter
+        // filesystem-safety charset. The error must name the actual fault
+        // (the user's config) and point at the `--name` workaround with a
+        // ready-to-use slug, not blame this tool.
+        let mut server_info = create_mock_server_info();
+        server_info.id = ServerId::new("claude_ai_Gmail");
+
+        let err = resolve_server_dir_name(&server_info, true).unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("mcp.json"), "got: {err_msg}");
+        assert!(err_msg.contains("--name claude-ai-gmail"), "got: {err_msg}");
+        assert!(!err_msg.contains("internal error"), "got: {err_msg}");
+    }
+
+    #[test]
+    fn test_export_generated_code_confines_output_to_base_dir() {
+        // End-to-end reproduction of the vulnerable call site
+        // (`export_generated_code`): even if a caller upstream failed to
+        // sanitize the id, the confinement check wired in via
+        // `ExportOptions::with_confine_to` must reject an `output_path` that
+        // escapes `base_dir`, rather than silently writing outside it.
+        let temp = tempfile::TempDir::new().unwrap();
+        let base_dir = temp.path().join("servers");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let escape_target = temp.path().join("escaped");
+
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_mock_server_info();
+        let generated_code = generator.generate(&server_info).unwrap();
+
+        let result = export_generated_code(generated_code, &base_dir, &escape_target);
+
+        assert!(result.is_err());
+        assert!(
+            !escape_target.exists(),
+            "confinement check must reject the export before anything is written outside base_dir"
+        );
     }
 }

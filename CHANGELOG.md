@@ -63,6 +63,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deduping on the submitted string alone missed a caller submitting both forms for the same tool,
   letting the second entry silently overwrite the first's categorization (#307).
 
+- **`mcp-execution-cli`**: `generate`'s stdio transport derived its output directory name
+  directly from an unvalidated `ServerId` built from the raw stdio `command`, unlike its
+  http/sse sibling which already sanitized the URL first. Since `PathBuf::join` discards its
+  base entirely when the joined component is absolute, a `command` containing `..` segments or
+  an absolute path could write generated files outside `~/.claude/servers/`. This fix is scoped
+  to `generate`: the stdio path now routes through a new sanitizing helper
+  (`derive_server_id_from_path_or_name`) that strips path separators and `..` the same way the
+  URL-derivation helper already did; a `--name` override is instead validated with
+  `validate_server_id` and rejected outright when invalid rather than silently rewritten, since
+  it's meant to match an identity the caller already has in mind (typically an `mcp.json` key)
+  rather than being a free-form path; and, as a final invariant check right before the id is
+  joined onto the output directory, `generate` now validates the fully-resolved id regardless of
+  which of these paths produced it. `introspect`/`server`, which read the same `mcp.json` keys
+  but never turn them into a directory name, are unaffected (#311).
+- **`mcp-execution-files`**: `FileSystem::export_to_filesystem_with_options` gained an optional
+  confinement check (`ExportOptions::with_confine_to`) that rejects an export target whose
+  canonicalized parent directory resolves outside a caller-supplied base directory. Wired into
+  `mcp-execution-cli`'s `generate` as defense-in-depth alongside the fix above (#311).
 - **`mcp-execution-skill`**: `scan_tools_directory` discarded the real `io::Error` from both of
   its `canonicalize` calls (the server directory and the `_meta.json` sidecar) and mislabeled
   every failure as `DirectoryNotFound`/`MissingMetadata` respectively, even when the underlying
