@@ -522,16 +522,7 @@ pub fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEn
 ///
 /// Returns an error if the config file is missing, malformed, or the server
 /// name is not present.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::load_server_from_config;
-///
-/// let (id, config) = load_server_from_config("github").unwrap();
-/// assert_eq!(id.as_str(), "github");
-/// ```
-pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
+pub(crate) fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
     let (id, config, _) = get_mcp_server(name)?;
     Ok((id, config))
 }
@@ -865,29 +856,7 @@ impl TryFrom<TransportArgs> for McpTransport {
 /// `KEY=VALUE` format, or if the resulting [`ServerConfig`] fails security
 /// validation (shell metacharacters, forbidden environment variables,
 /// invalid URL scheme, unsafe headers, or out-of-bounds timeouts).
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::common::{TransportArgs, build_server_config};
-///
-/// let transport = TransportArgs::from_flags(
-///     Some("github-mcp-server".to_string()),
-///     vec!["stdio".to_string()],
-///     vec!["TOKEN=abc".to_string()],
-///     None,
-///     None,
-///     None,
-///     vec![],
-/// )
-/// .unwrap();
-///
-/// let (id, config) = build_server_config(transport, None, None).unwrap();
-///
-/// assert_eq!(id.as_str(), "github-mcp-server");
-/// assert_eq!(config.args(), &["stdio"]);
-/// ```
-pub fn build_server_config(
+pub(crate) fn build_server_config(
     transport: TransportArgs,
     connect_timeout_secs: Option<u64>,
     discover_timeout_secs: Option<u64>,
