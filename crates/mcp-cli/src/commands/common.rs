@@ -371,17 +371,7 @@ impl<'de> Deserialize<'de> for McpServerEntry {
 /// # Errors
 ///
 /// Returns an error if the file cannot be read or the JSON is malformed.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::load_mcp_config_from;
-/// use std::path::Path;
-///
-/// let config = load_mcp_config_from(Path::new("/tmp/mcp.json")).unwrap();
-/// println!("{} servers configured", config.mcp_servers.len());
-/// ```
-pub fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
+fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read MCP config from {}", path.display()))?;
 
@@ -396,18 +386,7 @@ pub fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
 ///
 /// Returns an error if the home directory cannot be determined, the file
 /// cannot be read, or the JSON is malformed.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::load_mcp_config;
-///
-/// match load_mcp_config() {
-///     Ok(config) => println!("Loaded {} servers", config.mcp_servers.len()),
-///     Err(e) => eprintln!("Failed to load config: {}", e),
-/// }
-/// ```
-pub fn load_mcp_config() -> Result<McpConfig> {
+fn load_mcp_config() -> Result<McpConfig> {
     let home = dirs::home_dir().context("failed to get home directory")?;
     load_mcp_config_from(&home.join(".claude").join("mcp.json"))
 }
@@ -420,17 +399,7 @@ pub fn load_mcp_config() -> Result<McpConfig> {
 /// # Errors
 ///
 /// Returns an error if the file exists but cannot be read or parsed.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::list_mcp_servers_from;
-/// use std::path::Path;
-///
-/// let servers = list_mcp_servers_from(Path::new("/tmp/mcp.json")).unwrap();
-/// println!("{} servers", servers.len());
-/// ```
-pub fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)>> {
+fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -445,23 +414,15 @@ pub fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)
 ///
 /// Delegates to [`list_mcp_servers_from`] after resolving the default path.
 ///
+/// Callers may print an entry's `transport` field directly:
+/// [`McpTransport`]'s `Debug` impl redacts `headers`/`env` values (keeping
+/// keys), so doing so can never leak a secret read from `mcp.json`.
+///
 /// # Errors
 ///
 /// Returns an error if the home directory cannot be determined, or the config
 /// file exists but cannot be read or parsed.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::list_mcp_servers;
-///
-/// // `McpTransport`'s `Debug` impl redacts `headers`/`env` values, so
-/// // printing an entry this way never leaks secrets read from mcp.json.
-/// for (name, entry) in list_mcp_servers().unwrap() {
-///     println!("{}: {:?}", name, entry.transport);
-/// }
-/// ```
-pub fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
+pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
     let home = dirs::home_dir().context("failed to get home directory")?;
     list_mcp_servers_from(&home.join(".claude").join("mcp.json"))
 }
@@ -483,16 +444,7 @@ pub fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 ///
 /// Returns an error if the config file is missing, malformed, or the named
 /// server is not present.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::get_mcp_server;
-///
-/// let (id, _config, _entry) = get_mcp_server("github").unwrap();
-/// assert_eq!(id.as_str(), "github");
-/// ```
-pub fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
+pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
     let config = load_mcp_config()?;
 
     let entry = config
@@ -512,7 +464,8 @@ pub fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEn
 
 /// Loads server configuration from `~/.claude/mcp.json` by server name.
 ///
-/// Convenience wrapper around [`get_mcp_server`] that drops the raw entry.
+/// Convenience wrapper around the crate-internal server lookup that drops
+/// the raw entry.
 ///
 /// # Arguments
 ///
@@ -2236,5 +2189,73 @@ mod tests {
 
         assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
         assert!(!id.as_str().contains("token"));
+    }
+
+    /// Serializes tests in this module that mutate the `HOME` env var so
+    /// they cannot race each other when run in the same process (relevant
+    /// under plain `cargo test`, which runs a crate's tests in one process;
+    /// the mandated `cargo nextest run` isolates every test in its own
+    /// process, so this lock is a safety net for the unmandated runner, not
+    /// a requirement of the mandated one). A separate static from
+    /// `server.rs`'s own `HOME_ENV_LOCK` — the two don't cross-serialize —
+    /// which is fine precisely because `cargo nextest run` never runs them
+    /// concurrently in a shared process to begin with.
+    #[cfg(unix)]
+    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Regression test for #276: `list_mcp_servers` and `get_mcp_server`
+    /// (both downgraded to `pub(crate)`, losing their `# Examples` doctest)
+    /// were previously only exercised via their `_from`/error-path siblings.
+    /// This exercises the 0-arg wrappers' actual success path — resolving
+    /// `~/.claude/mcp.json` via `dirs::home_dir()` and returning a populated,
+    /// looked-up entry — which no other test in this crate covered.
+    ///
+    /// Unix-only, mirroring `server.rs`'s own `HOME`-override tests: on
+    /// Windows, `dirs::home_dir()` resolves via the `SHGetKnownFolderPath`
+    /// Win32 API, which reads the real OS user profile and ignores
+    /// environment variables entirely, so no `HOME` override can redirect it.
+    #[cfg(unix)]
+    #[test]
+    fn test_list_and_get_mcp_server_success_via_default_path() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("mcp.json"),
+            r#"{"mcpServers": {"github": {"command": "node", "args": ["server.js"]}}}"#,
+        )
+        .unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
+        // reads or writes `HOME` while the guard is held.
+        unsafe {
+            std::env::set_var("HOME", temp.path());
+        }
+
+        let list_result = list_mcp_servers();
+        let get_result = get_mcp_server("github");
+
+        // SAFETY: see above.
+        unsafe {
+            match &original_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let servers = list_result.expect("list_mcp_servers must resolve the default path");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, "github");
+
+        let (id, _config, entry) =
+            get_result.expect("get_mcp_server must find the configured server");
+        assert_eq!(id.as_str(), "github");
+        assert!(matches!(
+            entry.transport,
+            McpTransport::Stdio { ref command, .. } if command == "node"
+        ));
     }
 }

@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *relative to* `~/.claude/servers/{server_id}/`, as part of the path-confinement fix below
   (#216). A caller previously passing an absolute `output_dir` now gets `INVALID_PARAMS`.
 
+- **`mcp-execution-cli`**: `commands::common::get_mcp_server`/`list_mcp_servers` downgraded
+  from `pub` to `pub(crate)`, and `load_mcp_config`/`load_mcp_config_from`/
+  `list_mcp_servers_from` downgraded to private — none had callers outside the crate; the
+  first two are still used cross-module by `commands::server`, the rest only within
+  `commands::common` itself (#276).
+
 - **`mcp-execution-core`**: `ServerConfigBuilder::try_build()` removed — use `build()`, which
   has returned `Result<ServerConfig, Error>` since #177 and runs identical validation; the
   alias left the workspace's two builders with divergent surfaces where `FilesBuilder` exposes
