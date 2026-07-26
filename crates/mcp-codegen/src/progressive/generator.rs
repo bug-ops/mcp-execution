@@ -47,8 +47,9 @@ use mcp_execution_introspector::{ServerInfo, ToolInfo};
 use std::collections::{HashMap, HashSet};
 
 /// Files emitted by every `generate`/`generate_with_categories` call regardless of tool
-/// count: `index.ts`, the runtime bridge, `package.json`, and the `_meta.json` sidecar.
-const FIXED_FILE_COUNT: usize = 4;
+/// count: `index.ts`, the runtime bridge, `package.json`, `tsconfig.json`, and the `_meta.json`
+/// sidecar.
+const FIXED_FILE_COUNT: usize = 5;
 
 /// Maximum number of files a single `generate`/`generate_with_categories` call will produce
 /// (denial-of-service protection, CWE-400).
@@ -79,6 +80,45 @@ pub const MAX_GENERATED_BYTES: usize = 2
     * (mcp_execution_introspector::MAX_TOOL_NAME_LEN
         + mcp_execution_introspector::MAX_TOOL_DESCRIPTION_LEN
         + mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES);
+
+/// Contents of the generated `package.json`.
+///
+/// Declares `@types/node` as a `devDependency` — pinned to major version 22, matching the
+/// Node.js version this project's own CI targets — because `_runtime/mcp-bridge.ts` imports
+/// Node builtins (`child_process`, `fs/promises`, `os`, `path`) and references ambient globals
+/// (`process`, the `NodeJS` namespace) that only resolve once type declarations for Node are
+/// present; without it, `tsc --noEmit` fails on the generated package even with a correct
+/// `tsconfig.json` (see `TSCONFIG_JSON` below).
+const PACKAGE_JSON: &str = "{\"type\":\"module\",\"devDependencies\":{\"@types/node\":\"^22\"}}\n";
+
+/// Contents of the generated `tsconfig.json`.
+///
+/// Tool files import the runtime bridge with an explicit `.ts` extension (see
+/// `tool.ts.hbs`), which requires `allowImportingTsExtensions`. TypeScript requires `noEmit`
+/// (or a declaration/emit setting) whenever `allowImportingTsExtensions` is set, since that
+/// option only changes how imports are type-checked, not how output is emitted.
+///
+/// `"types": ["node"]` is explicit rather than relying on automatic `@types/*` acquisition:
+/// TypeScript 5.x auto-includes every package under `node_modules/@types` when `types` is
+/// unset, but TypeScript 7 (the native/Go-based compiler) does not extend that same implicit
+/// behavior to `@types/node`'s ambient globals (`process`, the `NodeJS` namespace) — `tsc
+/// --noEmit` fails with `TS2591`/`TS2503` under TS 7 even with `@types/node` correctly
+/// installed, unless `types` names it explicitly. Listing it explicitly works identically
+/// under both major versions.
+const TSCONFIG_JSON: &str = r#"{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}
+"#;
 
 /// Generator for progressive loading TypeScript files.
 ///
@@ -130,6 +170,7 @@ impl<'a> ProgressiveGenerator<'a> {
     /// - `index.ts`: Re-exports all tools
     /// - `_runtime/mcp-bridge.ts`: Runtime bridge for calling MCP tools
     /// - `package.json`: ES module type declaration
+    /// - `tsconfig.json`: compiler options allowing the `.ts`-extensioned imports above
     ///
     /// # Arguments
     ///
@@ -173,6 +214,7 @@ impl<'a> ProgressiveGenerator<'a> {
     /// // - index.ts
     /// // - _runtime/mcp-bridge.ts
     /// // - package.json
+    /// // - tsconfig.json
     /// // - one file per tool
     /// println!("Generated {} files", code.file_count());
     /// # Ok(())
@@ -249,17 +291,31 @@ impl<'a> ProgressiveGenerator<'a> {
 
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
 
-        // Generate package.json for ES module identification
+        // Generate package.json for ES module identification and the @types/node devDependency
+        // needed for the runtime bridge to type-check (see PACKAGE_JSON doc comment)
         add_tracked(
             &mut code,
             &mut total_bytes,
             GeneratedFile {
                 path: "package.json".to_string(),
-                content: "{\"type\":\"module\"}\n".to_string(),
+                content: PACKAGE_JSON.to_string(),
             },
         )?;
 
         tracing::debug!("Generated package.json");
+
+        // Generate tsconfig.json so `tsc --noEmit` accepts the `.ts`-extensioned import in
+        // each tool file (see TSCONFIG_JSON doc comment)
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "tsconfig.json".to_string(),
+                content: TSCONFIG_JSON.to_string(),
+            },
+        )?;
+
+        tracing::debug!("Generated tsconfig.json");
 
         // Generate _meta.json sidecar with structured tool metadata
         add_tracked(
@@ -417,17 +473,31 @@ impl<'a> ProgressiveGenerator<'a> {
 
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
 
-        // Generate package.json for ES module identification
+        // Generate package.json for ES module identification and the @types/node devDependency
+        // needed for the runtime bridge to type-check (see PACKAGE_JSON doc comment)
         add_tracked(
             &mut code,
             &mut total_bytes,
             GeneratedFile {
                 path: "package.json".to_string(),
-                content: "{\"type\":\"module\"}\n".to_string(),
+                content: PACKAGE_JSON.to_string(),
             },
         )?;
 
         tracing::debug!("Generated package.json");
+
+        // Generate tsconfig.json so `tsc --noEmit` accepts the `.ts`-extensioned import in
+        // each tool file (see TSCONFIG_JSON doc comment)
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "tsconfig.json".to_string(),
+                content: TSCONFIG_JSON.to_string(),
+            },
+        )?;
+
+        tracing::debug!("Generated tsconfig.json");
 
         // Generate _meta.json sidecar with structured tool metadata
         add_tracked(
@@ -1024,8 +1094,9 @@ mod tests {
         // - 1 index.ts
         // - 1 runtime bridge
         // - 1 package.json
+        // - 1 tsconfig.json
         // - 1 _meta.json
-        assert_eq!(code.file_count(), 6);
+        assert_eq!(code.file_count(), 7);
 
         // Check tool files exist
         let tool_files: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
@@ -1035,7 +1106,62 @@ mod tests {
         assert!(tool_files.contains(&"index.ts"));
         assert!(tool_files.contains(&"_runtime/mcp-bridge.ts"));
         assert!(tool_files.contains(&"package.json"));
+        assert!(tool_files.contains(&"tsconfig.json"));
         assert!(tool_files.contains(&"_meta.json"));
+    }
+
+    /// Regression guard for #183: tool files import the runtime bridge with an explicit `.ts`
+    /// extension, which `tsc` only accepts under `allowImportingTsExtensions`; that option in
+    /// turn requires `noEmit` (or a declaration/emit setting) to be internally consistent.
+    /// `types` must explicitly name `node` — TypeScript 7's automatic `@types/*` acquisition
+    /// does not extend `@types/node`'s ambient globals the way TypeScript 5.x's does, so
+    /// `tsc --noEmit` fails under TS 7 without this even with `@types/node` installed.
+    #[test]
+    fn test_generate_tsconfig_json_allows_ts_extension_imports() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let code = generator.generate(&server_info).unwrap();
+
+        let tsconfig_file = code
+            .files
+            .iter()
+            .find(|f| f.path == "tsconfig.json")
+            .expect("tsconfig.json not found");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&tsconfig_file.content).expect("tsconfig.json is not valid JSON");
+        let compiler_options = &parsed["compilerOptions"];
+
+        assert_eq!(compiler_options["allowImportingTsExtensions"], true);
+        assert_eq!(compiler_options["noEmit"], true);
+        assert_eq!(compiler_options["types"], serde_json::json!(["node"]));
+    }
+
+    /// Regression guard for #183: `tsconfig.json` alone does not make the generated package
+    /// pass `tsc --noEmit` — the runtime bridge imports Node builtins and references ambient
+    /// globals (`process`, `NodeJS`) that only resolve with `@types/node` installed. Without a
+    /// declared devDependency, a consumer running `tsc --noEmit` "out of the box" still fails.
+    #[test]
+    fn test_generate_package_json_declares_types_node_dev_dependency() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let code = generator.generate(&server_info).unwrap();
+
+        let package_json_file = code
+            .files
+            .iter()
+            .find(|f| f.path == "package.json")
+            .expect("package.json not found");
+
+        let parsed: serde_json::Value = serde_json::from_str(&package_json_file.content)
+            .expect("package.json is not valid JSON");
+
+        assert!(
+            parsed["devDependencies"]["@types/node"].is_string(),
+            "package.json is missing a @types/node devDependency: {parsed}"
+        );
     }
 
     #[test]
