@@ -306,6 +306,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the default `fmt` subscriber, log lines emitted inside an instrumented call now carry a
   `generate{server_id=... tool_count=...}:` span-context prefix that was not there before
   (#211).
+- **`mcp-execution-cli`**, **`mcp-execution-server`**: extracted the pipeline stages of
+  `generate::run`, `skill::run`, `runner::execute_command`, and
+  `GeneratorService::introspect_server` into named private helper functions (e.g.
+  `resolve_server_config` in `common.rs`, now shared by `generate`/`introspect` instead of
+  each duplicating the same `--from-config` branch), so each entry point reads as a short,
+  linear pipeline instead of one long function. No behavior change beyond the #257 addition
+  (see the Added entry for #257 below); existing log call sites, error classification, and
+  lock/eviction ordering are unchanged (#179).
 
 ### Fixed
 
@@ -744,6 +752,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `internal_error`, misreporting a hostile caller-supplied parameter as a server-side fault.
 
 ### Added
+
+- **`mcp-execution-cli`**: `generate` now prints a "Next step: run 'npm install' in the
+  output directory before type-checking the generated package" hint after a successful
+  export, in the text and pretty output formats and as a new `next_step` field in the JSON
+  result. Not emitted in `--dry-run`, since nothing has been written to disk yet (#257).
 
 - **`mcp-execution-introspector`**: new `test-fixtures`-gated dependency on
   `rmcp/transport-streamable-http-server` and dev-dependencies on `axum` and `tokio-util`,

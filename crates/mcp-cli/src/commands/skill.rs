@@ -11,7 +11,8 @@ use anyhow::{Context, Result, bail};
 use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_skill::{
-    build_skill_context, render_skill_md, scan_tools_directory, validate_server_id,
+    GenerateSkillResult, ParsedToolFile, ScanResult, build_skill_context, render_skill_md,
+    scan_tools_directory, validate_server_id,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -118,69 +119,12 @@ pub async fn run(
         .map_err(|e| CoreError::InvalidArgument(format!("Invalid server ID: {e}")))?;
     info!("Server ID validated: {}", server);
 
-    // Step 2: Resolve servers directory
-    let servers_base = resolve_servers_dir(servers_dir.as_deref())?;
-    debug!("Servers base directory: {}", servers_base.display());
+    let tool_dir = resolve_tool_dir(&server, servers_dir.as_deref())?;
 
-    // Step 3: Build and validate server path
-    let tool_dir = servers_base.join(&server);
-    let tool_dir = validate_path_security(&tool_dir, &servers_base)?;
-    debug!("Server directory: {}", tool_dir.display());
+    let scan_result = scan_server_tools(&tool_dir, &server).await?;
 
-    // Step 4: Check server directory exists
-    if !tool_dir.exists() {
-        bail!(
-            "Server directory not found: {}\n\
-             Run 'mcp-execution-cli generate --from-config {}' first to generate TypeScript files.",
-            tool_dir.display(),
-            server
-        );
-    }
-
-    // Step 5: Scan TypeScript files
-    info!("Scanning TypeScript files in {}", tool_dir.display());
-    let scan_result = scan_tools_directory(&tool_dir)
-        .await
-        .context("Failed to scan tools directory")?;
-
-    if scan_result.tools.is_empty() {
-        bail!(
-            "No TypeScript tool files found in {}\n\
-             Run 'mcp-execution-cli generate --from-config {}' first.",
-            tool_dir.display(),
-            server
-        );
-    }
-
-    // `tools.len()` reflects sidecar entries that were cross-checked against an
-    // actual `.ts` file on disk by `scan_tools_directory` (issue #154) — not a
-    // raw sidecar entry count.
-    info!(
-        "Verified {} tool files against sidecar",
-        scan_result.tools.len()
-    );
-
-    // Step 6: Build skill context
-    let hints_ref: Option<Vec<String>> = if hints.is_empty() { None } else { Some(hints) };
-
-    let mut context = build_skill_context(&server, &scan_result.tools, hints_ref.as_deref());
-
-    // Apply custom skill name if provided
-    if let Some(name) = skill_name {
-        context.skill_name = name;
-    }
-
-    // Apply custom output path if provided
-    if let Some(path) = output_path {
-        // Validate output path for path traversal
-        validate_output_path(&path)?;
-        context.output_path = path.display().to_string();
-    } else {
-        // Use default skills directory
-        let skills_dir = resolve_skills_dir()?;
-        let default_output = skills_dir.join(&server).join("SKILL.md");
-        context.output_path = default_output.display().to_string();
-    }
+    let context =
+        prepare_skill_context(&server, &scan_result.tools, hints, skill_name, output_path)?;
 
     // Check if output file exists and overwrite flag
     let output_path = PathBuf::from(&context.output_path);
@@ -195,18 +139,7 @@ pub async fn run(
     // Step 7: Render SKILL.md and write atomically.
     let rendered = render_skill_md(&context).context("failed to render SKILL.md template")?;
 
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
-    }
-
-    // Atomic write: write to a temp file in the same directory, then rename.
-    // `with_added_extension` appends `.tmp` without removing `.md` (N1).
-    let tmp_path = output_path.with_added_extension("tmp");
-    std::fs::write(&tmp_path, &rendered)
-        .with_context(|| format!("failed to write temp file: {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &output_path)
-        .with_context(|| format!("failed to rename to: {}", output_path.display()))?;
+    write_skill_md(&rendered, &output_path)?;
 
     let bytes_written = rendered.len();
     info!(
@@ -228,6 +161,128 @@ pub async fn run(
     println!("{output}");
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Resolves and validates the server's tool directory under `servers_dir` (or its default).
+///
+/// # Errors
+///
+/// Returns an error if the home directory cannot be determined, the resolved path escapes
+/// its base via a symlink, or the server directory does not exist.
+fn resolve_tool_dir(server: &str, servers_dir: Option<&Path>) -> Result<PathBuf> {
+    // Step 2: Resolve servers directory
+    let servers_base = resolve_servers_dir(servers_dir)?;
+    debug!("Servers base directory: {}", servers_base.display());
+
+    // Step 3: Build and validate server path
+    let tool_dir = servers_base.join(server);
+    let tool_dir = validate_path_security(&tool_dir, &servers_base)?;
+    debug!("Server directory: {}", tool_dir.display());
+
+    // Step 4: Check server directory exists
+    if !tool_dir.exists() {
+        bail!(
+            "Server directory not found: {}\n\
+             Run 'mcp-execution-cli generate --from-config {}' first to generate TypeScript files.",
+            tool_dir.display(),
+            server
+        );
+    }
+
+    Ok(tool_dir)
+}
+
+/// Scans `tool_dir` for generated TypeScript tool files.
+///
+/// # Errors
+///
+/// Returns an error if the directory cannot be scanned or no tool files are found.
+async fn scan_server_tools(tool_dir: &Path, server: &str) -> Result<ScanResult> {
+    // Step 5: Scan TypeScript files
+    info!("Scanning TypeScript files in {}", tool_dir.display());
+    let scan_result = scan_tools_directory(tool_dir)
+        .await
+        .context("Failed to scan tools directory")?;
+
+    if scan_result.tools.is_empty() {
+        bail!(
+            "No TypeScript tool files found in {}\n\
+             Run 'mcp-execution-cli generate --from-config {}' first.",
+            tool_dir.display(),
+            server
+        );
+    }
+
+    // `tools.len()` reflects sidecar entries that were cross-checked against an
+    // actual `.ts` file on disk by `scan_tools_directory` (issue #154) — not a
+    // raw sidecar entry count.
+    info!(
+        "Verified {} tool files against sidecar",
+        scan_result.tools.len()
+    );
+
+    Ok(scan_result)
+}
+
+/// Builds the skill generation context, applying custom skill name and output path overrides.
+///
+/// # Errors
+///
+/// Returns an error if a custom `output_path` fails traversal validation, or if the default
+/// skills directory cannot be resolved (home directory not determinable).
+fn prepare_skill_context(
+    server: &str,
+    tools: &[ParsedToolFile],
+    hints: Vec<String>,
+    skill_name: Option<String>,
+    output_path: Option<PathBuf>,
+) -> Result<GenerateSkillResult> {
+    // Step 6: Build skill context
+    let hints_ref: Option<Vec<String>> = if hints.is_empty() { None } else { Some(hints) };
+
+    let mut context = build_skill_context(server, tools, hints_ref.as_deref());
+
+    // Apply custom skill name if provided
+    if let Some(name) = skill_name {
+        context.skill_name = name;
+    }
+
+    // Apply custom output path if provided
+    if let Some(path) = output_path {
+        // Validate output path for path traversal
+        validate_output_path(&path)?;
+        context.output_path = path.display().to_string();
+    } else {
+        // Use default skills directory
+        let skills_dir = resolve_skills_dir()?;
+        let default_output = skills_dir.join(server).join("SKILL.md");
+        context.output_path = default_output.display().to_string();
+    }
+
+    Ok(context)
+}
+
+/// Writes `rendered` SKILL.md content to `output_path` atomically (write-temp then rename).
+///
+/// # Errors
+///
+/// Returns an error if the parent directory cannot be created, the temp file cannot be
+/// written, or the rename fails.
+fn write_skill_md(rendered: &str, output_path: &Path) -> Result<()> {
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
+    }
+
+    // Atomic write: write to a temp file in the same directory, then rename.
+    // `with_added_extension` appends `.tmp` without removing `.md` (N1).
+    let tmp_path = output_path.with_added_extension("tmp");
+    std::fs::write(&tmp_path, rendered)
+        .with_context(|| format!("failed to write temp file: {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, output_path)
+        .with_context(|| format!("failed to rename to: {}", output_path.display()))?;
+
+    Ok(())
 }
 
 /// Resolve servers directory from provided path or default.

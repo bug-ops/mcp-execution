@@ -88,7 +88,19 @@ pub fn init_logging(verbose: bool) -> Result<()> {
 /// # }
 /// ```
 pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
-    let result = match command {
+    Ok(match dispatch(command, output_format).await {
+        Ok(code) => code,
+        Err(err) => report_and_classify(&err),
+    })
+}
+
+/// Routes `command` to its handler and returns the handler's result unclassified.
+///
+/// # Errors
+///
+/// Returns whatever error the dispatched command handler produces.
+async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
+    match command {
         Commands::Introspect {
             from_config,
             server,
@@ -172,18 +184,17 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
         Commands::Setup => commands::setup::run(output_format).await,
-        Commands::Completions { shell } => {
-            use crate::cli::Cli;
-            use clap::CommandFactory;
-            let mut cmd = Cli::command();
-            commands::completions::run(shell, &mut cmd).await
-        }
-    };
+        Commands::Completions { shell } => run_completions(shell).await,
+    }
+}
 
-    Ok(match result {
-        Ok(code) => code,
-        Err(err) => report_and_classify(&err),
-    })
+/// Runs the `completions` subcommand: builds the clap command tree and generates the shell
+/// completion script for it.
+async fn run_completions(shell: clap_complete::Shell) -> Result<ExitCode> {
+    use crate::cli::Cli;
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    commands::completions::run(shell, &mut cmd).await
 }
 
 /// Prints `err` to stderr (matching anyhow's default `main`-error format) and

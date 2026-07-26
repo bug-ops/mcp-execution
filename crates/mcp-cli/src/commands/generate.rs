@@ -6,15 +6,17 @@
 //! 2. Generates TypeScript files for progressive loading (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
-use super::common::{TransportArgs, build_server_config, load_server_from_config};
+use super::common::resolve_server_config;
 use anyhow::{Context, Result};
+use mcp_execution_codegen::GeneratedCode;
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_core::{ServerConfig, ServerId};
 use mcp_execution_files::FilesBuilder;
-use mcp_execution_introspector::Introspector;
+use mcp_execution_introspector::{Introspector, ServerInfo};
 use serde::Serialize;
-use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use std::path::{Path, PathBuf};
+use tracing::{info, warn};
 
 /// Result of progressive loading code generation.
 #[derive(Debug, Serialize)]
@@ -27,7 +29,13 @@ struct GenerationResult {
     tool_count: usize,
     /// Path where files were saved
     output_path: String,
+    /// Hint describing the required post-export step (issue #257).
+    next_step: String,
 }
+
+/// Post-export step required before the generated package type-checks.
+const NPM_INSTALL_HINT: &str =
+    "run 'npm install' in the output directory before type-checking the generated package";
 
 /// Preview of a file that would be generated in dry-run mode.
 #[derive(Debug, Serialize)]
@@ -127,22 +135,57 @@ pub async fn run(
     discover_timeout_secs: Option<u64>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    let (server_id, server_config) = if let Some(config_name) = from_config {
-        debug!(
-            "Loading server configuration from ~/.claude/mcp.json: {}",
-            config_name
-        );
-        load_server_from_config(&config_name)?
-    } else {
-        let transport = TransportArgs::from_flags(server, args, env, cwd, http, sse, headers)?;
-        build_server_config(transport, connect_timeout_secs, discover_timeout_secs)?
-    };
+    let (server_id, server_config) = resolve_server_config(
+        from_config,
+        server,
+        args,
+        env,
+        cwd,
+        http,
+        sse,
+        headers,
+        connect_timeout_secs,
+        discover_timeout_secs,
+    )?;
 
+    let server_info = discover_server_info(server_id, &server_config, name.as_deref()).await?;
+
+    if server_info.tools.is_empty() {
+        warn!("Server has no tools to generate code for");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let server_dir_name = server_info.id.to_string();
+    let generated_code = generate_code(&server_info)?;
+
+    let base_dir = resolve_base_dir(output_dir)?;
+    let output_path = base_dir.join(&server_dir_name);
+
+    if dry_run {
+        return render_dry_run(&server_info, &generated_code, &output_path, output_format);
+    }
+
+    export_generated_code(generated_code, &base_dir, &output_path)?;
+
+    render_success(&server_info, &output_path, output_format)
+}
+
+/// Connects to the target server, discovers its tools, and applies the
+/// `--name` override to [`ServerInfo::id`] if one was given.
+///
+/// # Errors
+///
+/// Returns an error if the connection or tool discovery fails.
+async fn discover_server_info(
+    server_id: ServerId,
+    server_config: &ServerConfig,
+    name: Option<&str>,
+) -> Result<ServerInfo> {
     info!("Connecting to MCP server: {}", server_id);
 
     let mut introspector = Introspector::new();
-    let server_info = introspector
-        .discover_server(server_id, &server_config)
+    let mut server_info = introspector
+        .discover_server(server_id, server_config)
         .await
         .context("failed to introspect MCP server")?;
 
@@ -152,23 +195,24 @@ pub async fn run(
         server_info.name
     );
 
-    if server_info.tools.is_empty() {
-        warn!("Server has no tools to generate code for");
-        return Ok(ExitCode::SUCCESS);
-    }
-
     // Override server_info.id with custom name if provided
     // This ensures generated code uses the correct server_id that matches mcp.json
-    let mut server_info = server_info;
-    if let Some(ref custom_name) = name {
-        server_info.id = mcp_execution_core::ServerId::new(custom_name);
+    if let Some(custom_name) = name {
+        server_info.id = ServerId::new(custom_name);
     }
 
-    let server_dir_name = server_info.id.to_string();
+    Ok(server_info)
+}
 
+/// Generates progressive-loading TypeScript code for `server_info`.
+///
+/// # Errors
+///
+/// Returns an error if the code generator fails to initialize or generate code.
+fn generate_code(server_info: &ServerInfo) -> Result<GeneratedCode> {
     let generator = ProgressiveGenerator::new().context("failed to create code generator")?;
     let generated_code = generator
-        .generate(&server_info)
+        .generate(server_info)
         .context("failed to generate TypeScript code")?;
 
     info!(
@@ -176,71 +220,99 @@ pub async fn run(
         generated_code.file_count()
     );
 
-    let base_dir = if let Some(custom_dir) = output_dir {
-        custom_dir
+    Ok(generated_code)
+}
+
+/// Resolves the base directory generated servers are exported under, defaulting to
+/// `~/.claude/servers` when `output_dir` is not set.
+///
+/// # Errors
+///
+/// Returns an error if `output_dir` is `None` and the home directory cannot be determined.
+fn resolve_base_dir(output_dir: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(custom_dir) = output_dir {
+        Ok(custom_dir)
     } else {
-        dirs::home_dir()
+        Ok(dirs::home_dir()
             .context("failed to get home directory")?
             .join(".claude")
-            .join("servers")
+            .join("servers"))
+    }
+}
+
+/// Renders a dry-run preview of the files that would be generated, without writing anything.
+fn render_dry_run(
+    server_info: &ServerInfo,
+    generated_code: &GeneratedCode,
+    output_path: &Path,
+    output_format: OutputFormat,
+) -> Result<ExitCode> {
+    let server_dir_name = server_info.id.to_string();
+    let files: Vec<FilePreview> = generated_code
+        .files
+        .iter()
+        .map(|f| FilePreview {
+            path: format!("{}/{}", server_dir_name, f.path),
+            size: f.content.len(),
+        })
+        .collect();
+    let total_size: usize = files.iter().map(|f| f.size).sum();
+    let total_files = files.len();
+
+    let result = DryRunResult {
+        server_id: server_info.id.to_string(),
+        server_name: server_info.name.clone(),
+        output_path: output_path.display().to_string(),
+        files,
+        total_files,
+        total_size,
     };
-    let output_path = base_dir.join(&server_dir_name);
 
-    if dry_run {
-        let files: Vec<FilePreview> = generated_code
-            .files
-            .iter()
-            .map(|f| FilePreview {
-                path: format!("{}/{}", server_dir_name, f.path),
-                size: f.content.len(),
-            })
-            .collect();
-        let total_size: usize = files.iter().map(|f| f.size).sum();
-        let total_files = files.len();
-
-        let result = DryRunResult {
-            server_id: server_info.id.to_string(),
-            server_name: server_info.name,
-            output_path: output_path.display().to_string(),
-            files,
-            total_files,
-            total_size,
-        };
-
-        match output_format {
-            OutputFormat::Json => {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            }
-            OutputFormat::Text => {
-                println!("Server: {} ({})", result.server_name, result.server_id);
-                println!(
-                    "Would generate {} files ({}) to {}/",
-                    result.total_files,
-                    format_size(result.total_size),
-                    result.output_path
-                );
-            }
-            OutputFormat::Pretty => {
-                println!(
-                    "Would generate {} files to {}/:",
-                    result.total_files, result.output_path
-                );
-                println!();
-                for f in &result.files {
-                    println!("  - {} ({})", f.path, format_size(f.size));
-                }
-                println!();
-                println!(
-                    "Total: {} files, ~{}",
-                    result.total_files,
-                    format_size(result.total_size)
-                );
-            }
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
-
-        return Ok(ExitCode::SUCCESS);
+        OutputFormat::Text => {
+            println!("Server: {} ({})", result.server_name, result.server_id);
+            println!(
+                "Would generate {} files ({}) to {}/",
+                result.total_files,
+                format_size(result.total_size),
+                result.output_path
+            );
+        }
+        OutputFormat::Pretty => {
+            println!(
+                "Would generate {} files to {}/:",
+                result.total_files, result.output_path
+            );
+            println!();
+            for f in &result.files {
+                println!("  - {} ({})", f.path, format_size(f.size));
+            }
+            println!();
+            println!(
+                "Total: {} files, ~{}",
+                result.total_files,
+                format_size(result.total_size)
+            );
+        }
     }
 
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Builds the VFS from `generated_code` and exports it to `output_path` under `base_dir`.
+///
+/// # Errors
+///
+/// Returns an error if VFS construction fails, `base_dir` cannot be created, or the export to
+/// the filesystem fails.
+fn export_generated_code(
+    generated_code: GeneratedCode,
+    base_dir: &Path,
+    output_path: &Path,
+) -> Result<()> {
     // Build VFS with base_path="/" since generated files already have flat structure;
     // server_dir_name will be used when exporting to filesystem
     let vfs = FilesBuilder::from_generated_code(generated_code, "/")
@@ -253,15 +325,25 @@ pub async fn run(
     // `output_path` itself atomically (single rename on first generate,
     // stage-then-swap on regeneration), so pre-creating it here would just
     // force the slower regeneration path even on a brand-new server.
-    std::fs::create_dir_all(&base_dir).context("failed to create output directory")?;
-    vfs.export_to_filesystem(&output_path)
+    std::fs::create_dir_all(base_dir).context("failed to create output directory")?;
+    vfs.export_to_filesystem(output_path)
         .context("failed to export files to filesystem")?;
 
+    Ok(())
+}
+
+/// Renders the success output for a completed export, including the #257 npm-install hint.
+fn render_success(
+    server_info: &ServerInfo,
+    output_path: &Path,
+    output_format: OutputFormat,
+) -> Result<ExitCode> {
     let result = GenerationResult {
         server_id: server_info.id.to_string(),
         server_name: server_info.name.clone(),
         tool_count: server_info.tools.len(),
         output_path: output_path.display().to_string(),
+        next_step: NPM_INSTALL_HINT.to_string(),
     };
 
     match output_format {
@@ -272,12 +354,14 @@ pub async fn run(
             println!("Server: {} ({})", result.server_name, result.server_id);
             println!("Generated {} tool files", result.tool_count);
             println!("Output: {}", result.output_path);
+            println!("Next step: {NPM_INSTALL_HINT}");
         }
         OutputFormat::Pretty => {
             println!("✓ Successfully generated progressive loading files");
             println!("  Server: {} ({})", result.server_name, result.server_id);
             println!("  Tools: {}", result.tool_count);
             println!("  Location: {}", result.output_path);
+            println!("  Next step: {NPM_INSTALL_HINT}");
         }
     }
 
@@ -322,11 +406,13 @@ mod tests {
             server_name: "Test Server".to_string(),
             tool_count: 5,
             output_path: "/path/to/output".to_string(),
+            next_step: NPM_INSTALL_HINT.to_string(),
         };
 
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"server_id\":\"test\""));
         assert!(json.contains("\"tool_count\":5"));
+        assert!(json.contains(NPM_INSTALL_HINT));
     }
 
     #[test]

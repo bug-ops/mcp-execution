@@ -16,7 +16,7 @@ use crate::types::{
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::{ServerConfig, ServerId, sanitize_path_for_error};
 use mcp_execution_files::FilesBuilder;
-use mcp_execution_introspector::Introspector;
+use mcp_execution_introspector::{Introspector, ToolInfo};
 use mcp_execution_skill::{
     GenerateSkillParams, MAX_TOOL_FILES, OutputPathError, SaveSkillParams, SaveSkillResult,
     ScanError, build_skill_context, extract_skill_metadata, resolve_skill_output_path,
@@ -299,6 +299,49 @@ impl GeneratorService {
             entry.remove();
         }
     }
+
+    /// Connects to and introspects `server_id`, observing cancellation.
+    ///
+    /// Deliberately not `#[tracing::instrument]`-annotated: `introspect_server`'s span already
+    /// records `server_id` for the whole call, and a second span field here would make
+    /// `test_introspect_server_concurrent_calls_do_not_cross_contaminate_server_id`'s "exactly 2
+    /// `server_id` values" assertion see 3 instead, breaking it.
+    async fn discover_with_cancellation(
+        &self,
+        server_id: &ServerId,
+        config: &ServerConfig,
+        ct: &CancellationToken,
+    ) -> Result<mcp_execution_introspector::ServerInfo, McpError> {
+        // Connect and introspect, holding only the lock for this server_id. A
+        // tokio::select! against `ct.cancelled()` lets a client-issued
+        // `notifications/cancelled` interrupt the (potentially up-to-600s)
+        // discovery round trip instead of always running it to completion.
+        // `biased;` prefers noticing cancellation over starting/continuing
+        // discovery, making the cancelled path deterministic rather than
+        // depending on `tokio::select!`'s (default-randomised) poll order.
+        let introspector_handle = self.introspector_for(server_id).await;
+        let mut introspector = introspector_handle.lock().await;
+        let discover_outcome = tokio::select! {
+            biased;
+            () = ct.cancelled() => None,
+            result = introspector.discover_server(server_id.clone(), config) => Some(result),
+        };
+        drop(introspector);
+
+        // Evict the per-server-id handle regardless of outcome (including
+        // cancellation), so caller-supplied server_id values can't grow the
+        // introspectors map without bound. Only removes the entry if it is
+        // still this exact handle (see `evict_introspector` docs for why
+        // identity matters here).
+        self.evict_introspector(server_id, &introspector_handle)
+            .await;
+
+        let discover_result = discover_outcome.ok_or_else(|| {
+            McpError::internal_error("introspect_server cancelled by client", None)
+        })?;
+
+        discover_result.map_err(|e| caller_or_internal_error(&e, "Failed to introspect server"))
+    }
 }
 
 impl Default for GeneratorService {
@@ -372,69 +415,16 @@ impl GeneratorService {
             params.connect_timeout_secs,
             params.discover_timeout_secs,
         )
-        .map_err(|e| {
-            // A `SecurityViolation` here (shell metacharacters, forbidden env var, etc.) is
-            // caused by the caller's own params, same as a `ValidationError` — not an
-            // internal server fault — so both map to `invalid_params`.
-            if e.is_validation_error() || e.is_security_error() {
-                McpError::invalid_params(e.to_string(), None)
-            } else {
-                McpError::internal_error(format!("Failed to build server config: {e}"), None)
-            }
-        })?;
+        .map_err(|e| caller_or_internal_error(&e, "Failed to build server config"))?;
 
-        // Connect and introspect, holding only the lock for this server_id. A
-        // tokio::select! against `ct.cancelled()` lets a client-issued
-        // `notifications/cancelled` interrupt the (potentially up-to-600s)
-        // discovery round trip instead of always running it to completion.
-        // `biased;` prefers noticing cancellation over starting/continuing
-        // discovery, making the cancelled path deterministic rather than
-        // depending on `tokio::select!`'s (default-randomised) poll order.
-        let introspector_handle = self.introspector_for(&server_id).await;
-        let mut introspector = introspector_handle.lock().await;
-        let discover_outcome = tokio::select! {
-            biased;
-            () = ct.cancelled() => None,
-            result = introspector.discover_server(server_id.clone(), &config) => Some(result),
-        };
-        drop(introspector);
-
-        // Evict the per-server-id handle regardless of outcome (including
-        // cancellation), so caller-supplied server_id values can't grow the
-        // introspectors map without bound. Only removes the entry if it is
-        // still this exact handle (see `evict_introspector` docs for why
-        // identity matters here).
-        self.evict_introspector(&server_id, &introspector_handle)
-            .await;
-
-        let discover_result = discover_outcome.ok_or_else(|| {
-            McpError::internal_error("introspect_server cancelled by client", None)
-        })?;
-
-        let server_info = discover_result.map_err(|e| {
-            // See the matching comment above `config_builder.build()`: a `SecurityViolation`
-            // is a caller-param problem too, not an internal fault.
-            if e.is_validation_error() || e.is_security_error() {
-                McpError::invalid_params(e.to_string(), None)
-            } else {
-                McpError::internal_error(format!("Failed to introspect server: {e}"), None)
-            }
-        })?;
+        // See `discover_with_cancellation` for the cancellation/locking rationale, and
+        // `caller_or_internal_error` for the error-classification rule it applies.
+        let server_info = self
+            .discover_with_cancellation(&server_id, &config, &ct)
+            .await?;
 
         // Extract tool metadata for Claude
-        let tools: Vec<IntrospectedToolSummary> = server_info
-            .tools
-            .iter()
-            .map(|tool| {
-                let parameters = extract_parameter_names(&tool.input_schema);
-
-                IntrospectedToolSummary {
-                    name: tool.name.as_str().to_string(),
-                    description: tool.description.clone(),
-                    parameters,
-                }
-            })
-            .collect();
+        let tools = build_introspected_summaries(&server_info.tools);
 
         // Store pending generation
         let pending = PendingGeneration::new(
@@ -1153,6 +1143,37 @@ async fn resolve_list_base_dir(
         });
     }
     Ok(canonical_joined)
+}
+
+/// Classifies an [`mcp_execution_core::Error`] from the introspection pipeline into an
+/// [`McpError`].
+///
+/// A `ValidationError` or `SecurityViolation` reflects a problem with the caller's own
+/// params (shell metacharacters, forbidden env var, malformed field, etc.), not an internal
+/// server fault, so both map to `invalid_params`; anything else is `internal_error`, prefixed
+/// with `internal_prefix` for context.
+fn caller_or_internal_error(err: &mcp_execution_core::Error, internal_prefix: &str) -> McpError {
+    if err.is_validation_error() || err.is_security_error() {
+        McpError::invalid_params(err.to_string(), None)
+    } else {
+        McpError::internal_error(format!("{internal_prefix}: {err}"), None)
+    }
+}
+
+/// Builds the per-tool summaries `introspect_server` returns to Claude for categorization.
+fn build_introspected_summaries(tools: &[ToolInfo]) -> Vec<IntrospectedToolSummary> {
+    tools
+        .iter()
+        .map(|tool| {
+            let parameters = extract_parameter_names(&tool.input_schema);
+
+            IntrospectedToolSummary {
+                name: tool.name.as_str().to_string(),
+                description: tool.description.clone(),
+                parameters,
+            }
+        })
+        .collect()
 }
 
 /// Extracts parameter names from a JSON Schema.

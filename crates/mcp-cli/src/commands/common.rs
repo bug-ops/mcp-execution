@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::warn;
+use tracing::{debug, warn};
 use url::Url;
 
 /// Fallback slug used when a URL sanitizes down to nothing (e.g. no host).
@@ -868,6 +868,47 @@ pub fn build_server_config(
     }
 
     Ok((server_id, builder.build()?))
+}
+
+/// Resolves a server's [`ServerId`] and [`ServerConfig`], either from
+/// `~/.claude/mcp.json` (when `from_config` is set) or from CLI transport
+/// flags.
+///
+/// The single place `generate` and `introspect` share for this "config file
+/// vs. CLI flags" branch, since both commands accept the identical flag
+/// surface.
+///
+/// # Errors
+///
+/// Returns an error if `from_config` is set and the named server is missing
+/// from the config file or the file is malformed, or if the CLI transport
+/// flags fail [`TransportArgs::from_flags`] validation or the resulting
+/// [`ServerConfig`] fails security validation.
+// One argument per CLI flag; clap already destructures flags for us, and
+// grouping them into a struct would only benefit this function, not caller ergonomics.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_server_config(
+    from_config: Option<String>,
+    server: Option<String>,
+    args: Vec<String>,
+    env: Vec<String>,
+    cwd: Option<String>,
+    http: Option<String>,
+    sse: Option<String>,
+    headers: Vec<String>,
+    connect_timeout_secs: Option<u64>,
+    discover_timeout_secs: Option<u64>,
+) -> Result<(ServerId, ServerConfig)> {
+    if let Some(config_name) = from_config {
+        debug!(
+            "Loading server configuration from ~/.claude/mcp.json: {}",
+            config_name
+        );
+        load_server_from_config(&config_name)
+    } else {
+        let transport = TransportArgs::from_flags(server, args, env, cwd, http, sse, headers)?;
+        build_server_config(transport, connect_timeout_secs, discover_timeout_secs)
+    }
 }
 
 /// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from
