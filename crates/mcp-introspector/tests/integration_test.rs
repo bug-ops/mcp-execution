@@ -362,7 +362,7 @@ fn test_multiple_server_management() {
 #[test]
 fn test_discover_server_empty_command() {
     // Empty command should fail during build
-    let result = ServerConfig::builder().command(String::new()).try_build();
+    let result = ServerConfig::builder().command(String::new()).build();
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("empty"));
 }
@@ -371,9 +371,7 @@ fn test_discover_server_empty_command() {
 #[test]
 fn test_discover_server_whitespace_command() {
     // Whitespace-only command should fail during build
-    let result = ServerConfig::builder()
-        .command("   ".to_string())
-        .try_build();
+    let result = ServerConfig::builder().command("   ".to_string()).build();
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("empty"));
 }

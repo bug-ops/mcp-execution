@@ -289,7 +289,7 @@ fn validate_stdio_config(config: &ServerConfig) -> Result<()> {
 ///
 /// `url` is `Option` at the type level and `#[serde(default)]`, so a
 /// hand-edited `mcp.json` with `"transport": "http"` and no `url` key
-/// deserializes successfully, bypassing `ServerConfigBuilder::try_build`'s
+/// deserializes successfully, bypassing `ServerConfigBuilder::build`'s
 /// "url required" check. This function is the actual enforcement point.
 fn validate_network_config(config: &ServerConfig) -> Result<()> {
     let url = config.url().ok_or_else(|| Error::ValidationError {
@@ -588,14 +588,12 @@ mod tests {
     #[test]
     fn test_validate_server_config_empty_command() {
         // Empty command should fail during build
-        let result = ServerConfig::builder().command(String::new()).try_build();
+        let result = ServerConfig::builder().command(String::new()).build();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
 
         // Whitespace-only command should fail during build
-        let result = ServerConfig::builder()
-            .command("   ".to_string())
-            .try_build();
+        let result = ServerConfig::builder().command("   ".to_string()).build();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
     }
@@ -1019,7 +1017,7 @@ mod tests {
     }
 
     /// Constructs an Http-transport config missing `url` via deserialization
-    /// rather than the builder, since `try_build()` already refuses this and
+    /// rather than the builder, since `build()` already refuses this and
     /// would mask the bug this test guards against: a hand-edited `mcp.json`
     /// with `"transport": "http"` and no `url` key deserializes fine because
     /// every field is `#[serde(default)]`.

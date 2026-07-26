@@ -105,7 +105,7 @@ pub enum TransportType {
 ///
 /// # Security
 ///
-/// [`ServerConfigBuilder::build`] (and its [`ServerConfigBuilder::try_build`] alias) run
+/// [`ServerConfigBuilder::build`] runs
 /// [`validate_server_config`] internally, so a `ServerConfig` built through the builder
 /// cannot be constructed without having already passed security validation. This is *not*
 /// a type-level guarantee, though: every field is `pub` and the type derives `Deserialize`,
@@ -144,7 +144,7 @@ pub enum TransportType {
 /// up with a secret-shaped key in `format!("{builder:?}")`. Keys are shown
 /// there deliberately regardless — redacting them would defeat the point of
 /// a debug impl for a type whose purpose is to be inspected before
-/// `build()`/`try_build()`.
+/// `build()`.
 ///
 /// `Serialize`/`Deserialize` are deliberately left unredacted: config
 /// persistence and the wire format must still round-trip real values.
@@ -785,31 +785,9 @@ impl ServerConfigBuilder {
     ///
     /// [`validate_server_config`]: fn.validate_server_config.html
     pub fn build(self) -> crate::Result<ServerConfig> {
-        let config = self.try_build_structural()?;
+        let config = self.build_structural()?;
         crate::validate_server_config(&config)?;
         Ok(config)
-    }
-
-    /// Alias for [`Self::build`], kept for call sites that prefer the
-    /// `try_`-prefixed fallible-constructor naming.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`Self::build`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_core::ServerConfig;
-    ///
-    /// let result = ServerConfig::builder()
-    ///     .command("docker".to_string())
-    ///     .try_build();
-    ///
-    /// assert!(result.is_ok());
-    /// ```
-    pub fn try_build(self) -> crate::Result<ServerConfig> {
-        self.build()
     }
 
     /// Checks structural completeness (command/url presence) and assembles
@@ -819,7 +797,7 @@ impl ServerConfigBuilder {
     /// "is this config structurally complete" and "is this config safe to
     /// spawn" — stay independently testable, while the public API only ever
     /// hands out a fully validated [`ServerConfig`].
-    fn try_build_structural(self) -> crate::Result<ServerConfig> {
+    fn build_structural(self) -> crate::Result<ServerConfig> {
         match self.transport {
             TransportType::Stdio => {
                 let command = self.command.ok_or_else(|| crate::Error::ValidationError {
@@ -994,8 +972,8 @@ mod tests {
     }
 
     #[test]
-    fn test_server_config_builder_try_build_missing_command() {
-        let result = ServerConfig::builder().try_build();
+    fn test_server_config_builder_build_missing_command() {
+        let result = ServerConfig::builder().build();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("command"));
     }
@@ -1083,7 +1061,7 @@ mod tests {
     #[test]
     fn test_server_config_debug_redacts_header_values() {
         // headers are only populated for HTTP/SSE transport (see the
-        // builder's `try_build`), so exercise them via `http_transport`.
+        // builder's `build`), so exercise them via `http_transport`.
         let config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .header(
@@ -1104,7 +1082,7 @@ mod tests {
     #[test]
     fn test_server_config_debug_redacts_env_values() {
         // env is only populated for stdio transport (see the builder's
-        // `try_build`), so exercise it via the default stdio transport.
+        // `build`), so exercise it via the default stdio transport.
         let config = ServerConfig::builder()
             .command("docker".to_string())
             .env(
@@ -1153,7 +1131,7 @@ mod tests {
         // Serialize/Deserialize must round-trip real values for config
         // persistence; only Debug formatting is redacted. Headers and env
         // are exercised separately since `build()` drops whichever one
-        // doesn't match the config's transport (see `try_build`).
+        // doesn't match the config's transport.
         let http_config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .header(
@@ -1240,8 +1218,8 @@ mod tests {
     }
 
     #[test]
-    fn test_server_config_http_try_build_missing_url() {
-        let result = ServerConfig::builder().try_build();
+    fn test_server_config_http_build_missing_url() {
+        let result = ServerConfig::builder().build();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("required"));
     }
@@ -1301,11 +1279,11 @@ mod tests {
     }
 
     #[test]
-    fn test_server_config_sse_try_build_missing_url() {
+    fn test_server_config_sse_build_missing_url() {
         let mut builder = ServerConfig::builder();
         builder.transport = TransportType::Sse;
 
-        let result = builder.try_build();
+        let result = builder.build();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("url is required"));
     }

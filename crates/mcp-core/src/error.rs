@@ -10,15 +10,16 @@
 //!
 //! fn connect_to_server(name: &str) -> Result<()> {
 //!     if name.is_empty() {
-//!         return Err(Error::ConfigError {
-//!             message: "Server name cannot be empty".to_string(),
+//!         return Err(Error::ValidationError {
+//!             field: "name".to_string(),
+//!             reason: "Server name cannot be empty".to_string(),
 //!         });
 //!     }
 //!     Ok(())
 //! }
 //!
 //! let err = connect_to_server("").unwrap_err();
-//! assert!(err.is_config_error());
+//! assert!(err.is_validation_error());
 //! ```
 
 use thiserror::Error;
@@ -52,26 +53,6 @@ pub enum Error {
     SecurityViolation {
         /// Description of the security violation
         reason: String,
-    },
-
-    /// Resource not found error.
-    ///
-    /// Occurs when attempting to access a resource (file, tool, server)
-    /// that does not exist.
-    #[error("Resource not found: {resource}")]
-    ResourceNotFound {
-        /// Identifier of the missing resource
-        resource: String,
-    },
-
-    /// Configuration error.
-    ///
-    /// Raised when configuration is invalid, missing required fields,
-    /// or contains contradictory settings.
-    #[error("Configuration error: {message}")]
-    ConfigError {
-        /// Description of the configuration problem
-        message: String,
     },
 
     /// Timeout error.
@@ -166,40 +147,6 @@ impl Error {
         matches!(self, Self::SecurityViolation { .. })
     }
 
-    /// Returns `true` if this is a resource not found error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_core::Error;
-    ///
-    /// let err = Error::ResourceNotFound {
-    ///     resource: "tool:example".to_string(),
-    /// };
-    /// assert!(err.is_not_found());
-    /// ```
-    #[must_use]
-    pub const fn is_not_found(&self) -> bool {
-        matches!(self, Self::ResourceNotFound { .. })
-    }
-
-    /// Returns `true` if this is a configuration error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_core::Error;
-    ///
-    /// let err = Error::ConfigError {
-    ///     message: "Invalid port".to_string(),
-    /// };
-    /// assert!(err.is_config_error());
-    /// ```
-    #[must_use]
-    pub const fn is_config_error(&self) -> bool {
-        matches!(self, Self::ConfigError { .. })
-    }
-
     /// Returns `true` if this is a timeout error.
     ///
     /// # Examples
@@ -268,9 +215,9 @@ impl Error {
 ///
 /// fn validate_input(value: i32) -> Result<i32> {
 ///     if value < 0 {
-///         return Err(Error::ConfigError {
-///             message: "Value must be non-negative".to_string(),
-///         });
+///         return Err(Error::InvalidArgument(
+///             "Value must be non-negative".to_string(),
+///         ));
 ///     }
 ///     Ok(value)
 /// }
@@ -304,31 +251,13 @@ mod tests {
     }
 
     #[test]
-    fn test_not_found_error_detection() {
-        let err = Error::ResourceNotFound {
-            resource: "missing-tool".to_string(),
-        };
-        assert!(err.is_not_found());
-        assert!(!err.is_timeout());
-    }
-
-    #[test]
-    fn test_config_error_detection() {
-        let err = Error::ConfigError {
-            message: "Invalid configuration".to_string(),
-        };
-        assert!(err.is_config_error());
-        assert!(!err.is_timeout());
-    }
-
-    #[test]
     fn test_timeout_error_detection() {
         let err = Error::Timeout {
             operation: "long_operation".to_string(),
             duration_secs: 60,
         };
         assert!(err.is_timeout());
-        assert!(!err.is_not_found());
+        assert!(!err.is_validation_error());
     }
 
     #[test]
@@ -349,9 +278,7 @@ mod tests {
         }
 
         fn returns_err() -> Result<i32> {
-            Err(Error::ConfigError {
-                message: "test error".to_string(),
-            })
+            Err(Error::InvalidArgument("test error".to_string()))
         }
 
         assert_eq!(returns_ok().unwrap(), 42);
