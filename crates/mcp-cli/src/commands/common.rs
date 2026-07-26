@@ -23,6 +23,19 @@ const FALLBACK_SERVER_ID_SLUG: &str = "http-server";
 ///
 /// The `mcp_servers` field defaults to an empty map so that an absent file or
 /// a file containing only `{}` does not produce a deserialization error.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::common::McpConfig;
+/// use std::collections::HashMap;
+///
+/// let config = McpConfig {
+///     mcp_servers: HashMap::new(),
+/// };
+///
+/// assert!(config.mcp_servers.is_empty());
+/// ```
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpConfig {
@@ -125,6 +138,24 @@ impl fmt::Debug for McpTransport {
 }
 
 /// Individual MCP server configuration entry from `mcp.json`.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::common::McpServerEntry;
+/// use std::collections::HashMap;
+///
+/// let entry = McpServerEntry {
+///     transport: mcp_execution_cli::commands::common::McpTransport::Http {
+///         url: "https://api.example.com".to_string(),
+///         headers: HashMap::new(),
+///     },
+///     connect_timeout_secs: Some(30),
+///     discover_timeout_secs: Some(30),
+/// };
+///
+/// assert_eq!(entry.connect_timeout_secs, Some(30));
+/// ```
 #[derive(Debug, Clone)]
 pub struct McpServerEntry {
     /// The server's transport and its transport-specific settings.
@@ -365,6 +396,17 @@ pub fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
 ///
 /// Returns an error if the home directory cannot be determined, the file
 /// cannot be read, or the JSON is malformed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::commands::common::load_mcp_config;
+///
+/// match load_mcp_config() {
+///     Ok(config) => println!("Loaded {} servers", config.mcp_servers.len()),
+///     Err(e) => eprintln!("Failed to load config: {}", e),
+/// }
+/// ```
 pub fn load_mcp_config() -> Result<McpConfig> {
     let home = dirs::home_dir().context("failed to get home directory")?;
     load_mcp_config_from(&home.join(".claude").join("mcp.json"))

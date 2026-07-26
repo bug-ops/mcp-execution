@@ -30,6 +30,20 @@ impl ServerStatus {
 }
 
 /// Represents a configured server entry for output.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::ServerEntry;
+///
+/// let entry = ServerEntry {
+///     id: "github".to_string(),
+///     command: "github-mcp-server".to_string(),
+///     status: "available".to_string(),
+/// };
+///
+/// assert_eq!(entry.id, "github");
+/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServerEntry {
     /// Server identifier.
@@ -41,6 +55,24 @@ pub struct ServerEntry {
 }
 
 /// List of configured servers.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::{ServerEntry, ServerList};
+///
+/// let list = ServerList {
+///     servers: vec![
+///         ServerEntry {
+///             id: "github".to_string(),
+///             command: "github-mcp-server".to_string(),
+///             status: "available".to_string(),
+///         }
+///     ],
+/// };
+///
+/// assert_eq!(list.servers.len(), 1);
+/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServerList {
     /// All configured servers.
@@ -48,6 +80,24 @@ pub struct ServerList {
 }
 
 /// Detailed server information for output.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::{ServerInfo, ToolSummary};
+///
+/// let info = ServerInfo {
+///     id: "github".to_string(),
+///     name: "GitHub MCP".to_string(),
+///     version: "1.0.0".to_string(),
+///     command: "github-mcp-server".to_string(),
+///     status: "available".to_string(),
+///     tools: vec![],
+///     capabilities: vec!["tools".to_string()],
+/// };
+///
+/// assert_eq!(info.id, "github");
+/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServerInfo {
     /// Server identifier.
@@ -67,6 +117,19 @@ pub struct ServerInfo {
 }
 
 /// Tool summary for output.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::ToolSummary;
+///
+/// let tool = ToolSummary {
+///     name: "search".to_string(),
+///     description: "Search repositories".to_string(),
+/// };
+///
+/// assert_eq!(tool.name, "search");
+/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSummary {
     /// Tool name.
@@ -76,6 +139,20 @@ pub struct ToolSummary {
 }
 
 /// Validation result for a server command.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::ValidationResult;
+///
+/// let result = ValidationResult {
+///     command: "server".to_string(),
+///     valid: true,
+///     message: "Command is valid".to_string(),
+/// };
+///
+/// assert!(result.valid);
+/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ValidationResult {
     /// The validated command.

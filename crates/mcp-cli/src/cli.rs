@@ -19,6 +19,18 @@ use mcp_execution_core::cli::OutputFormat;
 ///
 /// This CLI provides secure execution of MCP tools in a WebAssembly sandbox,
 /// achieving 90-98% token savings through progressive tool loading.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::cli::Cli;
+/// use clap::Parser;
+///
+/// // Parse command-line arguments into a Cli struct
+/// let args = Cli::parse();
+/// println!("Verbose: {}", args.verbose);
+/// println!("Format: {:?}", args.format);
+/// ```
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 #[command(author = "MCP Execution Team")]
@@ -69,6 +81,23 @@ impl fmt::Debug for Cli {
 }
 
 /// Available CLI subcommands.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::cli::{Cli, Commands};
+/// use clap::Parser;
+///
+/// let args = Cli::parse();
+/// match args.command {
+///     Commands::Introspect { .. } => println!("Introspect command"),
+///     Commands::Generate { .. } => println!("Generate command"),
+///     Commands::Server { .. } => println!("Server command"),
+///     Commands::Skill { .. } => println!("Skill command"),
+///     Commands::Setup => println!("Setup command"),
+///     Commands::Completions { .. } => println!("Completions command"),
+/// }
+/// ```
 #[derive(Subcommand)]
 pub enum Commands {
     /// Introspect an MCP server and display its capabilities.

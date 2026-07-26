@@ -398,6 +398,7 @@ async fn test_scan_directory_file_too_large() {
     let dir = temp_dir.path();
 
     // Create a sidecar larger than MAX_FILE_SIZE (1MB) by padding one tool's description.
+    // MAX_FILE_SIZE (1MB) always fits in usize; the cast cannot truncate.
     #[allow(clippy::cast_possible_truncation)]
     let large_description = "a".repeat((MAX_FILE_SIZE as usize) + 1);
 

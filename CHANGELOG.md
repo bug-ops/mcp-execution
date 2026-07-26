@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Backfilled `# Examples` doc-test sections for ~50 public types and functions across the workspace that previously lacked runnable examples, including `ServerConfig` getters, CLI formatters, command structs, and resource limit constants (#189).
+- Added justification comments to 3 undocumented `#[allow(...)]` clippy attributes explaining the tradeoff for each (#186).
+
 ### Breaking
 
 - **`mcp-execution-core`**: `ServerConfigBuilder::build()` now returns

@@ -111,6 +111,14 @@ const STALE_ARTIFACT_MIN_AGE: Duration = Duration::from_mins(5);
 /// introspection, one layer down). This check remains meaningful defense-in-depth for a
 /// `FileSystem` built directly (e.g. via `FilesBuilder`) with an unbounded file count,
 /// bypassing that upstream cap.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_files::FileSystem;
+/// // MAX_EXPORT_FILES is a constant used internally by FileSystem
+/// let _fs = FileSystem::new();
+/// ```
 pub const MAX_EXPORT_FILES: usize =
     mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES;
 
@@ -118,6 +126,14 @@ pub const MAX_EXPORT_FILES: usize =
 ///
 /// Equal to `mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES` for the same
 /// consistency reason as [`MAX_EXPORT_FILES`].
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_files::FileSystem;
+/// // MAX_EXPORT_BYTES is a constant used internally by FileSystem
+/// let _fs = FileSystem::new();
+/// ```
 pub const MAX_EXPORT_BYTES: usize =
     mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES;
 
