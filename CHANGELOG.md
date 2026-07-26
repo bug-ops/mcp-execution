@@ -211,6 +211,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `benches/` or `examples/` directory. Removed the unused `static_assertions`, `dialoguer`, and
   `toml` entries from the root `[workspace.dependencies]` table, none of which any crate in the
   workspace still referenced (#193).
+- **`mcp-execution-introspector`**: the server-discovery pipeline now threads a `PeerMeta`
+  struct (`server_name`, `server_version`, `has_resources`, `has_prompts`) and a
+  `DiscoveryResult` struct (`tools`, `peer_meta`) instead of positional `(String, String, bool,
+  bool)` and `(Vec<Tool>, String, String, bool, bool)` tuples across `extract_peer_meta`,
+  `discover_via_stdio`, `discover_via_http`, `discover_via_stdio_process`, and
+  `build_server_info`. The two same-typed trailing `bool` fields could previously be
+  transposed at one call site without a compile error, silently producing wrong
+  `ServerCapabilities.supports_resources`/`supports_prompts` values (#207).
+- Added `#[tracing::instrument]` spans to `Introspector::discover_server`,
+  `GeneratorService::introspector_for`/`evict_introspector`/`export_lock_for`/
+  `evict_export_lock` and its `introspect_server`/`save_categorized_tools`/`generate_skill`/
+  `save_skill` tool handlers, and `ProgressiveGenerator::generate`/`generate_with_categories`,
+  each carrying a `server_id` (or, for the export lock helpers, `output_dir`) span field so
+  concurrent per-server-id log output can be correlated. No existing log call site's message
+  text changed. This does change the *shape* of `mcp-execution-cli generate`'s stderr output:
+  with the default `fmt` subscriber, log lines emitted inside an instrumented call now carry a
+  `generate{server_id=... tool_count=...}:` span-context prefix that was not there before
+  (#211).
 
 ### Fixed
 
