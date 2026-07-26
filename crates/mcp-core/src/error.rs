@@ -126,6 +126,18 @@ pub enum Error {
         /// The configured maximum allowed for this resource.
         limit: usize,
     },
+
+    /// A generated file's path collides with one already present in the same output.
+    ///
+    /// Raised when adding a file to a generated-code collection would silently overwrite
+    /// a file already added at the same path — e.g. a tool name that sanitizes to a
+    /// generator's own reserved output filename (like `index`) slipping past name
+    /// disambiguation and colliding with the fixed `index.ts` re-export (issue #312).
+    #[error("duplicate generated file path: {path}")]
+    DuplicateGeneratedFilePath {
+        /// The path that was already present when a second file was added at it.
+        path: String,
+    },
 }
 
 impl Error {
@@ -237,6 +249,23 @@ impl Error {
     pub const fn is_resource_limit_exceeded(&self) -> bool {
         matches!(self, Self::ResourceLimitExceeded { .. })
     }
+
+    /// Returns `true` if this is a duplicate-generated-file-path error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::Error;
+    ///
+    /// let err = Error::DuplicateGeneratedFilePath {
+    ///     path: "index.ts".to_string(),
+    /// };
+    /// assert!(err.is_duplicate_generated_file_path());
+    /// ```
+    #[must_use]
+    pub const fn is_duplicate_generated_file_path(&self) -> bool {
+        matches!(self, Self::DuplicateGeneratedFilePath { .. })
+    }
 }
 
 /// Result type alias for MCP operations.
@@ -319,6 +348,17 @@ mod tests {
         assert!(display.contains("tool count"));
         assert!(display.contains("1500"));
         assert!(display.contains("1000"));
+    }
+
+    #[test]
+    fn test_duplicate_generated_file_path_detection() {
+        let err = Error::DuplicateGeneratedFilePath {
+            path: "index.ts".to_string(),
+        };
+        assert!(err.is_duplicate_generated_file_path());
+        assert!(!err.is_resource_limit_exceeded());
+        let display = format!("{err}");
+        assert!(display.contains("index.ts"));
     }
 
     #[test]

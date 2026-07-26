@@ -502,40 +502,60 @@ impl GeneratorService {
 
         // Validate categorized tools match introspected tools.
         //
-        // M1: `pending.server_info.tools[].name` is raw — it's the actual
-        // introspection data, kept unsanitized because it's also used to build the
-        // `.ts` files themselves. But Claude never sees these raw names: it only
-        // ever saw the *sanitized* copies `build_introspected_summaries` returned
-        // from `introspect_server` (issue #292), so it can only ever echo back a
-        // sanitized name. Comparing the echoed name against the raw name would fail
-        // closed on any name containing a control character or line terminator
-        // (`"Tool 'X' not found in introspected tools"`) — not a security bug, but a
-        // misleading error for a well-behaved caller. Applying the identical
-        // sanitization here keeps this set in sync with what Claude actually saw.
-        let introspected_names: HashSet<String> = pending
-            .server_info
-            .tools
-            .iter()
-            .map(|t| sanitize_untrusted_text(t.name.as_str(), MAX_UNTRUSTED_FIELD_LEN))
+        // #307: `pending.server_info.tools[].name` is raw — it's the actual introspection
+        // data, kept unsanitized because it's also used to build the `.ts` files themselves.
+        // Claude never sees these raw names directly: it only ever saw a *display* form of
+        // each one, produced by `build_introspected_summaries` + `wrap_introspect_result`
+        // from `introspect_server` (issues #292, #307). Matching a `categorized_tools` entry
+        // against what was introspected must key off that display form, while codegen
+        // (`generate_with_categorization`, below) must key off the raw name it actually looks
+        // tools up by — conflating the two by using the echoed name as both the match key and
+        // the codegen key desynced categorization from any tool name containing a control
+        // character, line terminator, or `&`/`<`/`>`.
+        //
+        // S2: a raw name can legitimately be echoed back in either of [`display_forms`]'s two
+        // forms (the literal escaped text, or the same text with entities decoded), so both are
+        // accepted as keys for the same raw tool.
+        //
+        // S3: if two DISTINCT raw tool names ever produce the same display key (via either
+        // form), which raw tool a caller meant by that key is genuinely ambiguous. A plain
+        // `HashMap::collect` would silently keep only the last one, misattributing one tool's
+        // categorization to a different tool's `_meta.json` entry with no error surfaced.
+        // Instead, `owners` tracks every raw name that could produce each key, and any key with
+        // more than one distinct owner is dropped from `display_to_raw` entirely, so a caller
+        // trying to use it hits the "not found" branch below explicitly.
+        let mut display_key_owners: HashMap<String, HashSet<&str>> = HashMap::new();
+        for tool in &pending.server_info.tools {
+            let raw = tool.name.as_str();
+            for key in display_forms(raw) {
+                display_key_owners.entry(key).or_default().insert(raw);
+            }
+        }
+        let display_to_raw: HashMap<String, &str> = display_key_owners
+            .into_iter()
+            .filter_map(|(key, owners)| {
+                if owners.len() == 1 {
+                    owners.into_iter().next().map(|raw| (key, raw))
+                } else {
+                    None
+                }
+            })
             .collect();
 
-        // A legitimate call can never submit more entries than there are
-        // introspected tools: every name must be a member of
-        // `introspected_names` (checked below) and duplicates are rejected,
-        // so the entry count is bounded by that set's size. Reject early,
-        // before any per-entry validation, HashMap insertion, or codegen
-        // work (CWE-400 - see issue #197).
+        // A legitimate call can never submit more entries than there are introspected tools.
+        // Reject early, before any per-entry validation, HashMap insertion, or codegen work
+        // (CWE-400 - see issue #197).
         //
-        // `introspected_names.len()` alone is not a trustworthy ceiling: it
-        // comes from whatever tool count the *target* MCP server reported to
-        // `introspect_server`, so a hostile or buggy target could inflate it
-        // arbitrarily. `MAX_TOOL_FILES` is the same per-server tool-count
-        // ceiling `generate_skill` already enforces (via
-        // `mcp_execution_skill::scan_tools_directory`), so reusing it here
-        // keeps the two stages consistent - otherwise this call could
-        // happily generate more tool files than `generate_skill` will later
-        // accept.
-        let max_allowed_tools = introspected_names.len().min(MAX_TOOL_FILES);
+        // Bounded by the true introspected tool count (`pending.server_info.tools.len()`), not
+        // `display_to_raw.len()`: S2 means a single raw tool can legitimately own two display
+        // keys, and S3 means an ambiguous key is excluded from the map entirely — neither of
+        // those should shrink or inflate this bound. `MAX_TOOL_FILES` is the same per-server
+        // tool-count ceiling `generate_skill` already enforces (via
+        // `mcp_execution_skill::scan_tools_directory`), so reusing it here keeps the two stages
+        // consistent - otherwise this call could happily generate more tool files than
+        // `generate_skill` will later accept.
+        let introspected_tool_count = pending.server_info.tools.len();
+        let max_allowed_tools = introspected_tool_count.min(MAX_TOOL_FILES);
         if params.categorized_tools.len() > max_allowed_tools {
             return Err(McpError::invalid_params(
                 format!(
@@ -544,26 +564,47 @@ impl GeneratorService {
                      duplicates are not allowed)",
                     params.categorized_tools.len(),
                     max_allowed_tools,
-                    introspected_names.len(),
+                    introspected_tool_count,
                     MAX_TOOL_FILES,
                 ),
                 None,
             ));
         }
 
-        let mut seen_names: HashSet<&str> = HashSet::with_capacity(params.categorized_tools.len());
-        for cat_tool in &params.categorized_tools {
-            if !introspected_names.contains(cat_tool.name.as_str()) {
-                return Err(McpError::invalid_params(
-                    format!("Tool '{}' not found in introspected tools", cat_tool.name),
-                    None,
-                ));
-            }
+        // Validate each entry and build the codegen categorization map in a single pass,
+        // resolving `cat_tool.name` to its raw tool name once via `display_to_raw` (issue #307
+        // M3) — a prior version re-derived the same lookup in a second pass, relying on an
+        // `expect()` to justify why it couldn't fail there; doing it once removes that panic
+        // path by construction instead of just asserting it unreachable.
+        let tool_count = params.categorized_tools.len();
+        // Keyed by RESOLVED RAW NAME, not by `cat_tool.name` (the submitted display key):
+        // `display_forms` (S2) deliberately lets one raw tool own two distinct display keys
+        // (its escaped and unescaped forms), so two entries with different `name` strings can
+        // still resolve to the same introspected tool. Deduping on the submitted string would
+        // miss that case entirely, letting the second entry silently overwrite the first's
+        // categorization in the map below with no error surfaced (issue #307 N1).
+        let mut seen_raw_names: HashSet<&str> = HashSet::with_capacity(tool_count);
+        let mut categorization: HashMap<String, &CategorizedTool> =
+            HashMap::with_capacity(tool_count);
+        let mut categories: HashMap<String, usize> = HashMap::with_capacity(tool_count);
 
-            if !seen_names.insert(cat_tool.name.as_str()) {
+        for cat_tool in &params.categorized_tools {
+            let Some(&raw_name) = display_to_raw.get(cat_tool.name.as_str()) else {
                 return Err(McpError::invalid_params(
                     format!(
-                        "Tool '{}' appears more than once in categorized_tools",
+                        "Tool '{}' not found in introspected tools (or its sanitized display \
+                         name is ambiguous between two or more introspected tools)",
+                        cat_tool.name
+                    ),
+                    None,
+                ));
+            };
+
+            if !seen_raw_names.insert(raw_name) {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Tool '{}' appears more than once in categorized_tools (resolves to \
+                         the same introspected tool as an earlier entry)",
                         cat_tool.name
                     ),
                     None,
@@ -594,17 +635,9 @@ impl GeneratorService {
                 &cat_tool.short_description,
                 MAX_SHORT_DESCRIPTION_LEN,
             )?;
-        }
 
-        // Build categorization map and category stats in single pass (avoid double iteration)
-        let tool_count = params.categorized_tools.len();
-        let mut categorization: HashMap<String, &CategorizedTool> =
-            HashMap::with_capacity(tool_count);
-        let mut categories: HashMap<String, usize> = HashMap::with_capacity(tool_count);
-
-        for tool in &params.categorized_tools {
-            categorization.insert(tool.name.clone(), tool);
-            *categories.entry(tool.category.clone()).or_default() += 1;
+            categorization.insert(raw_name.to_string(), cat_tool);
+            *categories.entry(cat_tool.category.clone()).or_default() += 1;
         }
 
         // Generate code with categorization
@@ -1238,6 +1271,54 @@ fn wrap_introspect_result(json: &str) -> String {
          parameter names, and the server name)",
         json,
     )
+}
+
+/// Computes the escaped form of `raw_name` that `introspect_server` literally shows Claude for
+/// a tool's `name` field: [`sanitize_untrusted_text`] followed by the same `&`/`<`/`>`
+/// entity-escaping [`wrap_untrusted_block`] applies afterward to the whole serialized response
+/// (see its escaping-order doc comment).
+///
+/// `build_introspected_summaries` deliberately does *not* apply this escaping itself — it only
+/// sanitizes control characters — because `wrap_introspect_result` escapes the entire
+/// already-serialized JSON body exactly once; escaping per-field here as well would double-escape
+/// `&` into `&amp;amp;`. This function exists purely so `save_categorized_tools` can compute,
+/// independently, the identical transformation Claude actually saw, without touching that
+/// production code path.
+///
+/// This is only one of two forms `save_categorized_tools` accepts as a valid echo of a tool
+/// name — see [`display_forms`] and issue #307 S2.
+fn display_tool_name(raw_name: &str) -> String {
+    sanitize_untrusted_text(raw_name, MAX_UNTRUSTED_FIELD_LEN)
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Returns every display-form key `raw_name` might plausibly be echoed back as by Claude
+/// (issue #307 S2).
+///
+/// [`wrap_untrusted_block`]'s own preamble tells its LLM reader that the block's `&`/`<`/`>`
+/// characters "have been escaped as `&lt;`/`&gt;`" — an explicit invitation to decode them back
+/// to the original character, not just an opaque transform. So a well-behaved caller may
+/// legitimately echo back either [`display_tool_name`]'s escaped form (what was literally shown)
+/// or the sanitize-only form with entities decoded (what the escaping represents). Treating only
+/// the escaped form as valid — the pre-issue-307-S2 behavior — hard-rejected the second,
+/// previously-accepted case with an unrecoverable "not found" error.
+///
+/// Returns a single-element vector when `raw_name` contains no `&`/`<`/`>` (the two forms
+/// coincide), so callers can iterate the result uniformly without special-casing.
+///
+/// Used by `save_categorized_tools` to build a display-name-to-raw-name lookup that accepts
+/// either form for a given raw tool, while still detecting when two *different* raw tool names
+/// collide on the same key (issue #307 S3) — see its call site for the ambiguity handling.
+fn display_forms(raw_name: &str) -> Vec<String> {
+    let escaped = display_tool_name(raw_name);
+    let unescaped = sanitize_untrusted_text(raw_name, MAX_UNTRUSTED_FIELD_LEN);
+    if escaped == unescaped {
+        vec![escaped]
+    } else {
+        vec![escaped, unescaped]
+    }
 }
 
 /// Extracts parameter names from a JSON Schema.
@@ -2923,6 +3004,416 @@ mod tests {
             result.is_ok(),
             "the sanitized name Claude actually saw must be accepted: {:?}",
             result.err()
+        );
+    }
+
+    /// Regression guard for #307: `save_categorized_tools` must not just accept a
+    /// `categorized_tools` entry keyed by the *display* form Claude was shown
+    /// (M1's fix, above) — the categorization it carries must actually reach the
+    /// generated output, keyed by the tool's RAW name. A prior version built the
+    /// codegen categorization map keyed by the echoed display name, which desynced
+    /// from `ProgressiveGenerator`'s raw-name lookup for any tool name containing a
+    /// control character, line terminator, or `&`/`<`/`>`.
+    #[tokio::test]
+    async fn test_save_categorized_tools_preserves_categorization_for_control_character_tool_name()
+    {
+        use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("ctrl-char-server"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new("evil\ntool"),
+                description: "Test tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("ctrl-char-server"),
+            server_info,
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
+            None,
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await.unwrap();
+
+        // The display name Claude actually saw for "evil\ntool" (control character
+        // flattened to a space).
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("evil tool")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+        let content = result.expect("the display name Claude saw must be accepted");
+        let text = content.content[0].as_text().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+        let output_dir = PathBuf::from(parsed["output_dir"].as_str().unwrap());
+
+        let meta_content = std::fs::read_to_string(output_dir.join(METADATA_FILE_NAME)).unwrap();
+        let meta: ServerMetadata = serde_json::from_str(&meta_content).unwrap();
+
+        assert_eq!(meta.tools.len(), 1);
+        let tool_meta = &meta.tools[0];
+        // The sidecar's `name` field must carry the RAW tool name, not the display form.
+        assert_eq!(tool_meta.name, "evil\ntool");
+        assert_eq!(
+            tool_meta.category,
+            Some("cat".to_string()),
+            "categorization submitted under the display name must reach the raw-named \
+             tool's metadata, not be silently dropped: {meta:?}"
+        );
+        assert_eq!(tool_meta.keywords, vec!["kw".to_string()]);
+    }
+
+    /// Regression guard for #307's second gap: `introspect_server`'s response is
+    /// HTML/XML-entity-escaped (`&`/`<`/`>`) as part of delimiting untrusted MCP
+    /// metadata (issue #292/#310), independent of control-character sanitization.
+    /// A tool name containing `&` must round-trip its categorization the same way.
+    #[tokio::test]
+    async fn test_save_categorized_tools_preserves_categorization_for_ampersand_tool_name() {
+        use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("ampersand-server"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new("tool&name"),
+                description: "Test tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("ampersand-server"),
+            server_info,
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
+            None,
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await.unwrap();
+
+        // The display name Claude actually saw for "tool&name": `&` entity-escaped by
+        // `wrap_introspect_result`.
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool&amp;name")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+        let content = result.expect("the escaped display name Claude saw must be accepted");
+        let text = content.content[0].as_text().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+        let output_dir = PathBuf::from(parsed["output_dir"].as_str().unwrap());
+
+        let meta_content = std::fs::read_to_string(output_dir.join(METADATA_FILE_NAME)).unwrap();
+        let meta: ServerMetadata = serde_json::from_str(&meta_content).unwrap();
+
+        assert_eq!(meta.tools.len(), 1);
+        let tool_meta = &meta.tools[0];
+        assert_eq!(tool_meta.name, "tool&name");
+        assert_eq!(
+            tool_meta.category,
+            Some("cat".to_string()),
+            "categorization submitted under the escaped display name must reach the \
+             raw-named tool's metadata: {meta:?}"
+        );
+    }
+
+    /// Regression guard for #307's second gap, symmetric with the `&` case above: `<`
+    /// and `>` are entity-escaped by `wrap_introspect_result` independently of `&`
+    /// (`.replace('&', ...)` runs first, then `<`/`>`), so a tool name containing them
+    /// must round-trip its categorization the same way.
+    #[tokio::test]
+    async fn test_save_categorized_tools_preserves_categorization_for_angle_bracket_tool_name() {
+        use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("angle-bracket-server"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new("tool<name>end"),
+                description: "Test tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("angle-bracket-server"),
+            server_info,
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
+            None,
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await.unwrap();
+
+        // The display name Claude actually saw for "tool<name>end": `<`/`>`
+        // entity-escaped by `wrap_introspect_result`.
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool&lt;name&gt;end")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+        let content = result.expect("the escaped display name Claude saw must be accepted");
+        let text = content.content[0].as_text().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+        let output_dir = PathBuf::from(parsed["output_dir"].as_str().unwrap());
+
+        let meta_content = std::fs::read_to_string(output_dir.join(METADATA_FILE_NAME)).unwrap();
+        let meta: ServerMetadata = serde_json::from_str(&meta_content).unwrap();
+
+        assert_eq!(meta.tools.len(), 1);
+        let tool_meta = &meta.tools[0];
+        assert_eq!(tool_meta.name, "tool<name>end");
+        assert_eq!(
+            tool_meta.category,
+            Some("cat".to_string()),
+            "categorization submitted under the escaped display name must reach the \
+             raw-named tool's metadata: {meta:?}"
+        );
+    }
+
+    /// Regression guard for #307 S2: `wrap_untrusted_block`'s own preamble tells its LLM
+    /// reader that `<`/`>` "have been escaped as `&lt;`/`&gt;`" — an explicit invitation to
+    /// decode them back, not just an opaque transform. A caller that echoes the *decoded*
+    /// literal form (`a<b`) instead of the literally-shown escaped form (`a&lt;b`) must still
+    /// be accepted: the pre-#307-S2 fix only recognized the escaped form and hard-rejected
+    /// this previously-working case with an unrecoverable "not found" error.
+    #[tokio::test]
+    async fn test_save_categorized_tools_accepts_unescaped_form_of_angle_bracket_tool_name() {
+        use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("decoded-form-server"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new("a<b"),
+                description: "Test tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("decoded-form-server"),
+            server_info,
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
+            None,
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await.unwrap();
+
+        // The DECODED literal form, not the escaped form ("a&lt;b") Claude was literally
+        // shown — a legitimate echo per `wrap_untrusted_block`'s own preamble.
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("a<b")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+        let content =
+            result.expect("the decoded literal form must be accepted, not just the escaped form");
+        let text = content.content[0].as_text().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
+        let output_dir = PathBuf::from(parsed["output_dir"].as_str().unwrap());
+
+        let meta_content = std::fs::read_to_string(output_dir.join(METADATA_FILE_NAME)).unwrap();
+        let meta: ServerMetadata = serde_json::from_str(&meta_content).unwrap();
+
+        assert_eq!(meta.tools.len(), 1);
+        let tool_meta = &meta.tools[0];
+        assert_eq!(tool_meta.name, "a<b");
+        assert_eq!(tool_meta.category, Some("cat".to_string()));
+    }
+
+    /// Regression guard for #307 S3: two distinct raw tool names that sanitize to the same
+    /// display form must not silently misattribute categorization to the wrong tool.
+    /// `evil\ntool` (control character flattened to a space) and `evil tool` (already that
+    /// exact text) both produce the display key `"evil tool"`. Attempting to categorize using
+    /// that ambiguous shared key must fail explicitly instead of a `HashMap`'s last-write-wins
+    /// silently resolving it to whichever raw tool happened to be processed last.
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_ambiguous_display_name_instead_of_misattributing()
+    {
+        let service = GeneratorService::new();
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("ambiguous-server"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![
+                ToolInfo {
+                    name: ToolName::new("evil\ntool"),
+                    description: "First tool".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    output_schema: None,
+                },
+                ToolInfo {
+                    name: ToolName::new("evil tool"),
+                    description: "Second tool".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    output_schema: None,
+                },
+            ],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("ambiguous-server"),
+            server_info,
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
+            None,
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await.unwrap();
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("evil tool")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err(
+            "an ambiguous display name shared by two distinct raw tools must be rejected, \
+             not silently resolved to one of them",
+        );
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(
+            err.message.contains("not found") || err.message.contains("ambiguous"),
+            "error message should explain the ambiguity: {}",
+            err.message
+        );
+    }
+
+    /// Regression guard for #307 N1: `display_forms` (S2) deliberately lets one raw tool own
+    /// two distinct display keys (its escaped and unescaped forms). A caller submitting BOTH
+    /// forms as separate `categorized_tools` entries for the SAME raw tool must be rejected as
+    /// a duplicate — deduping on the submitted display string (`cat_tool.name`) would miss this,
+    /// since `"a&lt;b"` and `"a<b"` are different strings that both resolve to raw tool `a<b`,
+    /// letting the second entry silently overwrite the first's categorization with no error.
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_duplicate_via_two_display_forms_of_same_raw_name()
+    {
+        let service = GeneratorService::new();
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("dual-form-dup-server"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![
+                ToolInfo {
+                    name: ToolName::new("a<b"),
+                    description: "Angle bracket tool".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    output_schema: None,
+                },
+                ToolInfo {
+                    name: ToolName::new("plain"),
+                    description: "Plain tool".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                    output_schema: None,
+                },
+            ],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("dual-form-dup-server"),
+            server_info,
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
+            None,
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await.unwrap();
+
+        // Both entries name the SAME raw tool (`a<b`) via its two different display forms —
+        // the escaped form Claude was literally shown, and the decoded literal form.
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("a&lt;b"), categorized_tool("a<b")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err(
+            "two entries resolving to the same raw tool via different display forms must be \
+             rejected as duplicates, not silently let the second overwrite the first",
+        );
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(
+            err.message.contains("more than once"),
+            "error message should explain the duplicate: {}",
+            err.message
         );
     }
 
