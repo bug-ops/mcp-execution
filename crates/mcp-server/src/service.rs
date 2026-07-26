@@ -2708,10 +2708,22 @@ mod tests {
         let service =
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
+        // A bare `/etc/passwd`-style path has no drive prefix, so
+        // `Path::is_absolute()` is false for it on Windows and it would be
+        // rejected later, via the confinement walk's `Escape` variant,
+        // after the (safe, still-confined) `server_id` directory is
+        // already created. Use a path that is genuinely absolute on the
+        // current platform so this test exercises the early
+        // `AbsolutePath` rejection, before any filesystem work.
+        let absolute = if cfg!(windows) {
+            r"C:\Windows\System32\config"
+        } else {
+            "/etc/passwd"
+        };
         let params = SaveSkillParams {
             server_id: "test".to_string(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from("/etc/passwd")),
+            output_path: Some(PathBuf::from(absolute)),
             overwrite: true,
         };
 
