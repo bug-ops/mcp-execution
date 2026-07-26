@@ -46,6 +46,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -104,6 +105,38 @@ pub enum TransportType {
 /// to construct instances, and call [`validate_server_config`] before execution
 /// to ensure security requirements are met.
 ///
+/// `headers` and `env` routinely carry secrets (e.g. an `Authorization: Bearer
+/// <token>` header, or a `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable),
+/// so this type's [`Debug`] implementation is hand-written to redact their
+/// *values* while keeping keys visible — a legitimately configured key (a
+/// chosen header or env var name, e.g. `"Authorization"`) is not itself a
+/// secret and remains useful for debugging. This mirrors the discipline
+/// already applied to header values in `command.rs`'s
+/// `validate_header_value_string`, which never echoes a header value into an
+/// error message.
+///
+/// This is a narrower guarantee than `command.rs`'s header-*name* validation
+/// errors, which redact the name too: those fire on input that has not yet
+/// been confirmed well-formed (e.g. a `Name=Value` CLI argument mis-split on
+/// the wrong separator can leave a secret value sitting in the name
+/// position), so any name reaching that error path must be treated as
+/// secret-shaped. Once [`validate_server_config`] has accepted a config,
+/// its `headers`/`env` keys are the caller's own identifiers rather than
+/// unvalidated split output, so trusting them for `Debug` output is not in
+/// tension with distrusting an unvalidated name in an error message.
+///
+/// [`ServerConfigBuilder`] carries the same [`Debug`] treatment for
+/// consistency, but that guarantee does not extend to it: the builder is
+/// populated *before* [`validate_server_config`] runs, so a caller that
+/// feeds it unvalidated input (e.g. a mis-split CLI argument) can still end
+/// up with a secret-shaped key in `format!("{builder:?}")`. Keys are shown
+/// there deliberately regardless — redacting them would defeat the point of
+/// a debug impl for a type whose purpose is to be inspected before
+/// `build()`/`try_build()`.
+///
+/// `Serialize`/`Deserialize` are deliberately left unredacted: config
+/// persistence and the wire format must still round-trip real values.
+///
 /// # Examples
 ///
 /// ```
@@ -126,8 +159,23 @@ pub enum TransportType {
 ///     .build();
 /// ```
 ///
+/// Debug output redacts header/env values but keeps keys:
+///
+/// ```
+/// use mcp_execution_core::ServerConfig;
+///
+/// let config = ServerConfig::builder()
+///     .http_transport("https://api.example.com/mcp".to_string())
+///     .header("Authorization".to_string(), "Bearer sk-secret-value".to_string())
+///     .build();
+///
+/// let debug_output = format!("{config:?}");
+/// assert!(debug_output.contains("Authorization"));
+/// assert!(!debug_output.contains("sk-secret-value"));
+/// ```
+///
 /// [`validate_server_config`]: fn.validate_server_config.html
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServerConfig {
     /// Transport type (stdio or http).
     ///
@@ -160,6 +208,8 @@ pub struct ServerConfig {
     ///
     /// These are added to (or override) the parent process environment.
     /// Security validation blocks dangerous variables like `LD_PRELOAD`.
+    /// Values routinely hold secrets (e.g. `GITHUB_PERSONAL_ACCESS_TOKEN`); see
+    /// the redaction note on [`ServerConfig`]'s own doc comment.
     #[serde(default)]
     pub env: HashMap<String, String>,
 
@@ -191,6 +241,9 @@ pub struct ServerConfig {
     /// Common headers include:
     /// - `Authorization`: Authentication token
     /// - `Content-Type`: Request content type
+    ///
+    /// Values routinely hold secrets (e.g. a bearer token); see the redaction
+    /// note on [`ServerConfig`]'s own doc comment.
     #[serde(default)]
     pub headers: HashMap<String, String>,
 
@@ -207,6 +260,39 @@ pub struct ServerConfig {
     /// `list_all_tools` to respond. Defaults to 30 seconds.
     #[serde(default = "default_discover_timeout")]
     pub discover_timeout: Duration,
+}
+
+/// Debug-formats a `String`-valued map with keys visible and every value
+/// replaced by a fixed placeholder.
+///
+/// Used by `ServerConfig` and `ServerConfigBuilder`'s [`Debug`] impls for
+/// `headers` and `env`, both of which routinely carry secrets (bearer
+/// tokens, API keys). See the redaction note on [`ServerConfig`]'s own doc
+/// comment for why.
+struct RedactedValues<'a>(&'a HashMap<String, String>);
+
+impl fmt::Debug for RedactedValues<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|key| (key, "<redacted>")))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("transport", &self.transport)
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field("env", &RedactedValues(&self.env))
+            .field("cwd", &self.cwd)
+            .field("url", &self.url)
+            .field("headers", &RedactedValues(&self.headers))
+            .field("connect_timeout", &self.connect_timeout)
+            .field("discover_timeout", &self.discover_timeout)
+            .finish()
+    }
 }
 
 impl ServerConfig {
@@ -330,7 +416,12 @@ impl ServerConfig {
 ///     .header("Authorization".to_string(), "Bearer token".to_string())
 ///     .build();
 /// ```
-#[derive(Debug, Clone)]
+///
+/// Like [`ServerConfig`] itself, this builder accumulates `env`/`headers`
+/// before secrets they may carry are known to be well-formed, so its
+/// [`Debug`] impl redacts values the same way — see the redaction note on
+/// [`ServerConfig`]'s doc comment.
+#[derive(Clone)]
 pub struct ServerConfigBuilder {
     transport: TransportType,
     command: Option<String>,
@@ -341,6 +432,22 @@ pub struct ServerConfigBuilder {
     headers: HashMap<String, String>,
     connect_timeout: Duration,
     discover_timeout: Duration,
+}
+
+impl fmt::Debug for ServerConfigBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerConfigBuilder")
+            .field("transport", &self.transport)
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field("env", &RedactedValues(&self.env))
+            .field("cwd", &self.cwd)
+            .field("url", &self.url)
+            .field("headers", &RedactedValues(&self.headers))
+            .field("connect_timeout", &self.connect_timeout)
+            .field("discover_timeout", &self.discover_timeout)
+            .finish()
+    }
 }
 
 impl Default for ServerConfigBuilder {
@@ -880,6 +987,107 @@ mod tests {
 
         let debug_str = format!("{config:?}");
         assert!(debug_str.contains("docker"));
+    }
+
+    #[test]
+    fn test_server_config_debug_redacts_header_values() {
+        // headers are only populated for HTTP/SSE transport (see the
+        // builder's `try_build`), so exercise them via `http_transport`.
+        let config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header(
+                "Authorization".to_string(),
+                "Bearer sk-secret-header-value".to_string(),
+            )
+            .build();
+
+        let debug_str = format!("{config:?}");
+
+        // The key is useful for debugging and is not secret.
+        assert!(debug_str.contains("Authorization"));
+        // The value must never appear.
+        assert!(!debug_str.contains("sk-secret-header-value"));
+    }
+
+    #[test]
+    fn test_server_config_debug_redacts_env_values() {
+        // env is only populated for stdio transport (see the builder's
+        // `try_build`), so exercise it via the default stdio transport.
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .env(
+                "GITHUB_PERSONAL_ACCESS_TOKEN".to_string(),
+                "ghp_supersecretvalue".to_string(),
+            )
+            .build();
+
+        let debug_str = format!("{config:?}");
+
+        // The key is useful for debugging and is not secret.
+        assert!(debug_str.contains("GITHUB_PERSONAL_ACCESS_TOKEN"));
+        // The value must never appear.
+        assert!(!debug_str.contains("ghp_supersecretvalue"));
+    }
+
+    #[test]
+    fn test_server_config_builder_debug_redacts_env_and_header_values() {
+        // Unlike `ServerConfig::build()`, the builder itself doesn't drop
+        // env/headers based on transport, so both can be populated at once
+        // and inspected via `{:?}` before `build()` is ever called.
+        let builder = ServerConfig::builder()
+            .command("docker".to_string())
+            .env(
+                "GITHUB_PERSONAL_ACCESS_TOKEN".to_string(),
+                "ghp_supersecretvalue".to_string(),
+            )
+            .header(
+                "Authorization".to_string(),
+                "Bearer sk-secret-header-value".to_string(),
+            );
+
+        let debug_str = format!("{builder:?}");
+
+        // Keys are useful for debugging and are not secret.
+        assert!(debug_str.contains("GITHUB_PERSONAL_ACCESS_TOKEN"));
+        assert!(debug_str.contains("Authorization"));
+        // Values must never appear.
+        assert!(!debug_str.contains("ghp_supersecretvalue"));
+        assert!(!debug_str.contains("sk-secret-header-value"));
+    }
+
+    #[test]
+    fn test_server_config_serialize_still_contains_real_secret_values() {
+        // Serialize/Deserialize must round-trip real values for config
+        // persistence; only Debug formatting is redacted. Headers and env
+        // are exercised separately since `build()` drops whichever one
+        // doesn't match the config's transport (see `try_build`).
+        let http_config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header(
+                "Authorization".to_string(),
+                "Bearer sk-secret-header-value".to_string(),
+            )
+            .build();
+
+        let http_json = serde_json::to_string(&http_config).unwrap();
+        assert!(http_json.contains("sk-secret-header-value"));
+
+        let http_deserialized: ServerConfig = serde_json::from_str(&http_json).unwrap();
+        assert_eq!(http_config, http_deserialized);
+
+        let stdio_config = ServerConfig::builder()
+            .command("docker".to_string())
+            .env(
+                "GITHUB_PERSONAL_ACCESS_TOKEN".to_string(),
+                "ghp_supersecretvalue".to_string(),
+            )
+            .build();
+
+        let stdio_json = serde_json::to_string(&stdio_config).unwrap();
+        assert!(stdio_json.contains("ghp_supersecretvalue"));
+
+        let stdio_deserialized: ServerConfig = serde_json::from_str(&stdio_json).unwrap();
+        assert_eq!(stdio_config, stdio_deserialized);
     }
 
     #[test]

@@ -34,6 +34,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control characters (never legitimate in a header/env name) before it can reach that assumption
   (#190).
 
+- **`mcp-execution-core`**: `validate_network_config`'s duplicate-header-name check echoed the
+  raw header name verbatim in its `SecurityViolation` reason, even though the check only runs
+  after `validate_header_name_string` has already accepted the name as RFC 7230 `token`-charset
+  only (alphanumerics plus `` !#$%&'*+-.^_`|~ ``) — a misparsed CLI argument whose "key" portion
+  happens to be entirely token-charset (e.g. a hex-encoded key or a JWT-like value using only
+  `A-Za-z0-9-_.`) could still be echoed in full if it collided case-insensitively with another
+  header name. The duplicate-header error message no longer includes the name (#228).
+  `validate_header_name_string`'s own tchar-violation error had the identical leak on a wider,
+  more easily reachable branch (any name with a single character outside the token charset, no
+  collision required) — a `Name=Value` argument mis-split on the wrong `=` could put a full
+  secret in the name position and have it echoed here. That error message no longer includes the
+  name either, closing both the wide and narrow branches of the same leak (#215).
+  `validate_header_value_string`'s control-character error had the same leak on the remaining
+  third branch of the same loop: it always ran after the name had already cleared the
+  token-charset check, so a JWT-shaped or hex-encoded name (e.g. from a `~/.claude/mcp.json`
+  entry, which never goes through the CLI's argument parser at all) was still echoed whenever its
+  paired value contained a control character. That error message is now a static string that
+  omits the name as well.
+
+- **`mcp-execution-core`**: `ServerConfig` derived a plain `Debug` impl, so `headers` and `env` —
+  which routinely carry secrets such as a bearer token or `GITHUB_PERSONAL_ACCESS_TOKEN` — were
+  printed in full by `format!("{config:?}")`, with no redaction applied anywhere in the type
+  itself (unlike the error-message discipline already enforced in `command.rs`). `ServerConfig`
+  now has a hand-written `Debug` impl that keeps `headers`/`env` keys visible but replaces every
+  value with `<redacted>`; `Serialize`/`Deserialize` are unchanged and still round-trip real
+  values for config persistence (#208). `ServerConfigBuilder`, which accumulates the same two
+  maps before `build()`/`try_build()` is called, derived `Debug` over them too and gets the same
+  treatment, reusing the private `RedactedValues` helper introduced for `ServerConfig`.
+
 ### Fixed
 
 - **`mcp-execution-cli`**: `introspect`, `generate`, `skill`, and `setup` now exit with the
