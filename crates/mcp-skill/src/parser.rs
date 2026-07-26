@@ -14,6 +14,7 @@
 
 use mcp_execution_core::metadata::{METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ServerMetadata};
 use regex::Regex;
+use serde::Deserialize;
 use std::path::Path;
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -24,13 +25,21 @@ pub const MAX_TOOL_FILES: usize = 500;
 /// Maximum sidecar file size to read in bytes (1MB).
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
-// Regexes for SKILL.md frontmatter parsing
+/// Maximum size of a `SKILL.md`'s extracted YAML frontmatter block, in bytes.
+///
+/// `serde_norway` (like other libyaml-based parsers) is not linear-time on
+/// pathologically nested input (e.g. deeply nested flow sequences), so
+/// bounding only the overall `SKILL.md` content size does not bound parse
+/// latency. A real `name`/`description` frontmatter is a few hundred bytes at
+/// most, so 8KB is already generous while keeping [`extract_skill_metadata`]
+/// cheap enough to run synchronously on `save_skill`'s request-handling task.
+pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024;
+
+// Locates the raw YAML block between a SKILL.md's `---` delimiters. The
+// block's contents are handed to `serde_norway` for actual parsing, so this
+// regex never inspects individual field values (see `extract_skill_metadata`).
 static FRONTMATTER_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---").expect("valid regex"));
-static NAME_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"name:\s*(.+)").expect("valid regex"));
-static SKILL_DESC_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"description:\s*(.+)").expect("valid regex"));
 
 /// Sanitize file path for error messages to prevent information disclosure.
 ///
@@ -378,10 +387,91 @@ async fn verify_tool_files_on_disk(
     Ok(warnings)
 }
 
+/// Errors that can occur while extracting [`SkillMetadata`](crate::types::SkillMetadata)
+/// from a `SKILL.md`'s YAML frontmatter.
+#[derive(Debug, Error)]
+pub enum SkillMetadataError {
+    /// The content did not start with a `---`-delimited YAML frontmatter block.
+    #[error("YAML frontmatter not found")]
+    MissingFrontmatter,
+
+    /// The extracted frontmatter block exceeded `MAX_FRONTMATTER_SIZE`.
+    #[error("YAML frontmatter too large: {size} bytes exceeds {limit} limit")]
+    FrontmatterTooLarge {
+        /// Actual size of the rejected frontmatter block, in bytes.
+        size: usize,
+        /// Maximum allowed size (`MAX_FRONTMATTER_SIZE`).
+        limit: usize,
+    },
+
+    /// The frontmatter block was not valid YAML.
+    ///
+    /// The message is a rendering of the underlying `serde_norway` error
+    /// (captured eagerly rather than storing the error type itself, so this
+    /// crate's public API is not pinned to a specific `serde_norway`
+    /// version) with its line number corrected to be relative to the whole
+    /// `SKILL.md` file rather than the extracted frontmatter block — the
+    /// block starts one line after the file's opening `---` delimiter.
+    #[error("failed to parse YAML frontmatter: {0}")]
+    InvalidYaml(String),
+
+    /// A required field was absent, or present but empty, in an otherwise
+    /// valid frontmatter block.
+    #[error("'{field}' field is missing or empty in frontmatter")]
+    MissingField {
+        /// Name of the missing/empty field (e.g. `"name"`, `"description"`).
+        field: &'static str,
+    },
+}
+
+/// Renders a `serde_norway` deserialization error, correcting its line number
+/// to be relative to the whole `SKILL.md` file rather than the frontmatter
+/// block passed to `serde_norway::from_str` (see
+/// [`SkillMetadataError::InvalidYaml`]).
+fn describe_yaml_error(err: &serde_norway::Error) -> String {
+    let rendered = err.to_string();
+    let Some(location) = err.location() else {
+        return rendered;
+    };
+    // The block starts one line after the file's opening `---`, so the
+    // block-relative line number under-counts the file line by exactly one.
+    let block_relative = format!("line {} column {}", location.line(), location.column());
+    let file_relative = format!("line {} column {}", location.line() + 1, location.column());
+    rendered.replacen(&block_relative, &file_relative, 1)
+}
+
+/// Raw shape of a `SKILL.md`'s YAML frontmatter block.
+///
+/// Both fields are optional at the YAML level so that a missing `name` and a
+/// missing `description` are reported as distinct
+/// [`SkillMetadataError::MissingField`] variants rather than being folded
+/// into one generic deserialization failure.
+#[derive(Debug, Deserialize)]
+struct RawFrontmatter {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+/// Returns `value` if present and non-blank, otherwise a
+/// [`SkillMetadataError::MissingField`] naming `field`.
+///
+/// Treats an absent key, a null/empty scalar (`name:`, `name: null`,
+/// `name: ~`), and a blank string (`name: ""`, `name: "   "`) as equally
+/// invalid — a skill with an empty name or description is not usable.
+fn require_field(value: Option<String>, field: &'static str) -> Result<String, SkillMetadataError> {
+    match value {
+        Some(v) if !v.trim().is_empty() => Ok(v),
+        _ => Err(SkillMetadataError::MissingField { field }),
+    }
+}
+
 /// Extract skill metadata from SKILL.md content.
 ///
 /// Parses YAML frontmatter to extract name and description, and counts
-/// sections (H2 headers) and words.
+/// sections (H2 headers) and words. Frontmatter is parsed with a real YAML
+/// parser (`serde_norway`), so block scalars (`description: |` / `>`) and
+/// quoted scalars (`name: "my-name"`) are handled per the YAML spec rather
+/// than by a single-line regex capture.
 ///
 /// # Arguments
 ///
@@ -393,7 +483,9 @@ async fn verify_tool_files_on_disk(
 ///
 /// # Errors
 ///
-/// Returns error if YAML frontmatter is missing or required fields not found.
+/// Returns [`SkillMetadataError`] if the YAML frontmatter is missing, too
+/// large (`MAX_FRONTMATTER_SIZE`), malformed, or a required field (`name`,
+/// `description`) is absent or empty.
 ///
 /// # Examples
 ///
@@ -416,29 +508,33 @@ async fn verify_tool_files_on_disk(
 /// assert_eq!(metadata.name, "github-progressive");
 /// assert_eq!(metadata.description, "GitHub MCP server operations");
 /// ```
-pub fn extract_skill_metadata(content: &str) -> Result<crate::types::SkillMetadata, String> {
+pub fn extract_skill_metadata(
+    content: &str,
+) -> Result<crate::types::SkillMetadata, SkillMetadataError> {
     use crate::types::SkillMetadata;
 
-    // Extract YAML frontmatter (using pre-compiled regex)
-    let frontmatter = FRONTMATTER_REGEX
+    // Locate the raw YAML block between the `---` delimiters (using pre-compiled regex).
+    let frontmatter_block = FRONTMATTER_REGEX
         .captures(content)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str())
-        .ok_or("YAML frontmatter not found")?;
+        .ok_or(SkillMetadataError::MissingFrontmatter)?;
 
-    // Extract name (using pre-compiled regex)
-    let name = NAME_REGEX
-        .captures(frontmatter)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().trim().to_string())
-        .ok_or("'name' field not found in frontmatter")?;
+    // Bound parse cost before handing the block to `serde_norway`: YAML parsing is not
+    // linear-time on pathologically nested input, so the overall SKILL.md size limit
+    // (`MAX_SKILL_CONTENT_SIZE` in mcp-execution-server) does not bound parse latency.
+    if frontmatter_block.len() > MAX_FRONTMATTER_SIZE {
+        return Err(SkillMetadataError::FrontmatterTooLarge {
+            size: frontmatter_block.len(),
+            limit: MAX_FRONTMATTER_SIZE,
+        });
+    }
 
-    // Extract description (using pre-compiled regex)
-    let description = SKILL_DESC_REGEX
-        .captures(frontmatter)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().trim().to_string())
-        .ok_or("'description' field not found in frontmatter")?;
+    let frontmatter: RawFrontmatter = serde_norway::from_str(frontmatter_block)
+        .map_err(|e| SkillMetadataError::InvalidYaml(describe_yaml_error(&e)))?;
+
+    let name = require_field(frontmatter.name, "name")?;
+    let description = require_field(frontmatter.description, "description")?;
 
     // Count sections (H2 headers)
     let section_count = content.lines().filter(|l| l.starts_with("## ")).count();
@@ -834,8 +930,10 @@ More content.
         let content = "# Test\n\nNo frontmatter";
 
         let result = extract_skill_metadata(content);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("YAML frontmatter not found"));
+        assert!(matches!(
+            result,
+            Err(SkillMetadataError::MissingFrontmatter)
+        ));
     }
 
     #[test]
@@ -843,8 +941,10 @@ More content.
         let content = "---\ndescription: test\n---\n# Test";
 
         let result = extract_skill_metadata(content);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("'name' field not found"));
+        assert!(matches!(
+            result,
+            Err(SkillMetadataError::MissingField { field: "name" })
+        ));
     }
 
     #[test]
@@ -852,12 +952,79 @@ More content.
         let content = "---\nname: test\n---\n# Test";
 
         let result = extract_skill_metadata(content);
-        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(SkillMetadataError::MissingField {
+                field: "description"
+            })
+        ));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_invalid_yaml() {
+        // Syntactically invalid YAML (an unterminated flow sequence) must surface
+        // as `SkillMetadataError::InvalidYaml`, wrapping the underlying serde_norway error.
+        let content = "---\nname: [unterminated\ndescription: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+        let Err(SkillMetadataError::InvalidYaml(message)) = &result else {
+            panic!("expected InvalidYaml, got: {result:?}");
+        };
+        // Issue #203 follow-up (M3): the error's line number must be file-relative, not
+        // relative to the extracted frontmatter block. `name: [unterminated` is file line 2
+        // (after the opening `---` on line 1); the block-relative location.line() the
+        // underlying serde_norway error reports for this input is 1.
         assert!(
-            result
-                .unwrap_err()
-                .contains("'description' field not found")
+            message.contains("line 2"),
+            "expected file-relative 'line 2', got: {message:?}"
         );
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_frontmatter_too_large() {
+        // Issue #203 follow-up (S2): a pathologically large frontmatter block must be
+        // rejected before it reaches `serde_norway::from_str`, since YAML parsing is not
+        // linear-time on deeply nested input.
+        let padding = "a".repeat(MAX_FRONTMATTER_SIZE + 1);
+        let content = format!("---\nname: test\ndescription: {padding}\n---\n# Test");
+
+        let result = extract_skill_metadata(&content);
+
+        match result {
+            Err(SkillMetadataError::FrontmatterTooLarge { size, limit }) => {
+                assert!(size > MAX_FRONTMATTER_SIZE);
+                assert_eq!(limit, MAX_FRONTMATTER_SIZE);
+            }
+            other => panic!("expected FrontmatterTooLarge, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_null_name_rejected() {
+        // Issue #203 follow-up (M4): `name:`/`name: null`/`name: ~` all deserialize to
+        // `None`, same as an absent key, and must be rejected the same way.
+        let content = "---\nname: ~\ndescription: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+
+        assert!(matches!(
+            result,
+            Err(SkillMetadataError::MissingField { field: "name" })
+        ));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_empty_string_name_rejected() {
+        // Issue #203 follow-up (M4): an empty-string name/description is present but
+        // useless, and must not silently reach `SkillMetadata`.
+        let content = "---\nname: \"\"\ndescription: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+
+        assert!(matches!(
+            result,
+            Err(SkillMetadataError::MissingField { field: "name" })
+        ));
     }
 
     #[test]
@@ -881,19 +1048,59 @@ author: Test Author
     }
 
     #[test]
-    fn test_extract_skill_metadata_multiline_description() {
+    fn test_extract_skill_metadata_block_literal_scalar() {
+        // Issue #203 regression: a `description: |` block literal scalar must have its
+        // real multi-line body captured, not just the `|` marker character.
         let content = r"---
-name: test
-description: This is a long description that contains multiple words
+name: test-skill
+description: |
+  This is a block literal description
+  spanning multiple lines.
 ---
 
 # Test
 ";
 
-        let result = extract_skill_metadata(content);
-        assert!(result.is_ok());
+        let metadata = extract_skill_metadata(content).unwrap();
+        assert_ne!(metadata.description, "|");
+        assert!(metadata.description.contains("block literal description"));
+        assert!(metadata.description.contains("spanning multiple lines."));
+    }
 
-        let metadata = result.unwrap();
-        assert!(metadata.description.contains("multiple words"));
+    #[test]
+    fn test_extract_skill_metadata_folded_block_scalar() {
+        // Issue #203 regression: a `description: >` folded block scalar must have its
+        // real multi-line body captured, not just the `>` marker character.
+        let content = r"---
+name: test-skill
+description: >
+  This is a folded description
+  spanning multiple lines.
+---
+
+# Test
+";
+
+        let metadata = extract_skill_metadata(content).unwrap();
+        assert_ne!(metadata.description, ">");
+        assert!(metadata.description.contains("folded description"));
+        assert!(metadata.description.contains("spanning multiple lines."));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_quoted_scalars() {
+        // Issue #203 regression: quote characters must be stripped by the YAML
+        // parser, not captured verbatim into the field value.
+        let content = r#"---
+name: "quoted-name"
+description: 'quoted text'
+---
+
+# Test
+"#;
+
+        let metadata = extract_skill_metadata(content).unwrap();
+        assert_eq!(metadata.name, "quoted-name");
+        assert_eq!(metadata.description, "quoted text");
     }
 }

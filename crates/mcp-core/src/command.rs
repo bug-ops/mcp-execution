@@ -232,6 +232,11 @@ pub const fn forbidden_env_prefix() -> &'static str {
 /// - Environment variables are checked against forbidden names
 /// - Header values are never echoed into error messages, since they routinely
 ///   carry secrets such as bearer tokens
+/// - Header *names* are never echoed either, once rejected: a `Name=Value` or
+///   `Name: Value` CLI argument can be mis-split on the wrong separator,
+///   leaving a full secret value in the "name" position — the token-charset
+///   error, the duplicate-header-name error, and the header-value
+///   control-character error all omit the name for this reason
 /// - There is no infinite-timeout option: `0` is always rejected, since an
 ///   unbounded wait would let a hung server block this non-interactive tool
 ///   forever (see the `validate_timeout` design note in this module)
@@ -301,10 +306,12 @@ fn validate_network_config(config: &ServerConfig) -> Result<()> {
     let mut seen_header_names = std::collections::HashSet::new();
     for (name, value) in config.headers() {
         validate_header_name_string(name)?;
-        validate_header_value_string(name, value)?;
+        validate_header_value_string(value)?;
         if !seen_header_names.insert(name.to_ascii_lowercase()) {
             return Err(Error::SecurityViolation {
-                reason: format!("duplicate header name (case-insensitive): '{name}'"),
+                reason: "duplicate header name (case-insensitive); name omitted as it may \
+                         be secret-shaped"
+                    .to_string(),
             });
         }
     }
@@ -366,9 +373,16 @@ const fn is_header_name_tchar(c: char) -> bool {
 /// A plain control-character check is not tight enough: a space, `:`, or `@`
 /// is not a control character but is still an invalid header-name character
 /// that would otherwise pass here and fail later inside `http::HeaderName`
-/// construction with an opaque error that omits the offending name. The
-/// header name itself is not a secret, so it is safe to include in the error
-/// message.
+/// construction with an opaque error.
+///
+/// # Security
+///
+/// The rejected name is never echoed into the error message. A `Name=Value`
+/// or `Name: Value` CLI argument can be mis-split on the wrong separator,
+/// leaving a full secret value in the "name" position; that value only needs
+/// one non-`tchar` byte to reach this branch, so it must be treated the same
+/// as a secret — mirroring the duplicate-header-name check below, which
+/// redacts for the same reason.
 fn validate_header_name_string(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(Error::SecurityViolation {
@@ -377,9 +391,8 @@ fn validate_header_name_string(name: &str) -> Result<()> {
     }
     if !name.chars().all(is_header_name_tchar) {
         return Err(Error::SecurityViolation {
-            reason: format!(
-                "header name '{name}' contains characters outside the allowed HTTP token charset"
-            ),
+            reason: "header name contains characters outside the allowed HTTP token charset"
+                .to_string(),
         });
     }
     Ok(())
@@ -390,12 +403,16 @@ fn validate_header_name_string(name: &str) -> Result<()> {
 /// # Security
 ///
 /// The header *value* routinely carries secrets (e.g. bearer tokens), so it
-/// must never appear in the returned error's reason string — only the header
-/// *name* is included.
-fn validate_header_value_string(name: &str, value: &str) -> Result<()> {
+/// must never appear in the returned error's reason string. The header
+/// *name* is not echoed either: this runs after `validate_header_name_string`
+/// has already accepted it as RFC 7230 `token`-charset-only, the same
+/// "may still be secret-shaped input from a misparsed argument" condition
+/// that the tchar-violation and duplicate-header-name errors above already
+/// treat as untrusted.
+fn validate_header_value_string(value: &str) -> Result<()> {
     if contains_control_char(value) {
         return Err(Error::SecurityViolation {
-            reason: format!("value for header '{name}' contains control characters"),
+            reason: "header value contains control characters".to_string(),
         });
     }
     Ok(())
@@ -1067,6 +1084,42 @@ mod tests {
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("duplicate header"));
+            assert!(!reason.contains("Authorization"));
+            assert!(!reason.to_ascii_lowercase().contains("authorization"));
+        } else {
+            panic!("expected SecurityViolation for duplicate header name");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_duplicate_header_secret_shaped_name() {
+        // A misparsed `Name: Value`-style CLI argument can leave a "key" that
+        // is entirely RFC 7230 token-charset (alphanumerics plus
+        // `!#$%&'*+-.^_`|~`), e.g. a hex-encoded key or JWT-like value using
+        // only `A-Za-z0-9-_.`. Such a name passes `validate_header_name_string`
+        // and must not be echoed if it collides case-insensitively.
+        let secret_name = "eyJhbGciOiJIUzI1NiJ9.super-secret-token-material";
+        let mut config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build()
+            .unwrap();
+        config
+            .headers
+            .insert(secret_name.to_string(), "value one".to_string());
+        config
+            .headers
+            .insert(secret_name.to_ascii_uppercase(), "value two".to_string());
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("duplicate header"));
+            assert!(!reason.contains(secret_name));
+            assert!(
+                !reason
+                    .to_ascii_lowercase()
+                    .contains(&secret_name.to_ascii_lowercase())
+            );
         } else {
             panic!("expected SecurityViolation for duplicate header name");
         }
@@ -1089,9 +1142,37 @@ mod tests {
             assert!(result.is_err(), "should reject header name: {bad_name}");
             if let Err(Error::SecurityViolation { reason }) = result {
                 assert!(reason.contains("header name"));
+                assert!(!reason.contains(bad_name));
             } else {
                 panic!("expected SecurityViolation for header name: {bad_name}");
             }
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_secret_shaped_header_name_without_leaking_it() {
+        // Reproduces the #215 leak vector: a `Name=Value` CLI argument
+        // mis-split on the wrong `=` leaves a base64-encoded secret in the
+        // "name" position. It only needs one non-tchar byte (here `/`) to
+        // reach `validate_header_name_string`'s tchar-violation branch,
+        // which must not echo it back.
+        let secret_name = "aGVsbG8/d29ybGQK=supersecretpayload";
+        let mut config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build()
+            .unwrap();
+        config
+            .headers
+            .insert(secret_name.to_string(), "value".to_string());
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("header name"));
+            assert!(!reason.contains(secret_name));
+            assert!(!reason.contains("aGVsbG8"));
+        } else {
+            panic!("expected SecurityViolation for header name");
         }
     }
 
@@ -1109,6 +1190,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("header name"));
+            assert!(!reason.contains("X-Bad"));
         } else {
             panic!("expected SecurityViolation for header name");
         }
@@ -1126,10 +1208,40 @@ mod tests {
 
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("Authorization"));
-            // The header VALUE must never appear in the error message.
+            assert!(reason.contains("header value"));
+            // Neither the header value nor its (ordinary, non-secret-shaped
+            // here) name need to appear — the name is withheld unconditionally
+            // since this path cannot distinguish an ordinary name from a
+            // secret-shaped one.
+            assert!(!reason.contains("Authorization"));
             assert!(!reason.contains("sekrit"));
             assert!(!reason.contains("X-Injected"));
+        } else {
+            panic!("expected SecurityViolation for header value");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_control_char_in_value_with_secret_shaped_name() {
+        // Reproduces the critic's S5 repro: a JWT-shaped header *name* (fully
+        // RFC 7230 token-charset, so it clears `validate_header_name_string`)
+        // paired with a control character in the *value*. Both the name and
+        // the control-char-bearing value must be absent from the error.
+        let secret_name = "eyJhbGciOiJIUzI1NiJ9.abc-secret_material";
+        let mut config = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build()
+            .unwrap();
+        config
+            .headers
+            .insert(secret_name.to_string(), "x\ry".to_string());
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("header value"));
+            assert!(!reason.contains(secret_name));
+            assert!(!reason.contains("eyJhbGciOiJIUzI1NiJ9"));
         } else {
             panic!("expected SecurityViolation for header value");
         }

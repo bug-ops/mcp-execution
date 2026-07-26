@@ -9,6 +9,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use thiserror::Error;
 
 /// Maximum `server_id` length (denial-of-service protection).
 const MAX_SERVER_ID_LENGTH: usize = 64;
@@ -215,6 +216,34 @@ pub struct SkillMetadata {
 // Validation functions
 // ============================================================================
 
+/// Errors returned by [`validate_server_id`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ServerIdError {
+    /// `server_id` was empty.
+    ///
+    /// An empty `server_id` would collapse a per-server confinement
+    /// directory back to its shared parent, so it is rejected explicitly
+    /// rather than falling through the (vacuously true) character-class
+    /// check below.
+    #[error("server_id must not be empty")]
+    Empty,
+
+    /// `server_id` exceeded the maximum allowed length.
+    #[error("server_id too long: {len} chars exceeds {limit} limit")]
+    TooLong {
+        /// Actual length of the rejected `server_id`, in bytes (`str::len`,
+        /// not `chars().count()`).
+        len: usize,
+        /// Maximum allowed length (`MAX_SERVER_ID_LENGTH`).
+        limit: usize,
+    },
+
+    /// `server_id` contained a character other than a lowercase letter,
+    /// digit, or hyphen.
+    #[error("server_id must contain only lowercase letters, digits, and hyphens")]
+    InvalidCharacters,
+}
+
 /// Validate `server_id` format and length.
 ///
 /// # Arguments
@@ -227,7 +256,7 @@ pub struct SkillMetadata {
 ///
 /// # Errors
 ///
-/// Returns `Err` with descriptive message if:
+/// Returns [`ServerIdError`] if:
 /// - Empty
 /// - Length exceeds 64 characters
 /// - Contains characters other than lowercase letters, digits, and hyphens
@@ -249,21 +278,20 @@ pub struct SkillMetadata {
 /// assert!(validate_server_id("GitHub").is_err()); // uppercase
 /// assert!(validate_server_id("my_server").is_err()); // underscore
 /// ```
-pub fn validate_server_id(server_id: &str) -> Result<(), String> {
+pub fn validate_server_id(server_id: &str) -> Result<(), ServerIdError> {
     // Check emptiness (the character-class check below is vacuously true for
     // an empty string, and an empty server_id would collapse a per-server
     // confinement directory back to its shared parent)
     if server_id.is_empty() {
-        return Err("server_id must not be empty".to_string());
+        return Err(ServerIdError::Empty);
     }
 
     // Check length
     if server_id.len() > MAX_SERVER_ID_LENGTH {
-        return Err(format!(
-            "server_id too long: {} chars exceeds {} limit",
-            server_id.len(),
-            MAX_SERVER_ID_LENGTH
-        ));
+        return Err(ServerIdError::TooLong {
+            len: server_id.len(),
+            limit: MAX_SERVER_ID_LENGTH,
+        });
     }
 
     // Check format
@@ -271,9 +299,7 @@ pub fn validate_server_id(server_id: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(
-            "server_id must contain only lowercase letters, digits, and hyphens".to_string(),
-        );
+        return Err(ServerIdError::InvalidCharacters);
     }
 
     Ok(())
@@ -294,37 +320,38 @@ mod tests {
     #[test]
     fn test_validate_server_id_empty() {
         let result = validate_server_id("");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("empty"));
+        assert_eq!(result, Err(ServerIdError::Empty));
     }
 
     #[test]
     fn test_validate_server_id_uppercase() {
         let result = validate_server_id("GitHub");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("lowercase"));
+        assert_eq!(result, Err(ServerIdError::InvalidCharacters));
     }
 
     #[test]
     fn test_validate_server_id_underscore() {
         let result = validate_server_id("my_server");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("lowercase"));
+        assert_eq!(result, Err(ServerIdError::InvalidCharacters));
     }
 
     #[test]
     fn test_validate_server_id_special_chars() {
         let result = validate_server_id("my@server");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("lowercase"));
+        assert_eq!(result, Err(ServerIdError::InvalidCharacters));
     }
 
     #[test]
     fn test_validate_server_id_too_long() {
         let long_id = "a".repeat(65);
         let result = validate_server_id(&long_id);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("too long"));
+        assert_eq!(
+            result,
+            Err(ServerIdError::TooLong {
+                len: 65,
+                limit: MAX_SERVER_ID_LENGTH
+            })
+        );
     }
 
     #[test]
