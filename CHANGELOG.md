@@ -165,6 +165,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now fall back to redacting the entire URL rather than risk a partial leak. A fragment-only URL
   (no query string) is now labeled `#<redacted>` rather than the misleading `?<redacted>`.
 
+- **`mcp-execution-core`**: `sanitize_path_for_error` compared the home directory against the
+  input path as a literal, case-sensitive string, so it silently failed to redact the OS username
+  on Windows whenever the two didn't match byte-for-byte — a caller-supplied forward-slash path
+  (`mcp.json` is JSON, so `"cwd": "C:/Users/Name/proj"` is natural) never matched
+  `dirs::home_dir()`'s backslash-separated form, and neither did a path differing only in case,
+  even though Windows treats both as the same location (#246). The comparison now walks path
+  components instead of raw strings, so separator style no longer matters, and on Windows/macOS
+  (both case-insensitive-but-case-preserving by default) components are compared
+  ASCII-case-insensitively. When the component walk still can't recognize `path` as rooted at
+  `home` — e.g. a `\\?\`-verbatim canonicalized path, or `home` reached through a different mount
+  point — the bare username is scrubbed from the rendered path as a defense-in-depth fallback
+  rather than the previous behavior of returning the path unredacted.
+
 ### Changed
 
 - **`mcp-execution-skill`**: `validate_server_id` and `extract_skill_metadata` now return

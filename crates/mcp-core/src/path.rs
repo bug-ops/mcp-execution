@@ -12,7 +12,22 @@ use std::path::{Component, Path};
 /// Sanitizes a file path for inclusion in an error message, to prevent information disclosure.
 ///
 /// Replaces the home directory with `~` to avoid leaking usernames and full filesystem paths
-/// in error messages returned to callers (e.g. over the MCP protocol).
+/// in error messages returned to callers (e.g. over the MCP protocol). Note that the rebuilt
+/// suffix is composed from normalized path components, so incidental input artifacts such as
+/// repeated separators or `.` segments are not preserved verbatim.
+///
+/// The comparison walks path components rather than matching raw strings, so a `/`-separated
+/// input matches a backslash-separated home directory (and vice versa) on platforms where both
+/// separators are valid. On Windows and macOS, components are also compared
+/// ASCII-case-insensitively, matching those platforms' case-insensitive-but-case-preserving
+/// filesystem semantics; elsewhere the comparison stays case-sensitive.
+///
+/// When `path` does not begin with `home` — e.g. it reaches this function through a different
+/// mount point, or (on Windows) as a `\\?\`-verbatim canonicalized path whose prefix shape the
+/// component walk does not recognize as equivalent to `home`'s — this falls back to scrubbing
+/// the bare username (`home`'s final component) wherever it appears in the path, so the
+/// username itself is never disclosed verbatim even when the fuller `~`-collapse of the whole
+/// home directory isn't achieved.
 ///
 /// # Examples
 ///
@@ -35,11 +50,83 @@ use std::path::{Component, Path};
 pub fn sanitize_path_for_error(path: &Path) -> String {
     dirs::home_dir().map_or_else(
         || path.display().to_string(),
-        |home| {
-            let path_str = path.display().to_string();
-            path_str.replace(&home.display().to_string(), "~")
-        },
+        |home| strip_home_prefix(path, &home).unwrap_or_else(|| scrub_username(path, &home)),
     )
+}
+
+/// Returns `path` with its leading `home` components replaced by `~`, or `None` if `path` is
+/// not rooted at `home`.
+fn strip_home_prefix(path: &Path, home: &Path) -> Option<String> {
+    let mut path_components = path.components();
+    for home_component in home.components() {
+        if !components_match(home_component, path_components.next()?) {
+            return None;
+        }
+    }
+    let mut result = String::from("~");
+    for component in path_components {
+        result.push(std::path::MAIN_SEPARATOR);
+        result.push_str(&component.as_os_str().to_string_lossy());
+    }
+    Some(result)
+}
+
+/// Defense-in-depth redaction for when `path` is not rooted at `home` (see
+/// [`sanitize_path_for_error`]'s doc comment for when this triggers): scrubs `home`'s bare
+/// username wherever it textually appears in `path`, independent of path structure.
+///
+/// This scrub is a plain substring match, not scoped to a path component: on this fallback path
+/// only, a component that merely contains the username as a substring (e.g. `alice-website` when
+/// the username is `alice`) is partially mangled (`~-website`) rather than left alone.
+/// Over-redaction is the accepted safe-failure direction for an information-disclosure guard.
+fn scrub_username(path: &Path, home: &Path) -> String {
+    let path_str = path.display().to_string();
+    let Some(username) = home.file_name() else {
+        return path_str;
+    };
+    let username = username.to_string_lossy();
+    if username.is_empty() {
+        return path_str;
+    }
+    replace_case_aware(&path_str, &username, "~")
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn components_match(home: Component<'_>, path: Component<'_>) -> bool {
+    // TODO(critic): ASCII-only case folding misses non-ASCII usernames (e.g. Cyrillic); the
+    // scrub_username fallback in sanitize_path_for_error covers that gap.
+    home.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&path.as_os_str().to_string_lossy())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn components_match(home: Component<'_>, path: Component<'_>) -> bool {
+    home == path
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn replace_case_aware(haystack: &str, needle: &str, replacement: &str) -> String {
+    // `to_ascii_lowercase` only remaps bytes in the ASCII range and never changes a string's
+    // byte length, so every byte offset found in the lowered copies below is also a valid slice
+    // point into the original `haystack`/`needle`. This invariant breaks if the case-folding
+    // strategy is ever changed to something Unicode-aware (e.g. `to_lowercase`).
+    let haystack_lower = haystack.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let mut result = String::with_capacity(haystack.len());
+    let mut last_end = 0;
+    for (start, _) in haystack_lower.match_indices(needle_lower.as_str()) {
+        result.push_str(&haystack[last_end..start]);
+        result.push_str(replacement);
+        last_end = start + needle.len();
+    }
+    result.push_str(&haystack[last_end..]);
+    result
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn replace_case_aware(haystack: &str, needle: &str, replacement: &str) -> String {
+    haystack.replace(needle, replacement)
 }
 
 /// Validates that `segment` is a single plain path component: non-empty, and with no `..`,
@@ -116,5 +203,86 @@ mod tests {
     #[test]
     fn sanitize_path_for_error_leaves_non_home_path_unchanged() {
         assert_eq!(sanitize_path_for_error(Path::new("/tmp/x")), "/tmp/x");
+    }
+
+    // `Path::components()` only treats `/` as a separator alongside `\` on Windows, so this
+    // variation is only meaningful, and only exercised, on that platform.
+    #[cfg(windows)]
+    #[test]
+    fn sanitize_path_for_error_redacts_home_directory_with_forward_slashes() {
+        let home = dirs::home_dir().unwrap();
+        let home_str = home.display().to_string().replace('\\', "/");
+        let under_home = format!("{home_str}/secret-file.md");
+        assert_eq!(
+            sanitize_path_for_error(Path::new(&under_home)),
+            format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
+        );
+    }
+
+    // Windows and macOS both have case-insensitive-but-case-preserving default filesystems, so
+    // this is exercised on both.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn sanitize_path_for_error_redacts_home_directory_case_insensitively() {
+        let home = dirs::home_dir().unwrap();
+        let flipped_case: String = home
+            .display()
+            .to_string()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_uppercase() {
+                    c.to_ascii_lowercase()
+                } else if c.is_ascii_lowercase() {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let under_home = format!("{flipped_case}{}secret-file.md", std::path::MAIN_SEPARATOR);
+        assert_eq!(
+            sanitize_path_for_error(Path::new(&under_home)),
+            format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
+        );
+    }
+
+    /// Reproduces the mounted/bind-mount scenario from the critic review: `home` appears as a
+    /// non-leading substring (e.g. under `/mnt/snapshot`), so the leading-prefix component walk
+    /// in `strip_home_prefix` cannot match it. Verifies the `scrub_username` fallback still
+    /// keeps the username out of the rendered output.
+    #[test]
+    fn sanitize_path_for_error_scrubs_username_when_home_is_not_a_leading_prefix() {
+        let home = dirs::home_dir().unwrap();
+        let username = home.file_name().unwrap().to_string_lossy().into_owned();
+
+        let mut mounted = std::path::PathBuf::from("mnt");
+        mounted.push("snapshot");
+        for component in home
+            .components()
+            .filter(|c| matches!(c, Component::Normal(_)))
+        {
+            mounted.push(component.as_os_str());
+        }
+        mounted.push("secret.md");
+
+        let sanitized = sanitize_path_for_error(&mounted);
+        assert!(!sanitized.to_lowercase().contains(&username.to_lowercase()));
+        assert!(sanitized.contains('~'));
+    }
+
+    /// Reproduces the Windows `\\?\`-verbatim canonicalized-path regression from the critic
+    /// review: `std::fs::canonicalize` prefixes the drive with `\\?\`, which
+    /// `strip_home_prefix`'s component walk does not recognize as equivalent to a plain `C:\`
+    /// prefix. Verifies the `scrub_username` fallback still keeps the username out of the
+    /// rendered output.
+    #[cfg(windows)]
+    #[test]
+    fn sanitize_path_for_error_scrubs_username_from_canonicalized_home_path() {
+        let home = dirs::home_dir().unwrap();
+        let username = home.file_name().unwrap().to_string_lossy().into_owned();
+        let canonical = std::fs::canonicalize(&home).unwrap();
+
+        let sanitized = sanitize_path_for_error(&canonical);
+        assert!(!sanitized.to_lowercase().contains(&username.to_lowercase()));
     }
 }
