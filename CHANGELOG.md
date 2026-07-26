@@ -961,6 +961,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SecurityViolation` was previously excluded from the check and fell through to
   `internal_error`, misreporting a hostile caller-supplied parameter as a server-side fault.
 
+- **`mcp-execution-introspector`**: `BoundedResponseDecoder` (the bounded stdio decoder added
+  for #225) logged a `tracing::warn!` for every blank line, instead of skipping it silently the
+  way the transport it replaced did (#275). A hostile child process emitting many bare newlines
+  could amplify this into roughly one ~100-byte warning record per input byte, on the exact
+  code path meant to bound resource exhaustion. Blank and whitespace-only lines are now detected
+  via a read-only, resumable peek before the inner JSON-RPC codec runs on them, so they are
+  skipped with no log call; genuinely malformed non-empty lines still warn, unchanged. The
+  peek never mutates the shared decode buffer itself, so it cannot desynchronize the inner
+  codec's own line-scan state — an earlier version of this fix that advanced the buffer
+  directly could panic or silently drop a valid response when a whitespace-only line was split
+  across two reads.
+
 ### Added
 
 - **`mcp-execution-cli`**: `generate` now prints a "Next step: run 'npm install' in the

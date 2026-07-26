@@ -765,9 +765,54 @@ fn map_list_tools_bounded_error(server_id: &ServerId, error: ListToolsBoundedErr
 /// already be sitting in what is left of the buffer.
 struct BoundedResponseDecoder {
     inner: JsonRpcMessageCodec<RxJsonRpcMessage<RoleClient>>,
+    /// Resumable cursor for [`Self::peek_blank_line`]: how many leading bytes of the
+    /// current buffer are already known to contain no newline. Mirrors the inner codec's
+    /// own scan-resume behavior (its private `next_index`) so a long, non-blank line
+    /// built up over many small reads is peeked once in total rather than re-scanned
+    /// from the front on every call — see [`Self::peek_blank_line`] for why this state
+    /// must be kept separately rather than driving `buf` from outside the codec.
+    blank_scan_from: usize,
+    /// Set once `decode_step` reports [`JsonRpcMessageCodecError::MaxLineLengthExceeded`]
+    /// and cleared once it reports a message or a `Serde` error. While set, [`Self::drive`]
+    /// ignores [`Self::peek_blank_line`]'s result: the inner codec may still be discarding
+    /// the tail of that oversized line, so the bytes at the front of `buf` are that tail
+    /// rather than a genuine next line, and treating them as blank would misattribute the
+    /// following line's own parse error to blank-line suppression instead of logging it.
+    assume_mid_discard: bool,
 }
 
 impl BoundedResponseDecoder {
+    /// Read-only check for whether the *next* line the inner codec is about to consume
+    /// is empty or whitespace-only. Returns `Some(true/false)` once a full line (a `\n`
+    /// within `max_length + 1` bytes of the front of `buf`) is buffered; `None` if no
+    /// newline is in reach yet, in which case `scan_from` is advanced to the bound
+    /// already checked so the next call resumes instead of re-scanning.
+    ///
+    /// Deliberately never mutates `buf`: an earlier version of this fix called
+    /// `buf.advance()` directly from outside [`JsonRpcMessageCodec`], which desynchronized
+    /// the codec's own private `next_index`/`is_discarding` bookkeeping from `buf`'s real
+    /// contents — causing an out-of-range slice panic when a whitespace-only line was
+    /// split across two reads, and silently dropping the next valid response when the
+    /// codec was mid-discard on an oversized line. Keeping all buffer consumption inside
+    /// the codec (this function only peeks) makes that class of desync impossible: the
+    /// codec's state can never disagree with `buf` because nothing else ever changes it.
+    fn peek_blank_line(scan_from: &mut usize, max_length: usize, buf: &BytesMut) -> Option<bool> {
+        let bound = std::cmp::min(max_length.saturating_add(1), buf.len());
+        if *scan_from >= bound {
+            return None;
+        }
+        if let Some(offset) = buf[*scan_from..bound]
+            .iter()
+            .position(|&byte| byte == b'\n')
+        {
+            let newline_at = *scan_from + offset;
+            Some(buf[..newline_at].iter().all(u8::is_ascii_whitespace))
+        } else {
+            *scan_from = bound;
+            None
+        }
+    }
+
     /// Runs `decode_step` in a loop, following [`JsonRpcMessageCodec`]'s "skip and keep
     /// scanning" behavior: an `Ok(None)` that consumed bytes may have a further frame
     /// sitting right behind it, so `decode_step` is called again immediately; an `Ok(None)`
@@ -775,8 +820,17 @@ impl BoundedResponseDecoder {
     /// [`JsonRpcMessageCodecError`] is reported as an `Item` rather than looped on, so the
     /// caller can log it once per bad line instead of the underlying codec's own internal
     /// discard loop being observed as a single opaque error.
+    ///
+    /// A [`JsonRpcMessageCodecError::Serde`] for a line [`Self::peek_blank_line`] already
+    /// identified as blank is looped on instead of reported, so blank lines never produce
+    /// a logged `Item` (issue #275); `scan_from` is reset whenever `decode_step` actually
+    /// consumes bytes, since a shorter buffer invalidates any previously-checked range.
+    /// `assume_mid_discard` gates whether the peek is trusted at all — see its field doc.
     fn drive(
         buf: &mut BytesMut,
+        max_length: usize,
+        scan_from: &mut usize,
+        assume_mid_discard: &mut bool,
         mut decode_step: impl FnMut(
             &mut BytesMut,
         ) -> std::result::Result<
@@ -787,8 +841,23 @@ impl BoundedResponseDecoder {
         Option<std::result::Result<RxJsonRpcMessage<RoleClient>, JsonRpcMessageCodecError>>,
     > {
         loop {
+            let is_blank = !*assume_mid_discard
+                && Self::peek_blank_line(scan_from, max_length, buf).unwrap_or(false);
             let before = buf.len();
-            return match decode_step(buf) {
+            let step_result = decode_step(buf);
+            if buf.len() < before {
+                *scan_from = 0;
+            }
+            match &step_result {
+                Ok(Some(_)) | Err(JsonRpcMessageCodecError::Serde(_)) => {
+                    *assume_mid_discard = false;
+                }
+                Err(JsonRpcMessageCodecError::MaxLineLengthExceeded) => {
+                    *assume_mid_discard = true;
+                }
+                Ok(None) | Err(_) => {}
+            }
+            return match step_result {
                 Ok(Some(message)) => Ok(Some(Ok(message))),
                 Ok(None) => {
                     if buf.len() < before {
@@ -797,6 +866,7 @@ impl BoundedResponseDecoder {
                     Ok(None)
                 }
                 Err(JsonRpcMessageCodecError::Io(error)) => Err(error),
+                Err(JsonRpcMessageCodecError::Serde(_)) if is_blank => continue,
                 Err(error) => Ok(Some(Err(error))),
             };
         }
@@ -808,11 +878,27 @@ impl Decoder for BoundedResponseDecoder {
     type Error = std::io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<Self::Item>> {
-        Self::drive(buf, |buf| self.inner.decode(buf))
+        let max_length = self.inner.max_length();
+        let inner = &mut self.inner;
+        Self::drive(
+            buf,
+            max_length,
+            &mut self.blank_scan_from,
+            &mut self.assume_mid_discard,
+            |buf| inner.decode(buf),
+        )
     }
 
     fn decode_eof(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<Self::Item>> {
-        Self::drive(buf, |buf| self.inner.decode_eof(buf))
+        let max_length = self.inner.max_length();
+        let inner = &mut self.inner;
+        Self::drive(
+            buf,
+            max_length,
+            &mut self.blank_scan_from,
+            &mut self.assume_mid_discard,
+            |buf| inner.decode_eof(buf),
+        )
     }
 }
 
@@ -848,6 +934,8 @@ where
         reader,
         BoundedResponseDecoder {
             inner: JsonRpcMessageCodec::new_with_max_length(max_length),
+            blank_scan_from: 0,
+            assume_mid_discard: false,
         },
     );
     stream::poll_fn(move |cx| {
@@ -1227,6 +1315,39 @@ mod tests {
             }
         }
 
+        /// Minimal `tracing::Subscriber` that counts WARN-level events on the calling
+        /// thread, so a test can assert exactly how many warnings `bounded_response_stream`
+        /// logged without pulling in a tracing-capture crate for one assertion. Install via
+        /// `tracing::subscriber::set_default`, which is thread-local; `#[tokio::test]` uses
+        /// a current-thread runtime by default, so the whole test body — including every
+        /// `.await` — runs on the thread the guard was set on.
+        struct WarnCounter(Arc<AtomicUsize>);
+
+        impl tracing::Subscriber for WarnCounter {
+            fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+                *metadata.level() == tracing::Level::WARN
+            }
+
+            fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+
+            fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+            fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {
+            }
+
+            fn event(&self, event: &tracing::Event<'_>) {
+                if *event.metadata().level() == tracing::Level::WARN {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+
+            fn enter(&self, _span: &tracing::span::Id) {}
+
+            fn exit(&self, _span: &tracing::span::Id) {}
+        }
+
         /// Number of times `ErrAfter` returns a real error before giving up and signaling
         /// EOF. Bounds the fixture itself so that if a regression ever makes
         /// `bounded_response_stream` treat an I/O error as recoverable again, the resulting
@@ -1302,6 +1423,211 @@ mod tests {
                 "the trailing valid line must still decode after a malformed line"
             );
             assert!(stream.next().await.is_none());
+        }
+
+        #[tokio::test]
+        async fn skips_blank_lines_silently_and_keeps_reading() {
+            // Bare newlines, a whitespace-only line, and a CRLF blank line must all be
+            // dropped without ever reaching `JsonRpcMessageCodec` (issue #275) — unlike
+            // a malformed line, they must not surface as a decoded `Err` item at all.
+            let script = Script {
+                chunks: vec![
+                    b"\n".to_vec(),
+                    b"   \n".to_vec(),
+                    b"\r\n".to_vec(),
+                    valid_notification_line(),
+                ],
+                idx: 0,
+            };
+            let mut stream = bounded_response_stream(script, TEST_MAX);
+
+            assert!(
+                stream.next().await.is_some(),
+                "the valid line must decode with no item emitted for the blank lines before it"
+            );
+            assert!(stream.next().await.is_none());
+        }
+
+        #[test]
+        fn peek_blank_line_leaves_buf_untouched_for_non_blank_lines() {
+            let buf = BytesMut::from(&b"{not valid json\nnext"[..]);
+            let mut scan_from = 0;
+            assert_eq!(
+                BoundedResponseDecoder::peek_blank_line(&mut scan_from, TEST_MAX, &buf),
+                Some(false)
+            );
+            assert_eq!(
+                &buf[..],
+                b"{not valid json\nnext",
+                "peek must never mutate buf"
+            );
+            assert_eq!(
+                scan_from, 0,
+                "a found newline must not perturb the cursor — only the 'no newline yet' \
+                 branch advances it"
+            );
+        }
+
+        #[test]
+        fn peek_blank_line_returns_none_without_a_complete_line() {
+            let buf = BytesMut::from(&b"   "[..]);
+            let mut scan_from = 0;
+            assert_eq!(
+                BoundedResponseDecoder::peek_blank_line(&mut scan_from, TEST_MAX, &buf),
+                None
+            );
+            assert_eq!(&buf[..], b"   ");
+            assert_eq!(
+                scan_from,
+                buf.len(),
+                "the cursor must advance to the bound already checked, so a later call \
+                 resumes instead of re-scanning these bytes"
+            );
+        }
+
+        #[test]
+        fn peek_blank_line_resumes_from_scan_from_instead_of_rescanning() {
+            // A prior call already established there's no newline in the first 5 bytes;
+            // a second call must not redo that work even though it's still true of the
+            // now-longer buffer, and must find the newline that arrived after it.
+            let buf = BytesMut::from(&b"     \n"[..]);
+            let mut scan_from = 5;
+            assert_eq!(
+                BoundedResponseDecoder::peek_blank_line(&mut scan_from, TEST_MAX, &buf),
+                Some(true)
+            );
+        }
+
+        #[test]
+        fn peek_blank_line_trusts_the_resumed_cursor_instead_of_rescanning_from_zero() {
+            // `scan_from = 1` asserts "buf[0..1] has no newline" even though buf[0] is
+            // one — a precondition a real caller never violates, but exploiting it here
+            // is what makes this test discriminating: a regression that silently starts
+            // every scan at 0 (ignoring the passed-in cursor) would "discover" that
+            // leading newline and answer `Some(true)`. Only a real caller of `drive`
+            // could trigger the regression this guards, since `drive` is what threads
+            // `scan_from` across calls and would be the one to stop honoring it; this
+            // unit test exercises `peek_blank_line` directly because it is the cheapest
+            // way to pin the cursor's exact meaning (see M2, critic handoff
+            // 2026-07-26T22-33-10).
+            let buf = BytesMut::from(&b"\n    "[..]);
+            let mut scan_from = 1;
+            assert_eq!(
+                BoundedResponseDecoder::peek_blank_line(&mut scan_from, TEST_MAX, &buf),
+                None,
+                "search must start at scan_from, not re-scan from the front of buf"
+            );
+            assert_eq!(
+                scan_from,
+                buf.len(),
+                "cursor must advance to the bound reached by the resumed search"
+            );
+        }
+
+        #[tokio::test]
+        async fn splits_whitespace_only_line_across_reads_without_panicking() {
+            // Regression for a desync bug in an earlier version of this fix: calling
+            // `buf.advance()` from outside `JsonRpcMessageCodec` while a whitespace-only
+            // line was still incomplete left the codec's private scan cursor pointing
+            // past the (now shorter) buffer, panicking on the next decode. The blank-line
+            // fast path must only ever peek, never mutate `buf` itself.
+            let script = Script {
+                chunks: vec![
+                    b"          ".to_vec(), // 10 spaces, no newline yet
+                    b"\n".to_vec(),
+                    valid_notification_line(),
+                ],
+                idx: 0,
+            };
+            let mut stream = bounded_response_stream(script, TEST_MAX);
+
+            assert!(
+                stream.next().await.is_some(),
+                "the valid line must still decode after a blank line split across two reads"
+            );
+            assert!(stream.next().await.is_none());
+        }
+
+        #[tokio::test]
+        async fn recovers_two_valid_responses_after_oversized_whitespace_run() {
+            // Regression: an earlier version of this fix let its own blank-line skip
+            // consume the newline that ends an oversized, all-whitespace run while the
+            // inner codec was still mid-discard for that same run, desynchronizing the
+            // codec's `is_discarding` state from `buf` and silently dropping the next
+            // valid response. The run's terminating newline must be in a *separate* read
+            // from the run itself — putting them in one chunk (as an earlier version of
+            // this test did) never leaves the codec mid-discard before the blank-line
+            // logic runs, so it can't catch the desync at all (tester handoff
+            // 2026-07-26T22-28-30). A single trailing response isn't enough either: with
+            // only one, the old bug degenerates into the split-blank-line panic that
+            // `splits_whitespace_only_line_across_reads_without_panicking` already
+            // covers, rather than demonstrating the silent-loss variant this test targets
+            // — two responses are what let the buggy code stay panic-free while still
+            // dropping the second one.
+            let warn_count = Arc::new(AtomicUsize::new(0));
+            let _tracing_guard =
+                tracing::subscriber::set_default(WarnCounter(Arc::clone(&warn_count)));
+
+            let oversized_whitespace_run = vec![b' '; TEST_MAX * 3]; // no trailing newline
+            let mut rest = vec![b'\n'];
+            rest.extend(valid_notification_line());
+            rest.extend(valid_notification_line());
+            let script = Script {
+                chunks: vec![oversized_whitespace_run, rest],
+                idx: 0,
+            };
+            let mut stream = bounded_response_stream(script, TEST_MAX);
+
+            assert!(
+                stream.next().await.is_some(),
+                "the first response after the oversized whitespace run must decode"
+            );
+            assert!(
+                stream.next().await.is_some(),
+                "the second response after the oversized whitespace run must not be \
+                 silently dropped"
+            );
+            assert!(stream.next().await.is_none());
+            assert_eq!(
+                warn_count.load(Ordering::SeqCst),
+                1,
+                "exactly one warning for the oversized run itself — no blank-line noise, \
+                 and no swallowed diagnostic either"
+            );
+        }
+
+        #[tokio::test]
+        async fn warns_for_malformed_line_immediately_after_oversized_discard() {
+            // Regression for critic finding M3 (handoff 2026-07-26T22-33-10): right after
+            // the codec finishes discarding an oversized line, the bytes now at the front
+            // of `buf` are the *next* line, but a stale `is_blank` computed before
+            // `decode_step` ran could be mis-attributed to that next line's own parse
+            // error, swallowing its warning even though no message was lost. Both the
+            // oversized-run warning and the malformed-line warning must be reported.
+            let oversized_whitespace_run = vec![b' '; TEST_MAX * 3]; // no trailing newline
+            let mut rest = b"\nnot json at all\n".to_vec();
+            rest.extend(valid_notification_line());
+            let script = Script {
+                chunks: vec![oversized_whitespace_run, rest],
+                idx: 0,
+            };
+
+            let warn_count = Arc::new(AtomicUsize::new(0));
+            let _tracing_guard =
+                tracing::subscriber::set_default(WarnCounter(Arc::clone(&warn_count)));
+            let mut stream = bounded_response_stream(script, TEST_MAX);
+
+            assert!(
+                stream.next().await.is_some(),
+                "the valid response after the malformed line must still decode"
+            );
+            assert!(stream.next().await.is_none());
+            assert_eq!(
+                warn_count.load(Ordering::SeqCst),
+                2,
+                "one warning for the oversized run and one for the malformed line that \
+                 follows it — neither is blank, so neither may be suppressed"
+            );
         }
 
         #[tokio::test]
@@ -1486,19 +1812,27 @@ mod tests {
             .expect("fixture notification must parse");
             let mut calls = 0u32;
             let mut buf = BytesMut::from(&b"stand-in bytes, contents are irrelevant"[..]);
+            let mut scan_from = 0;
+            let mut assume_mid_discard = false;
 
-            let result = BoundedResponseDecoder::drive(&mut buf, |buf| {
-                calls += 1;
-                if calls == 1 {
-                    // Mirrors the codec's own "skip" behavior: consumes bytes but
-                    // produces no item.
-                    let half = buf.len() / 2;
-                    buf.advance(half);
-                    Ok(None)
-                } else {
-                    Ok(Some(message.clone()))
-                }
-            });
+            let result = BoundedResponseDecoder::drive(
+                &mut buf,
+                TEST_MAX,
+                &mut scan_from,
+                &mut assume_mid_discard,
+                |buf| {
+                    calls += 1;
+                    if calls == 1 {
+                        // Mirrors the codec's own "skip" behavior: consumes bytes but
+                        // produces no item.
+                        let half = buf.len() / 2;
+                        buf.advance(half);
+                        Ok(None)
+                    } else {
+                        Ok(Some(message.clone()))
+                    }
+                },
+            );
 
             assert!(
                 matches!(result, Ok(Some(Ok(_)))),
@@ -1515,7 +1849,15 @@ mod tests {
         #[test]
         fn drive_reports_needs_more_data_when_no_progress_is_made() {
             let mut buf = BytesMut::from(&b"an incomplete line with no delimiter yet"[..]);
-            let result = BoundedResponseDecoder::drive(&mut buf, |_buf| Ok(None));
+            let mut scan_from = 0;
+            let mut assume_mid_discard = false;
+            let result = BoundedResponseDecoder::drive(
+                &mut buf,
+                TEST_MAX,
+                &mut scan_from,
+                &mut assume_mid_discard,
+                |_buf| Ok(None),
+            );
 
             assert!(
                 matches!(result, Ok(None)),
