@@ -263,6 +263,24 @@ impl GeneratorService {
                 .join(&server_id_str)
         });
 
+        // Validate and canonicalize output_dir to prevent path traversal (fixes #216)
+        let output_dir = {
+            // Reject paths containing parent directory components
+            if output_dir.components().any(|c| c == std::path::Component::ParentDir) {
+                return Err(McpError::invalid_params(
+                    format!("output_dir contains '..' path traversal: {}", output_dir.display()),
+                    None,
+                ));
+            }
+            // Canonicalize to resolve '.' and symlinks
+            output_dir.canonicalize().map_err(|e| {
+                McpError::invalid_params(
+                    format!("Failed to resolve output_dir '{}': {}", output_dir.display(), e),
+                    None,
+                )
+            })?
+        };
+
         // Build server config (consume args and env to avoid clones)
         let mut config_builder = ServerConfig::builder().command(params.command);
 
