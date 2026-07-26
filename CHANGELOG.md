@@ -113,6 +113,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value). The error message no longer includes the value, matching the "value omitted as it may
   be secret-shaped" convention already used by the header validation checks in this file (#229).
 
+- **`mcp-execution-server`**: `list_generated_servers`'s `base_dir` parameter was used verbatim
+  to build a `read_dir` scan, so a caller could point it anywhere the process could read (e.g.
+  `/etc`) and get back a directory listing — subdirectory names, per-subdirectory `.ts` file
+  counts, and modification times — a read-side sibling of the write-side path-confinement issues
+  already fixed for `introspect_server`/`save_categorized_tools` (#216/#217). `base_dir`, if
+  supplied, is now confined to `~/.claude/servers/` the same way: treated as relative to that
+  directory, with an absolute path, a `..` component, or a path that escapes via a symlink
+  rejected with `INVALID_PARAMS` rather than silently falling back to the default (#236). The
+  confinement check runs lexically (`starts_with`) even before the joined path is known to exist,
+  matching every confinement check in `resolve_output_dir` — including its own deliberately
+  not-created final component — rather than skipping it for a not-yet-existing target, which would
+  have let a root-without-prefix override (e.g. `\pwn\evil` on Windows, not caught by the
+  absolute-path check there) escape the base undetected.
+
+- **`mcp-execution-server`**: added a doc comment on `IntrospectServerParams` cross-referencing
+  `ServerConfig::url`'s documented SSRF trade-off, a compile-time regression test pinning that
+  type's field set, and — since neither guards against an existing field being repurposed to
+  build an HTTP/SSE config rather than a new field being added — a unit test asserting that the
+  `ServerConfig` `introspect_server` actually builds always reports `TransportType::Stdio`. The
+  builder chain that produces it is now a standalone `build_stdio_server_config` function so this
+  last test can assert on it directly, rather than only on the params type feeding it (#209).
+
 ### Changed
 
 - **`mcp-execution-skill`**: `validate_server_id` and `extract_skill_metadata` now return

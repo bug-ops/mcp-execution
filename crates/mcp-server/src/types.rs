@@ -21,6 +21,17 @@ use uuid::Uuid;
 
 /// Parameters for introspecting an MCP server.
 ///
+/// This type only ever builds a stdio [`ServerConfig`] (see
+/// `GeneratorService::introspect_server`, which calls `ServerConfig::builder().command(...)`
+/// and never sets a transport of `Http` or `Sse`). It must never gain a field capable of
+/// setting `ServerConfig`'s transport to `Http`/`Sse` (e.g. `url`, `http`, `sse`, `headers`)
+/// without SSRF allowlisting logic added alongside it: `ServerConfig::url`
+/// (`crates/mcp-core/src/server_config.rs`) documents that this crate does not apply SSRF
+/// allowlisting itself and expects a server-context embedder - which is exactly what
+/// `mcp-execution-server` is - to add its own before connecting. `tests::introspect_server_params_shape_is_pinned`
+/// pins the current field set so a silent addition fails to compile instead of merely
+/// widening the attack surface unnoticed.
+///
 /// # Examples
 ///
 /// ```
@@ -205,7 +216,10 @@ pub struct ToolGenerationError {
 /// Parameters for listing generated servers.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ListGeneratedServersParams {
-    /// Base directory to scan (default: `~/.claude/servers`)
+    /// Base directory to scan, relative to `~/.claude/servers`
+    /// (default: `~/.claude/servers` itself). Confined to that directory: an
+    /// absolute path, a `..` component, or a path that escapes it via a
+    /// symlink is rejected.
     pub base_dir: Option<String>,
 }
 
@@ -412,6 +426,37 @@ mod tests {
 
         let json = serde_json::to_string(&tool).unwrap();
         let _deserialized: CategorizedTool = serde_json::from_str(&json).unwrap();
+    }
+
+    /// Regression guard for issue #209: `IntrospectServerParams` must never gain a field
+    /// capable of setting `ServerConfig`'s transport to `Http`/`Sse` (e.g. `url`, `http`,
+    /// `sse`, `headers`) without SSRF allowlisting logic added alongside it. Destructuring
+    /// with a struct pattern that names every current field, with no `..` rest pattern, means
+    /// Rust's exhaustiveness check fails this file to compile the moment a field is added or
+    /// removed - a stronger guarantee than a runtime assertion could give.
+    #[test]
+    fn introspect_server_params_shape_is_pinned() {
+        let params = IntrospectServerParams {
+            server_id: "test".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+
+        // Fields that must never appear on this type without SSRF allowlisting logic: `url`,
+        // `http`, `sse`, `headers`.
+        let IntrospectServerParams {
+            server_id: _,
+            command: _,
+            args: _,
+            env: _,
+            output_dir: _,
+            connect_timeout_secs: _,
+            discover_timeout_secs: _,
+        } = params;
     }
 
     // Test helpers
