@@ -328,6 +328,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `structuredContent` present resolves with that value; an empty `content` array with neither
   produces a clear, well-typed error instead of a crash.
 
+- **`mcp-execution-introspector`**: `build_tool_info` hardcoded `ToolInfo::output_schema` to
+  `None` with a comment claiming rmcp did not expose a tool's output schema (#254). `rmcp`'s
+  `Tool` type has carried `output_schema: Option<Arc<JsonObject>>` since before this project's
+  pinned 2.2.0 version; the value was simply never read. `build_tool_info` now converts
+  `tool.output_schema` into `ToolInfo::output_schema` the same way it already does for
+  `input_schema`, so servers that advertise a tool output schema have it surfaced instead of
+  silently discarded, and the same `MAX_SCHEMA_SIZE_BYTES` denial-of-service bound (CWE-400)
+  that already guards `input_schema` now applies to `output_schema` too. `mcp-execution-server`'s
+  documented per-session memory budget derivation (`MAX_SINGLE_SESSION_BYTES` in `state.rs`) is
+  updated to account for both schemas per tool instead of one.
+
 - **`mcp-execution-cli`**: `Cli`/`Commands` derived a plain `Debug`, so `Commands::Introspect`'s
   `env`/`headers` and `Commands::Generate`'s `server_env`/`server_headers` — raw `KEY=VALUE`
   strings straight from argv, routinely carrying secrets — were printed in full wherever the
