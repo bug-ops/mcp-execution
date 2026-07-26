@@ -27,6 +27,15 @@ use serde::Serialize;
 ///
 /// This type is `Send` and `Sync`, allowing it to be used across
 /// thread boundaries safely.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_codegen::template_engine::TemplateEngine;
+///
+/// let engine = TemplateEngine::new().unwrap();
+/// // engine can now render templates
+/// ```
 #[derive(Debug)]
 pub struct TemplateEngine<'a> {
     handlebars: Handlebars<'a>,

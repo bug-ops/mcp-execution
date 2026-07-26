@@ -62,6 +62,14 @@ const FIXED_FILE_COUNT: usize = 5;
 /// as introspection already allows" (issue #198 M1). This check remains meaningful
 /// defense-in-depth for callers that construct a `ServerInfo` directly rather than going
 /// through introspection.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES;
+///
+/// assert!(MAX_GENERATED_FILES > 0);
+/// ```
 pub const MAX_GENERATED_FILES: usize =
     mcp_execution_introspector::MAX_TOOL_COUNT + FIXED_FILE_COUNT;
 
@@ -75,6 +83,14 @@ pub const MAX_GENERATED_FILES: usize =
 /// introspection already allows" (issue #198 M1). The 2x multiplier accounts for `_meta.json`
 /// re-embedding every tool's raw name/description/schema alongside the already-rendered `.ts`
 /// file content, roughly doubling the total.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES;
+///
+/// assert!(MAX_GENERATED_BYTES > 0);
+/// ```
 pub const MAX_GENERATED_BYTES: usize = 2
     * mcp_execution_introspector::MAX_TOOL_COUNT
     * (mcp_execution_introspector::MAX_TOOL_NAME_LEN

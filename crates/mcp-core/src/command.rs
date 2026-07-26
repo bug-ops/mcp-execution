@@ -108,30 +108,78 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 ///
 /// An `mcp.json` entry or CLI invocation is expected to pass a short, fixed argv to the
 /// spawned subprocess, so this is generous headroom rather than a realistic expectation.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::MAX_ARG_COUNT;
+///
+/// assert!(MAX_ARG_COUNT > 0);
+/// ```
 pub const MAX_ARG_COUNT: usize = 256;
 
 /// Maximum byte length for a single command string, argument, or environment variable name.
 ///
 /// A legitimate command/argument/env-name is always a short identifier or path, never
 /// free-form text, so this ceiling exists purely as a resource-exhaustion backstop.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::MAX_ARG_LEN;
+///
+/// assert!(MAX_ARG_LEN > 0);
+/// ```
 pub const MAX_ARG_LEN: usize = 4096;
 
 /// Maximum number of environment variables accepted in a `ServerConfig`.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::MAX_ENV_COUNT;
+///
+/// assert!(MAX_ENV_COUNT > 0);
+/// ```
 pub const MAX_ENV_COUNT: usize = 256;
 
 /// Maximum byte length for a single environment variable value.
 ///
 /// Wider than [`MAX_ARG_LEN`] since env values legitimately carry things like JSON
 /// configuration blobs, not just short identifiers.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::MAX_ENV_VALUE_LEN;
+///
+/// assert!(MAX_ENV_VALUE_LEN > 0);
+/// ```
 pub const MAX_ENV_VALUE_LEN: usize = 32 * 1024;
 
 /// Maximum number of HTTP headers accepted for Http/Sse transport.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::MAX_HEADER_COUNT;
+///
+/// assert!(MAX_HEADER_COUNT > 0);
+/// ```
 pub const MAX_HEADER_COUNT: usize = 128;
 
 /// Maximum byte length for a single HTTP header value.
 ///
 /// Wider than [`MAX_ARG_LEN`] since header values legitimately carry things like long
 /// bearer tokens.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::MAX_HEADER_VALUE_LEN;
+///
+/// assert!(MAX_HEADER_VALUE_LEN > 0);
+/// ```
 pub const MAX_HEADER_VALUE_LEN: usize = 8 * 1024;
 
 /// Maximum byte length for the HTTP/Sse transport `url`.
@@ -139,6 +187,14 @@ pub const MAX_HEADER_VALUE_LEN: usize = 8 * 1024;
 /// Generous headroom over any realistic endpoint URL (including a long query string), while
 /// still bounding a hostile or hand-edited `mcp.json` entry (denial-of-service protection,
 /// CWE-400).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::MAX_URL_LEN;
+///
+/// assert!(MAX_URL_LEN > 0);
+/// ```
 pub const MAX_URL_LEN: usize = 8 * 1024;
 
 /// Returns the shell metacharacters considered forbidden in a command or argument string.

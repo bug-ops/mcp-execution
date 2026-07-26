@@ -60,6 +60,20 @@ pub mod json {
     ///
     /// Returns an error if JSON serialization fails (e.g., if the data
     /// contains non-serializable types or custom serialization fails).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use serde::Serialize;
+    /// use mcp_execution_cli::formatters::json;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Data { value: i32 }
+    ///
+    /// let data = Data { value: 42 };
+    /// let json = json::format(&data).unwrap();
+    /// assert!(json.contains("42"));
+    /// ```
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         let json = serde_json::to_string_pretty(data)?;
         Ok(json)
@@ -71,6 +85,20 @@ pub mod json {
     ///
     /// Returns an error if JSON serialization fails (e.g., if the data
     /// contains non-serializable types or custom serialization fails).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use serde::Serialize;
+    /// use mcp_execution_cli::formatters::json;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Data { value: i32 }
+    ///
+    /// let data = Data { value: 42 };
+    /// let json = json::format_compact(&data).unwrap();
+    /// assert!(!json.contains('\n'));
+    /// ```
     pub fn format_compact<T: Serialize>(data: &T) -> Result<String> {
         let json = serde_json::to_string(data)?;
         Ok(json)
@@ -90,6 +118,20 @@ pub mod text {
     ///
     /// Returns an error if JSON serialization fails (propagated from the
     /// underlying `json::format_compact` call).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use serde::Serialize;
+    /// use mcp_execution_cli::formatters::text;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Data { value: i32 }
+    ///
+    /// let data = Data { value: 42 };
+    /// let text = text::format(&data).unwrap();
+    /// assert!(text.contains("42"));
+    /// ```
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         // For text mode, use JSON without pretty printing
         json::format_compact(data)
@@ -108,6 +150,20 @@ pub mod pretty {
     ///
     /// Returns an error if JSON serialization fails (e.g., if the data
     /// contains non-serializable types). Value formatting itself cannot fail.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use serde::Serialize;
+    /// use mcp_execution_cli::formatters::pretty;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Data { value: i32 }
+    ///
+    /// let data = Data { value: 42 };
+    /// let output = pretty::format(&data).unwrap();
+    /// assert!(output.contains("42"));
+    /// ```
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         // Convert to JSON value first for inspection
         let value = serde_json::to_value(data)?;

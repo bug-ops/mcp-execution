@@ -43,6 +43,14 @@ use serde::{Deserialize, Serialize};
 /// nested types, so that a consumer built against an older schema fails
 /// loudly (via a schema-version mismatch check) instead of silently
 /// misinterpreting the new shape.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::METADATA_SCHEMA_VERSION;
+///
+/// assert_eq!(METADATA_SCHEMA_VERSION, 1);
+/// ```
 pub const METADATA_SCHEMA_VERSION: u32 = 1;
 
 /// Filename of the sidecar metadata file emitted alongside generated tool files.
@@ -50,6 +58,14 @@ pub const METADATA_SCHEMA_VERSION: u32 = 1;
 /// Shared between the producer (`mcp-execution-codegen`) and the consumer
 /// (`mcp-execution-skill`) to avoid a stringly-typed filename duplicated in
 /// two crates.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::METADATA_FILE_NAME;
+///
+/// assert_eq!(METADATA_FILE_NAME, "_meta.json");
+/// ```
 pub const METADATA_FILE_NAME: &str = "_meta.json";
 
 /// Structured sidecar describing one server's generated tools.

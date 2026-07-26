@@ -16,6 +16,14 @@ use std::fmt;
 ///
 /// A single constant so every redacting [`Debug`] impl (and every test that
 /// asserts on the placeholder) stays in sync if the text ever changes.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::REDACTED_PLACEHOLDER;
+///
+/// assert_eq!(REDACTED_PLACEHOLDER, "<redacted>");
+/// ```
 pub const REDACTED_PLACEHOLDER: &str = "<redacted>";
 
 /// Debug-formats a `String`-valued map with keys visible and every value

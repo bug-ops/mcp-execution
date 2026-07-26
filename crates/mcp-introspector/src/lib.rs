@@ -63,12 +63,36 @@ use tokio::process::Child;
 /// could return an unbounded tool list, which downstream codegen turns into one `.ts` file
 /// per tool. 1000 is generous headroom over any real-world server's tool count while still
 /// bounding the worst case.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::MAX_TOOL_COUNT;
+///
+/// assert_eq!(MAX_TOOL_COUNT, 1000);
+/// ```
 pub const MAX_TOOL_COUNT: usize = 1000;
 
 /// Maximum byte length for a single tool's `name`, as reported by the server.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::MAX_TOOL_NAME_LEN;
+///
+/// assert!(MAX_TOOL_NAME_LEN > 0);
+/// ```
 pub const MAX_TOOL_NAME_LEN: usize = 256;
 
 /// Maximum byte length for a single tool's `description`, as reported by the server.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::MAX_TOOL_DESCRIPTION_LEN;
+///
+/// assert!(MAX_TOOL_DESCRIPTION_LEN > 0);
+/// ```
 pub const MAX_TOOL_DESCRIPTION_LEN: usize = 8 * 1024;
 
 /// Maximum serialized JSON byte size for a single tool's `input_schema`, as reported by the
@@ -82,6 +106,14 @@ pub const MAX_TOOL_DESCRIPTION_LEN: usize = 8 * 1024;
 /// budget from `MAX_TOOL_COUNT * MAX_SCHEMA_SIZE_BYTES`. Previously 256KB, which propagated
 /// out to a ~1GB pending-session budget and a ~541MB generate/export budget; shrinking this one
 /// source constant 4x shrinks all of those proportionally without any structural change.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES;
+///
+/// assert!(MAX_SCHEMA_SIZE_BYTES > 0);
+/// ```
 pub const MAX_SCHEMA_SIZE_BYTES: usize = 64 * 1024;
 
 /// Information about an MCP server.

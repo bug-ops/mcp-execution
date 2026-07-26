@@ -45,6 +45,23 @@ pub struct IntrospectionResult {
 ///
 /// Simplified representation of server information optimized
 /// for CLI output formatting.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::introspect::ServerMetadata;
+///
+/// let metadata = ServerMetadata {
+///     id: "github".to_string(),
+///     name: "GitHub MCP".to_string(),
+///     version: "1.0.0".to_string(),
+///     supports_tools: true,
+///     supports_resources: false,
+///     supports_prompts: false,
+/// };
+///
+/// assert_eq!(metadata.name, "GitHub MCP");
+/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerMetadata {
     /// Server identifier
@@ -65,6 +82,21 @@ pub struct ServerMetadata {
 ///
 /// Contains tool information with optional schema details
 /// when detailed output is requested.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::introspect::ToolDisplay;
+///
+/// let tool = ToolDisplay {
+///     name: "search".to_string(),
+///     description: "Search repositories".to_string(),
+///     input_schema: None,
+///     output_schema: None,
+/// };
+///
+/// assert_eq!(tool.name, "search");
+/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDisplay {
     /// Tool name

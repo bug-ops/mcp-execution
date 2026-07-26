@@ -349,42 +349,133 @@ impl ServerConfig {
     }
 
     /// Returns the transport type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::{ServerConfig, TransportType};
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("test".to_string())
+    ///     .build().unwrap();
+    ///
+    /// assert!(matches!(config.transport(), TransportType::Stdio));
+    /// ```
     #[must_use]
     pub const fn transport(&self) -> &TransportType {
         &self.transport
     }
 
     /// Returns the command as a string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("test-server".to_string())
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!(config.command(), "test-server");
+    /// ```
     #[must_use]
     pub fn command(&self) -> &str {
         &self.command
     }
 
     /// Returns a slice of arguments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("server".to_string())
+    ///     .args(vec!["--port".to_string(), "8080".to_string()])
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!(config.args(), &["--port", "8080"]);
+    /// ```
     #[must_use]
     pub fn args(&self) -> &[String] {
         &self.args
     }
 
     /// Returns a reference to the environment variables map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("server".to_string())
+    ///     .env("VAR_NAME".to_string(), "var_value".to_string())
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!(config.env().get("VAR_NAME"), Some(&"var_value".to_string()));
+    /// ```
     #[must_use]
     pub const fn env(&self) -> &HashMap<String, String> {
         &self.env
     }
 
     /// Returns the working directory, if set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("server".to_string())
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!(config.cwd(), None);
+    /// ```
     #[must_use]
     pub const fn cwd(&self) -> Option<&PathBuf> {
         self.cwd.as_ref()
     }
 
     /// Returns the URL for HTTP transport, if set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .command("server".to_string())
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!(config.url(), None);
+    /// ```
     #[must_use]
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
     }
 
     /// Returns a reference to the HTTP headers map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerConfig;
+    /// use std::collections::HashMap;
+    ///
+    /// let mut headers_map = HashMap::new();
+    /// headers_map.insert("Authorization".to_string(), "Bearer token".to_string());
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .http_transport("https://api.example.com/mcp".to_string())
+    ///     .headers(headers_map)
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!(config.headers().get("Authorization"), Some(&"Bearer token".to_string()));
+    /// ```
     #[must_use]
     pub const fn headers(&self) -> &HashMap<String, String> {
         &self.headers

@@ -323,6 +323,7 @@ mod tests {
 
     #[test]
     fn test_result_alias() {
+        // Function must return Result to test the type alias, even though the Ok path is infallible.
         #[allow(clippy::unnecessary_wraps)]
         fn returns_ok() -> Result<i32> {
             Ok(42)

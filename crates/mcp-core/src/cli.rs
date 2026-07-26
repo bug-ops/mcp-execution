@@ -124,18 +124,58 @@ pub struct ExitCode(i32);
 
 impl ExitCode {
     /// Successful execution (exit code 0).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::SUCCESS.as_i32(), 0);
+    /// ```
     pub const SUCCESS: Self = Self(0);
 
     /// General error (exit code 1).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::ERROR.as_i32(), 1);
+    /// ```
     pub const ERROR: Self = Self(1);
 
     /// Invalid input or arguments (exit code 2).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::INVALID_INPUT.as_i32(), 2);
+    /// ```
     pub const INVALID_INPUT: Self = Self(2);
 
     /// Server connection or communication error (exit code 3).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::SERVER_ERROR.as_i32(), 3);
+    /// ```
     pub const SERVER_ERROR: Self = Self(3);
 
     /// Execution timeout or resource limit exceeded (exit code 4).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::TIMEOUT.as_i32(), 4);
+    /// ```
     pub const TIMEOUT: Self = Self(4);
 
     /// Creates an exit code from an integer value.
