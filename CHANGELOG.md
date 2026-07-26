@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`mcp-execution-files`**: `FilesError::is_not_found()`, `is_not_directory()`,
+  `is_invalid_path()`, and `is_io_error()`, and `FilePath::is_dir_path()` removed — none had any
+  real (non-test/non-doctest) call site anywhere in the workspace; `mcp-cli` and `mcp-server`
+  both propagate `FilesError` opaquely via `anyhow`, without ever naming it. Mirrors the
+  resolution of the identical dead-predicate pattern in `mcp_execution_core::Error` (#199).
+  `FilesError::is_resource_limit_exceeded()` is unaffected (#202).
+
 - **`mcp-execution-core`**: `ServerConfigBuilder::build()` now returns
   `Result<ServerConfig, Error>` instead of an infallible `ServerConfig` (#177). Security
   validation (shell metacharacters, forbidden environment variables, URL scheme, header
@@ -54,8 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their `is_not_found()`/`is_config_error()` predicates removed — never constructed by
   production code; each crate owns its own error type for these conditions
   (`mcp_files::FilesError::FileNotFound`, rmcp's `McpError` in `mcp-server`, `anyhow` in
-  `mcp-cli`), and `ServerConfigBuilder` uses the more precise `ValidationError` (#199). Note
-  `mcp_files::FilesError::is_not_found()` is a different type and is unchanged.
+  `mcp-cli`), and `ServerConfigBuilder` uses the more precise `ValidationError` (#199).
+  `mcp_files::FilesError` is a different type; its own analogous dead predicates were removed
+  separately, see the `mcp-execution-files` entry above (#202).
 
 - **`mcp-execution-server`**: `StateManager::store` now returns `Result<Uuid, StateError>`
   instead of an infallible `Uuid`, rejecting new sessions once the pending-generation table is
@@ -395,6 +403,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lock/eviction ordering are unchanged (#179).
 
 ### Fixed
+
+- **`mcp-execution-files`**: `FileSystem::export_to_filesystem_parallel` and
+  `FilesBuilder::build_and_export` were not directory-atomic — a process interrupted mid-export
+  (or a parallel write failing partway through) could leave a torn mix of old and new files
+  visible, the same interrupted-export bug already fixed for `FileSystem::export_to_filesystem`.
+  `export_to_filesystem_parallel` now shares `export_to_filesystem`'s
+  staging/atomic-rename mechanism (both are built on a new shared `stage_export` helper), giving
+  it identical guarantees; as a side effect it now also replaces `base_path` wholesale rather
+  than merging into it, so pre-existing files under `base_path` absent from the `FileSystem`
+  being exported are deleted — consistent with `export_to_filesystem`, but a behavior change for
+  any caller relying on the previous merge semantics. `build_and_export` is used for exporting
+  independent batches (e.g. one per MCP server) into one *shared* root such as
+  `~/.claude/servers/`, where a whole-directory swap would delete every sibling batch already
+  published there, so it instead publishes each top-level group in the batch (e.g. `/github/...`
+  files, grouped under `github`) atomically via `export_to_filesystem`, while a bare top-level
+  file with no subdirectory (already independently atomic) is written directly — giving
+  per-top-level-group atomicity and bounding the whole batch's size up front, rather than the
+  previous unbounded, non-atomic per-file write loop. For the same reason as
+  `export_to_filesystem_parallel` above, re-exporting the same top-level group now replaces
+  rather than merges into that one group (e.g. re-exporting `/github/...` with a smaller tool set
+  deletes files from the previous export of that group absent from the new batch); sibling groups
+  and bare top-level files elsewhere under `base_path` are unaffected (#178).
+
+- **`mcp-execution-files`**: `FilePath::new` accepted empty and `.` path components (e.g.
+  `"//x.ts"`, `"/./x.ts"`, or a trailing slash like `"/github/"`), which could make
+  `FilesBuilder::build_and_export`'s new per-group publish (above) resolve an empty top-level
+  group name to `base_path` itself and swap the entire shared root, deleting every sibling batch
+  already published there — reachable via the public `FilesBuilder::add_file` (and latently via
+  `from_generated_code` if a `GeneratedFile.path` ever began with `/`; no in-tree codegen output
+  does today). `FilePath::new` now rejects empty and `.` components; the root path `/` itself
+  still has none and remains valid (#178).
 
 - **`mcp-execution-codegen`**: the generated `index.ts` re-exported every tool file and the
   runtime bridge with a `.js` specifier (e.g. `from './createIssue.js'`), while `tool.ts.hbs`

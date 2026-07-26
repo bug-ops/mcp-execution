@@ -20,6 +20,7 @@
 use crate::filesystem::FileSystem;
 use crate::types::{FilesError, Result};
 use mcp_execution_codegen::GeneratedCode;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -201,10 +202,45 @@ impl FilesBuilder {
 
     /// Builds the VFS and exports all files to the real filesystem.
     ///
-    /// Files are written to disk at the specified base path with atomic
-    /// operations (write to temp file, then rename). Parent directories
-    /// are created automatically. The tilde (`~`) is expanded to the
-    /// user's home directory.
+    /// Unlike [`FileSystem::export_to_filesystem`], `base_path` here is not a
+    /// directory this call owns exclusively — callers routinely export
+    /// multiple independent batches (e.g. one per MCP server) into the same
+    /// shared root, such as `~/.claude/servers/`, so a whole-`base_path`
+    /// staging swap would delete every sibling batch already published
+    /// there (see [`Self::from_generated_code`], whose files all share one
+    /// top-level directory per call).
+    ///
+    /// Files are grouped by their top-level path component. A group with a
+    /// real subdirectory (e.g. `/github/createIssue.ts` and
+    /// `/github/getIssue.ts`, grouped under `github`) is published as a
+    /// whole via [`FileSystem::export_to_filesystem`] — the same
+    /// staging/atomic-rename mechanism `export_to_filesystem` gives its own
+    /// target — so that entire subtree lands under `base_path` atomically,
+    /// without disturbing sibling groups already there. Because that
+    /// publish reuses `export_to_filesystem`'s directory swap, it also
+    /// inherits its replace-not-merge semantics *for that one group*: a
+    /// second `build_and_export` call for the same top-level group (e.g.
+    /// re-exporting `/github/...` with a smaller tool set) deletes any file
+    /// previously under `base_path/github` that is absent from the new
+    /// batch, rather than only adding/updating what the new batch contains.
+    /// Sibling groups and bare top-level files elsewhere under `base_path`
+    /// are unaffected either way. A bare file with no subdirectory (e.g.
+    /// `/manifest.json`) is written directly with its own atomic
+    /// temp-file-then-rename, which is already a complete atomic unit on its
+    /// own and is unconditionally additive/overwriting, never deleting
+    /// unrelated files. This gives per-top-level-group atomicity, not
+    /// whole-batch atomicity: if a batch spans multiple groups and one
+    /// group's publish fails partway through processing the batch, groups
+    /// already published (or bare files already written) are unaffected and
+    /// remain in place, but the batch as a whole is not rolled back.
+    ///
+    /// As with [`FileSystem::export_to_filesystem`], concurrent calls that
+    /// publish the *same* group into the *same* `base_path` from different
+    /// processes are not locked against each other and can race on the
+    /// final swap (a lost update); concurrent calls publishing different
+    /// groups are safe. `base_path` is created (via `create_dir_all`) even
+    /// for an empty VFS. The tilde (`~`) is expanded to the user's home
+    /// directory before export.
     ///
     /// # Arguments
     ///
@@ -215,6 +251,10 @@ impl FilesBuilder {
     /// Returns an error if:
     /// - Any file path is invalid
     /// - Home directory cannot be determined (when using `~`)
+    /// - The batch's file count or total byte size exceeds
+    ///   [`crate::filesystem::MAX_EXPORT_FILES`] /
+    ///   [`crate::filesystem::MAX_EXPORT_BYTES`]
+    /// - `base_path` cannot be created
     /// - I/O operations fail (permissions, disk space, etc.)
     ///
     /// # Examples
@@ -229,21 +269,47 @@ impl FilesBuilder {
     /// // Files are now at: ~/.claude/servers/github/createIssue.ts
     /// # Ok::<(), mcp_execution_files::FilesError>(())
     /// ```
-    // TODO(critic): not directory-atomic — needs staging treatment before any
-    // production caller is wired up (currently unused outside this crate's
-    // own tests, so the interrupted-export bug fixed in
-    // `FileSystem::export_to_filesystem` does not apply here yet).
     pub fn build_and_export(self, base_path: impl AsRef<Path>) -> Result<FileSystem> {
         // First, build the VFS to check for errors
         let vfs = self.build()?;
 
+        // Bound the whole batch up front (not just each group below), so a
+        // payload crafted as many small groups can't bypass the per-group
+        // check each `export_to_filesystem` call below performs on its own.
+        vfs.check_export_bounds()?;
+
         // Expand tilde in path
         let base = expand_tilde(base_path.as_ref())?;
 
-        // Export all files to disk
+        fs::create_dir_all(&base).map_err(|e| FilesError::IoError {
+            path: base.display().to_string(),
+            source: e,
+        })?;
+
+        // Split the batch into per-top-level-group sub-filesystems (relative
+        // to their group root) plus a list of bare top-level files. A
+        // `BTreeMap` gives deterministic (alphabetical) publish order, which
+        // doesn't affect correctness but makes a partial-batch outcome
+        // reproducible.
+        let mut groups: BTreeMap<String, FileSystem> = BTreeMap::new();
+
         for path in vfs.all_paths() {
             let content = vfs.read_file(path)?;
-            write_file_atomic(&base, path.as_str(), content)?;
+            let relative = path.as_str().strip_prefix('/').unwrap_or(path.as_str());
+
+            match relative.split_once('/') {
+                Some((root, rest)) => {
+                    groups
+                        .entry(root.to_string())
+                        .or_default()
+                        .add_file(format!("/{rest}"), content)?;
+                }
+                None => write_file_atomic(&base, path.as_str(), content)?,
+            }
+        }
+
+        for (root, group_vfs) in groups {
+            group_vfs.export_to_filesystem(base.join(root))?;
         }
 
         Ok(vfs)
@@ -334,13 +400,13 @@ fn expand_tilde(path: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Writes file content to disk atomically using temp file + rename.
+/// Writes file content to disk atomically, creating parent directories
+/// automatically.
 ///
-/// Creates parent directories automatically. Uses atomic write pattern:
-/// 1. Write to temporary file
-/// 2. Rename temp file to final path
-///
-/// This ensures no partial files are visible if write fails.
+/// Delegates the actual write to [`crate::filesystem::write_file_atomic`]
+/// (temp file + `fsync` + rename) for durability parity with every other
+/// export path in this crate, after resolving `vfs_path` against `base_path`
+/// and validating it.
 ///
 /// # Security
 ///
@@ -350,7 +416,8 @@ fn expand_tilde(path: &Path) -> Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns an error if I/O operations fail.
+/// Returns an error if `vfs_path` contains a `..` component, or if I/O
+/// operations fail.
 fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<()> {
     // Remove leading slash and validate
     let relative_path = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
@@ -373,27 +440,13 @@ fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<
         })?;
     }
 
-    // Atomic write: write to temp file, then rename
-    let temp_path = disk_path.with_added_extension("tmp");
-
-    fs::write(&temp_path, content).map_err(|e| FilesError::IoError {
-        path: temp_path.display().to_string(),
-        source: e,
-    })?;
-
-    fs::rename(&temp_path, &disk_path).map_err(|e| FilesError::IoError {
-        path: disk_path.display().to_string(),
-        source: e,
-    })?;
-
-    Ok(())
+    crate::filesystem::write_file_atomic(&disk_path, content, true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use mcp_execution_codegen::GeneratedFile;
-    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -427,8 +480,7 @@ mod tests {
             .add_file("relative/path", "content")
             .build();
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_invalid_path());
+        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
     }
 
     #[test]
@@ -623,6 +675,41 @@ mod tests {
     }
 
     #[test]
+    fn test_build_and_export_group_replaces_not_merges_on_re_export() {
+        // Unlike `test_build_and_export_overwrites_existing` (a bare
+        // top-level file, always additive/overwriting), a re-export of the
+        // same top-level *group* goes through `FileSystem::export_to_filesystem`'s
+        // directory swap and replaces the whole group: a file present in the
+        // first export but absent from the second must be deleted, not just
+        // left alone.
+        let temp_dir = TempDir::new().unwrap();
+
+        let vfs1 = FilesBuilder::new()
+            .add_file("/github/createIssue.ts", "create v1")
+            .add_file("/github/getIssue.ts", "get v1")
+            .build_and_export(temp_dir.path())
+            .unwrap();
+        assert_eq!(vfs1.file_count(), 2);
+        assert!(temp_dir.path().join("github/getIssue.ts").exists());
+
+        let vfs2 = FilesBuilder::new()
+            .add_file("/github/createIssue.ts", "create v2")
+            .build_and_export(temp_dir.path())
+            .unwrap();
+        assert_eq!(vfs2.file_count(), 1);
+
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("github/createIssue.ts")).unwrap(),
+            "create v2"
+        );
+        assert!(
+            !temp_dir.path().join("github/getIssue.ts").exists(),
+            "a file present in the first export but absent from the second must be deleted, \
+             not merged/left behind"
+        );
+    }
+
+    #[test]
     fn test_build_and_export_returns_vfs() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -649,9 +736,7 @@ mod tests {
             .add_file("invalid/relative", "content")
             .build_and_export(temp_dir.path());
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.is_invalid_path());
+        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
     }
 
     #[test]
@@ -691,6 +776,118 @@ mod tests {
     }
 
     #[test]
+    fn test_build_and_export_group_replaces_file_collision_without_losing_siblings() {
+        // Regression test for a real bug found during review: a batch spanning
+        // a bare top-level file plus a group whose name collides with a
+        // pre-existing plain file at that path (e.g. `base/sub` already exists
+        // as a file, but this batch wants to publish `/sub/nested.ts`). The
+        // group publish goes through `FileSystem::export_to_filesystem`, which
+        // displaces the existing file and replaces it with the new directory —
+        // this must succeed as a whole, and must never leave bare sibling
+        // files (already written directly, before the group publish runs)
+        // missing or corrupted.
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("sub"), "not a directory").unwrap();
+
+        let vfs = FilesBuilder::new()
+            .add_file("/first.ts", "first")
+            .add_file("/second.ts", "second")
+            .add_file("/sub/nested.ts", "nested")
+            .build_and_export(temp_dir.path())
+            .unwrap();
+
+        assert_eq!(vfs.file_count(), 3);
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("first.ts")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("second.ts")).unwrap(),
+            "second"
+        );
+        assert!(temp_dir.path().join("sub").is_dir());
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("sub/nested.ts")).unwrap(),
+            "nested"
+        );
+
+        // Regression check: displacing a *file* (rather than a directory)
+        // used to leave an unremovable `.sub.stale-*` artifact behind forever,
+        // since `remove_dir_all` always fails on a plain file and the error
+        // was silently discarded. Nothing but the three published entries
+        // should remain in `base_path`.
+        let mut children: Vec<String> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        children.sort();
+        assert_eq!(children, vec!["first.ts", "second.ts", "sub"]);
+    }
+
+    #[test]
+    fn test_build_and_export_rejects_empty_top_level_component() {
+        // Regression test for a real bug found during review: `"//x.ts"` used
+        // to pass `FilePath` validation and split into an *empty* top-level
+        // group name, so `base.join("")` resolved to `base` itself — the
+        // group publish would then swap `base_path` wholesale via
+        // `FileSystem::export_to_filesystem`, deleting every sibling batch
+        // already published there. `FilePath::new` now rejects this at
+        // `add_file` time, well before grouping.
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("existing-sibling.ts"), "keep").unwrap();
+
+        let result = FilesBuilder::new()
+            .add_file("//x.ts", "malicious")
+            .build_and_export(temp_dir.path());
+
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
+        // Rejected during `build()`, before any group ever touches `base_path`.
+        assert!(temp_dir.path().join("existing-sibling.ts").exists());
+    }
+
+    #[test]
+    fn test_build_and_export_rejects_dot_component() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let result = FilesBuilder::new()
+            .add_file("/./x.ts", "content")
+            .build_and_export(temp_dir.path());
+
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn test_build_and_export_rejects_oversized_batch_before_touching_base() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut builder = FilesBuilder::new();
+        // Each file lives in its own group, so no single group's own
+        // `export_to_filesystem` bound check would catch this — only the
+        // whole-batch check in `build_and_export` itself can.
+        for i in 0..=crate::filesystem::MAX_EXPORT_FILES {
+            builder = builder.add_file(format!("/group{i}/tool.ts"), "export {}");
+        }
+
+        let target = temp_dir.path().join("out");
+        let result = builder.build_and_export(&target);
+
+        assert!(matches!(
+            result,
+            Err(FilesError::ResourceLimitExceeded { .. })
+        ));
+        // Rejected before any per-group publish ran, so the target directory
+        // (which build_and_export would otherwise create unconditionally)
+        // must never have been created.
+        assert!(!target.exists());
+    }
+
+    #[test]
     fn test_expand_tilde_expands_home() {
         let path = Path::new("~/test/path");
         let expanded = expand_tilde(path).unwrap();
@@ -726,8 +923,10 @@ mod tests {
 
         let result = write_file_atomic(temp_dir.path(), "/../etc/passwd", "malicious");
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_invalid_path());
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
     }
 
     #[test]
