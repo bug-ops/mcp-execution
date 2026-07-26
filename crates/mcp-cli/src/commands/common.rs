@@ -360,7 +360,7 @@ pub fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEn
         })?
         .clone();
 
-    let server_config = build_core_config(&entry);
+    let server_config = build_core_config(&entry)?;
     Ok((ServerId::new(name), server_config, entry))
 }
 
@@ -433,7 +433,13 @@ fn builder_for_transport(transport: McpTransport) -> ServerConfigBuilder {
 }
 
 /// Builds a core [`ServerConfig`] from an [`McpServerEntry`].
-fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
+///
+/// # Errors
+///
+/// Returns an error if the entry fails [`ServerConfigBuilder::build`]'s
+/// security validation (e.g. a shell metacharacter or forbidden environment
+/// variable in a hand-edited `mcp.json`).
+fn build_core_config(entry: &McpServerEntry) -> Result<ServerConfig> {
     let mut builder = builder_for_transport(entry.transport.clone());
 
     if let Some(secs) = entry.connect_timeout_secs {
@@ -444,7 +450,7 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
         builder = builder.discover_timeout(Duration::from_secs(secs));
     }
 
-    builder.build()
+    Ok(builder.build()?)
 }
 
 /// Parses a single `KEY=VALUE` CLI argument (used for `--env` and `--header`).
@@ -650,15 +656,17 @@ impl TryFrom<TransportArgs> for McpTransport {
 /// * `connect_timeout_secs` - Connection (handshake) timeout override, in
 ///   seconds. Same semantics as `mcp.json`'s `connectTimeoutSecs`: must be
 ///   greater than zero and at most 600 seconds, enforced by
-///   [`validate_server_config`](mcp_execution_core::validate_server_config)
-///   at connect time.
+///   [`ServerConfigBuilder::build`](mcp_execution_core::ServerConfigBuilder::build)
+///   at construction time.
 /// * `discover_timeout_secs` - Tool discovery timeout override, in seconds.
 ///   Same semantics as `mcp.json`'s `discoverTimeoutSecs`.
 ///
 /// # Errors
 ///
 /// Returns an error if environment variables or headers are not in
-/// `KEY=VALUE` format.
+/// `KEY=VALUE` format, or if the resulting [`ServerConfig`] fails security
+/// validation (shell metacharacters, forbidden environment variables,
+/// invalid URL scheme, unsafe headers, or out-of-bounds timeouts).
 ///
 /// # Examples
 ///
@@ -703,7 +711,7 @@ pub fn build_server_config(
         builder = builder.discover_timeout(Duration::from_secs(secs));
     }
 
-    Ok((server_id, builder.build()))
+    Ok((server_id, builder.build()?))
 }
 
 /// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from
@@ -1397,18 +1405,19 @@ mod tests {
     #[test]
     fn test_build_server_config_timeout_override_reaches_core_validation() {
         // The manual CLI-flag path must fail identically to the mcp.json path:
-        // both end up calling the same `validate_server_config`, so a zero
-        // override must trip the same `connect_timeout` ValidationError.
-        let (_, config) = build_server_config(
+        // both end up calling the same `ServerConfigBuilder::build`, so a zero
+        // override must trip the same `connect_timeout` ValidationError — now
+        // surfaced directly by `build_server_config` itself, since
+        // `ServerConfig` can no longer be constructed unvalidated (#177).
+        let result = build_server_config(
             stdio_transport("docker", vec![], vec![], None),
             Some(0),
             None,
-        )
-        .unwrap();
+        );
 
-        let result = mcp_execution_core::validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(mcp_execution_core::Error::ValidationError { field, reason }) = result {
+        let err = result.unwrap_err();
+        let core_err = err.downcast::<mcp_execution_core::Error>().unwrap();
+        if let mcp_execution_core::Error::ValidationError { field, reason } = core_err {
             assert_eq!(field, "connect_timeout");
             assert!(reason.contains("greater than zero"));
         } else {
@@ -1502,7 +1511,7 @@ mod tests {
         assert_eq!(entry.connect_timeout_secs, None);
         assert_eq!(entry.discover_timeout_secs, None);
 
-        let server_config = build_core_config(entry);
+        let server_config = build_core_config(entry).unwrap();
         assert_eq!(server_config.connect_timeout(), Duration::from_secs(30));
         assert_eq!(server_config.discover_timeout(), Duration::from_secs(30));
     }
@@ -1521,7 +1530,7 @@ mod tests {
         assert_eq!(entry.connect_timeout_secs, Some(5));
         assert_eq!(entry.discover_timeout_secs, Some(90));
 
-        let server_config = build_core_config(entry);
+        let server_config = build_core_config(entry).unwrap();
         assert_eq!(server_config.connect_timeout(), Duration::from_secs(5));
         assert_eq!(server_config.discover_timeout(), Duration::from_secs(90));
     }
@@ -1537,7 +1546,7 @@ mod tests {
         let config = load_mcp_config_from(file.path()).unwrap();
         let entry = &config.mcp_servers["remote"];
 
-        let server_config = build_core_config(entry);
+        let server_config = build_core_config(entry).unwrap();
         assert_eq!(server_config.url(), Some("https://api.example.com/mcp"));
         assert_eq!(
             server_config.headers().get("Authorization"),
@@ -1553,7 +1562,7 @@ mod tests {
         let config = load_mcp_config_from(file.path()).unwrap();
         let entry = &config.mcp_servers["local"];
 
-        let server_config = build_core_config(entry);
+        let server_config = build_core_config(entry).unwrap();
         assert_eq!(server_config.cwd(), Some(&PathBuf::from("/tmp/workdir")));
     }
 

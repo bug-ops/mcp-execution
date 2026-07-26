@@ -351,7 +351,16 @@ impl GeneratorService {
             config_builder = config_builder.discover_timeout(std::time::Duration::from_secs(secs));
         }
 
-        let config = config_builder.build();
+        let config = config_builder.build().map_err(|e| {
+            // A `SecurityViolation` here (shell metacharacters, forbidden env var, etc.) is
+            // caused by the caller's own params, same as a `ValidationError` — not an
+            // internal server fault — so both map to `invalid_params`.
+            if e.is_validation_error() || e.is_security_error() {
+                McpError::invalid_params(e.to_string(), None)
+            } else {
+                McpError::internal_error(format!("Failed to build server config: {e}"), None)
+            }
+        })?;
 
         // Connect and introspect, holding only the lock for this server_id. A
         // tokio::select! against `ct.cancelled()` lets a client-issued
@@ -382,7 +391,9 @@ impl GeneratorService {
         })?;
 
         let server_info = discover_result.map_err(|e| {
-            if e.is_validation_error() {
+            // See the matching comment above `config_builder.build()`: a `SecurityViolation`
+            // is a caller-param problem too, not an internal fault.
+            if e.is_validation_error() || e.is_security_error() {
                 McpError::invalid_params(e.to_string(), None)
             } else {
                 McpError::internal_error(format!("Failed to introspect server: {e}"), None)
@@ -1445,6 +1456,37 @@ mod tests {
         );
     }
 
+    /// Critic follow-up (M1): `Error::SecurityViolation` (shell metacharacters, forbidden env
+    /// vars, ...) is a caller-supplied-param problem, same as `Error::ValidationError` — it
+    /// must also surface as `INVALID_PARAMS`, not `internal_error`, which would otherwise
+    /// blame the server for a hostile client argument.
+    #[tokio::test]
+    async fn test_introspect_server_shell_metacharacter_is_invalid_params() {
+        let service = GeneratorService::new();
+
+        let params = IntrospectServerParams {
+            server_id: "metachar-test".to_string(),
+            command: "echo".to_string(),
+            args: vec!["run; rm -rf /".to_string()],
+            env: HashMap::new(),
+            output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
+
+        let err = result.expect_err("shell metacharacter in args must be rejected");
+        assert_eq!(
+            err.code,
+            ErrorCode::INVALID_PARAMS,
+            "a security violation in caller-supplied params is a client input error, not an \
+             internal error"
+        );
+    }
+
     // ========================================================================
     // output_dir confinement tests (issue #216)
     // ========================================================================
@@ -1889,7 +1931,10 @@ mod tests {
         let pending = PendingGeneration::new(
             server_id,
             server_info,
-            ServerConfig::builder().command("echo".to_string()).build(),
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
             None,
             &SystemClock,
         );
@@ -1963,7 +2008,10 @@ mod tests {
         PendingGeneration::new(
             ServerId::new(server_id),
             server_info,
-            ServerConfig::builder().command("echo".to_string()).build(),
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
             None,
             &SystemClock,
         )
@@ -2075,7 +2123,10 @@ mod tests {
         let pending = PendingGeneration::new(
             ServerId::new("test"),
             server_info,
-            ServerConfig::builder().command("echo".to_string()).build(),
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
             None,
             &SystemClock,
         );
@@ -2208,7 +2259,10 @@ mod tests {
         let pending = PendingGeneration::new(
             ServerId::new("test"),
             server_info,
-            ServerConfig::builder().command("echo".to_string()).build(),
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
             None,
             &SystemClock,
         );
@@ -2344,7 +2398,10 @@ mod tests {
         let pending = PendingGeneration::new(
             server_id,
             server_info,
-            ServerConfig::builder().command("echo".to_string()).build(),
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
             None,
             &past_clock,
         );
@@ -2394,7 +2451,10 @@ mod tests {
         let pending = PendingGeneration::new(
             server_id,
             server_info,
-            ServerConfig::builder().command("echo".to_string()).build(),
+            ServerConfig::builder()
+                .command("echo".to_string())
+                .build()
+                .unwrap(),
             None,
             clock.as_ref(),
         );

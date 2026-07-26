@@ -46,7 +46,7 @@
 //! let server_id = ServerId::new("github");
 //! let config = ServerConfig::builder()
 //!     .command("/path/to/github-server".to_string())
-//!     .build();
+//!     .build()?;
 //! let info = introspector.discover_server(server_id, &config).await?;
 //!
 //! // Generate progressive loading files

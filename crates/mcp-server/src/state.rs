@@ -42,7 +42,7 @@ use uuid::Uuid;
 /// let pending = PendingGeneration::new(
 ///     ServerId::new("github"),
 ///     server_info,
-///     ServerConfig::builder().command("npx".to_string()).build(),
+///     ServerConfig::builder().command("npx".to_string()).build().unwrap(),
 ///     None,
 ///     &SystemClock,
 /// );
@@ -270,7 +270,10 @@ mod tests {
                 output_schema: None,
             }],
         };
-        let config = ServerConfig::builder().command("echo".to_string()).build();
+        let config = ServerConfig::builder()
+            .command("echo".to_string())
+            .build()
+            .unwrap();
 
         PendingGeneration::new(server_id, server_info, config, None, clock)
     }

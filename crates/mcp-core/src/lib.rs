@@ -21,7 +21,8 @@
 //!     .command("docker".to_string())
 //!     .arg("run".to_string())
 //!     .env("LOG_LEVEL".to_string(), "debug".to_string())
-//!     .build();
+//!     .build()
+//!     .unwrap();
 //!
 //! // Server ID
 //! let server_id = ServerId::new("github");
@@ -49,7 +50,9 @@ pub use types::{ServerId, ToolName};
 pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
 
 // Re-export command validation
-pub use command::validate_server_config;
+pub use command::{
+    forbidden_chars, forbidden_env_names, forbidden_env_prefix, validate_server_config,
+};
 
 // Re-export path helpers shared by confinement checks
 pub use path::{sanitize_path_for_error, validate_path_segment};

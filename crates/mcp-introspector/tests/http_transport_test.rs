@@ -152,7 +152,8 @@ async fn test_discover_server_http_lists_tools_and_metadata() {
         .header(TEST_HEADER_NAME.to_string(), "propagated-value".to_string())
         .connect_timeout(Duration::from_secs(5))
         .discover_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector
         .discover_server(ServerId::new("http-fixture"), &config)
@@ -186,7 +187,8 @@ async fn test_discover_server_sse_transport_also_works() {
         .sse_transport(url)
         .connect_timeout(Duration::from_secs(5))
         .discover_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector
         .discover_server(ServerId::new("sse-fixture"), &config)
@@ -214,7 +216,8 @@ async fn test_discover_server_http_discover_timeout_fires() {
         .http_transport(url)
         .connect_timeout(Duration::from_secs(5))
         .discover_timeout(Duration::from_millis(150))
-        .build();
+        .build()
+        .unwrap();
 
     let started = Instant::now();
     let result = introspector
@@ -253,7 +256,8 @@ async fn test_discover_server_http_connect_timeout_fires() {
     let config = ServerConfig::builder()
         .http_transport(url)
         .connect_timeout(Duration::from_millis(150))
-        .build();
+        .build()
+        .unwrap();
 
     let started = Instant::now();
     let result = introspector
@@ -298,7 +302,8 @@ async fn test_discover_server_http_reserved_header_collision_is_legible() {
         .http_transport(format!("http://{addr}/mcp"))
         .header("Accept".to_string(), "text/html".to_string())
         .connect_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector
         .discover_server(ServerId::new("reserved-header-fixture"), &config)

@@ -296,7 +296,8 @@ impl PendingGeneration {
     ///     .command("npx".to_string())
     ///     .arg("-y".to_string())
     ///     .arg("@anthropic/mcp-server-github".to_string())
-    ///     .build();
+    ///     .build()
+    ///     .unwrap();
     /// let pending = PendingGeneration::new(
     ///     server_id,
     ///     server_info,
@@ -339,7 +340,7 @@ impl PendingGeneration {
     /// let pending = PendingGeneration::new(
     ///     ServerId::new("test"),
     ///     server_info,
-    ///     ServerConfig::builder().command("echo".to_string()).build(),
+    ///     ServerConfig::builder().command("echo".to_string()).build().unwrap(),
     ///     None,
     ///     &SystemClock,
     /// );
@@ -439,7 +440,10 @@ mod tests {
                 output_schema: None,
             }],
         };
-        let config = ServerConfig::builder().command("echo".to_string()).build();
+        let config = ServerConfig::builder()
+            .command("echo".to_string())
+            .build()
+            .unwrap();
 
         PendingGeneration::new(server_id, server_info, config, None, clock)
     }

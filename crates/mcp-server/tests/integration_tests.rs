@@ -68,7 +68,10 @@ async fn test_state_manager_workflow() {
     let server_id = ServerId::new("test-server");
     let server_info = create_test_server_info(server_id.clone());
 
-    let config = ServerConfig::builder().command("echo".to_string()).build();
+    let config = ServerConfig::builder()
+        .command("echo".to_string())
+        .build()
+        .unwrap();
 
     // Store pending generation
     let pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
@@ -110,7 +113,10 @@ async fn test_multiple_concurrent_sessions() {
             tools: vec![],
         };
 
-        let config = ServerConfig::builder().command("echo".to_string()).build();
+        let config = ServerConfig::builder()
+            .command("echo".to_string())
+            .build()
+            .unwrap();
 
         let pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
         let session_id = state.store(pending).await;
@@ -136,7 +142,10 @@ async fn test_state_manager_handles_expiration() {
 
     let server_id = ServerId::new("test");
     let server_info = create_test_server_info(server_id.clone());
-    let config = ServerConfig::builder().command("echo".to_string()).build();
+    let config = ServerConfig::builder()
+        .command("echo".to_string())
+        .build()
+        .unwrap();
 
     // Create and manually expire a session
     let mut pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
@@ -344,7 +353,10 @@ fn create_test_server_info(server_id: ServerId) -> ServerInfo {
 fn create_test_pending(server_id_str: &str) -> PendingGeneration {
     let server_id = ServerId::new(server_id_str);
     let server_info = create_test_server_info(server_id.clone());
-    let config = ServerConfig::builder().command("echo".to_string()).build();
+    let config = ServerConfig::builder()
+        .command("echo".to_string())
+        .build()
+        .unwrap();
 
     PendingGeneration::new(server_id, server_info, config, None, &SystemClock)
 }

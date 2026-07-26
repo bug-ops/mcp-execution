@@ -690,6 +690,18 @@ fn run_bridge_harness(
     mcp_json: &serde_json::Value,
     server_id: &str,
 ) -> Option<(bool, String, String)> {
+    run_bridge_harness_with_env(test_name, bridge_ts, mcp_json, server_id, &[])
+}
+
+/// Same as [`run_bridge_harness`], additionally setting `extra_env` on the spawned Node
+/// harness process (e.g. `MCPBRIDGE_REQUEST_TIMEOUT_MS` for timeout-specific tests).
+fn run_bridge_harness_with_env(
+    test_name: &str,
+    bridge_ts: &str,
+    mcp_json: &serde_json::Value,
+    server_id: &str,
+    extra_env: &[(&str, &str)],
+) -> Option<(bool, String, String)> {
     if !require_ts_toolchain(test_name, true) {
         return None;
     }
@@ -759,17 +771,24 @@ fn run_bridge_harness(
         .expect("Failed to write dist/package.json");
 
     let harness_path = dist_dir.join("harness.js");
+    let owned_extra_env: Vec<(String, String)> = extra_env
+        .iter()
+        .map(|&(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = Command::new("node")
-            .arg(&harness_path)
+        let mut cmd = Command::new("node");
+        cmd.arg(&harness_path)
             // Node's `os.homedir()` — which `loadServerConfig()` uses to find
             // `~/.claude/mcp.json` — reads `$HOME` on POSIX but `%USERPROFILE%` on Windows;
             // both must point at the fake home directory for the harness to isolate itself
             // from the real runner's home on every platform.
             .env("HOME", &home_dir)
-            .env("USERPROFILE", &home_dir)
-            .output();
+            .env("USERPROFILE", &home_dir);
+        for (key, value) in &owned_extra_env {
+            cmd.env(key, value);
+        }
+        let result = cmd.output();
         let _ = tx.send(result);
     });
 
@@ -906,5 +925,373 @@ fn test_runtime_bridge_rejects_http_transport_with_clear_error_not_crash() {
     assert!(
         stdout.contains("http") || stdout.contains("transport"),
         "rejection reason should mention the unsupported transport: {stdout}"
+    );
+}
+
+/// #221 item 2 — the rendered bridge must validate an http/sse config's URL scheme to the
+/// same depth as `mcp_execution_core::validate_server_config` before rejecting the transport
+/// as unsupported, so a bad scheme is reported precisely rather than masked by the generic
+/// "unsupported transport" message.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_bad_url_scheme() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    for url in ["file:///etc/passwd", "ftp://host/path"] {
+        let mcp_json = json!({
+            "mcpServers": {
+                "github": {
+                    "transport": "http",
+                    "url": url
+                }
+            }
+        });
+
+        let Some((success, stdout, stderr)) = run_bridge_harness(
+            "test_runtime_bridge_rejects_http_transport_bad_url_scheme",
+            &bridge.content,
+            &mcp_json,
+            "github",
+        ) else {
+            return;
+        };
+
+        assert!(
+            success,
+            "bridge did not reject url {url}:\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("http:// or https://"),
+            "rejection reason should name the required scheme for url {url}: {stdout}"
+        );
+    }
+}
+
+/// #221 item 2 — a hand-edited `mcp.json` with `"transport": "http"` and no `url` key is
+/// valid JSON (every `ServerConfig` field is optional on the Rust side); the bridge must
+/// reject it with a specific "url is required" message, not an opaque `TypeError`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_missing_url() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http"
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_missing_url",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject missing url cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Cannot read properties of undefined"),
+        "must fail with a clear, intentional error, not an opaque TypeError: {stdout}"
+    );
+    assert!(
+        stdout.contains("url is required"),
+        "rejection reason should mention the missing url: {stdout}"
+    );
+}
+
+/// #221 item 2 — header name/value safety for http/sse transports, mirroring
+/// `mcp_execution_core::command`'s RFC 7230 `tchar` and control-character checks.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_unsafe_headers() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    // Space is not a control character but is still outside RFC 7230's `token` charset.
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": { "X Bad Header": "value" }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_unsafe_headers",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the unsafe header name cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("header name"),
+        "rejection reason should mention the header name: {stdout}"
+    );
+}
+
+/// #221 item 2 — a header value containing a CR/LF must be rejected, and — like the Rust
+/// source of truth — the value itself (which routinely carries secrets such as bearer
+/// tokens) must never appear in the thrown error.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_control_char_in_header_value() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": { "Authorization": "Bearer sekrit\r\nX-Injected: evil" }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_control_char_in_header_value",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the unsafe header value cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Authorization"),
+        "rejection reason should name the header: {stdout}"
+    );
+    assert!(
+        !stdout.contains("sekrit") && !stdout.contains("X-Injected"),
+        "the header VALUE must never appear in the error message: {stdout}"
+    );
+}
+
+/// #221 item 2 — two header names differing only in case (e.g. `Authorization` and
+/// `authorization`) must be rejected, mirroring the Rust source of truth's
+/// case-insensitive-collision check.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_duplicate_case_insensitive_headers() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": { "Authorization": "Bearer one", "authorization": "Bearer two" }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_duplicate_case_insensitive_headers",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the duplicate header cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("duplicate header"),
+        "rejection reason should mention the duplicate header: {stdout}"
+    );
+}
+
+/// Writes `content` to a standalone `.js` file inside a fresh temp directory and returns its
+/// absolute path as a string, suitable for use as a stdio-transport `args` entry.
+///
+/// Used instead of `node -e '<code>'` for the #221 item 4 tests below: `(` and `)` are
+/// themselves forbidden shell metacharacters (`FORBIDDEN_CHARS`), so virtually any real JS
+/// snippet passed inline as an argument would trip `validateCommandString` before the
+/// scenario under test — the process dying or hanging — ever gets a chance to run.
+fn write_test_script(content: &str) -> String {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir for test script");
+    let path = dir.path().join("script.js");
+    std::fs::write(&path, content).expect("Failed to write test script");
+    // Leak the tempdir so it outlives the spawned `node` process for the duration of the
+    // test; these are single test-process-lifetime allocations, not a long-running leak.
+    Box::leak(Box::new(dir));
+    path.to_string_lossy().into_owned()
+}
+
+/// #221 item 4 — a subprocess that exits before ever writing a JSON-RPC response must be
+/// rejected with a clear error instead of hanging forever. Reproduces the issue's own
+/// repro steps almost verbatim (`node -e "process.exit(1)"`, via a script file — see
+/// `write_test_script`).
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_when_child_exits_before_responding() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script("process.exit(1);\n");
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": [script_path]
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_when_child_exits_before_responding",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the dead server cleanly (may have hung until the harness \
+         watchdog fired):\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the call: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("exited before responding"),
+        "rejection reason should explain the process died before replying: {stdout}"
+    );
+}
+
+/// #221 item 4 — a subprocess that spawns successfully but never replies at all must still
+/// fail with a clear timeout error rather than hang forever. Uses
+/// `MCPBRIDGE_REQUEST_TIMEOUT_MS` (well under the harness's 5s watchdog) so this test doesn't
+/// need to wait out the bridge's real 30s default.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_times_out_when_server_never_replies() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    // Stays alive indefinitely without ever writing to stdout.
+    let script_path = write_test_script("setInterval(function keepAlive() {}, 1000);\n");
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": [script_path]
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness_with_env(
+        "test_runtime_bridge_times_out_when_server_never_replies",
+        &bridge.content,
+        &mcp_json,
+        "github",
+        &[("MCPBRIDGE_REQUEST_TIMEOUT_MS", "200")],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not time out cleanly (may have hung until the harness watchdog \
+         fired):\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the call: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Timed out"),
+        "rejection reason should explain the request timed out: {stdout}"
     );
 }
