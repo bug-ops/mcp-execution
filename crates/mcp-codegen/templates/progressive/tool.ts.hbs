@@ -68,13 +68,15 @@ export type {{typescript_name}}Params = {
 /**
  * Result type for {{typescript_name}} tool.
  *
- * The structure of the result depends on the specific tool implementation.
- * Refer to the MCP server documentation for details.
+ * `callMCPTool` returns a parsed JSON object or array for JSON-shaped text content, a bare
+ * string for plain-text content, or the content item itself (an object) for non-text content
+ * types — this union reflects all three, rather than narrowing to an object-only shape.
+ * Refer to the MCP server documentation for the specific shape this tool actually returns.
+ *
+ * Narrow before accessing a property, e.g.:
+ * `if (typeof result === 'object' && result !== null && !Array.isArray(result)) { result.foo }`
  */
-{{!-- TODO(critic): Result is declared as Record<string, unknown> but callMCPTool returns string for text content and arrays for JSON lists — see #176 discussion --}}
-export interface {{typescript_name}}Result {
-  [key: string]: unknown;
-}
+export type {{typescript_name}}Result = Record<string, unknown> | unknown[] | string;
 
 // CLI mode: Execute when run directly
 // This enables autonomous execution via: node {{typescript_name}}.ts '{"param":"value"}'

@@ -99,8 +99,9 @@ fn test_progressive_generator_creates_correct_number_of_files() {
     // - 1 index.ts
     // - 1 runtime bridge (_runtime/mcp-bridge.ts)
     // - 1 package.json
+    // - 1 tsconfig.json
     // - 1 _meta.json
-    assert_eq!(code.file_count(), 7);
+    assert_eq!(code.file_count(), 8);
 }
 
 #[test]
@@ -130,6 +131,10 @@ fn test_progressive_tool_files_exist() {
     assert!(
         file_paths.contains(&"_runtime/mcp-bridge.ts"),
         "Missing _runtime/mcp-bridge.ts"
+    );
+    assert!(
+        file_paths.contains(&"tsconfig.json"),
+        "Missing tsconfig.json"
     );
 }
 
@@ -163,10 +168,13 @@ fn test_progressive_tool_file_structure() {
         "Missing Params type alias"
     );
 
-    // Should contain result interface
+    // Should contain the widened Result union — an object-only shape would misdescribe what
+    // callMCPTool can actually return (issue #182)
     assert!(
-        content.contains("export interface createIssueResult"),
-        "Missing Result interface"
+        content.contains(
+            "export type createIssueResult = Record<string, unknown> | unknown[] | string;"
+        ),
+        "Missing widened Result type union"
     );
 
     // Should call callMCPTool
@@ -382,13 +390,15 @@ fn test_progressive_generator_with_empty_server() {
     // - 1 index.ts
     // - 1 runtime bridge
     // - 1 package.json
+    // - 1 tsconfig.json
     // - 1 _meta.json
-    assert_eq!(code.file_count(), 4);
+    assert_eq!(code.file_count(), 5);
 
     let file_paths: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
     assert!(file_paths.contains(&"index.ts"));
     assert!(file_paths.contains(&"_runtime/mcp-bridge.ts"));
     assert!(file_paths.contains(&"package.json"));
+    assert!(file_paths.contains(&"tsconfig.json"));
 }
 
 #[test]
@@ -559,27 +569,82 @@ fn require_ts_toolchain(test_name: &str, require_node: bool) -> bool {
     false
 }
 
-/// Regression guard for #176: generated tool wrappers must actually type-check under
-/// `tsc --strict --noEmit`, not merely contain the right substrings. Type-checks the real
-/// generated `createIssue.ts` against a minimal stub of `callMCPTool` (mirroring the
-/// signature declared in `runtime-bridge.ts.hbs`) rather than the full runtime bridge, so
-/// the test stays offline and doesn't depend on `@types/node` being installed.
+/// `npm install -g typescript` installs a global `tsc`, but not `npm` itself as `npm.cmd` on
+/// Windows in a way `Command::new("npm")` would find — mirrors `tsc_program`'s reasoning.
+const fn npm_program() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
+}
+
+/// Installs `dir`'s `package.json` `devDependencies` (currently just `@types/node`, added for
+/// #183) via `npm install`, so `tsc --noEmit` can resolve the Node builtin modules and ambient
+/// globals the real runtime bridge references. Without this, `tsc` would fail with `TS2307`/
+/// `TS2580`/`TS2503` regardless of how correct the generated `tsconfig.json` is.
 ///
-/// Skips locally (hard-fails in CI — see `require_ts_toolchain`) when `tsc` is not on `PATH`.
-#[test]
-fn test_generated_tool_passes_tsc_noemit() {
-    if !require_ts_toolchain("test_generated_tool_passes_tsc_noemit", false) {
-        return;
+/// Same skip-locally/hard-fail-in-CI policy as [`require_ts_toolchain`]: this exists to catch
+/// exactly the kind of regression a missing `@types/node` produces (see #183's critique), so
+/// silently skipping in CI would defeat the point. A local `npm install` failure (e.g. no
+/// network) skips rather than hard-failing, since CI is presumed to have registry access but a
+/// local sandbox may not.
+///
+/// Returns `true` if the install succeeded and the caller should proceed to `tsc`.
+fn install_declared_dev_dependencies(dir: &std::path::Path, test_name: &str) -> bool {
+    if Command::new(npm_program())
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "{test_name}: npm not found on PATH in CI — cannot install the generated \
+             package.json's devDependencies, so this test cannot catch a missing @types/node \
+             regression."
+        );
+        eprintln!("skipping {test_name}: npm not found on PATH");
+        return false;
     }
 
-    // Guard against the stub below silently going stale if callMCPTool's signature changes.
-    let bridge_template = include_str!("../templates/progressive/runtime-bridge.ts.hbs");
-    assert!(
-        bridge_template.contains("params: Record<string, unknown>")
-            && bridge_template.contains("): Promise<unknown> {"),
-        "callMCPTool signature in runtime-bridge.ts.hbs changed — update the stub in \
-         test_generated_tool_passes_tsc_noemit to match"
-    );
+    let output = Command::new(npm_program())
+        .args(["install", "--no-save", "--no-audit", "--no-fund"])
+        .current_dir(dir)
+        .output()
+        .expect("Failed to run npm install");
+
+    if !output.status.success() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "{test_name}: npm install failed in CI:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        eprintln!(
+            "skipping {test_name}: npm install failed (no network access?):\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return false;
+    }
+
+    true
+}
+
+/// Regression guard for #176/#182/#183: the *actual* exported package — every file `generate`
+/// produces, unmodified — must pass `tsc --noEmit` out of the box. Earlier versions of this
+/// test substituted a 9-line stub for `_runtime/mcp-bridge.ts` and a hand-written
+/// `globals.d.ts` declaring `process`, which meant it passed regardless of whether the real
+/// ~900-line bridge (which imports `child_process`/`fs/promises`/`os`/`path` and references the
+/// `NodeJS` namespace) actually type-checked — exactly the gap that let #183 regress even after
+/// a tsconfig-only fix (missing `@types/node`) landed. This writes every `code.files` entry
+/// verbatim, installs the generated `package.json`'s devDependencies for real via `npm
+/// install`, and only then runs `tsc --noEmit` against the generated `tsconfig.json`.
+///
+/// Skips locally (hard-fails in CI) when `tsc`/`node`/`npm` are not on `PATH`, or when `npm
+/// install` fails (e.g. no network) — see `require_ts_toolchain` and
+/// `install_declared_dev_dependencies`.
+#[test]
+fn test_generated_tool_passes_tsc_noemit() {
+    let test_name = "test_generated_tool_passes_tsc_noemit";
+    if !require_ts_toolchain(test_name, true) {
+        return;
+    }
 
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
@@ -587,70 +652,22 @@ fn test_generated_tool_passes_tsc_noemit() {
         .generate(&server_info)
         .expect("Failed to generate code");
 
-    let tool_file = code
-        .files
-        .iter()
-        .find(|f| f.path == "createIssue.ts")
-        .expect("createIssue.ts not found");
-    let package_json = code
-        .files
-        .iter()
-        .find(|f| f.path == "package.json")
-        .expect("package.json not found");
-
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
 
-    std::fs::write(dir.path().join("createIssue.ts"), &tool_file.content)
-        .expect("Failed to write createIssue.ts");
-    // Real package.json declares `"type": "module"`, which is what makes `import.meta.url`
-    // in the generated CLI-mode block legal under NodeNext module resolution.
-    std::fs::write(dir.path().join("package.json"), &package_json.content)
-        .expect("Failed to write package.json");
-    // Minimal ambient declaration for the subset of the Node `process` global the generated
-    // CLI-mode block references, so the test doesn't depend on `@types/node` being installed.
-    std::fs::write(
-        dir.path().join("globals.d.ts"),
-        "declare const process: {\n\
-         \x20\x20argv: string[];\n\
-         \x20\x20exit(code?: number): never;\n\
-         };\n",
-    )
-    .expect("Failed to write globals.d.ts");
+    // Write every generated file verbatim — real bridge, real package.json, real
+    // tsconfig.json, real tool/index files — rather than substituting stand-ins for any of
+    // them, so this test proves the actual exported package type-checks, not a stand-in of it.
+    for file in &code.files {
+        let path = dir.path().join(&file.path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("Failed to create parent dir for file");
+        }
+        std::fs::write(&path, &file.content).expect("Failed to write generated file");
+    }
 
-    let runtime_dir = dir.path().join("_runtime");
-    std::fs::create_dir_all(&runtime_dir).expect("Failed to create _runtime dir");
-    std::fs::write(
-        runtime_dir.join("mcp-bridge.ts"),
-        "export async function callMCPTool(\n\
-         \x20\x20serverId: string,\n\
-         \x20\x20toolName: string,\n\
-         \x20\x20params: Record<string, unknown>\n\
-         ): Promise<unknown> {\n\
-         \x20\x20void serverId;\n\
-         \x20\x20void toolName;\n\
-         \x20\x20void params;\n\
-         \x20\x20return undefined;\n\
-         }\n",
-    )
-    .expect("Failed to write mcp-bridge.ts stub");
-
-    std::fs::write(
-        dir.path().join("tsconfig.json"),
-        r#"{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "skipLibCheck": true
-  },
-  "include": ["**/*.ts"]
-}
-"#,
-    )
-    .expect("Failed to write tsconfig.json");
+    if !install_declared_dev_dependencies(dir.path(), test_name) {
+        return;
+    }
 
     let output = Command::new(tsc_program())
         .arg("--noEmit")
@@ -661,7 +678,7 @@ fn test_generated_tool_passes_tsc_noemit() {
 
     assert!(
         output.status.success(),
-        "tsc --noEmit failed on generated createIssue.ts:\nstdout: {}\nstderr: {}",
+        "tsc --noEmit failed on the real generated package:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

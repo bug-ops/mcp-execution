@@ -333,7 +333,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--format JSON`/`--format Pretty` (mixed/upper case) still parse successfully, matching the
   case-insensitive matching `OutputFormat::from_str` already performed on the previous
   `String`-typed field.
-
+- **`mcp-execution-codegen`**: each generated tool's `{Tool}Result` type was declared as
+  `interface {Tool}Result { [key: string]: unknown }`, an object-only shape, even though
+  `callMCPTool` can also resolve with a bare `string` (plain-text content) or an array
+  (JSON-list payloads) (#182). It is now `type {Tool}Result = Record<string, unknown> |
+  unknown[] | string`, matching every shape `callMCPTool` actually returns. **Breaking for
+  generated-code consumers**: code that read a field directly off a tool's result (e.g. `const
+  r = await createIssue(params); r.number;`), relying on the old interface's implicit index
+  signature, no longer compiles (`TS2339`) — the union requires narrowing first, e.g. `if
+  (typeof r === 'object' && r !== null && !Array.isArray(r)) { r.number }`, before accessing a
+  property. This is intentional: the previous type silently claimed every result was an object,
+  which was never actually guaranteed. Regenerate affected tools and add the narrowing check at
+  each call site.
+- **`mcp-execution-codegen`**: generated tool files import the runtime bridge with an explicit
+  `.ts` extension, which `tsc` only accepts under `allowImportingTsExtensions`, but the
+  generated package shipped no `tsconfig.json` enabling it — `tsc --noEmit` under a plain
+  `--module nodenext --moduleResolution nodenext` setup failed with `TS5097` (#183). A
+  `tsconfig.json` (with `allowImportingTsExtensions` and the `noEmit` it requires) is now
+  generated alongside `package.json`. The runtime bridge also imports Node builtins
+  (`child_process`, `fs/promises`, `os`, `path`) and references ambient globals (`process`, the
+  `NodeJS` namespace), none of which resolve without Node's own type declarations, so
+  `package.json` now additionally declares `@types/node` (pinned to the major version this
+  project's own CI targets) as a `devDependency` — without it, `tsc --noEmit` still failed
+  (`TS2307`/`TS2580`/`TS2503`) even with the corrected `tsconfig.json`.
 - **`mcp-execution-codegen`**: the generated runtime bridge (`_runtime/mcp-bridge.ts`) attached a
   fresh `stdout` listener per `callMCPTool` call and resolved on the first complete JSON-RPC
   message with an `id`, without checking that the `id` matched the request it sent. Two
