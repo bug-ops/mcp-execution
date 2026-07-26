@@ -76,6 +76,15 @@ pub enum StateError {
 /// `server_info`'s tool list), used only to enforce [`MAX_TOTAL_PENDING_BYTES`]. A serialization
 /// failure is treated as exceeding any bound, rather than silently under-counting a session
 /// that could not be measured.
+///
+/// `serde_json::to_vec`'s `Serialize` implementation for `Value` (nested inside `server_info`'s
+/// tool schemas) is unconditionally recursive with no depth limit of its own — the same class
+/// of unguarded recursion `mcp-execution-codegen`'s `MAX_SCHEMA_RECURSION_DEPTH` defends
+/// against (issue #303). It isn't guarded separately here for the same reason it isn't guarded
+/// in `mcp-execution-introspector`'s `build_tool_info`, which is what originally built every
+/// schema in `server_info`: `serde_json`'s deserializer already enforces its own default
+/// recursion limit while parsing a `tools/list` response, so nothing reaching this function was
+/// ever deep enough to threaten a recursive serialize.
 fn estimate_size_bytes(generation: &PendingGeneration) -> usize {
     serde_json::to_vec(&generation.server_info).map_or(usize::MAX, |bytes| bytes.len())
 }

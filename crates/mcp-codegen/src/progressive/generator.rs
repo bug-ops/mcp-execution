@@ -32,7 +32,8 @@
 
 use crate::common::types::{GeneratedCode, GeneratedFile};
 use crate::common::typescript::{
-    disambiguate_identifier, extract_properties, sanitize_ts_identifier, to_camel_case,
+    MAX_SCHEMA_RECURSION_DEPTH, disambiguate_identifier, extract_properties,
+    sanitize_ts_identifier, to_camel_case,
 };
 use crate::progressive::types::{
     BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolCategorization, ToolContext,
@@ -981,11 +982,41 @@ fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
 }
 
 fn sanitize_schema_jsdoc_descriptions(mut value: serde_json::Value) -> serde_json::Value {
-    sanitize_schema_jsdoc_value(&mut value);
+    let mut cap_hit = false;
+    sanitize_schema_jsdoc_value(&mut value, 0, &mut cap_hit);
+    if cap_hit {
+        // Known limitation: unlike `json_schema_to_typescript` (called once per property via
+        // `extract_properties`), `create_tool_context` calls this once per tool directly on
+        // the whole `input_schema` — but this warning still carries no tool/server identifier
+        // to correlate it back to the originating `generate_with_categories` call.
+        tracing::warn!(
+            max_depth = MAX_SCHEMA_RECURSION_DEPTH,
+            "schema nesting exceeded MAX_SCHEMA_RECURSION_DEPTH; descriptions beyond that depth \
+             were left unsanitized"
+        );
+    }
     value
 }
 
-fn sanitize_schema_jsdoc_value(value: &mut serde_json::Value) {
+/// Sanitizes every `description` field in `value`'s tree in place, recursing into nested
+/// objects and arrays up to [`MAX_SCHEMA_RECURSION_DEPTH`] — see that constant's docs for what
+/// this cap actually defends against (this crate's `pub` API surface, not a reachable wire-path
+/// schema). `cap_hit` is set (never cleared) the first time any branch trips the cap, so the
+/// public wrapper can log once per call rather than once per clipped branch.
+///
+/// `value` is (a clone of) a tool's `input_schema`, called on the schema's true top level with
+/// no depth peeled off beforehand (unlike [`typescript::extract_properties`]'s call path into
+/// `json_schema_to_typescript`) — so `depth` here always matches the schema's real JSON
+/// nesting. Beyond the depth cap, remaining branches are left unsanitized rather than
+/// continuing to recurse.
+///
+/// [`typescript::extract_properties`]: crate::common::typescript::extract_properties
+fn sanitize_schema_jsdoc_value(value: &mut serde_json::Value, depth: usize, cap_hit: &mut bool) {
+    if depth >= MAX_SCHEMA_RECURSION_DEPTH {
+        *cap_hit = true;
+        return;
+    }
+
     match value {
         serde_json::Value::Object(map) => {
             for (key, child) in map.iter_mut() {
@@ -996,13 +1027,13 @@ fn sanitize_schema_jsdoc_value(value: &mut serde_json::Value) {
                         *child = serde_json::Value::Null;
                     }
                 } else {
-                    sanitize_schema_jsdoc_value(child);
+                    sanitize_schema_jsdoc_value(child, depth + 1, cap_hit);
                 }
             }
         }
         serde_json::Value::Array(values) => {
             for child in values {
-                sanitize_schema_jsdoc_value(child);
+                sanitize_schema_jsdoc_value(child, depth + 1, cap_hit);
             }
         }
         _ => {}
@@ -2234,6 +2265,102 @@ mod tests {
             .unwrap();
 
         assert_eq!(description, "Tag *\\/ injected next");
+    }
+
+    /// Builds a schema with `depth` nested `type: "array"` levels, each carrying its own
+    /// `description`, wrapping a `string` leaf that also has a `description`.
+    ///
+    /// Assembled directly via `serde_json::Map`/`Value` (like
+    /// `typescript::tests::nested_array_schema`) so building this fixture can't itself
+    /// overflow the stack, and using `"array"`/`"items"` rather than `"object"`/`"properties"`
+    /// so each `depth` step costs exactly one recursion level in
+    /// [`sanitize_schema_jsdoc_value`] — unlike an `"object"`/`"properties"`-nested schema,
+    /// where the intermediate `properties` map itself consumes a level (see
+    /// [`sanitize_schema_jsdoc_value`]'s doc comment) — making it possible to predict exactly
+    /// which nesting level lands on either side of [`MAX_SCHEMA_RECURSION_DEPTH`].
+    fn nested_array_schema_with_descriptions(depth: usize, description: &str) -> serde_json::Value {
+        let mut schema = json!({"type": "string", "description": description});
+        for _ in 0..depth {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "type".to_string(),
+                serde_json::Value::String("array".to_string()),
+            );
+            map.insert("items".to_string(), schema);
+            map.insert(
+                "description".to_string(),
+                serde_json::Value::String(description.to_string()),
+            );
+            schema = serde_json::Value::Object(map);
+        }
+        schema
+    }
+
+    /// Walks `depth` `"items"` hops into `value`, returning the schema found there.
+    fn nth_level(value: &serde_json::Value, depth: usize) -> serde_json::Value {
+        let mut v = value.clone();
+        for _ in 0..depth {
+            v = v["items"].clone();
+        }
+        v
+    }
+
+    #[test]
+    fn test_sanitize_schema_jsdoc_bounds_deeply_nested_schema() {
+        // Issue #303: `input_schema` is attacker-controlled and this sanitizer used to
+        // recurse into every nested object/array with no depth limit; this is
+        // defense-in-depth for the pub API surface (see `MAX_SCHEMA_RECURSION_DEPTH`'s docs
+        // in `typescript.rs`), not a fix for a wire-reachable schema. Asserts the cap's actual
+        // observable effect rather than just "doesn't panic": a `description` one level below
+        // the cap is still sanitized, while one at the cap is left untouched because the
+        // function stops recursing before ever reaching it.
+        const MALICIOUS: &str = "desc */ injected\nnext";
+        let depth = MAX_SCHEMA_RECURSION_DEPTH + 10;
+        let schema = nested_array_schema_with_descriptions(depth, MALICIOUS);
+
+        let sanitized = sanitize_schema_jsdoc_descriptions(schema);
+
+        let just_below_cap = nth_level(&sanitized, MAX_SCHEMA_RECURSION_DEPTH - 1);
+        let below_description = just_below_cap["description"]
+            .as_str()
+            .expect("description below the cap must still be a string");
+        assert!(
+            !below_description.contains("*/"),
+            "description one level below the cap must be sanitized: {below_description}"
+        );
+
+        let at_cap = nth_level(&sanitized, MAX_SCHEMA_RECURSION_DEPTH);
+        let at_cap_description = at_cap["description"]
+            .as_str()
+            .expect("description at the cap must still be a string");
+        assert_eq!(
+            at_cap_description, MALICIOUS,
+            "description at the cap must be left untouched — the function must stop \
+             recursing before reaching it"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_schema_jsdoc_survives_pathologically_deep_input() {
+        // Issue #303: a caller of this crate's `pub` API could hand it a `Value` nested far
+        // beyond any depth reachable via introspection (see `MAX_SCHEMA_RECURSION_DEPTH`'s
+        // docs). Must not stack overflow at 5,000+ levels, however that `Value` was built.
+        //
+        // Runs on a dedicated large-stack thread because `serde_json::Value`'s own `Drop` is
+        // recursive and unrelated to this fix: dropping a sufficiently deep `Value` overflows
+        // the *default* thread stack merely by going out of scope, regardless of how it was
+        // traversed beforehand — see `typescript::tests::run_on_large_stack` for the full
+        // rationale.
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let schema = nested_array_schema_with_descriptions(5_000, "leaf");
+                let sanitized = sanitize_schema_jsdoc_descriptions(schema);
+                assert!(sanitized.is_object());
+            })
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
     }
 
     #[test]
