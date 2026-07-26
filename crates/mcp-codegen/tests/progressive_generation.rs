@@ -668,8 +668,8 @@ fn test_generated_tool_passes_tsc_noemit() {
 }
 
 /// Compiles `bridge_ts` (the rendered runtime bridge) alongside a harness that calls
-/// `callMCPTool(server_id, "noop", {})`, runs it under Node with `$HOME` pointed at a temp
-/// directory containing `mcp_json` as `~/.claude/mcp.json`, and returns
+/// `callMCPTool(server_id, "noop", {})`, runs it under Node with `$HOME`/`%USERPROFILE%`
+/// pointed at a temp directory containing `mcp_json` as `~/.claude/mcp.json`, and returns
 /// `(exit_success, stdout, stderr)`.
 ///
 /// Uses `tsc --noCheck` (type-erasure only, no type-checking) so this doesn't need
@@ -763,7 +763,12 @@ fn run_bridge_harness(
     std::thread::spawn(move || {
         let result = Command::new("node")
             .arg(&harness_path)
+            // Node's `os.homedir()` — which `loadServerConfig()` uses to find
+            // `~/.claude/mcp.json` — reads `$HOME` on POSIX but `%USERPROFILE%` on Windows;
+            // both must point at the fake home directory for the harness to isolate itself
+            // from the real runner's home on every platform.
             .env("HOME", &home_dir)
+            .env("USERPROFILE", &home_dir)
             .output();
         let _ = tx.send(result);
     });
