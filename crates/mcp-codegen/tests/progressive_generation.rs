@@ -506,6 +506,18 @@ fn test_progressive_tool_with_complex_types() {
     );
 }
 
+/// Name of the `tsc` executable to spawn directly via [`std::process::Command`].
+///
+/// `npm install -g typescript` installs `tsc` as a `.cmd`/`.ps1` shim script on Windows, not
+/// a `.exe`. Windows' `CreateProcess` (which `Command` calls into directly, bypassing a
+/// shell) only appends the `.exe` extension when none is given — it does not consult
+/// `PATHEXT` the way `cmd.exe` does — so `Command::new("tsc")` silently fails to find it even
+/// though `tsc` resolves fine when typed at a Windows shell prompt. Elsewhere, the real `tsc`
+/// binary (or symlink to one) is on `PATH` unqualified.
+const fn tsc_program() -> &'static str {
+    if cfg!(windows) { "tsc.cmd" } else { "tsc" }
+}
+
 /// Ensures `tsc` (and, if `require_node`, `node`) are available on `PATH` before a test that
 /// depends on the TypeScript/Node toolchain runs.
 ///
@@ -519,7 +531,10 @@ fn test_progressive_tool_with_complex_types() {
 ///
 /// Returns `true` if the required tools are present and the test should proceed.
 fn require_ts_toolchain(test_name: &str, require_node: bool) -> bool {
-    let tsc_missing = Command::new("tsc").arg("--version").output().is_err();
+    let tsc_missing = Command::new(tsc_program())
+        .arg("--version")
+        .output()
+        .is_err();
     let node_missing = require_node && Command::new("node").arg("--version").output().is_err();
 
     if !tsc_missing && !node_missing {
@@ -637,7 +652,7 @@ fn test_generated_tool_passes_tsc_noemit() {
     )
     .expect("Failed to write tsconfig.json");
 
-    let output = Command::new("tsc")
+    let output = Command::new(tsc_program())
         .arg("--noEmit")
         .arg("-p")
         .arg(dir.path().join("tsconfig.json"))
@@ -723,7 +738,7 @@ fn run_bridge_harness(
     .expect("Failed to write harness.ts");
 
     let dist_dir = dir.path().join("dist");
-    let tsc_output = Command::new("tsc")
+    let tsc_output = Command::new(tsc_program())
         .args(["--noCheck", "--module", "NodeNext", "--moduleResolution"])
         .arg("NodeNext")
         .arg("--target")
