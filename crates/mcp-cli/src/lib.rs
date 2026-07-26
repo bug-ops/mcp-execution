@@ -4,7 +4,7 @@
 //! exposing the CLI argument definitions, command implementations, output
 //! formatters, and command runner, so the binary crate and tests can share
 //! a single compiled module tree.
-
+#![warn(missing_docs, missing_debug_implementations)]
 // `commands::completions::run` and `commands::server::list_servers` are `async fn` to match
 // the signature every other command handler needs (they're all dispatched uniformly from
 // `runner::execute_command`), even though these two happen to do no `.await`ing themselves.

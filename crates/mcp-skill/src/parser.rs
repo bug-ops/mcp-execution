@@ -54,31 +54,56 @@ pub enum ScanError {
 
     /// Directory does not exist.
     #[error("directory does not exist: {path}")]
-    DirectoryNotFound { path: String },
+    DirectoryNotFound {
+        /// Sanitized path of the missing directory.
+        path: String,
+    },
 
     /// The `_meta.json` sidecar is missing from the server directory.
     #[error("metadata sidecar not found: {path} (was the server directory regenerated?)")]
-    MissingMetadata { path: String },
+    MissingMetadata {
+        /// Sanitized path of the expected sidecar file.
+        path: String,
+    },
 
     /// The `_meta.json` sidecar could not be parsed as valid `ServerMetadata` JSON.
     #[error("failed to parse metadata sidecar {path}: {source}")]
     MetadataParse {
+        /// Sanitized path of the sidecar file that failed to parse.
         path: String,
+        /// Underlying JSON deserialization error.
         #[source]
         source: serde_json::Error,
     },
 
     /// The sidecar's `schema_version` does not match the version this crate understands.
     #[error("unsupported metadata schema version: found {found}, expected {expected}")]
-    UnsupportedSchema { found: u32, expected: u32 },
+    UnsupportedSchema {
+        /// Schema version read from the sidecar.
+        found: u32,
+        /// Schema version this crate supports (`METADATA_SCHEMA_VERSION`).
+        expected: u32,
+    },
 
     /// Too many tools in the sidecar (denial-of-service protection).
     #[error("too many tools: {count} exceeds limit of {limit}")]
-    TooManyFiles { count: usize, limit: usize },
+    TooManyFiles {
+        /// Number of tools listed in the sidecar.
+        count: usize,
+        /// Maximum allowed number of tools (`MAX_TOOL_FILES`).
+        limit: usize,
+    },
 
     /// Sidecar file too large to process.
     #[error("file too large: {path} ({size} bytes exceeds {limit} limit)")]
-    FileTooLarge { path: String, size: u64, limit: u64 },
+    FileTooLarge {
+        /// Sanitized path of the oversized sidecar file.
+        path: String,
+        /// Actual size of the file, in bytes.
+        size: u64,
+        /// Maximum allowed size, in bytes (`MAX_FILE_SIZE`).
+        limit: u64,
+    },
 
     /// A tool listed in the `_meta.json` sidecar has no corresponding `.ts`
     /// file on disk.
@@ -91,8 +116,11 @@ pub enum ScanError {
          is missing (re-run 'generate' to regenerate this server)"
     )]
     StaleMetadata {
+        /// MCP tool name listed in the sidecar.
         tool: String,
+        /// `.ts` file name expected on disk for `tool`.
         expected_file: String,
+        /// Sanitized path of the sidecar that references `tool`.
         sidecar_path: String,
     },
 }
@@ -222,12 +250,15 @@ impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
 /// ```
 pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
     // Canonicalize the base directory to resolve symlinks and get absolute path
-    let canonical_base =
-        tokio::fs::canonicalize(dir)
-            .await
-            .map_err(|_| ScanError::DirectoryNotFound {
+    let canonical_base = tokio::fs::canonicalize(dir).await.map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            ScanError::DirectoryNotFound {
                 path: sanitize_path_for_error(dir),
-            })?;
+            }
+        } else {
+            ScanError::Io(err)
+        }
+    })?;
 
     let meta_path = canonical_base.join(METADATA_FILE_NAME);
 
@@ -235,11 +266,17 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
     // directory, preventing path traversal via a symlinked `_meta.json`.
     let canonical_meta = match tokio::fs::canonicalize(&meta_path).await {
         Ok(path) if path.starts_with(&canonical_base) => path,
-        _ => {
+        Ok(_) => {
             return Err(ScanError::MissingMetadata {
                 path: sanitize_path_for_error(&meta_path),
             });
         }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ScanError::MissingMetadata {
+                path: sanitize_path_for_error(&meta_path),
+            });
+        }
+        Err(err) => return Err(ScanError::Io(err)),
     };
 
     let file_metadata = tokio::fs::metadata(&canonical_meta).await?;
@@ -847,6 +884,27 @@ mod tests {
         let result = scan_tools_directory(Path::new("/nonexistent/path/for/testing")).await;
 
         assert!(matches!(result, Err(ScanError::DirectoryNotFound { .. })));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_scan_tools_directory_canonicalize_non_not_found_error_propagates_as_io() {
+        // Issue #302 regression: a symlink loop makes `canonicalize` fail with
+        // `ErrorKind::FilesystemLoop`/`Other` (never `NotFound`). Before the fix,
+        // every canonicalize failure — regardless of kind — collapsed into
+        // `DirectoryNotFound`, silently discarding the real error.
+        let temp_dir = TempDir::new().unwrap();
+        let loop_path = temp_dir.path().join("loop");
+        std::os::unix::fs::symlink(&loop_path, &loop_path).unwrap();
+
+        let result = scan_tools_directory(&loop_path).await;
+
+        match result {
+            Err(ScanError::Io(err)) => {
+                assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected ScanError::Io, got: {other:?}"),
+        }
     }
 
     // ========================================================================

@@ -22,6 +22,7 @@
 //! # Ok(())
 //! # }
 //! ```
+#![warn(missing_docs, missing_debug_implementations)]
 
 mod context;
 mod output_path;

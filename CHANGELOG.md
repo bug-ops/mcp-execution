@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mcp-execution-skill`**: `scan_tools_directory` discarded the real `io::Error` from both of
+  its `canonicalize` calls (the server directory and the `_meta.json` sidecar) and mislabeled
+  every failure as `DirectoryNotFound`/`MissingMetadata` respectively, even when the underlying
+  cause was a permission error (e.g. a `chmod 000` directory) rather than a missing path. Both
+  call sites now distinguish `io::ErrorKind::NotFound` — which still reports the existing
+  `DirectoryNotFound`/`MissingMetadata` variants — from any other I/O error, which now propagates
+  the real cause via `ScanError::Io` instead of being discarded (#302).
+
 ### Documentation
 
 - Backfilled `# Examples` doc-test sections for ~50 public types and functions across the workspace that previously lacked runnable examples, including `ServerConfig` getters, CLI formatters, command structs, and resource limit constants (#189).
@@ -354,6 +364,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-skill`, `mcp-execution-server`, `mcp-execution-cli`**: enabled
+  `#![warn(missing_docs, missing_debug_implementations)]` at the crate root, matching the other
+  four workspace crates, and backfilled one-line field docs on every previously-undocumented
+  `ScanError` struct-variant field so the new lint has nothing to warn about (#290).
 - **`mcp-execution-server`**: `save_categorized_tools` collapsed its four copy-pasted per-field
   byte-length checks (`name`, `category`, `keywords`, `short_description`) into a single private
   `check_categorized_field_length` helper, called once per field. No behavior change: the exact
