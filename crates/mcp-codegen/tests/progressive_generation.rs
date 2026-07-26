@@ -702,6 +702,47 @@ fn run_bridge_harness_with_env(
     server_id: &str,
     extra_env: &[(&str, &str)],
 ) -> Option<(bool, String, String)> {
+    let harness_ts = format!(
+        "import {{ callMCPTool }} from './mcp-bridge.js';\n\
+         \n\
+         const watchdog = setTimeout(() => {{\n\
+         \x20\x20console.log('TIMEOUT: did not settle before spawning');\n\
+         \x20\x20process.exit(2);\n\
+         }}, 5000);\n\
+         \n\
+         callMCPTool('{server_id}', 'noop', {{}}).then(\n\
+         \x20\x20() => {{\n\
+         \x20\x20\x20\x20clearTimeout(watchdog);\n\
+         \x20\x20\x20\x20console.log('UNEXPECTED_SUCCESS');\n\
+         \x20\x20\x20\x20process.exit(1);\n\
+         \x20\x20}},\n\
+         \x20\x20(err: unknown) => {{\n\
+         \x20\x20\x20\x20clearTimeout(watchdog);\n\
+         \x20\x20\x20\x20console.log('REJECTED:', String(err));\n\
+         \x20\x20\x20\x20process.exit(0);\n\
+         \x20\x20}}\n\
+         );\n"
+    );
+
+    compile_and_run_bridge_harness(test_name, bridge_ts, mcp_json, &harness_ts, extra_env)
+}
+
+/// Shared innards of [`run_bridge_harness_with_env`] and the concurrency regression test below:
+/// compiles `bridge_ts` plus a caller-supplied `harness_ts` under tsc, then runs the result
+/// under Node with `$HOME`/`%USERPROFILE%` pointed at a temp directory containing `mcp_json`
+/// as `~/.claude/mcp.json`. Factored out of `run_bridge_harness_with_env` so a harness body
+/// other than the single fixed `callMCPTool('...', 'noop', {})` call (e.g. two concurrent
+/// calls) does not need to duplicate the tsc/Node plumbing.
+///
+/// Returns `None` if `tsc`/`node` are not on `PATH` and the caller should skip locally; hard
+/// fails (via `require_ts_toolchain`) instead of returning `None` when running in CI.
+fn compile_and_run_bridge_harness(
+    test_name: &str,
+    bridge_ts: &str,
+    mcp_json: &serde_json::Value,
+    harness_ts: &str,
+    extra_env: &[(&str, &str)],
+) -> Option<(bool, String, String)> {
     if !require_ts_toolchain(test_name, true) {
         return None;
     }
@@ -723,31 +764,7 @@ fn run_bridge_harness_with_env(
         .expect("Failed to write src/package.json");
     std::fs::write(src_dir.join("mcp-bridge.ts"), bridge_ts)
         .expect("Failed to write mcp-bridge.ts");
-    std::fs::write(
-        src_dir.join("harness.ts"),
-        format!(
-            "import {{ callMCPTool }} from './mcp-bridge.js';\n\
-             \n\
-             const watchdog = setTimeout(() => {{\n\
-             \x20\x20console.log('TIMEOUT: did not settle before spawning');\n\
-             \x20\x20process.exit(2);\n\
-             }}, 5000);\n\
-             \n\
-             callMCPTool('{server_id}', 'noop', {{}}).then(\n\
-             \x20\x20() => {{\n\
-             \x20\x20\x20\x20clearTimeout(watchdog);\n\
-             \x20\x20\x20\x20console.log('UNEXPECTED_SUCCESS');\n\
-             \x20\x20\x20\x20process.exit(1);\n\
-             \x20\x20}},\n\
-             \x20\x20(err: unknown) => {{\n\
-             \x20\x20\x20\x20clearTimeout(watchdog);\n\
-             \x20\x20\x20\x20console.log('REJECTED:', String(err));\n\
-             \x20\x20\x20\x20process.exit(0);\n\
-             \x20\x20}}\n\
-             );\n"
-        ),
-    )
-    .expect("Failed to write harness.ts");
+    std::fs::write(src_dir.join("harness.ts"), harness_ts).expect("Failed to write harness.ts");
 
     let dist_dir = dir.path().join("dist");
     let tsc_output = Command::new(tsc_program())
@@ -796,8 +813,8 @@ fn run_bridge_harness_with_env(
         .recv_timeout(std::time::Duration::from_secs(15))
         .unwrap_or_else(|_| {
             panic!(
-                "node harness did not exit within 15s; the bridge may be hanging on an \
-                 unvalidated spawn instead of rejecting the hostile config"
+                "node harness for {test_name} did not exit within 15s; the bridge may be \
+                 hanging instead of settling every pending request"
             )
         })
         .expect("Failed to run node");
@@ -1293,5 +1310,141 @@ fn test_runtime_bridge_times_out_when_server_never_replies() {
     assert!(
         stdout.contains("Timed out"),
         "rejection reason should explain the request timed out: {stdout}"
+    );
+}
+
+/// Regression guard for #232: two concurrent `callMCPTool` calls on the same connection must
+/// each resolve with the response matching THEIR OWN JSON-RPC request id, even when the
+/// server replies out of order (responds to the second request before the first). Before the
+/// fix, each call's response was consumed by whichever per-call listener happened to fire
+/// first — not matched by id — so an out-of-order reply silently handed one caller the other's
+/// result.
+///
+/// The fake MCP server below deliberately buffers both `tools/call` requests and replies to
+/// the second-received one first, echoing back each call's own argument so a mismatch is
+/// directly observable in the result value rather than merely "no crash occurred".
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_dispatches_concurrent_out_of_order_responses_by_request_id() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let fake_server_js = r"
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+const pendingToolCalls = [];
+
+rl.on('line', (line) => {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return;
+  const message = JSON.parse(trimmed);
+
+  if (message.method === 'initialize') {
+    const response = {
+      jsonrpc: '2.0',
+      id: message.id,
+      result: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        serverInfo: { name: 'fake', version: '0.0.0' }
+      }
+    };
+    process.stdout.write(JSON.stringify(response) + '\n');
+    return;
+  }
+
+  if (message.method === 'tools/call') {
+    pendingToolCalls.push(message);
+    if (pendingToolCalls.length < 2) return;
+
+    // Deliberately reply in the REVERSE of arrival order: the second request received gets
+    // its response written first. This is the out-of-order scenario from issue #232 — a
+    // correct dispatcher must still resolve each caller with the response matching ITS OWN
+    // request id, not whichever response happens to arrive first.
+    const [receivedFirst, receivedSecond] = pendingToolCalls;
+    for (const call of [receivedSecond, receivedFirst]) {
+      const response = {
+        jsonrpc: '2.0',
+        id: call.id,
+        result: {
+          content: [{ type: 'text', text: `${call.params.arguments.value}-response` }]
+        }
+      };
+      process.stdout.write(JSON.stringify(response) + '\n');
+    }
+  }
+});
+";
+    let script_path = write_test_script(fake_server_js);
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "fake": {
+                "command": "node",
+                "args": [script_path]
+            }
+        }
+    });
+
+    let harness_ts = r"
+import { callMCPTool } from './mcp-bridge.js';
+
+const watchdog = setTimeout(() => {
+  console.log('TIMEOUT: did not settle both calls');
+  process.exit(2);
+}, 5000);
+
+const first = callMCPTool('fake', 'echo', { value: 'first' });
+const second = callMCPTool('fake', 'echo', { value: 'second' });
+
+Promise.all([first, second]).then(
+  ([firstResult, secondResult]) => {
+    clearTimeout(watchdog);
+    console.log('FIRST:', JSON.stringify(firstResult));
+    console.log('SECOND:', JSON.stringify(secondResult));
+    if (firstResult === 'first-response' && secondResult === 'second-response') {
+      console.log('MATCH');
+      process.exit(0);
+    } else {
+      console.log('MISMATCH');
+      process.exit(1);
+    }
+  },
+  (err: unknown) => {
+    clearTimeout(watchdog);
+    console.log('REJECTED:', String(err));
+    process.exit(3);
+  }
+);
+";
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_dispatches_concurrent_out_of_order_responses_by_request_id",
+        &bridge.content,
+        &mcp_json,
+        harness_ts,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not dispatch out-of-order concurrent responses correctly:\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("MATCH"),
+        "each caller must resolve with the response matching its own request id, not the \
+         other caller's response: stdout: {stdout}, stderr: {stderr}"
     );
 }

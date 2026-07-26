@@ -15,7 +15,6 @@ import { spawn, ChildProcess } from 'child_process';
 import { readFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
-import { Readable } from 'stream';
 
 /**
  * Configuration for an MCP server
@@ -92,10 +91,38 @@ interface MCPInitializeRequest {
 }
 
 /**
- * Cache of active server connections
- * Key: serverId, Value: server process
+ * A single pending JSON-RPC request awaiting its response.
  */
-const serverConnections = new Map<string, ChildProcess>();
+interface PendingRequest {
+  resolve: (message: MCPToolCallResponse) => void;
+  reject: (error: Error) => void;
+}
+
+/**
+ * An active connection to an MCP server: the child process plus the
+ * in-flight requests awaiting a response, keyed by JSON-RPC request id.
+ */
+interface ServerConnection {
+  process: ChildProcess;
+  pending: Map<number, PendingRequest>;
+}
+
+/**
+ * Cache of active (or in-flight) server connections.
+ *
+ * Key: serverId, Value: promise resolving to the connection once the child process has
+ * spawned and completed the JSON-RPC `initialize` handshake. Caching the in-flight promise
+ * (not just the eventually-resolved connection) means concurrent callers on a cold serverId
+ * await the same connection setup instead of each spawning a competing child process.
+ */
+const serverConnections = new Map<string, Promise<ServerConnection>>();
+
+/**
+ * Child processes spawned for active connections, tracked separately from
+ * {@link serverConnections} so the synchronous `process.on('exit', ...)` handler can kill
+ * them without needing to await a possibly-still-pending connection promise.
+ */
+const activeProcesses = new Set<ChildProcess>();
 
 /**
  * Request ID counter for JSON-RPC
@@ -394,7 +421,7 @@ async function loadServerConfig(serverId: string): Promise<ServerConfig> {
 
 /**
  * Default timeout, in milliseconds, for a single JSON-RPC round trip in
- * {@link readJsonRpcMessage}. Overridable via the `MCPBRIDGE_REQUEST_TIMEOUT_MS`
+ * {@link sendRequest}. Overridable via the `MCPBRIDGE_REQUEST_TIMEOUT_MS`
  * environment variable.
  */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -411,147 +438,232 @@ const REQUEST_TIMEOUT_MS = (() => {
 })();
 
 /**
- * Reads a complete JSON-RPC message from a stream, guarding against the two ways this can
- * otherwise hang forever: the spawned server process exiting before ever writing a response,
- * and a server that simply never replies.
- *
- * @param stream - Readable stream (typically stdout from the MCP server)
- * @param child - The MCP server's child process; its `exit` event settles this promise with
- *   a clear error if the process dies before a response arrives
- * @param timeoutMs - Milliseconds to wait for a response before rejecting; defaults to
- *   {@link REQUEST_TIMEOUT_MS}
- * @returns Parsed JSON-RPC response
- * @throws {Error} If the stream errors, the child process exits before responding, or
- *   `timeoutMs` elapses with no response
+ * Request message shapes {@link sendRequest} may send: both carry a JSON-RPC `id` used to
+ * match the eventual response.
  */
-async function readJsonRpcMessage(
-  stream: Readable,
-  child: ChildProcess,
-  timeoutMs: number = REQUEST_TIMEOUT_MS
-): Promise<MCPToolCallResponse> {
-  return new Promise((resolve, reject) => {
-    let buffer = '';
-    let settled = false;
+type MCPRequestMessage = MCPToolCallRequest | MCPInitializeRequest;
 
-    const cleanup = (): void => {
-      stream.off('data', onData);
-      stream.off('error', onError);
-      child.off('exit', onExit);
-      clearTimeout(timer);
-    };
+/**
+ * Tears down a connection after it can no longer serve requests: rejects every request still
+ * awaiting a response, and removes the connection from {@link activeProcesses} and — only if
+ * the cache still points at this exact connection attempt — {@link serverConnections}. This
+ * identity check mirrors the one in {@link getConnection}'s catch handler: without it, a
+ * connection that already lost the race to a newer one (see `exit`-before-`close` ordering)
+ * would evict the newer, live connection from the cache instead of just itself.
+ *
+ * @param serverId - Server identifier the connection was cached under
+ * @param connection - The connection being torn down
+ * @param error - Rejection reason for any still-pending requests
+ * @param ownPromise - The {@link serverConnections} promise this connection was created from
+ */
+function teardownConnection(
+  serverId: string,
+  connection: ServerConnection,
+  error: Error,
+  ownPromise: Promise<ServerConnection>
+): void {
+  activeProcesses.delete(connection.process);
+  if (serverConnections.get(serverId) === ownPromise) {
+    serverConnections.delete(serverId);
+  }
 
-    const settleResolve = (message: MCPToolCallResponse): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(message);
-    };
+  const pendingRequests = [...connection.pending.values()];
+  for (const pendingRequest of pendingRequests) {
+    pendingRequest.reject(error);
+  }
+}
 
-    const settleReject = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
+/**
+ * Attaches the single, shared stdout listener for a connection: parses newline-delimited
+ * JSON-RPC messages and demultiplexes each response to the pending request with the matching
+ * `id`, so concurrent {@link sendRequest} calls on the same connection never receive each
+ * other's response.
+ *
+ * Uses `setEncoding('utf8')` rather than manually decoding `Buffer` chunks, so multi-byte
+ * UTF-8 characters split across chunk boundaries are reassembled correctly instead of
+ * producing replacement characters that fail `JSON.parse`.
+ *
+ * @param connection - The connection whose stdout should be dispatched
+ * @param serverId - Server identifier, used for debug logging and connection teardown
+ * @param getOwnPromise - Returns the {@link serverConnections} promise this connection was
+ *   created from, threaded through to {@link teardownConnection} so a stale teardown never
+ *   evicts a newer connection cached under the same `serverId`
+ */
+function attachResponseDispatcher(
+  connection: ServerConnection,
+  serverId: string,
+  getOwnPromise: () => Promise<ServerConnection>
+): void {
+  const stdout = connection.process.stdout!;
+  stdout.setEncoding('utf8');
+  let buffer = '';
 
-    const onData = (chunk: Buffer): void => {
-      buffer += chunk.toString();
+  stdout.on('data', (chunk: string): void => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
 
-      // Try to parse complete JSON messages
-      const lines = buffer.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
 
-      for (let i = 0; i < lines.length - 1; i++) {
-        const line = lines[i].trim();
-        if (line.length === 0) continue;
-
-        try {
-          const message = JSON.parse(line) as MCPToolCallResponse;
-
-          // Only process responses, ignore notifications
-          if ('id' in message) {
-            settleResolve(message);
-            return;
-          }
-        } catch (e) {
-          // Incomplete JSON, wait for more data
-          debug('Failed to parse JSON (waiting for more data):', line);
-        }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // A complete, newline-terminated line that isn't valid JSON-RPC — drop it rather
+        // than waiting for more data, since no more data will make this line parse.
+        debug('Dropping unparseable line from server output:', trimmed);
+        continue;
       }
 
-      // Keep the last incomplete line in the buffer
-      buffer = lines[lines.length - 1];
-    };
+      // Only object messages carrying an `id` are responses; primitive JSON (e.g. a bare
+      // `null` line) and notifications are ignored the same way an unparseable line is —
+      // `'id' in parsed` would otherwise throw a TypeError on a non-object `parsed`.
+      if (typeof parsed !== 'object' || parsed === null || !('id' in parsed)) continue;
 
-    const onError = (error: Error): void => {
-      settleReject(error);
-    };
+      const message = parsed as MCPToolCallResponse;
+      const pendingRequest = connection.pending.get(message.id);
+      if (!pendingRequest) {
+        debug(`Received response for unknown or already-settled request id ${message.id}`);
+        continue;
+      }
+      pendingRequest.resolve(message);
+    }
+  });
 
-    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-      settleReject(
-        new Error(
-          `MCP server process exited before responding (code ${code ?? 'null'}, ` +
-          `signal ${signal ?? 'null'})`
-        )
-      );
-    };
-
-    const timer = setTimeout(() => {
-      settleReject(new Error(`Timed out after ${timeoutMs}ms waiting for a response from the MCP server`));
-    }, timeoutMs);
-
-    stream.on('data', onData);
-    stream.on('error', onError);
-    child.on('exit', onExit);
+  stdout.on('error', (error: Error): void => {
+    debug(`stdout error for server ${serverId}:`, error);
+    teardownConnection(serverId, connection, error, getOwnPromise());
   });
 }
 
 /**
- * Connect to an MCP server or reuse existing connection
+ * Sends a JSON-RPC request on a connection and resolves once the response with the matching
+ * `id` arrives via {@link attachResponseDispatcher}, guarding against the two ways this could
+ * otherwise hang forever: the server process closing before ever responding, and a server
+ * that simply never replies.
  *
- * Implements connection caching: first call spawns server process,
- * subsequent calls reuse the same process.
+ * The pending-request entry is registered before the request is written to stdin, and is
+ * always removed — on resolve, reject, or timeout — so the pending map never grows unbounded.
+ *
+ * @param connection - The connection to send the request on
+ * @param request - The JSON-RPC request to send
+ * @param timeoutMs - Milliseconds to wait for a response before rejecting; defaults to
+ *   {@link REQUEST_TIMEOUT_MS}
+ * @returns Parsed JSON-RPC response matching the request's `id`
+ * @throws {Error} If writing to stdin fails, the connection closes before responding, or
+ *   `timeoutMs` elapses with no response
+ */
+async function sendRequest(
+  connection: ServerConnection,
+  request: MCPRequestMessage,
+  timeoutMs: number = REQUEST_TIMEOUT_MS
+): Promise<MCPToolCallResponse> {
+  return new Promise((resolve, reject) => {
+    const id = request.id;
+    let settled = false;
+
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      connection.pending.delete(id);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      settle(() =>
+        reject(new Error(`Timed out after ${timeoutMs}ms waiting for a response from the MCP server`))
+      );
+    }, timeoutMs);
+
+    connection.pending.set(id, {
+      resolve: (message) => settle(() => resolve(message)),
+      reject: (error) => settle(() => reject(error))
+    });
+
+    try {
+      connection.process.stdin!.write(JSON.stringify(request) + '\n');
+    } catch (error) {
+      settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+    }
+  });
+}
+
+/**
+ * Spawns the server process for `serverId`, wires up its response dispatcher and lifecycle
+ * handlers, and completes the JSON-RPC `initialize` handshake.
+ *
+ * Split out of {@link getConnection} so the latter can cache this function's promise —
+ * rather than only its resolved value — letting concurrent cold-start callers await the same
+ * in-flight setup instead of each spawning a competing child process.
  *
  * @param serverId - Server identifier
- * @returns Active server process
+ * @param getOwnPromise - Returns the {@link serverConnections} promise wrapping this very call,
+ *   so the process lifecycle handlers registered below can pass it to
+ *   {@link teardownConnection} for its cache-identity check. The promise doesn't exist yet when
+ *   this function starts running (the caller creates it from this call's return value), but by
+ *   the time any of these handlers fire the caller has assigned it, so the closure resolves it
+ *   correctly.
+ * @returns The newly established connection
+ * @throws {Error} If the config fails validation, or the server fails to initialize
  */
-async function getConnection(serverId: string): Promise<ChildProcess> {
-  // Return cached connection if exists
-  if (serverConnections.has(serverId)) {
-    const existingProcess = serverConnections.get(serverId)!;
-
-    // Check if process is still alive
-    if (!existingProcess.killed && existingProcess.exitCode === null) {
-      debug(`Reusing connection to server: ${serverId}`);
-      return existingProcess;
-    }
-
-    // Process died, remove from cache
-    debug(`Cached connection to ${serverId} is dead, reconnecting`);
-    serverConnections.delete(serverId);
-  }
-
-  // Spawn new server process
-  debug(`Connecting to server: ${serverId}`);
+async function createConnection(
+  serverId: string,
+  getOwnPromise: () => Promise<ServerConnection>
+): Promise<ServerConnection> {
   const config = await loadServerConfig(serverId);
 
-  const serverProcess = spawn(config.command, config.args, {
+  const childProcess = spawn(config.command, config.args, {
     stdio: ['pipe', 'pipe', 'inherit'],
     env: { ...process.env, ...config.env },
     cwd: config.cwd
   });
+  activeProcesses.add(childProcess);
 
-  // Handle process errors
-  serverProcess.on('error', (error) => {
+  const connection: ServerConnection = { process: childProcess, pending: new Map() };
+  attachResponseDispatcher(connection, serverId, getOwnPromise);
+
+  // An async EPIPE reported here (rather than as a synchronous throw from `stdin.write`)
+  // would otherwise leave the pending request(s) unrejected until they time out; tear down
+  // the same way as other stream/process failures so they fail fast instead.
+  childProcess.stdin!.on('error', (error) => {
+    debug(`stdin error for server ${serverId}:`, error);
+    teardownConnection(
+      serverId,
+      connection,
+      new Error(`MCP server stdin error: ${error.message}`),
+      getOwnPromise()
+    );
+  });
+
+  childProcess.on('error', (error) => {
     debug(`Server process error for ${serverId}:`, error);
-    serverConnections.delete(serverId);
+    teardownConnection(
+      serverId,
+      connection,
+      new Error(`MCP server process error: ${error.message}`),
+      getOwnPromise()
+    );
   });
 
-  serverProcess.on('exit', (code, signal) => {
-    debug(`Server ${serverId} exited with code ${code}, signal ${signal}`);
-    serverConnections.delete(serverId);
+  // 'close' (not 'exit') fires once stdio has fully drained, so a response already sitting
+  // in the OS pipe buffer is delivered to attachResponseDispatcher's listener before pending
+  // requests are rejected here.
+  childProcess.on('close', (code, signal) => {
+    debug(`Server ${serverId} closed (code ${code}, signal ${signal})`);
+    teardownConnection(
+      serverId,
+      connection,
+      new Error(
+        `MCP server process exited before responding (code ${code ?? 'null'}, ` +
+        `signal ${signal ?? 'null'})`
+      ),
+      getOwnPromise()
+    );
   });
 
-  // Send initialize request
   const initRequest: MCPInitializeRequest = {
     jsonrpc: '2.0',
     id: requestIdCounter++,
@@ -569,26 +681,86 @@ async function getConnection(serverId: string): Promise<ChildProcess> {
   };
 
   debug('Sending initialize request:', JSON.stringify(initRequest));
-  serverProcess.stdin!.write(JSON.stringify(initRequest) + '\n');
-
-  // Wait for initialize response
   try {
-    const initResponse = await readJsonRpcMessage(serverProcess.stdout!, serverProcess);
+    const initResponse = await sendRequest(connection, initRequest);
     debug('Received initialize response:', JSON.stringify(initResponse));
 
     if (initResponse.error) {
       throw new Error(`Server initialization failed: ${initResponse.error.message}`);
     }
   } catch (error) {
-    serverProcess.kill();
+    childProcess.kill();
     throw new Error(`Failed to initialize server ${serverId}: ${error}`);
   }
 
-  // Cache the connection
-  serverConnections.set(serverId, serverProcess);
   debug(`Connected to server: ${serverId}`);
+  return connection;
+}
 
-  return serverProcess;
+/**
+ * Returns whether `childProcess` is still running.
+ *
+ * Checking `exitCode` alone misses a process that was terminated by a signal without an exit
+ * code of its own (Node sets `signalCode` instead in that case), which would otherwise
+ * misclassify a signal-killed process as still alive.
+ *
+ * @param childProcess - The child process to check
+ */
+function isProcessAlive(childProcess: ChildProcess): boolean {
+  return childProcess.exitCode === null && childProcess.signalCode === null;
+}
+
+/**
+ * Connect to an MCP server or reuse an existing connection.
+ *
+ * Implements connection caching: the first call for a given `serverId` spawns the server
+ * process, subsequent calls reuse the same connection. Caches the in-flight
+ * {@link createConnection} promise (see {@link serverConnections}) so concurrent calls on a
+ * cold `serverId` share one connection attempt instead of racing to spawn duplicate
+ * processes.
+ *
+ * @param serverId - Server identifier
+ * @returns Active server connection
+ */
+async function getConnection(serverId: string): Promise<ServerConnection> {
+  const cached = serverConnections.get(serverId);
+  if (cached) {
+    try {
+      const connection = await cached;
+
+      if (isProcessAlive(connection.process)) {
+        debug(`Reusing connection to server: ${serverId}`);
+        return connection;
+      }
+
+      debug(`Cached connection to ${serverId} is dead, reconnecting`);
+      // Only clear the cache if it still points at this dead attempt — a concurrent caller
+      // may have already replaced it with a newer, live one.
+      if (serverConnections.get(serverId) === cached) {
+        serverConnections.delete(serverId);
+      }
+    } catch (error) {
+      if (serverConnections.get(serverId) === cached) {
+        serverConnections.delete(serverId);
+      }
+      throw error;
+    }
+  }
+
+  debug(`Connecting to server: ${serverId}`);
+  const connectionPromise: Promise<ServerConnection> = createConnection(serverId, () => connectionPromise);
+  serverConnections.set(serverId, connectionPromise);
+
+  try {
+    return await connectionPromise;
+  } catch (error) {
+    // Only clear the cache if it still points at this failed attempt — a concurrent caller
+    // may have already replaced it with a newer one.
+    if (serverConnections.get(serverId) === connectionPromise) {
+      serverConnections.delete(serverId);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -623,7 +795,7 @@ export async function callMCPTool(
 ): Promise<unknown> {
   debug(`Calling tool: ${serverId}.${toolName}`, params);
 
-  const serverProcess = await getConnection(serverId);
+  const connection = await getConnection(serverId);
 
   const request: MCPToolCallRequest = {
     jsonrpc: '2.0',
@@ -636,10 +808,7 @@ export async function callMCPTool(
   };
 
   debug('Sending tool call request:', JSON.stringify(request));
-  serverProcess.stdin!.write(JSON.stringify(request) + '\n');
-
-  // Wait for response
-  const response = await readJsonRpcMessage(serverProcess.stdout!, serverProcess);
+  const response = await sendRequest(connection, request);
   debug('Received tool call response:', JSON.stringify(response));
 
   // Handle errors
@@ -700,19 +869,29 @@ export async function callMCPTool(
 export async function closeAllConnections(): Promise<void> {
   debug('Closing all connections');
 
-  for (const [serverId, serverProcess] of serverConnections) {
-    debug(`Closing connection to: ${serverId}`);
-    serverProcess.kill('SIGTERM');
+  // Signal every tracked child process synchronously and immediately, before awaiting
+  // anything: a still-initializing server's connection-creation promise can take up to
+  // REQUEST_TIMEOUT_MS to settle, and awaiting each one in turn (as before) would both stall
+  // shutdown on a slow server and delay killing every other server behind it.
+  for (const childProcess of activeProcesses) {
+    if (!childProcess.killed) {
+      childProcess.kill('SIGTERM');
+    }
   }
 
+  // Best-effort: let in-flight connection attempts settle so their own teardown/cleanup runs,
+  // concurrently rather than sequentially. The kill signals above have already been sent
+  // regardless of how long (or whether) these resolve.
+  await Promise.allSettled([...serverConnections.values()]);
   serverConnections.clear();
 }
 
-// Cleanup on process exit
+// Cleanup on process exit. Synchronous — cannot await connection promises — so this walks
+// activeProcesses (populated synchronously at spawn time) rather than serverConnections.
 process.on('exit', () => {
-  for (const [_, serverProcess] of serverConnections) {
-    if (!serverProcess.killed) {
-      serverProcess.kill('SIGTERM');
+  for (const childProcess of activeProcesses) {
+    if (!childProcess.killed) {
+      childProcess.kill('SIGTERM');
     }
   }
 });
