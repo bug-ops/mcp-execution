@@ -35,6 +35,7 @@ test-fixtures = [
 ]
 
 [dependencies]
+futures-util.workspace = true
 http.workspace = true
 mcp-execution-core.workspace = true
 rmcp = { workspace = true, features = [
@@ -44,10 +45,16 @@ rmcp = { workspace = true, features = [
     # the `reqwest` dependency without a TLS backend.
     "reqwest",
     "transport-streamable-http-client-reqwest",
+    # Explicit rather than relying on the implicit `default -> server` path: this
+    # is a client-only crate, and `JsonRpcMessageCodec` (used to bound the stdio
+    # discovery read path, see `bounded_response_stream`) lives behind this
+    # feature.
+    "transport-async-rw",
 ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time"] }
+tokio-util = { workspace = true, features = ["codec"] }
 tracing.workspace = true
 
 [dev-dependencies]
@@ -55,4 +62,3 @@ axum.workspace = true
 criterion = { workspace = true, features = ["async_tokio"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros", "net"] }
-tokio-util.workspace = true
