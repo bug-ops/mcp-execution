@@ -98,6 +98,29 @@ use tempfile::TempDir;
 /// the rollback and permanently losing the target.
 const STALE_ARTIFACT_MIN_AGE: Duration = Duration::from_mins(5);
 
+/// Maximum number of files a single [`FileSystem::export_to_filesystem`] (or
+/// `export_to_filesystem_parallel`, behind the `parallel` feature) call will write
+/// (denial-of-service protection, CWE-400).
+///
+/// Equal to `mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES` (rather than
+/// chosen independently), since a `FileSystem` built via `FilesBuilder::from_generated_code`
+/// carries exactly the same files as the `GeneratedCode` it came from — no extra headroom is
+/// needed for that path, and equality means a `FileSystem` built from that crate's normal
+/// output can never be deterministically rejected here for simply being "as large as codegen
+/// already allows" (the same M1 consistency issue #198 identified between codegen and
+/// introspection, one layer down). This check remains meaningful defense-in-depth for a
+/// `FileSystem` built directly (e.g. via `FilesBuilder`) with an unbounded file count,
+/// bypassing that upstream cap.
+pub const MAX_EXPORT_FILES: usize =
+    mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES;
+
+/// Maximum total bytes across every file a single export call will write.
+///
+/// Equal to `mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES` for the same
+/// consistency reason as [`MAX_EXPORT_FILES`].
+pub const MAX_EXPORT_BYTES: usize =
+    mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES;
+
 /// An in-memory virtual filesystem for MCP tool definitions.
 ///
 /// `FileSystem` provides a read-only filesystem structure that stores generated
@@ -463,6 +486,8 @@ impl FileSystem {
         base_path: impl AsRef<Path>,
         options: &ExportOptions,
     ) -> Result<()> {
+        self.check_export_bounds()?;
+
         let target = base_path.as_ref();
 
         let parent = target.parent().ok_or_else(|| FilesError::InvalidPath {
@@ -558,6 +583,8 @@ impl FileSystem {
     pub fn export_to_filesystem_parallel(&self, base_path: impl AsRef<Path>) -> Result<()> {
         use rayon::prelude::*;
 
+        self.check_export_bounds()?;
+
         let base = base_path.as_ref();
         let canonical_base = base.canonicalize().map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to canonicalize {}: {}", base.display(), e),
@@ -577,6 +604,36 @@ impl FileSystem {
                 let disk_path = Self::vfs_to_disk_path(vfs_path.as_str(), &canonical_base);
                 write_file_atomic(&disk_path, file.content(), options.atomic)
             })?;
+
+        Ok(())
+    }
+
+    /// Rejects an export whose file count or total byte size exceeds its configured bound
+    /// (denial-of-service protection, CWE-400), before any directory is created or file
+    /// written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FilesError::ResourceLimitExceeded`] if [`Self::file_count`] exceeds
+    /// [`MAX_EXPORT_FILES`], or the combined byte size of every file's content exceeds
+    /// [`MAX_EXPORT_BYTES`].
+    fn check_export_bounds(&self) -> Result<()> {
+        if self.file_count() > MAX_EXPORT_FILES {
+            return Err(FilesError::ResourceLimitExceeded {
+                resource: "export file count".to_string(),
+                actual: self.file_count(),
+                limit: MAX_EXPORT_FILES,
+            });
+        }
+
+        let total_bytes: usize = self.files().map(|(_, file)| file.size()).sum();
+        if total_bytes > MAX_EXPORT_BYTES {
+            return Err(FilesError::ResourceLimitExceeded {
+                resource: "export total size".to_string(),
+                actual: total_bytes,
+                limit: MAX_EXPORT_BYTES,
+            });
+        }
 
         Ok(())
     }
@@ -1525,5 +1582,75 @@ mod tests {
         let options = ExportOptions::new().with_atomic_writes(false);
 
         assert!(!options.atomic);
+    }
+
+    // ── Resource-exhaustion bounds (issue #198) ──────────────────────────────
+
+    #[test]
+    fn test_export_rejects_too_many_files() {
+        let temp = TempDir::new().unwrap();
+        let mut builder = FilesBuilder::new();
+        for i in 0..=MAX_EXPORT_FILES {
+            builder = builder.add_file(format!("/tool{i}.ts"), "export {}");
+        }
+        let vfs = builder.build().unwrap();
+
+        let result = vfs.export_to_filesystem(temp.path());
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
+    }
+
+    #[test]
+    fn test_export_accepts_max_file_count() {
+        let temp = TempDir::new().unwrap();
+        let mut builder = FilesBuilder::new();
+        for i in 0..MAX_EXPORT_FILES {
+            builder = builder.add_file(format!("/tool{i}.ts"), "export {}");
+        }
+        let vfs = builder.build().unwrap();
+
+        assert!(vfs.export_to_filesystem(temp.path()).is_ok());
+    }
+
+    #[test]
+    fn test_export_rejects_oversized_total_bytes() {
+        let temp = TempDir::new().unwrap();
+        let vfs = FilesBuilder::new()
+            .add_file("/big.ts", "a".repeat(MAX_EXPORT_BYTES + 1))
+            .build()
+            .unwrap();
+
+        let result = vfs.export_to_filesystem(temp.path());
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
+    }
+
+    #[test]
+    fn test_export_accepts_total_bytes_at_exact_max() {
+        let temp = TempDir::new().unwrap();
+        let vfs = FilesBuilder::new()
+            .add_file("/big.ts", "a".repeat(MAX_EXPORT_BYTES))
+            .build()
+            .unwrap();
+
+        assert!(vfs.export_to_filesystem(temp.path()).is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "parallel")]
+    fn test_export_parallel_rejects_too_many_files() {
+        let temp = TempDir::new().unwrap();
+        let mut builder = FilesBuilder::new();
+        for i in 0..=MAX_EXPORT_FILES {
+            builder = builder.add_file(format!("/tool{i}.ts"), "export {}");
+        }
+        let vfs = builder.build().unwrap();
+
+        let result = vfs.export_to_filesystem_parallel(temp.path());
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
     }
 }

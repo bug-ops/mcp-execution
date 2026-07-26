@@ -109,6 +109,23 @@ pub enum Error {
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
+
+    /// A server- or attacker-controlled quantity exceeded a configured upper bound.
+    ///
+    /// Raised when a value that ultimately originates from an untrusted MCP server response
+    /// (tool count, a tool's name/description length, its schema size, etc.) exceeds one of
+    /// the resource-exhaustion (CWE-400) protections in
+    /// [`mcp_execution_introspector`](https://docs.rs/mcp-execution-introspector) or
+    /// [`mcp_execution_codegen`](https://docs.rs/mcp-execution-codegen).
+    #[error("resource limit exceeded for {resource}: {actual} exceeds limit of {limit}")]
+    ResourceLimitExceeded {
+        /// Human-readable name of the bounded resource (e.g. "tool count", "tool name length").
+        resource: String,
+        /// The actual observed size/count that triggered the rejection.
+        actual: usize,
+        /// The configured maximum allowed for this resource.
+        limit: usize,
+    },
 }
 
 impl Error {
@@ -201,6 +218,25 @@ impl Error {
     pub const fn is_script_generation_error(&self) -> bool {
         matches!(self, Self::ScriptGenerationError { .. })
     }
+
+    /// Returns `true` if this is a resource-limit-exceeded error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::Error;
+    ///
+    /// let err = Error::ResourceLimitExceeded {
+    ///     resource: "tool count".to_string(),
+    ///     actual: 1500,
+    ///     limit: 1000,
+    /// };
+    /// assert!(err.is_resource_limit_exceeded());
+    /// ```
+    #[must_use]
+    pub const fn is_resource_limit_exceeded(&self) -> bool {
+        matches!(self, Self::ResourceLimitExceeded { .. })
+    }
 }
 
 /// Result type alias for MCP operations.
@@ -268,6 +304,21 @@ mod tests {
         let display = format!("{err}");
         assert!(display.contains("Security policy violation"));
         assert!(display.contains("Unauthorized"));
+    }
+
+    #[test]
+    fn test_resource_limit_exceeded_detection() {
+        let err = Error::ResourceLimitExceeded {
+            resource: "tool count".to_string(),
+            actual: 1500,
+            limit: 1000,
+        };
+        assert!(err.is_resource_limit_exceeded());
+        assert!(!err.is_security_error());
+        let display = format!("{err}");
+        assert!(display.contains("tool count"));
+        assert!(display.contains("1500"));
+        assert!(display.contains("1000"));
     }
 
     #[test]

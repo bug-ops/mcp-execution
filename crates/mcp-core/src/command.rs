@@ -103,6 +103,44 @@ const FORBIDDEN_ENV_PREFIX: &str = "DYLD_";
 /// slow-starting servers configured via `mcp.json`.
 const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 
+/// Maximum number of positional arguments accepted in a `ServerConfig` (denial-of-service
+/// protection, CWE-400).
+///
+/// An `mcp.json` entry or CLI invocation is expected to pass a short, fixed argv to the
+/// spawned subprocess, so this is generous headroom rather than a realistic expectation.
+pub const MAX_ARG_COUNT: usize = 256;
+
+/// Maximum byte length for a single command string, argument, or environment variable name.
+///
+/// A legitimate command/argument/env-name is always a short identifier or path, never
+/// free-form text, so this ceiling exists purely as a resource-exhaustion backstop.
+pub const MAX_ARG_LEN: usize = 4096;
+
+/// Maximum number of environment variables accepted in a `ServerConfig`.
+pub const MAX_ENV_COUNT: usize = 256;
+
+/// Maximum byte length for a single environment variable value.
+///
+/// Wider than [`MAX_ARG_LEN`] since env values legitimately carry things like JSON
+/// configuration blobs, not just short identifiers.
+pub const MAX_ENV_VALUE_LEN: usize = 32 * 1024;
+
+/// Maximum number of HTTP headers accepted for Http/Sse transport.
+pub const MAX_HEADER_COUNT: usize = 128;
+
+/// Maximum byte length for a single HTTP header value.
+///
+/// Wider than [`MAX_ARG_LEN`] since header values legitimately carry things like long
+/// bearer tokens.
+pub const MAX_HEADER_VALUE_LEN: usize = 8 * 1024;
+
+/// Maximum byte length for the HTTP/Sse transport `url`.
+///
+/// Generous headroom over any realistic endpoint URL (including a long query string), while
+/// still bounding a hostile or hand-edited `mcp.json` entry (denial-of-service protection,
+/// CWE-400).
+pub const MAX_URL_LEN: usize = 8 * 1024;
+
 /// Returns the shell metacharacters considered forbidden in a command or argument string.
 ///
 /// Exposed so downstream consumers that must mirror this exact rule outside this function —
@@ -180,6 +218,15 @@ pub const fn forbidden_env_prefix() -> &'static str {
 /// - **Header names/values**: Must not contain control characters
 /// - **Timeout bounds**: `connect_timeout`/`discover_timeout` must be greater than zero and at
 ///   most `MAX_TIMEOUT` (600s)
+/// - **Element counts/lengths** (denial-of-service protection, CWE-400), checked
+///   unconditionally regardless of transport — see this module's `validate_size_bounds` — since
+///   `ServerConfig`'s `command`/`args`/`env` fields are all `#[serde(default)]` and can be
+///   populated for any transport by a hand-edited or hostile `mcp.json`/JSON payload even
+///   though the builder itself only ever populates them for stdio: at most `MAX_ARG_COUNT`
+///   args, `MAX_ENV_COUNT` env vars, and `MAX_HEADER_COUNT` headers; at most `MAX_ARG_LEN`
+///   bytes per command/argument/env-name/header-name, `MAX_ENV_VALUE_LEN` bytes per env
+///   value, `MAX_HEADER_VALUE_LEN` bytes per header value, and `MAX_URL_LEN` bytes for the
+///   `url` field
 ///
 /// # Errors
 ///
@@ -241,6 +288,13 @@ pub const fn forbidden_env_prefix() -> &'static str {
 ///   unbounded wait would let a hung server block this non-interactive tool
 ///   forever (see the `validate_timeout` design note in this module)
 pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
+    // Bound `command`/`args`/`env` element counts/lengths unconditionally, before dispatching
+    // on transport: every field involved is `#[serde(default)]`, so a hand-edited or hostile
+    // `mcp.json`/JSON payload can populate them for an Http/Sse config even though the builder
+    // itself only ever does so for stdio (issue #198 S2) — see this function's own doc comment
+    // for the full rationale.
+    validate_size_bounds(config)?;
+
     match config.transport() {
         TransportType::Stdio => validate_stdio_config(config)?,
         TransportType::Http | TransportType::Sse => validate_network_config(config)?,
@@ -257,10 +311,130 @@ pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
     Ok(())
 }
 
+/// Bounds `command`'s length, `args`' count/lengths, `env`'s count/lengths, and `headers`'
+/// count/lengths (denial-of-service protection, CWE-400), regardless of transport.
+///
+/// `ServerConfig`'s `command`/`args`/`env`/`headers` fields are all `#[serde(default)]` and
+/// carried unconditionally at the type level — only [`ServerConfigBuilder`](crate::ServerConfigBuilder)
+/// itself zeroes out the fields that don't match a config's transport, so a `ServerConfig`
+/// obtained by other means (a struct literal, or deserializing a hand-edited `mcp.json`) can
+/// still carry an unbounded `args`/`env` for `Http`/`Sse`, or an unbounded `headers` for
+/// `Stdio` (issue #198 S2, and the `headers` mirror of it caught in review as N1 — a hostile
+/// `mcp.json` with `"transport": "stdio"` and a giant `headers` map was otherwise still
+/// completely unbounded, since the header checks lived only in
+/// [`validate_network_config`], which never runs for `Stdio`). Called unconditionally from
+/// [`validate_server_config`], before the transport-specific dispatch, so none of these bounds
+/// can be bypassed by transport choice.
+///
+/// Deliberately does not check for shell metacharacters, forbidden environment variable names,
+/// or the HTTP header-name token charset — those remain [`validate_stdio_config`]'s/
+/// [`validate_network_config`]'s responsibility, since they are only meaningful for a config
+/// that is actually used to spawn a subprocess or send an HTTP request, respectively.
+fn validate_size_bounds(config: &ServerConfig) -> Result<()> {
+    if config.command.len() > MAX_ARG_LEN {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "command too long: {} bytes exceeds the {MAX_ARG_LEN} limit",
+                config.command.len()
+            ),
+        });
+    }
+
+    if let Some(url) = config.url()
+        && url.len() > MAX_URL_LEN
+    {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "url too long: {} bytes exceeds the {MAX_URL_LEN} limit",
+                url.len()
+            ),
+        });
+    }
+
+    if config.args.len() > MAX_ARG_COUNT {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "too many arguments: {} exceeds the {MAX_ARG_COUNT} limit",
+                config.args.len()
+            ),
+        });
+    }
+    for (idx, arg) in config.args.iter().enumerate() {
+        if arg.len() > MAX_ARG_LEN {
+            return Err(Error::SecurityViolation {
+                reason: format!(
+                    "argument {idx} too long: {} bytes exceeds the {MAX_ARG_LEN} limit",
+                    arg.len()
+                ),
+            });
+        }
+    }
+
+    if config.env.len() > MAX_ENV_COUNT {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "too many environment variables: {} exceeds the {MAX_ENV_COUNT} limit",
+                config.env.len()
+            ),
+        });
+    }
+    for (env_name, env_value) in &config.env {
+        if env_name.len() > MAX_ARG_LEN {
+            return Err(Error::SecurityViolation {
+                reason: format!(
+                    "environment variable name too long: {} bytes exceeds the {MAX_ARG_LEN} \
+                     limit",
+                    env_name.len()
+                ),
+            });
+        }
+        if env_value.len() > MAX_ENV_VALUE_LEN {
+            return Err(Error::SecurityViolation {
+                reason: format!(
+                    "environment variable '{env_name}' value too long: {} bytes exceeds the \
+                     {MAX_ENV_VALUE_LEN} limit",
+                    env_value.len()
+                ),
+            });
+        }
+    }
+
+    if config.headers().len() > MAX_HEADER_COUNT {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "too many headers: {} exceeds the {MAX_HEADER_COUNT} limit",
+                config.headers().len()
+            ),
+        });
+    }
+    for (name, value) in config.headers() {
+        if name.len() > MAX_ARG_LEN {
+            return Err(Error::SecurityViolation {
+                reason: format!(
+                    "header name too long: {} bytes exceeds the {MAX_ARG_LEN} limit",
+                    name.len()
+                ),
+            });
+        }
+        if value.len() > MAX_HEADER_VALUE_LEN {
+            return Err(Error::SecurityViolation {
+                reason: format!(
+                    "header value too long: {} bytes exceeds the {MAX_HEADER_VALUE_LEN} limit",
+                    value.len()
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 /// Validates the stdio-transport-specific fields of a `ServerConfig`.
 ///
-/// Checks the command (absolute path or binary name), arguments, and
-/// environment variables for command-injection risks.
+/// Checks the command (absolute path or binary name), arguments, and environment variables
+/// for command-injection risks. Element counts/lengths are already bounded unconditionally by
+/// [`validate_size_bounds`] before this runs; this function only adds the checks that are
+/// meaningful specifically because this config will be used to spawn a subprocess.
 fn validate_stdio_config(config: &ServerConfig) -> Result<()> {
     // Validate command
     validate_command_string(&config.command, "command")?;
@@ -291,6 +465,11 @@ fn validate_stdio_config(config: &ServerConfig) -> Result<()> {
 /// hand-edited `mcp.json` with `"transport": "http"` and no `url` key
 /// deserializes successfully, bypassing `ServerConfigBuilder::build`'s
 /// "url required" check. This function is the actual enforcement point.
+///
+/// `headers`'/`url`'s element counts/lengths are already bounded unconditionally by
+/// [`validate_size_bounds`] before this runs; this function only adds the checks that are
+/// meaningful specifically because this config will be used to send an HTTP request (header
+/// name charset, control characters, scheme, duplicate names).
 fn validate_network_config(config: &ServerConfig) -> Result<()> {
     let url = config.url().ok_or_else(|| Error::ValidationError {
         field: "url".to_string(),
@@ -448,7 +627,8 @@ fn validate_timeout(timeout: Duration, field: &str) -> Result<()> {
 /// Validates a command string for forbidden shell metacharacters.
 ///
 /// This is an internal helper that checks a string (command or argument)
-/// for dangerous shell metacharacters.
+/// for dangerous shell metacharacters. Length is already bounded unconditionally by
+/// [`validate_size_bounds`] before this runs.
 ///
 /// # Security
 ///
@@ -525,8 +705,9 @@ fn validate_absolute_path(command: &str) -> Result<()> {
 
 /// Validates an environment variable name.
 ///
-/// This is an internal helper that checks if an environment variable
-/// name is in the forbidden list.
+/// This is an internal helper that checks if an environment variable name is in the
+/// forbidden list. Length is already bounded unconditionally by [`validate_size_bounds`]
+/// before this runs.
 fn validate_env_name(name: &str) -> Result<()> {
     // Check for forbidden env names (exact match)
     if FORBIDDEN_ENV_NAMES.contains(&name) {
@@ -548,6 +729,7 @@ fn validate_env_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
     use std::io::Write;
 
@@ -1270,6 +1452,394 @@ mod tests {
         } else {
             panic!("expected SecurityViolation for header value");
         }
+    }
+
+    // ── Resource-exhaustion bounds (issue #198) ──────────────────────────────
+
+    #[test]
+    fn test_validate_server_config_rejects_too_many_args() {
+        let args = (0..=MAX_ARG_COUNT).map(|i| format!("a{i}")).collect();
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .args(args)
+            .build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too many arguments"));
+        } else {
+            panic!("expected SecurityViolation for too many arguments");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_accepts_max_arg_count() {
+        let args = (0..MAX_ARG_COUNT).map(|i| format!("a{i}")).collect();
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .args(args)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_rejects_oversized_arg() {
+        let long_arg = "a".repeat(MAX_ARG_LEN + 1);
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg(long_arg)
+            .build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized argument");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_accepts_arg_at_max_len() {
+        let arg_at_cap = "a".repeat(MAX_ARG_LEN);
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg(arg_at_cap)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_rejects_oversized_command() {
+        let long_command = "a".repeat(MAX_ARG_LEN + 1);
+        let result = ServerConfig::builder().command(long_command).build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized command");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_rejects_too_many_env_vars() {
+        let env: HashMap<String, String> = (0..=MAX_ENV_COUNT)
+            .map(|i| (format!("VAR_{i}"), "value".to_string()))
+            .collect();
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .environment(env)
+            .build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too many environment variables"));
+        } else {
+            panic!("expected SecurityViolation for too many env vars");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_accepts_max_env_count() {
+        let env: HashMap<String, String> = (0..MAX_ENV_COUNT)
+            .map(|i| (format!("VAR_{i}"), "value".to_string()))
+            .collect();
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .environment(env)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_rejects_oversized_env_value() {
+        let long_value = "v".repeat(MAX_ENV_VALUE_LEN + 1);
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .env("MY_VAR".to_string(), long_value)
+            .build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized env value");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_accepts_env_value_at_max_len() {
+        let value_at_cap = "v".repeat(MAX_ENV_VALUE_LEN);
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .env("MY_VAR".to_string(), value_at_cap)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_rejects_oversized_env_name() {
+        let long_name = "V".repeat(MAX_ARG_LEN + 1);
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .env(long_name, "value".to_string())
+            .build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized env name");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_rejects_too_many_headers() {
+        let headers: HashMap<String, String> = (0..=MAX_HEADER_COUNT)
+            .map(|i| (format!("X-Header-{i}"), "value".to_string()))
+            .collect();
+        let result = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .headers(headers)
+            .build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too many headers"));
+        } else {
+            panic!("expected SecurityViolation for too many headers");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_accepts_max_header_count() {
+        let headers: HashMap<String, String> = (0..MAX_HEADER_COUNT)
+            .map(|i| (format!("X-Header-{i}"), "value".to_string()))
+            .collect();
+        let result = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .headers(headers)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_rejects_oversized_header_value() {
+        let long_value = "v".repeat(MAX_HEADER_VALUE_LEN + 1);
+        let result = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header("Authorization".to_string(), long_value)
+            .build();
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized header value");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_accepts_header_value_at_max_len() {
+        let value_at_cap = "v".repeat(MAX_HEADER_VALUE_LEN);
+        let result = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header("Authorization".to_string(), value_at_cap)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    // ── S2: Http/Sse configs must not bypass args/env/command/url bounds ────────
+    //
+    // `ServerConfigBuilder::try_build` always zeroes `args`/`env` for Http/Sse transport (and
+    // `headers` for Stdio), so these bounds can only be exercised on such a config via direct
+    // deserialization — mirroring `deserialize_http_config_missing_url` above — the same
+    // "hand-edited or hostile mcp.json" scenario that motivates `validate_network_config`'s own
+    // doc comment.
+
+    #[test]
+    fn test_validate_server_config_http_rejects_oversized_args_via_deserialization() {
+        let args: Vec<String> = (0..=MAX_ARG_COUNT).map(|i| format!("a{i}")).collect();
+        let json = serde_json::json!({
+            "transport": "http",
+            "url": "https://api.example.com/mcp",
+            "args": args,
+        });
+        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too many arguments"));
+        } else {
+            panic!("expected SecurityViolation for too many arguments on http transport");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_oversized_env_via_deserialization() {
+        let env: HashMap<String, String> = (0..=MAX_ENV_COUNT)
+            .map(|i| (format!("VAR_{i}"), "value".to_string()))
+            .collect();
+        let json = serde_json::json!({
+            "transport": "http",
+            "url": "https://api.example.com/mcp",
+            "env": env,
+        });
+        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too many environment variables"));
+        } else {
+            panic!("expected SecurityViolation for too many env vars on http transport");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_oversized_command_via_deserialization() {
+        let json = serde_json::json!({
+            "transport": "http",
+            "url": "https://api.example.com/mcp",
+            "command": "a".repeat(MAX_ARG_LEN + 1),
+        });
+        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("command too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized command on http transport");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_stdio_rejects_oversized_headers_via_deserialization() {
+        // N1 (review follow-up to S2): `headers` is normally only populated for Http/Sse, but
+        // the field exists unconditionally at the type level too, and a hand-edited/hostile
+        // `mcp.json` with `"transport": "stdio"` can still populate it.
+        let headers: HashMap<String, String> = (0..=MAX_HEADER_COUNT)
+            .map(|i| (format!("X-Header-{i}"), "value".to_string()))
+            .collect();
+        let json = serde_json::json!({
+            "transport": "stdio",
+            "command": "docker",
+            "headers": headers,
+        });
+        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("too many headers"));
+        } else {
+            panic!("expected SecurityViolation for too many headers on stdio transport");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_stdio_rejects_oversized_header_value_via_deserialization() {
+        let mut headers = HashMap::new();
+        headers.insert("X-Custom".to_string(), "v".repeat(MAX_HEADER_VALUE_LEN + 1));
+        let json = serde_json::json!({
+            "transport": "stdio",
+            "command": "docker",
+            "headers": headers,
+        });
+        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("header value too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized header value on stdio transport");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_stdio_rejects_oversized_header_name_via_deserialization() {
+        let mut headers = HashMap::new();
+        headers.insert("a".repeat(MAX_ARG_LEN + 1), "value".to_string());
+        let json = serde_json::json!({
+            "transport": "stdio",
+            "command": "docker",
+            "headers": headers,
+        });
+        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("header name too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized header name on stdio transport");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_stdio_rejects_oversized_url_via_deserialization() {
+        // Symmetric to the headers bypass above: `url` exists unconditionally at the type
+        // level too, and `validate_stdio_config` never inspects it.
+        let json = serde_json::json!({
+            "transport": "stdio",
+            "command": "docker",
+            "url": format!("https://example.com/{}", "a".repeat(MAX_URL_LEN)),
+        });
+        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
+
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("url too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized url on stdio transport");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_url_too_long() {
+        let long_url = format!("https://example.com/{}", "a".repeat(MAX_URL_LEN));
+        let result = ServerConfig::builder().http_transport(long_url).build();
+
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("url too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized url");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_accepts_url_at_max_len() {
+        let prefix = "https://example.com/";
+        let padding_len = MAX_URL_LEN - prefix.len();
+        let url_at_cap = format!("{prefix}{}", "a".repeat(padding_len));
+        assert_eq!(url_at_cap.len(), MAX_URL_LEN);
+
+        let result = ServerConfig::builder().http_transport(url_at_cap).build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_config_http_rejects_header_name_too_long() {
+        let long_name = format!("X-{}", "a".repeat(MAX_ARG_LEN));
+        let result = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header(long_name, "value".to_string())
+            .build();
+
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("header name too long"));
+        } else {
+            panic!("expected SecurityViolation for oversized header name");
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_http_accepts_header_name_at_max_len() {
+        let name_at_cap = "a".repeat(MAX_ARG_LEN);
+        let result = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .header(name_at_cap, "value".to_string())
+            .build();
+
+        assert!(result.is_ok());
     }
 
     #[test]

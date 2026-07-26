@@ -12,7 +12,11 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 /// Maximum `server_id` length (denial-of-service protection).
-const MAX_SERVER_ID_LENGTH: usize = 64;
+///
+/// `pub` (rather than private) so downstream crates' schemars drift-guard tests — e.g.
+/// `mcp-execution-server`'s, for `IntrospectServerParams::server_id` — can assert the declared
+/// schema length against this real constant instead of a hardcoded literal (issue #198 S3).
+pub const MAX_SERVER_ID_LENGTH: usize = 64;
 
 // ============================================================================
 // generate_skill types
@@ -36,7 +40,10 @@ const MAX_SERVER_ID_LENGTH: usize = 64;
 pub struct GenerateSkillParams {
     /// Server identifier (e.g., "github").
     ///
-    /// Must contain only lowercase letters, digits, and hyphens.
+    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id`'s
+    /// `MAX_SERVER_ID_LENGTH`, mirrored here as a literal since schemars attributes cannot
+    /// reference a `const`).
+    #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
     pub server_id: String,
 
     /// Base directory for generated servers.
@@ -165,9 +172,23 @@ pub struct ToolExample {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SaveSkillParams {
     /// Server identifier.
+    ///
+    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id`'s
+    /// `MAX_SERVER_ID_LENGTH`, mirrored here as a literal since schemars attributes cannot
+    /// reference a `const`).
+    #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
     pub server_id: String,
 
     /// SKILL.md content (markdown with YAML frontmatter).
+    ///
+    /// Capped at 100KB (`MAX_SKILL_CONTENT_SIZE` in `mcp_execution_server::service`) at
+    /// runtime; mirrored here as a literal since schemars attributes require literals and
+    /// this crate does not depend on `mcp-execution-server` (the dependency runs the other
+    /// way). Note: JSON Schema's `maxLength` counts Unicode code points, not bytes, so the two
+    /// bounds only coincide exactly for ASCII input — for legitimate multi-byte UTF-8 content,
+    /// the runtime byte check can reject content the declared schema would still accept
+    /// (never the reverse), since bytes-per-char >= 1 (issue #198 M2).
+    #[schemars(length(max = 102_400))]
     pub content: String,
 
     /// Custom output path.
@@ -308,6 +329,35 @@ pub fn validate_server_id(server_id: &str) -> Result<(), ServerIdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── schemars bounds (issue #205) ──────────────────────────────────────
+
+    #[test]
+    fn test_generate_skill_params_schema_declares_server_id_bounds() {
+        let schema = schemars::schema_for!(GenerateSkillParams);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+
+        // Asserted against the real runtime constant (not a hardcoded literal), so bumping
+        // `MAX_SERVER_ID_LENGTH` without updating the `#[schemars(length(max = ..))]` literal
+        // above fails this test instead of leaving the declared schema silently stale
+        // (issue #198 S3).
+        assert_eq!(props["server_id"]["maxLength"], MAX_SERVER_ID_LENGTH);
+        assert_eq!(props["server_id"]["pattern"], "^[a-z0-9-]+$");
+    }
+
+    #[test]
+    fn test_save_skill_params_schema_declares_bounds() {
+        let schema = schemars::schema_for!(SaveSkillParams);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+
+        assert_eq!(props["server_id"]["maxLength"], MAX_SERVER_ID_LENGTH);
+        assert_eq!(props["server_id"]["pattern"], "^[a-z0-9-]+$");
+        // `content`'s bound (`MAX_SKILL_CONTENT_SIZE`) lives in `mcp-execution-server`, a
+        // reverse dependency this crate cannot reference — see
+        // `mcp-server::service::tests::test_save_skill_params_content_schema_matches_max_skill_content_size`
+        // for the drift-proof version of this specific assertion.
+        assert_eq!(props["content"]["maxLength"], 102_400);
+    }
 
     #[test]
     fn test_validate_server_id_valid() {
