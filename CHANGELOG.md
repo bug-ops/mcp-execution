@@ -249,6 +249,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point — the bare username is scrubbed from the rendered path as a defense-in-depth fallback
   rather than the previous behavior of returning the path unredacted.
 
+- **`mcp-execution-cli`**: `Commands::Introspect`'s `http`/`sse` and `Commands::Generate`'s
+  `http_url`/`sse_url` fields are now wrapped in `RedactedUrl` in their hand-written `Debug`
+  impls, closing the last unredacted path by which a raw, unparsed URL argument — which can
+  embed credentials, e.g. `https://user:token@host/mcp` — reached CLI debug/log output before
+  `TransportArgs`/`McpTransport` ever get a chance to redact it (#251).
+
 ### Testing
 
 - **`mcp-execution-introspector`**: added `tests/tool_count_bound_test.rs`, an integration test
