@@ -525,12 +525,17 @@ fn builder_for_transport(transport: McpTransport) -> ServerConfigBuilder {
 
 /// Builds a core [`ServerConfig`] from an [`McpServerEntry`].
 ///
+/// `pub(crate)` rather than private: `commands::server`'s `list_servers` also
+/// needs it, to build the same `(ServerId, ServerConfig)` pair
+/// [`get_mcp_server`] builds internally, without re-reading `mcp.json` for
+/// every entry it already has in hand.
+///
 /// # Errors
 ///
 /// Returns an error if the entry fails [`ServerConfigBuilder::build`]'s
 /// security validation (e.g. a shell metacharacter or forbidden environment
 /// variable in a hand-edited `mcp.json`).
-fn build_core_config(entry: &McpServerEntry) -> Result<ServerConfig> {
+pub(crate) fn build_core_config(entry: &McpServerEntry) -> Result<ServerConfig> {
     let mut builder = builder_for_transport(entry.transport.clone());
 
     if let Some(secs) = entry.connect_timeout_secs {
