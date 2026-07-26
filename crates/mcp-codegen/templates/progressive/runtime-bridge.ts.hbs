@@ -21,17 +21,21 @@ import { Readable } from 'stream';
  * Configuration for an MCP server
  */
 interface ServerConfig {
-  /** Transport type; "stdio" if omitted. Only "stdio" is validated/supported here — see
+  /** Transport type; "stdio" if omitted. Only "stdio" is executable by this bridge — see
    * {@link validateServerConfig}. */
   transport?: string;
-  /** Command to execute (e.g., "docker", "node", "npx") */
+  /** Command to execute (e.g., "docker", "node", "npx"). Stdio transport only. */
   command: string;
-  /** Arguments to pass to the command */
+  /** Arguments to pass to the command. Stdio transport only. */
   args: string[];
-  /** Environment variables */
+  /** Environment variables. Stdio transport only. */
   env?: Record<string, string>;
-  /** Working directory */
+  /** Working directory. Stdio transport only. */
   cwd?: string;
+  /** Server endpoint URL. Http/Sse transport only. */
+  url?: string;
+  /** HTTP headers. Http/Sse transport only. */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -114,25 +118,28 @@ function debug(...args: unknown[]): void {
 
 /**
  * Shell metacharacters that indicate potential command injection.
- * Mirrors `FORBIDDEN_CHARS` in `mcp-execution-core`'s `command.rs`.
+ *
+ * Rendered directly from `mcp-execution-core`'s `forbidden_chars()` (`command.rs`) at code
+ * generation time — not hand-copied — so this list can never silently drift from the Rust
+ * source of truth.
  */
-const FORBIDDEN_CHARS = [';', '|', '&', '>', '<', '`', '$', '(', ')', '\n', '\r'];
+const FORBIDDEN_CHARS = [{{#each forbidden_chars}}'{{{this}}}'{{#unless @last}}, {{/unless}}{{/each}}];
 
 /**
  * Forbidden environment variable names that pose security risks.
- * Mirrors `FORBIDDEN_ENV_NAMES` in `mcp-execution-core`'s `command.rs`.
- * `DYLD_*` is additionally rejected as a prefix match, not just these exact names.
+ *
+ * Rendered directly from `mcp-execution-core`'s `forbidden_env_names()` (`command.rs`) at
+ * code generation time, for the same drift-elimination reason as {@link FORBIDDEN_CHARS}.
+ * `{{{forbidden_env_prefix}}}*` is additionally rejected as a prefix match, not just these
+ * exact names — see {@link validateEnvName}.
  */
-const FORBIDDEN_ENV_NAMES = [
-  'LD_PRELOAD',
-  'LD_LIBRARY_PATH',
-  'DYLD_INSERT_LIBRARIES',
-  'DYLD_LIBRARY_PATH',
-  'DYLD_FRAMEWORK_PATH',
-  'PATH',
-  'NODE_OPTIONS',
-  'BASH_ENV',
-];
+const FORBIDDEN_ENV_NAMES = [{{#each forbidden_env_names}}'{{{this}}}'{{#unless @last}}, {{/unless}}{{/each}}];
+
+/**
+ * Environment-variable-name prefix rejected regardless of exact match, rendered directly
+ * from `mcp-execution-core`'s `forbidden_env_prefix()` (`command.rs`).
+ */
+const FORBIDDEN_ENV_PREFIX = '{{{forbidden_env_prefix}}}';
 
 /**
  * Validates a command or argument string for forbidden shell metacharacters.
@@ -178,37 +185,149 @@ function validateEnvName(name: string): void {
   if (FORBIDDEN_ENV_NAMES.includes(name)) {
     throw new Error(`Forbidden environment variable name: ${name}`);
   }
-  if (name.startsWith('DYLD_')) {
-    throw new Error(`Forbidden environment variable prefix DYLD_: ${name}`);
+  if (name.startsWith(FORBIDDEN_ENV_PREFIX)) {
+    throw new Error(`Forbidden environment variable prefix ${FORBIDDEN_ENV_PREFIX}: ${name}`);
   }
 }
 
 /**
- * Validates a server configuration for safe subprocess execution.
+ * Validates that a URL uses the `http://` or `https://` scheme.
  *
- * `~/.claude/mcp.json` is re-read from disk on every server (re)connection, so
- * a config that passed validation at `generate` time can later be edited to
- * add e.g. `LD_PRELOAD` and bypass that one-time check. This re-validates the
- * command, arguments, and environment variable names on every load, mirroring
- * `mcp_execution_core::validate_server_config`'s stdio-transport checks
- * (`command.rs`) — full parity with that function's http/sse checks (URL
- * scheme, headers, timeouts) is intentionally out of scope, since this bridge
- * only ever spawns a subprocess and has no http/sse client of its own. Fails
- * closed by throwing rather than silently stripping the offending value, so
- * an invalid config surfaces as a clear error instead of an unexpectedly
- * sanitized spawn.
+ * Mirrors `validate_url_scheme` in `mcp-execution-core`'s `command.rs`, including its
+ * defense-in-depth rationale (rejecting `file://`, `unix://`, etc.) and case-insensitive
+ * scheme comparison per RFC 3986.
+ *
+ * @param url - The URL to validate
+ * @param serverId - Server identifier, used in the error message
+ * @throws {Error} If the URL's scheme is not `http`/`https`
+ */
+function validateUrlScheme(url: string, serverId: string): void {
+  const schemeMatch = /^([^:]*):\/\//.exec(url);
+  const scheme = schemeMatch?.[1]?.toLowerCase();
+  if (scheme !== 'http' && scheme !== 'https') {
+    throw new Error(`url for server '${serverId}' must use the http:// or https:// scheme`);
+  }
+}
+
+/**
+ * Returns `true` if `c` is a valid RFC 7230 `tchar` (the charset allowed in an HTTP header
+ * field name). Mirrors `is_header_name_tchar` in `mcp-execution-core`'s `command.rs`.
+ */
+function isHeaderNameTchar(c: string): boolean {
+  return /^[A-Za-z0-9!#$%&'*+\-.^_`|~]$/.test(c);
+}
+
+/**
+ * Validates an HTTP header name against the RFC 7230 `token` charset.
+ *
+ * Mirrors `validate_header_name_string` in `mcp-execution-core`'s `command.rs`: a plain
+ * control-character check is not tight enough, since a space, `:`, or `@` is not a control
+ * character but is still an invalid header-name character.
+ *
+ * @param name - The header name to validate
+ * @param serverId - Server identifier, used in the error message
+ * @throws {Error} If the name is empty or contains a character outside the HTTP token charset
+ */
+function validateHeaderNameString(name: string, serverId: string): void {
+  if (name.length === 0) {
+    throw new Error(`header name cannot be empty for server '${serverId}'`);
+  }
+  for (const c of name) {
+    if (!isHeaderNameTchar(c)) {
+      throw new Error(
+        `header name '${name}' for server '${serverId}' contains characters outside the ` +
+        `allowed HTTP token charset`
+      );
+    }
+  }
+}
+
+/**
+ * Validates an HTTP header value for control characters.
+ *
+ * Mirrors `validate_header_value_string` in `mcp-execution-core`'s `command.rs`. The header
+ * *value* routinely carries secrets (e.g. bearer tokens), so it must never appear in the
+ * thrown error — only the header *name* is included.
+ *
+ * @param name - The header name, used in the error message (the value itself never is)
+ * @param value - The header value to validate
+ * @param serverId - Server identifier, used in the error message
+ * @throws {Error} If the value contains a control character
+ */
+function validateHeaderValueString(name: string, value: string, serverId: string): void {
+  // eslint-disable-next-line no-control-regex -- intentionally matching control characters
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    throw new Error(
+      `value for header '${name}' for server '${serverId}' contains control characters`
+    );
+  }
+}
+
+/**
+ * Validates the Http/Sse-transport-specific fields of a server configuration.
+ *
+ * Mirrors `validate_network_config` in `mcp-execution-core`'s `command.rs`: URL presence and
+ * scheme, and header name/value safety, including rejecting header names that collide
+ * case-insensitively (e.g. `Authorization` and `authorization` both present), since a
+ * downstream HTTP client would otherwise silently pick one with no deterministic winner.
  *
  * @param config - The server configuration to validate
  * @param serverId - Server identifier, used in error messages
- * @throws {Error} If the transport is not "stdio", or the command, an argument, or an
- *   environment variable name is unsafe
+ * @throws {Error} If `url` is missing, its scheme is not http/https, or a header name/value
+ *   is unsafe
+ */
+function validateNetworkConfig(config: ServerConfig, serverId: string): void {
+  if (typeof config.url !== 'string' || config.url.length === 0) {
+    throw new Error(`url is required for server '${serverId}'`);
+  }
+  validateUrlScheme(config.url, serverId);
+
+  const seenHeaderNames = new Set<string>();
+  for (const [name, value] of Object.entries(config.headers ?? {})) {
+    validateHeaderNameString(name, serverId);
+    validateHeaderValueString(name, value, serverId);
+    const lowerName = name.toLowerCase();
+    if (seenHeaderNames.has(lowerName)) {
+      throw new Error(`duplicate header name (case-insensitive) for server '${serverId}': '${name}'`);
+    }
+    seenHeaderNames.add(lowerName);
+  }
+}
+
+/**
+ * Validates a server configuration for safe execution.
+ *
+ * `~/.claude/mcp.json` is re-read from disk on every server (re)connection, so a config that
+ * passed validation at `generate` time can later be edited to add e.g. `LD_PRELOAD` and
+ * bypass that one-time check. This re-validates the command, arguments, and environment
+ * variable names (stdio) or URL and headers (http/sse) on every load, mirroring
+ * `mcp_execution_core::validate_server_config` (`command.rs`) to the same depth for every
+ * transport. Fails closed by throwing rather than silently stripping the offending value, so
+ * an invalid config surfaces as a clear error instead of an unexpectedly sanitized spawn.
+ *
+ * This bridge only ever spawns a subprocess (stdio transport) — it has no http/sse client of
+ * its own — so a validated http/sse config is still rejected as unsupported afterward. The
+ * validation runs first regardless, so the error a caller sees names the actual problem (a
+ * bad URL scheme, an unsafe header) when one exists, and the "unsupported transport" message
+ * is reserved for a config that is otherwise well-formed. This also means the validation
+ * logic is already correct and tested for when the bridge gains real http/sse tool-call
+ * support (see issue #221 item 2).
+ *
+ * @param config - The server configuration to validate
+ * @param serverId - Server identifier, used in error messages
+ * @throws {Error} If the config fails validation for its transport, or the transport is not
+ *   "stdio" (even if otherwise valid — see above)
  */
 function validateServerConfig(config: ServerConfig, serverId: string): void {
-  // `{"transport":"http",...}` is a valid mcp.json entry (all ServerConfig fields are
-  // optional on the Rust side), but this bridge only ever spawns a subprocess — reject it
-  // here with a clear message rather than letting `command`/`args` being `undefined` throw
-  // an opaque TypeError out of validateCommandString or Node's own spawn().
   const transport = config.transport ?? 'stdio';
+
+  // Validate http/sse configs to the same depth as the Rust source of truth before
+  // rejecting them as unsupported below, so a malformed URL/header is reported precisely
+  // rather than masked by the generic "unsupported transport" message.
+  if (transport === 'http' || transport === 'sse') {
+    validateNetworkConfig(config, serverId);
+  }
+
   if (transport !== 'stdio') {
     throw new Error(
       `Server '${serverId}' is configured for '${transport}' transport, but this generated ` +
@@ -274,14 +393,66 @@ async function loadServerConfig(serverId: string): Promise<ServerConfig> {
 }
 
 /**
- * Read a complete JSON-RPC message from a stream
- *
- * @param stream - Readable stream (typically stdout from MCP server)
- * @returns Parsed JSON-RPC response
+ * Default timeout, in milliseconds, for a single JSON-RPC round trip in
+ * {@link readJsonRpcMessage}. Overridable via the `MCPBRIDGE_REQUEST_TIMEOUT_MS`
+ * environment variable.
  */
-async function readJsonRpcMessage(stream: Readable): Promise<MCPToolCallResponse> {
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Configured request timeout, in milliseconds. Falls back to
+ * {@link DEFAULT_REQUEST_TIMEOUT_MS} if `MCPBRIDGE_REQUEST_TIMEOUT_MS` is unset, empty, or
+ * not a positive number.
+ */
+const REQUEST_TIMEOUT_MS = (() => {
+  const raw = process.env.MCPBRIDGE_REQUEST_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REQUEST_TIMEOUT_MS;
+})();
+
+/**
+ * Reads a complete JSON-RPC message from a stream, guarding against the two ways this can
+ * otherwise hang forever: the spawned server process exiting before ever writing a response,
+ * and a server that simply never replies.
+ *
+ * @param stream - Readable stream (typically stdout from the MCP server)
+ * @param child - The MCP server's child process; its `exit` event settles this promise with
+ *   a clear error if the process dies before a response arrives
+ * @param timeoutMs - Milliseconds to wait for a response before rejecting; defaults to
+ *   {@link REQUEST_TIMEOUT_MS}
+ * @returns Parsed JSON-RPC response
+ * @throws {Error} If the stream errors, the child process exits before responding, or
+ *   `timeoutMs` elapses with no response
+ */
+async function readJsonRpcMessage(
+  stream: Readable,
+  child: ChildProcess,
+  timeoutMs: number = REQUEST_TIMEOUT_MS
+): Promise<MCPToolCallResponse> {
   return new Promise((resolve, reject) => {
     let buffer = '';
+    let settled = false;
+
+    const cleanup = (): void => {
+      stream.off('data', onData);
+      stream.off('error', onError);
+      child.off('exit', onExit);
+      clearTimeout(timer);
+    };
+
+    const settleResolve = (message: MCPToolCallResponse): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(message);
+    };
+
+    const settleReject = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
 
     const onData = (chunk: Buffer): void => {
       buffer += chunk.toString();
@@ -298,9 +469,7 @@ async function readJsonRpcMessage(stream: Readable): Promise<MCPToolCallResponse
 
           // Only process responses, ignore notifications
           if ('id' in message) {
-            stream.off('data', onData);
-            stream.off('error', onError);
-            resolve(message);
+            settleResolve(message);
             return;
           }
         } catch (e) {
@@ -314,13 +483,25 @@ async function readJsonRpcMessage(stream: Readable): Promise<MCPToolCallResponse
     };
 
     const onError = (error: Error): void => {
-      stream.off('data', onData);
-      stream.off('error', onError);
-      reject(error);
+      settleReject(error);
     };
+
+    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      settleReject(
+        new Error(
+          `MCP server process exited before responding (code ${code ?? 'null'}, ` +
+          `signal ${signal ?? 'null'})`
+        )
+      );
+    };
+
+    const timer = setTimeout(() => {
+      settleReject(new Error(`Timed out after ${timeoutMs}ms waiting for a response from the MCP server`));
+    }, timeoutMs);
 
     stream.on('data', onData);
     stream.on('error', onError);
+    child.on('exit', onExit);
   });
 }
 
@@ -392,7 +573,7 @@ async function getConnection(serverId: string): Promise<ChildProcess> {
 
   // Wait for initialize response
   try {
-    const initResponse = await readJsonRpcMessage(serverProcess.stdout!);
+    const initResponse = await readJsonRpcMessage(serverProcess.stdout!, serverProcess);
     debug('Received initialize response:', JSON.stringify(initResponse));
 
     if (initResponse.error) {
@@ -458,7 +639,7 @@ export async function callMCPTool(
   serverProcess.stdin!.write(JSON.stringify(request) + '\n');
 
   // Wait for response
-  const response = await readJsonRpcMessage(serverProcess.stdout!);
+  const response = await readJsonRpcMessage(serverProcess.stdout!, serverProcess);
   debug('Received tool call response:', JSON.stringify(response));
 
   // Handle errors

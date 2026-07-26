@@ -275,19 +275,15 @@ fn test_tool_info_debug() {
     assert!(debug_str.contains("Description"));
 }
 
-/// Tests that invalid server commands are rejected
-#[tokio::test]
-async fn test_invalid_command_rejection() {
-    let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test");
-
-    // Try to discover with invalid command (should fail validation)
-    let config = ServerConfig::builder()
+/// Tests that invalid server commands are rejected at construction time —
+/// `ServerConfigBuilder::build()` now runs security validation itself, so an
+/// unvalidated `ServerConfig` never reaches `discover_server`.
+#[test]
+fn test_invalid_command_rejection() {
+    let result = ServerConfig::builder()
         .command("echo test; rm -rf /".to_string())
         .build();
-    let result = introspector.discover_server(server_id, &config).await;
 
-    // Should fail due to validation or connection error
     assert!(result.is_err());
 }
 
@@ -368,7 +364,7 @@ fn test_discover_server_empty_command() {
     // Empty command should fail during build
     let result = ServerConfig::builder().command(String::new()).try_build();
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("empty"));
+    assert!(result.unwrap_err().to_string().contains("empty"));
 }
 
 /// Tests `discover_server` with whitespace command
@@ -379,15 +375,13 @@ fn test_discover_server_whitespace_command() {
         .command("   ".to_string())
         .try_build();
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("empty"));
+    assert!(result.unwrap_err().to_string().contains("empty"));
 }
 
-/// Tests `discover_server` with command containing shell operators
-#[tokio::test]
-async fn test_discover_server_shell_operators() {
-    let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test");
-
+/// Tests that commands containing shell operators are rejected at
+/// construction time (see `test_invalid_command_rejection`'s doc comment).
+#[test]
+fn test_discover_server_shell_operators() {
     let dangerous_commands = vec![
         "cmd && malicious",
         "cmd | pipe",
@@ -398,12 +392,7 @@ async fn test_discover_server_shell_operators() {
     ];
 
     for cmd in dangerous_commands {
-        let config = ServerConfig::builder().command(cmd.to_string()).build();
-        let result = introspector
-            .discover_server(server_id.clone(), &config)
-            .await;
-
-        // Should fail validation
+        let result = ServerConfig::builder().command(cmd.to_string()).build();
         assert!(result.is_err(), "Command should be rejected: {cmd}");
     }
 }
@@ -414,9 +403,13 @@ async fn test_discover_server_nonexistent_command() {
     let mut introspector = Introspector::new();
     let server_id = ServerId::new("test");
 
+    // A bare (non-absolute) binary name passes construction-time validation
+    // (it's resolved via PATH at spawn time), so the failure below comes
+    // from the process spawn itself, not from `build()`.
     let config = ServerConfig::builder()
         .command("nonexistent-command-12345".to_string())
-        .build();
+        .build()
+        .unwrap();
     let result = introspector.discover_server(server_id, &config).await;
 
     // Should fail to spawn process

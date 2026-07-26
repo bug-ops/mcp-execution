@@ -16,7 +16,11 @@
 //! - Argument sanitization (no shell metacharacters)
 //! - Environment variable validation (block dangerous names)
 //! - Forbidden characters: `;`, `|`, `&`, `>`, `<`, `` ` ``, `$`, `(`, `)`, `\n`, `\r`
-//! - Forbidden env vars: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`
+//! - Forbidden env vars: dynamic-linker (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
+//!   `LD_AUDIT`, `DYLD_*`), `PATH`, and interpreter hijack vectors
+//!   (`NODE_OPTIONS`, `PYTHONPATH`, `PYTHONSTARTUP`, `RUBYOPT`, `PERL5OPT`,
+//!   `JAVA_TOOL_OPTIONS`) — see `command::FORBIDDEN_ENV_NAMES` for the full
+//!   list and its documented threat model
 //!
 //! # Examples
 //!
@@ -27,21 +31,21 @@
 //! // Simple configuration with just command
 //! let config = ServerConfig::builder()
 //!     .command("docker".to_string())
-//!     .build();
+//!     .build().unwrap();
 //!
 //! // Full configuration with args and env
 //! let config = ServerConfig::builder()
-//!     .command("/usr/local/bin/mcp-server".to_string())
+//!     .command("mcp-server".to_string())
 //!     .arg("--port".to_string())
 //!     .arg("8080".to_string())
 //!     .env("LOG_LEVEL".to_string(), "debug".to_string())
-//!     .build();
+//!     .build().unwrap();
 //!
 //! // HTTP transport configuration
 //! let config = ServerConfig::builder()
 //!     .http_transport("https://api.example.com/mcp".to_string())
 //!     .header("Authorization".to_string(), "Bearer token".to_string())
-//!     .build();
+//!     .build().unwrap();
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -100,9 +104,17 @@ pub enum TransportType {
 ///
 /// # Security
 ///
-/// This type is designed to be safe by construction. Use the builder pattern
-/// to construct instances, and call [`validate_server_config`] before execution
-/// to ensure security requirements are met.
+/// [`ServerConfigBuilder::build`] (and its [`ServerConfigBuilder::try_build`] alias) run
+/// [`validate_server_config`] internally, so a `ServerConfig` built through the builder
+/// cannot be constructed without having already passed security validation. This is *not*
+/// a type-level guarantee, though: every field is `pub` and the type derives `Deserialize`,
+/// so a caller can still assemble an unvalidated `ServerConfig` directly (a struct literal,
+/// or deserializing a hand-edited `mcp.json`) — see the `deserialize_http_config_missing_url`
+/// pattern in `command.rs`'s tests for exactly that construction. Callers that obtain a
+/// `ServerConfig` from anywhere other than the builder should still call
+/// [`validate_server_config`] themselves before using it to spawn a process or open a
+/// connection; `mcp_execution_introspector::Introspector::discover_server` does this as
+/// defense-in-depth even though its own callers always go through the builder.
 ///
 /// # Examples
 ///
@@ -114,7 +126,7 @@ pub enum TransportType {
 ///     .command("docker".to_string())
 ///     .arg("run".to_string())
 ///     .arg("mcp-server".to_string())
-///     .build();
+///     .build().unwrap();
 ///
 /// assert_eq!(config.command, "docker");
 /// assert_eq!(config.args.len(), 2);
@@ -123,7 +135,7 @@ pub enum TransportType {
 /// let config = ServerConfig::builder()
 ///     .http_transport("https://api.example.com/mcp".to_string())
 ///     .header("Authorization".to_string(), "Bearer token".to_string())
-///     .build();
+///     .build().unwrap();
 /// ```
 ///
 /// [`validate_server_config`]: fn.validate_server_config.html
@@ -219,7 +231,7 @@ impl ServerConfig {
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn builder() -> ServerConfigBuilder {
@@ -278,7 +290,7 @@ impl ServerConfig {
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     ///
     /// assert_eq!(config.connect_timeout(), Duration::from_secs(30));
     /// ```
@@ -297,7 +309,7 @@ impl ServerConfig {
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     ///
     /// assert_eq!(config.discover_timeout(), Duration::from_secs(30));
     /// ```
@@ -322,13 +334,13 @@ impl ServerConfig {
 ///     .command("mcp-server".to_string())
 ///     .arg("--verbose".to_string())
 ///     .env("DEBUG".to_string(), "1".to_string())
-///     .build();
+///     .build().unwrap();
 ///
 /// // HTTP transport
 /// let config = ServerConfig::builder()
 ///     .http_transport("https://api.example.com/mcp".to_string())
 ///     .header("Authorization".to_string(), "Bearer token".to_string())
-///     .build();
+///     .build().unwrap();
 /// ```
 #[derive(Debug, Clone)]
 pub struct ServerConfigBuilder {
@@ -369,7 +381,7 @@ impl ServerConfigBuilder {
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn command(mut self, command: String) -> Self {
@@ -388,7 +400,7 @@ impl ServerConfigBuilder {
     ///     .command("docker".to_string())
     ///     .arg("run".to_string())
     ///     .arg("--rm".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn arg(mut self, arg: String) -> Self {
@@ -406,7 +418,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
     ///     .args(vec!["run".to_string(), "--rm".to_string()])
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn args(mut self, args: Vec<String>) -> Self {
@@ -424,7 +436,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .command("mcp-server".to_string())
     ///     .env("LOG_LEVEL".to_string(), "debug".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn env(mut self, key: String, value: String) -> Self {
@@ -446,7 +458,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .command("mcp-server".to_string())
     ///     .environment(env_map)
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn environment(mut self, env: HashMap<String, String>) -> Self {
@@ -465,7 +477,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .command("mcp-server".to_string())
     ///     .cwd(PathBuf::from("/tmp"))
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn cwd(mut self, cwd: PathBuf) -> Self {
@@ -484,7 +496,7 @@ impl ServerConfigBuilder {
     ///
     /// let config = ServerConfig::builder()
     ///     .http_transport("https://api.example.com/mcp".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn http_transport(mut self, url: String) -> Self {
@@ -508,7 +520,7 @@ impl ServerConfigBuilder {
     ///
     /// let config = ServerConfig::builder()
     ///     .sse_transport("https://api.example.com/sse".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn sse_transport(mut self, url: String) -> Self {
@@ -531,7 +543,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .http_transport("https://api.example.com/mcp".to_string())
     ///     .url("https://api.example.com/mcp/v2".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn url(mut self, url: String) -> Self {
@@ -549,7 +561,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .http_transport("https://api.example.com/mcp".to_string())
     ///     .header("Authorization".to_string(), "Bearer token".to_string())
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn header(mut self, key: String, value: String) -> Self {
@@ -571,7 +583,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .http_transport("https://api.example.com/mcp".to_string())
     ///     .headers(headers)
-    ///     .build();
+    ///     .build().unwrap();
     /// ```
     #[must_use]
     pub fn headers(mut self, headers: HashMap<String, String>) -> Self {
@@ -590,7 +602,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
     ///     .connect_timeout(Duration::from_secs(5))
-    ///     .build();
+    ///     .build().unwrap();
     ///
     /// assert_eq!(config.connect_timeout(), Duration::from_secs(5));
     /// ```
@@ -611,7 +623,7 @@ impl ServerConfigBuilder {
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
     ///     .discover_timeout(Duration::from_secs(5))
-    ///     .build();
+    ///     .build().unwrap();
     ///
     /// assert_eq!(config.discover_timeout(), Duration::from_secs(5));
     /// ```
@@ -621,15 +633,29 @@ impl ServerConfigBuilder {
         self
     }
 
-    /// Builds the `ServerConfig`.
+    /// Builds and validates the `ServerConfig`.
     ///
-    /// # Panics
+    /// This is the only way to obtain a [`ServerConfig`] through the builder: beyond the
+    /// structural checks (command/url presence), it also runs the full security validation
+    /// performed by [`validate_server_config`] — shell metacharacters, forbidden environment
+    /// variables, URL scheme, and header safety — before returning. A `ServerConfig` built
+    /// through this method therefore cannot exist without having passed security
+    /// validation, closing the gap where a caller could construct a config via the builder
+    /// and forget to validate it before spawning a process. This is a builder-level
+    /// guarantee, not a type-level one: every field is `pub` and the type derives
+    /// `Deserialize`, so a `ServerConfig` obtained by other means (a struct literal,
+    /// `serde_json::from_str`) is not covered — see [`ServerConfig`]'s own "Security" section.
     ///
-    /// Panics if:
-    /// - Command was not set for stdio transport
-    /// - URL was not set for HTTP transport
+    /// # Errors
     ///
-    /// Use `try_build()` for fallible construction.
+    /// Returns `Error::ValidationError` if:
+    /// - Command is not set (or is empty) for stdio transport
+    /// - URL is not set for HTTP/SSE transport
+    ///
+    /// Returns `Error::SecurityViolation` or `Error::ValidationError` for any
+    /// reason documented on [`validate_server_config`] (forbidden shell
+    /// metacharacters, forbidden environment variables, invalid URL scheme,
+    /// unsafe headers, out-of-bounds timeouts, etc.).
     ///
     /// # Examples
     ///
@@ -638,21 +664,31 @@ impl ServerConfigBuilder {
     ///
     /// let config = ServerConfig::builder()
     ///     .command("docker".to_string())
-    ///     .build();
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// // Rejected at construction time — no separate validation step needed.
+    /// let err = ServerConfig::builder()
+    ///     .command("docker".to_string())
+    ///     .arg("run; rm -rf /".to_string())
+    ///     .build()
+    ///     .unwrap_err();
+    /// assert!(err.is_security_error());
     /// ```
-    #[must_use]
-    pub fn build(self) -> ServerConfig {
-        self.try_build()
-            .expect("ServerConfig::build() failed validation")
+    ///
+    /// [`validate_server_config`]: fn.validate_server_config.html
+    pub fn build(self) -> crate::Result<ServerConfig> {
+        let config = self.try_build_structural()?;
+        crate::validate_server_config(&config)?;
+        Ok(config)
     }
 
-    /// Attempts to build the `ServerConfig`, returning an error if invalid.
+    /// Alias for [`Self::build`], kept for call sites that prefer the
+    /// `try_`-prefixed fallible-constructor naming.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Command is not set for stdio transport
-    /// - URL is not set for HTTP transport
+    /// Same as [`Self::build`].
     ///
     /// # Examples
     ///
@@ -665,15 +701,30 @@ impl ServerConfigBuilder {
     ///
     /// assert!(result.is_ok());
     /// ```
-    pub fn try_build(self) -> Result<ServerConfig, String> {
+    pub fn try_build(self) -> crate::Result<ServerConfig> {
+        self.build()
+    }
+
+    /// Checks structural completeness (command/url presence) and assembles
+    /// the `ServerConfig`, without running security validation.
+    ///
+    /// Kept private and separate from [`Self::build`] so the two concerns —
+    /// "is this config structurally complete" and "is this config safe to
+    /// spawn" — stay independently testable, while the public API only ever
+    /// hands out a fully validated [`ServerConfig`].
+    fn try_build_structural(self) -> crate::Result<ServerConfig> {
         match self.transport {
             TransportType::Stdio => {
-                let command = self
-                    .command
-                    .ok_or_else(|| "command is required for stdio transport".to_string())?;
+                let command = self.command.ok_or_else(|| crate::Error::ValidationError {
+                    field: "command".to_string(),
+                    reason: "command is required for stdio transport".to_string(),
+                })?;
 
                 if command.trim().is_empty() {
-                    return Err("command cannot be empty for stdio transport".to_string());
+                    return Err(crate::Error::ValidationError {
+                        field: "command".to_string(),
+                        reason: "command cannot be empty for stdio transport".to_string(),
+                    });
                 }
 
                 Ok(ServerConfig {
@@ -689,9 +740,10 @@ impl ServerConfigBuilder {
                 })
             }
             TransportType::Http => {
-                let url = self
-                    .url
-                    .ok_or_else(|| "url is required for HTTP transport".to_string())?;
+                let url = self.url.ok_or_else(|| crate::Error::ValidationError {
+                    field: "url".to_string(),
+                    reason: "url is required for HTTP transport".to_string(),
+                })?;
 
                 Ok(ServerConfig {
                     transport: TransportType::Http,
@@ -706,9 +758,10 @@ impl ServerConfigBuilder {
                 })
             }
             TransportType::Sse => {
-                let url = self
-                    .url
-                    .ok_or_else(|| "url is required for SSE transport".to_string())?;
+                let url = self.url.ok_or_else(|| crate::Error::ValidationError {
+                    field: "url".to_string(),
+                    reason: "url is required for SSE transport".to_string(),
+                })?;
 
                 Ok(ServerConfig {
                     transport: TransportType::Sse,
@@ -734,7 +787,8 @@ mod tests {
     fn test_server_config_builder_minimal() {
         let config = ServerConfig::builder()
             .command("docker".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.command, "docker");
         assert!(config.args.is_empty());
@@ -749,7 +803,8 @@ mod tests {
             .arg("run".to_string())
             .arg("--rm".to_string())
             .arg("mcp-server".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.command, "docker");
         assert_eq!(config.args, vec!["run", "--rm", "mcp-server"]);
@@ -760,7 +815,8 @@ mod tests {
         let config = ServerConfig::builder()
             .command("docker".to_string())
             .args(vec!["run".to_string(), "--rm".to_string()])
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.args, vec!["run", "--rm"]);
     }
@@ -771,7 +827,8 @@ mod tests {
             .command("mcp-server".to_string())
             .env("LOG_LEVEL".to_string(), "debug".to_string())
             .env("DEBUG".to_string(), "1".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.env.len(), 2);
         assert_eq!(config.env.get("LOG_LEVEL"), Some(&"debug".to_string()));
@@ -787,7 +844,8 @@ mod tests {
         let config = ServerConfig::builder()
             .command("mcp-server".to_string())
             .environment(env_map)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.env.len(), 2);
     }
@@ -797,7 +855,8 @@ mod tests {
         let config = ServerConfig::builder()
             .command("mcp-server".to_string())
             .cwd(PathBuf::from("/tmp"))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.cwd, Some(PathBuf::from("/tmp")));
     }
@@ -808,13 +867,14 @@ mod tests {
         env_map.insert("LOG_LEVEL".to_string(), "debug".to_string());
 
         let config = ServerConfig::builder()
-            .command("/usr/local/bin/mcp-server".to_string())
+            .command("mcp-server".to_string())
             .args(vec!["--port".to_string(), "8080".to_string()])
             .environment(env_map)
             .cwd(PathBuf::from("/var/run"))
-            .build();
+            .build()
+            .unwrap();
 
-        assert_eq!(config.command, "/usr/local/bin/mcp-server");
+        assert_eq!(config.command, "mcp-server");
         assert_eq!(config.args.len(), 2);
         assert_eq!(config.env.len(), 1);
         assert_eq!(config.cwd, Some(PathBuf::from("/var/run")));
@@ -823,14 +883,41 @@ mod tests {
     #[test]
     #[should_panic(expected = "command")]
     fn test_server_config_builder_missing_command() {
-        let _ = ServerConfig::builder().build();
+        let _ = ServerConfig::builder().build().unwrap();
     }
 
     #[test]
     fn test_server_config_builder_try_build_missing_command() {
         let result = ServerConfig::builder().try_build();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("command"));
+        assert!(result.unwrap_err().to_string().contains("command"));
+    }
+
+    /// #177 — security validation must be folded into construction: a
+    /// `ServerConfig` carrying a shell metacharacter can no longer be built
+    /// at all, rather than only being caught by a separate manual call to
+    /// `validate_server_config` downstream.
+    #[test]
+    fn test_build_rejects_shell_metacharacters_at_construction() {
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg("run; rm -rf /".to_string())
+            .build();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_security_error());
+    }
+
+    /// #177 — same guarantee for forbidden environment variables.
+    #[test]
+    fn test_build_rejects_forbidden_env_var_at_construction() {
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .env("LD_PRELOAD".to_string(), "/evil.so".to_string())
+            .build();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_security_error());
     }
 
     #[test]
@@ -840,7 +927,8 @@ mod tests {
             .arg("run".to_string())
             .env("VAR".to_string(), "value".to_string())
             .cwd(PathBuf::from("/tmp"))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.command(), "docker");
         assert_eq!(config.args(), &["run".to_string()]);
@@ -854,7 +942,8 @@ mod tests {
             .command("mcp-server".to_string())
             .arg("--verbose".to_string())
             .env("DEBUG".to_string(), "1".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: ServerConfig = serde_json::from_str(&json).unwrap();
@@ -866,7 +955,8 @@ mod tests {
     fn test_server_config_clone() {
         let config = ServerConfig::builder()
             .command("docker".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         let cloned = config.clone();
         assert_eq!(config, cloned);
@@ -876,7 +966,8 @@ mod tests {
     fn test_server_config_debug() {
         let config = ServerConfig::builder()
             .command("docker".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         let debug_str = format!("{config:?}");
         assert!(debug_str.contains("docker"));
@@ -892,7 +983,8 @@ mod tests {
     fn test_server_config_http_transport() {
         let config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.transport, TransportType::Http);
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
@@ -906,7 +998,8 @@ mod tests {
             .http_transport("https://api.example.com/mcp".to_string())
             .header("Authorization".to_string(), "Bearer token".to_string())
             .header("Content-Type".to_string(), "application/json".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.transport, TransportType::Http);
         assert_eq!(config.headers.len(), 2);
@@ -928,7 +1021,8 @@ mod tests {
         let config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .headers(headers)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.headers.len(), 1);
     }
@@ -937,7 +1031,7 @@ mod tests {
     fn test_server_config_http_try_build_missing_url() {
         let result = ServerConfig::builder().try_build();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("required"));
+        assert!(result.unwrap_err().to_string().contains("required"));
     }
 
     #[test]
@@ -945,7 +1039,8 @@ mod tests {
         let config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .header("Auth".to_string(), "token".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.transport(), &TransportType::Http);
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
@@ -956,7 +1051,8 @@ mod tests {
     fn test_server_config_stdio_default_transport() {
         let config = ServerConfig::builder()
             .command("docker".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.transport, TransportType::Stdio);
     }
@@ -965,7 +1061,8 @@ mod tests {
     fn test_server_config_sse_transport() {
         let config = ServerConfig::builder()
             .sse_transport("https://api.example.com/sse".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.transport, TransportType::Sse);
         assert_eq!(config.url(), Some("https://api.example.com/sse"));
@@ -979,7 +1076,8 @@ mod tests {
             .sse_transport("https://api.example.com/sse".to_string())
             .header("Authorization".to_string(), "Bearer token".to_string())
             .header("X-Custom".to_string(), "value".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(config.transport, TransportType::Sse);
         assert_eq!(config.headers.len(), 2);
@@ -997,7 +1095,7 @@ mod tests {
 
         let result = builder.try_build();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("url is required"));
+        assert!(result.unwrap_err().to_string().contains("url is required"));
     }
 
     #[test]

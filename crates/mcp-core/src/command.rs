@@ -16,19 +16,23 @@
 //! ```
 //! use mcp_execution_core::{ServerConfig, validate_server_config};
 //!
-//! // Valid binary name (resolved via PATH)
+//! // Valid binary name (resolved via PATH) — `build()` validates internally,
+//! // so `validate_server_config` is redundant here; shown for clarity.
 //! let config = ServerConfig::builder()
 //!     .command("docker".to_string())
 //!     .arg("run".to_string())
-//!     .build();
+//!     .build()
+//!     .unwrap();
 //! assert!(validate_server_config(&config).is_ok());
 //!
-//! // Invalid: shell metacharacters in arg
-//! let config = ServerConfig::builder()
+//! // Invalid: shell metacharacters in arg — rejected by `build()` itself,
+//! // so no `ServerConfig` carrying this arg can ever exist.
+//! let err = ServerConfig::builder()
 //!     .command("docker".to_string())
 //!     .arg("run; rm -rf /".to_string())
-//!     .build();
-//! assert!(validate_server_config(&config).is_err());
+//!     .build()
+//!     .unwrap_err();
+//! assert!(err.is_security_error());
 //! ```
 
 use crate::{Error, Result, ServerConfig, TransportType};
@@ -39,21 +43,117 @@ use std::time::Duration;
 const FORBIDDEN_CHARS: &[char] = &[';', '|', '&', '>', '<', '`', '$', '(', ')', '\n', '\r'];
 
 /// Forbidden environment variable names that pose security risks.
+///
+/// # Threat Model — What This List Does and Does Not Protect Against
+///
+/// This is an **accidental/indirect-misconfiguration guard, not a sandbox
+/// boundary**. It blocks the well-known names an interpreter or dynamic
+/// linker consults to load extra code or redirect its own search paths —
+/// covering the runtimes this bridge actually spawns (Node.js, Python, Ruby,
+/// Perl, the JVM, and POSIX shells, in addition to the native dynamic
+/// linker) — so that a config sourced from `mcp.json` or CLI flags cannot
+/// silently turn an intended `docker`/`node`/`python` invocation into
+/// arbitrary code execution via one of these documented hijack vectors:
+///
+/// - `LD_PRELOAD` / `LD_LIBRARY_PATH` / `LD_AUDIT`: Linux dynamic linker —
+///   force-load an arbitrary shared object into the child process
+/// - `DYLD_*`: macOS dynamic linker equivalents
+/// - `PATH`: binary substitution for any bare (non-absolute) command
+/// - `NODE_OPTIONS`: Node.js — inject interpreter flags such as `--require`
+///   or `--experimental-loader` into any `node`/`npx` invocation
+/// - `BASH_ENV`: sourced by non-interactive `bash` before running a
+///   script/command, letting a config inject arbitrary shell code
+/// - `PYTHONPATH` / `PYTHONSTARTUP`: Python — module search-path hijacking
+///   and arbitrary code executed at interpreter startup
+/// - `RUBYOPT`: Ruby — inject interpreter flags (`-r`, `-e`) to load
+///   arbitrary code
+/// - `PERL5OPT`: Perl — inject interpreter switches to run arbitrary code
+/// - `JAVA_TOOL_OPTIONS`: JVM — inject arbitrary JVM arguments, including a
+///   `-javaagent` for bytecode instrumentation
+///
+/// What it deliberately does **not** protect against: a command/binary that
+/// is itself malicious, a compromised dependency, arbitrary code the spawned
+/// server executes once running, or forbidden-adjacent variables not on this
+/// exact-match/prefix list (e.g. an interpreter-specific vector this project
+/// does not yet spawn). This list is reviewed and extended as new spawn
+/// targets are added, not treated as exhaustive by construction.
 const FORBIDDEN_ENV_NAMES: &[&str] = &[
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
+    "LD_AUDIT",
     "DYLD_INSERT_LIBRARIES",
     "DYLD_LIBRARY_PATH",
     "DYLD_FRAMEWORK_PATH",
     "PATH",         // Block PATH override to prevent binary substitution
     "NODE_OPTIONS", // Lets a config inject e.g. `--require /tmp/evil.js` into any Node subprocess
     "BASH_ENV",     // Sourced by non-interactive `bash` before running a script/command
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "RUBYOPT",
+    "PERL5OPT",
+    "JAVA_TOOL_OPTIONS",
 ];
+
+/// Environment-variable-name prefix rejected regardless of exact match: macOS's
+/// dynamic-linker variable family (`DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, ...).
+const FORBIDDEN_ENV_PREFIX: &str = "DYLD_";
 
 /// Upper bound for `connect_timeout`/`discover_timeout`, matching the
 /// 30-second defaults declared in `server_config.rs` with headroom for
 /// slow-starting servers configured via `mcp.json`.
 const MAX_TIMEOUT: Duration = Duration::from_mins(10);
+
+/// Returns the shell metacharacters considered forbidden in a command or argument string.
+///
+/// Exposed so downstream consumers that must mirror this exact rule outside this function —
+/// currently, the generated TypeScript runtime bridge
+/// (`crates/mcp-codegen/templates/progressive/runtime-bridge.ts.hbs`) — can render their copy
+/// directly from this constant at code-generation time instead of hand-copying it, which
+/// would otherwise silently drift out of sync.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::forbidden_chars;
+///
+/// assert!(forbidden_chars().contains(&';'));
+/// ```
+#[must_use]
+pub const fn forbidden_chars() -> &'static [char] {
+    FORBIDDEN_CHARS
+}
+
+/// Returns the exact-match forbidden environment variable names.
+///
+/// Does not include the `DYLD_` prefix rule — see [`forbidden_env_prefix`] for that. Exposed
+/// for the same drift-elimination reason as [`forbidden_chars`]; see its documentation.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::forbidden_env_names;
+///
+/// assert!(forbidden_env_names().contains(&"LD_PRELOAD"));
+/// ```
+#[must_use]
+pub const fn forbidden_env_names() -> &'static [&'static str] {
+    FORBIDDEN_ENV_NAMES
+}
+
+/// Returns the environment-variable-name prefix rejected regardless of exact match
+/// (currently `DYLD_`, macOS's dynamic-linker variable family).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::forbidden_env_prefix;
+///
+/// assert_eq!(forbidden_env_prefix(), "DYLD_");
+/// ```
+#[must_use]
+pub const fn forbidden_env_prefix() -> &'static str {
+    FORBIDDEN_ENV_PREFIX
+}
 
 /// Validates a `ServerConfig` for safe execution, dispatching on transport type.
 ///
@@ -69,8 +169,11 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// # Security Rules
 ///
 /// - **Forbidden chars in command/args**: `;`, `|`, `&`, `>`, `<`, `` ` ``, `$`, `(`, `)`, `\n`, `\r`
-/// - **Forbidden env names**: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`,
-///   `NODE_OPTIONS`, `BASH_ENV`
+/// - **Forbidden env names**: dynamic-linker (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
+///   `LD_AUDIT`, `DYLD_*`), `PATH`, and interpreter hijack vectors
+///   (`NODE_OPTIONS`, `BASH_ENV`, `PYTHONPATH`, `PYTHONSTARTUP`, `RUBYOPT`,
+///   `PERL5OPT`, `JAVA_TOOL_OPTIONS`) — see the `FORBIDDEN_ENV_NAMES` constant's
+///   doc comment in this module's source for the full threat-model note
 /// - **Absolute paths**: Must exist and be executable
 /// - **Binary names**: Allowed (resolved via PATH at runtime)
 /// - **URL scheme**: Must be `http://` or `https://`
@@ -100,20 +203,24 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// // Valid: binary name
 /// let config = ServerConfig::builder()
 ///     .command("docker".to_string())
-///     .build();
+///     .build()
+///     .unwrap();
 /// assert!(validate_server_config(&config).is_ok());
 ///
-/// // Invalid: forbidden env var
-/// let config = ServerConfig::builder()
+/// // Invalid: forbidden env var — `ServerConfigBuilder::build()` already
+/// // rejects this, so no unvalidated `ServerConfig` reaches this function.
+/// let err = ServerConfig::builder()
 ///     .command("docker".to_string())
 ///     .env("LD_PRELOAD".to_string(), "/evil.so".to_string())
-///     .build();
-/// assert!(validate_server_config(&config).is_err());
+///     .build()
+///     .unwrap_err();
+/// assert!(err.is_security_error());
 ///
 /// // Valid: HTTP transport
 /// let config = ServerConfig::builder()
 ///     .http_transport("https://api.example.com/mcp".to_string())
-///     .build();
+///     .build()
+///     .unwrap();
 /// assert!(validate_server_config(&config).is_ok());
 /// ```
 ///
@@ -403,7 +510,7 @@ fn validate_env_name(name: &str) -> Result<()> {
     }
 
     // Check for DYLD_* prefix (macOS dynamic linker variables)
-    if name.starts_with("DYLD_") {
+    if name.starts_with(FORBIDDEN_ENV_PREFIX) {
         return Err(Error::SecurityViolation {
             reason: format!("Forbidden environment variable prefix DYLD_: {name}"),
         });
@@ -421,29 +528,35 @@ mod tests {
     #[test]
     fn test_validate_server_config_binary_name() {
         // Binary names (not absolute paths) should be valid
-        let config = ServerConfig::builder()
-            .command("docker".to_string())
-            .build();
-        assert!(validate_server_config(&config).is_ok());
-
-        let config = ServerConfig::builder()
-            .command("python".to_string())
-            .build();
-        assert!(validate_server_config(&config).is_ok());
-
-        let config = ServerConfig::builder().command("node".to_string()).build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(
+            ServerConfig::builder()
+                .command("docker".to_string())
+                .build()
+                .is_ok()
+        );
+        assert!(
+            ServerConfig::builder()
+                .command("python".to_string())
+                .build()
+                .is_ok()
+        );
+        assert!(
+            ServerConfig::builder()
+                .command("node".to_string())
+                .build()
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_validate_server_config_binary_with_args() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .arg("run".to_string())
             .arg("--rm".to_string())
             .arg("mcp-server".to_string())
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -451,14 +564,14 @@ mod tests {
         // Empty command should fail during build
         let result = ServerConfig::builder().command(String::new()).try_build();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("empty"));
+        assert!(result.unwrap_err().to_string().contains("empty"));
 
         // Whitespace-only command should fail during build
         let result = ServerConfig::builder()
             .command("   ".to_string())
             .try_build();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("empty"));
+        assert!(result.unwrap_err().to_string().contains("empty"));
     }
 
     #[test]
@@ -476,8 +589,9 @@ mod tests {
         ];
 
         for cmd in dangerous_commands {
-            let config = ServerConfig::builder().command(cmd.to_string()).build();
-            let result = validate_server_config(&config);
+            // `build()` now runs security validation internally, so a config
+            // carrying a shell metacharacter is rejected at construction.
+            let result = ServerConfig::builder().command(cmd.to_string()).build();
             assert!(
                 result.is_err(),
                 "Should reject command with metacharacters: {cmd}"
@@ -506,11 +620,10 @@ mod tests {
         ];
 
         for arg in dangerous_args {
-            let config = ServerConfig::builder()
+            let result = ServerConfig::builder()
                 .command("docker".to_string())
                 .arg(arg.to_string())
                 .build();
-            let result = validate_server_config(&config);
             assert!(
                 result.is_err(),
                 "Should reject arg with metacharacters: {arg}"
@@ -527,20 +640,19 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_empty_arg() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .arg(String::new())
             .build();
-        assert!(validate_server_config(&config).is_err());
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_server_config_forbidden_env_ld_preload() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .env("LD_PRELOAD".to_string(), "/evil.so".to_string())
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("LD_PRELOAD"));
@@ -549,11 +661,10 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_forbidden_env_ld_library_path() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .env("LD_LIBRARY_PATH".to_string(), "/evil".to_string())
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("LD_LIBRARY_PATH"));
@@ -571,11 +682,10 @@ mod tests {
         ];
 
         for var in dyld_vars {
-            let config = ServerConfig::builder()
+            let result = ServerConfig::builder()
                 .command("docker".to_string())
                 .env(var.to_string(), "/evil".to_string())
                 .build();
-            let result = validate_server_config(&config);
             assert!(result.is_err(), "Should reject DYLD_* variable: {var}");
             if let Err(Error::SecurityViolation { reason }) = result {
                 assert!(
@@ -588,14 +698,39 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_forbidden_env_path() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .env("PATH".to_string(), "/evil:/usr/bin".to_string())
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("PATH"));
+        }
+    }
+
+    /// #221.1 — the interpreter hijack vectors added alongside the original
+    /// dynamic-linker/`PATH` entries must also be rejected.
+    #[test]
+    fn test_validate_server_config_forbidden_env_interpreter_hijack_vectors() {
+        // NODE_OPTIONS and BASH_ENV have their own dedicated tests above.
+        let interpreter_vars = vec![
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            "RUBYOPT",
+            "PERL5OPT",
+            "JAVA_TOOL_OPTIONS",
+            "LD_AUDIT",
+        ];
+
+        for var in interpreter_vars {
+            let result = ServerConfig::builder()
+                .command("docker".to_string())
+                .env(var.to_string(), "evil".to_string())
+                .build();
+            assert!(result.is_err(), "Should reject variable: {var}");
+            if let Err(Error::SecurityViolation { reason }) = result {
+                assert!(reason.contains(var), "Error should mention {var}: {reason}");
+            }
         }
     }
 
@@ -603,14 +738,13 @@ mod tests {
     fn test_validate_server_config_forbidden_env_node_options() {
         // NODE_OPTIONS lets a config inject e.g. `--require /tmp/evil.js` into any Node
         // subprocess the server itself spawns.
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("node".to_string())
             .env(
                 "NODE_OPTIONS".to_string(),
                 "--require /tmp/evil.js".to_string(),
             )
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("NODE_OPTIONS"));
@@ -620,11 +754,10 @@ mod tests {
     #[test]
     fn test_validate_server_config_forbidden_env_bash_env() {
         // BASH_ENV is sourced by non-interactive `bash` before running a script or command.
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("bash".to_string())
             .env("BASH_ENV".to_string(), "/tmp/evil.sh".to_string())
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("BASH_ENV"));
@@ -633,14 +766,14 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_safe_env() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .env("LOG_LEVEL".to_string(), "debug".to_string())
             .env("DEBUG".to_string(), "1".to_string())
             .env("HOME".to_string(), "/home/user".to_string())
             .env("MY_CUSTOM_VAR".to_string(), "value".to_string())
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -658,13 +791,12 @@ mod tests {
         perms.set_mode(0o755);
         fs::set_permissions(temp_file, perms).unwrap();
 
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command(temp_file.to_string())
             .arg("--port".to_string())
             .arg("8080".to_string())
             .build();
 
-        let result = validate_server_config(&config);
         fs::remove_file(temp_file).ok();
 
         assert!(result.is_ok());
@@ -685,11 +817,10 @@ mod tests {
         perms.set_mode(0o644);
         fs::set_permissions(temp_file, perms).unwrap();
 
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command(temp_file.to_string())
             .build();
 
-        let result = validate_server_config(&config);
         fs::remove_file(temp_file).ok();
 
         assert!(result.is_err());
@@ -705,11 +836,10 @@ mod tests {
         #[cfg(windows)]
         let nonexistent = "C:\\absolutely\\nonexistent\\path\\to\\server.exe";
 
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command(nonexistent.to_string())
             .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("does not exist"));
@@ -719,16 +849,16 @@ mod tests {
     #[test]
     fn test_validate_server_config_with_cwd() {
         // cwd doesn't affect validation (it's not security-critical)
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .cwd(std::path::PathBuf::from("/tmp"))
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_server_config_complex_valid() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .arg("run".to_string())
             .arg("--rm".to_string())
@@ -739,24 +869,23 @@ mod tests {
             .env("CACHE_DIR".to_string(), "/var/cache".to_string())
             .cwd(std::path::PathBuf::from("/opt/app"))
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_server_config_default_timeouts_pass() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_server_config_zero_connect_timeout_rejected() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .connect_timeout(std::time::Duration::ZERO)
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::ValidationError { field, reason }) = result {
             assert_eq!(field, "connect_timeout");
@@ -768,11 +897,10 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_zero_discover_timeout_rejected() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .discover_timeout(std::time::Duration::ZERO)
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::ValidationError { field, .. }) = result {
             assert_eq!(field, "discover_timeout");
@@ -783,11 +911,10 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_above_max_timeout_rejected() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .connect_timeout(std::time::Duration::from_secs(601))
             .build();
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::ValidationError { field, reason }) = result {
             assert_eq!(field, "connect_timeout");
@@ -799,12 +926,12 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_in_bounds_timeout_accepted() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .command("docker".to_string())
             .connect_timeout(std::time::Duration::from_mins(1))
             .discover_timeout(std::time::Duration::from_mins(10))
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -824,27 +951,27 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_http_valid() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_server_config_sse_valid() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .sse_transport("https://api.example.com/sse".to_string())
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_server_config_http_with_valid_headers() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .header("Authorization".to_string(), "Bearer token123".to_string())
             .build();
-        assert!(validate_server_config(&config).is_ok());
+        assert!(result.is_ok());
     }
 
     /// Constructs an Http-transport config missing `url` via deserialization
@@ -889,10 +1016,9 @@ mod tests {
             "unix:///tmp/socket",
             "ftp://host/path",
         ] {
-            let config = ServerConfig::builder()
+            let result = ServerConfig::builder()
                 .http_transport(url.to_string())
                 .build();
-            let result = validate_server_config(&config);
             assert!(result.is_err(), "should reject scheme: {url}");
             if let Err(Error::SecurityViolation { reason }) = result {
                 assert!(reason.contains("http://") || reason.contains("https://"));
@@ -905,11 +1031,11 @@ mod tests {
     #[test]
     fn test_validate_server_config_http_accepts_case_insensitive_scheme() {
         for url in ["HTTP://api.example.com/mcp", "HTTPS://api.example.com/mcp"] {
-            let config = ServerConfig::builder()
+            let result = ServerConfig::builder()
                 .http_transport(url.to_string())
                 .build();
             assert!(
-                validate_server_config(&config).is_ok(),
+                result.is_ok(),
                 "should accept case-insensitive scheme: {url}"
             );
         }
@@ -918,17 +1044,18 @@ mod tests {
     #[test]
     fn test_validate_server_config_http_rejects_scheme_lookalike() {
         // "httpsomething" must not be accepted as a loose prefix match of "http".
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("httpsomething://api.example.com/mcp".to_string())
             .build();
-        assert!(validate_server_config(&config).is_err());
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_server_config_http_rejects_duplicate_header_case_insensitive() {
         let mut config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build();
+            .build()
+            .unwrap();
         config
             .headers
             .insert("Authorization".to_string(), "Bearer one".to_string());
@@ -952,7 +1079,8 @@ mod tests {
         for bad_name in ["X Bad Header", "X:Bad", "X@Bad"] {
             let mut config = ServerConfig::builder()
                 .http_transport("https://api.example.com/mcp".to_string())
-                .build();
+                .build()
+                .unwrap();
             config
                 .headers
                 .insert(bad_name.to_string(), "value".to_string());
@@ -971,7 +1099,8 @@ mod tests {
     fn test_validate_server_config_http_rejects_control_char_in_header_name() {
         let mut config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build();
+            .build()
+            .unwrap();
         config
             .headers
             .insert("X-Bad\r\nHeader".to_string(), "value".to_string());
@@ -987,7 +1116,7 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_http_rejects_control_char_in_header_value() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .header(
                 "Authorization".to_string(),
@@ -995,7 +1124,6 @@ mod tests {
             )
             .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("Authorization"));
@@ -1009,12 +1137,11 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_http_timeout_bounds_still_enforced() {
-        let config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
             .connect_timeout(std::time::Duration::ZERO)
             .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::ValidationError { field, .. }) = result {
             assert_eq!(field, "connect_timeout");

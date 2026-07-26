@@ -13,7 +13,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut introspector = Introspector::new();
 //! let server_id = ServerId::new("github");
-//! let config = ServerConfig::builder().command("/path/to/server".to_string()).build();
+//! let config = ServerConfig::builder().command("/path/to/server".to_string()).build()?;
 //! let info = introspector.discover_server(server_id, &config).await?;
 //!
 //! let generator = ProgressiveGenerator::new()?;
@@ -671,7 +671,7 @@ fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
 /// cannot terminate the literal by injecting a raw line break. U+2028/U+2029 are also
 /// escaped: legal but unescaped inside a string literal only since ES2019, so a raw
 /// occurrence would be a syntax error for consumers targeting an older ECMAScript target.
-fn sanitize_ts_string_literal(s: &str) -> String {
+pub(crate) fn sanitize_ts_string_literal(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('\'', "\\'")
         .replace('\r', "\\r")
@@ -1807,21 +1807,23 @@ mod tests {
         assert_eq!(sanitized.chars().count(), max_len);
     }
 
+    /// #221 item 3 — real drift guard: reads the names from
+    /// `mcp_execution_core::forbidden_env_names()` directly (not a hardcoded second copy),
+    /// so a future addition/removal in `command.rs`'s `FORBIDDEN_ENV_NAMES` is picked up here
+    /// automatically. Passing is guaranteed by construction (`BridgeContext`'s hand-written
+    /// `Default` impl renders from that same accessor), which is the point: since the rendered
+    /// TypeScript literal is generated from the Rust constant rather than hand-copied, the two
+    /// can no longer silently desynchronize the way a hand-maintained second copy could.
+    ///
+    /// This does NOT prove the validator is reachable or enforced at runtime — a
+    /// `grep`-style assertion can pass even against dead code (e.g. an unreachable function,
+    /// or one whose result is never checked). The actual behavioral regression guard for
+    /// #201 — that a hostile `~/.claude/mcp.json` is rejected before any subprocess is
+    /// spawned — lives in `crates/mcp-codegen/tests/progressive_generation.rs`
+    /// (`test_runtime_bridge_rejects_forbidden_env_var_before_spawn`), which compiles and
+    /// actually executes the rendered bridge under Node.
     #[test]
     fn test_generate_runtime_bridge_declares_forbidden_env_var_list() {
-        // Cheap, offline snapshot check that the rendered bridge's `FORBIDDEN_ENV_NAMES`
-        // literal contains the expected names. This is NOT a drift guard: the names below
-        // are hardcoded here a third time, independent of `mcp-core`'s `command.rs` — adding
-        // a name to `command.rs` alone would not fail this test, since nothing here reads
-        // that list. (A real Rust/TypeScript drift guard is tracked separately; the two
-        // copies are currently kept in sync by hand.) This also does NOT prove the validator
-        // is reachable or enforced at runtime — a `grep`-style assertion can pass even
-        // against dead code (e.g. an unreachable function, or one whose result is never
-        // checked). The actual behavioral regression guard for #201 — that a hostile
-        // `~/.claude/mcp.json` is rejected before any subprocess is spawned — lives in
-        // `crates/mcp-codegen/tests/progressive_generation.rs`
-        // (`test_runtime_bridge_rejects_forbidden_env_var_before_spawn`), which compiles and
-        // actually executes the rendered bridge under Node.
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
@@ -1832,22 +1834,30 @@ mod tests {
             .find(|f| f.path == "_runtime/mcp-bridge.ts")
             .unwrap();
 
-        for forbidden_env in [
-            "LD_PRELOAD",
-            "LD_LIBRARY_PATH",
-            "DYLD_INSERT_LIBRARIES",
-            "DYLD_LIBRARY_PATH",
-            "DYLD_FRAMEWORK_PATH",
-            "PATH",
-            "NODE_OPTIONS",
-            "BASH_ENV",
-        ] {
+        for forbidden_env in mcp_execution_core::forbidden_env_names() {
             assert!(
                 bridge.content.contains(&format!("'{forbidden_env}'")),
                 "runtime bridge must list forbidden env var {forbidden_env}: {}",
                 bridge.content
             );
         }
+
+        for forbidden_char in mcp_execution_core::forbidden_chars() {
+            let escaped = sanitize_ts_string_literal(&forbidden_char.to_string());
+            assert!(
+                bridge.content.contains(&format!("'{escaped}'")),
+                "runtime bridge must list forbidden char {forbidden_char:?}: {}",
+                bridge.content
+            );
+        }
+
+        assert!(
+            bridge
+                .content
+                .contains(mcp_execution_core::forbidden_env_prefix()),
+            "runtime bridge must reference the forbidden env prefix: {}",
+            bridge.content
+        );
     }
 
     #[test]
