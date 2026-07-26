@@ -94,6 +94,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   maps before `build()`/`try_build()` is called, derived `Debug` over them too and gets the same
   treatment, reusing the private `RedactedValues` helper introduced for `ServerConfig`.
 
+- **`mcp-execution-cli`**: `McpTransport`'s `Http`/`Sse` variants derived a plain `Debug`, so
+  their `headers` map — populated straight from `~/.claude/mcp.json` and routinely holding a real
+  `Authorization: Bearer <token>` — was printed in full by `format!("{transport:?}")`; the
+  `list_mcp_servers` doc example even modeled `println!("{}: {:?}", name, entry.transport)` as
+  safe usage. `McpTransport` now has a hand-written `Debug` impl mirroring
+  `mcp_execution_core::ServerConfig`'s convention: `headers`/`env` keys stay visible, every value
+  is replaced with `<redacted>`. `McpServerEntry` keeps deriving `Debug` and inherits the
+  redaction through its `transport` field (#229). `TransportArgs` — the CLI-flag mirror of
+  `McpTransport`, holding raw unparsed `KEY=VALUE` strings in `env`/`headers` before
+  `parse_key_value` ever splits them — had the identical derived-`Debug` leak and gets the same
+  treatment, replacing each entry wholesale with `<redacted>` (there is no validated key yet to
+  keep visible) (#229).
+
+- **`mcp-execution-core`**: `validate_command_string`'s forbidden-shell-metacharacter error
+  echoed the full offending command/argument value verbatim, even though the same function
+  validates CLI arguments that routinely carry secrets (e.g. a misparsed `--api-key sk-...`
+  value). The error message no longer includes the value, matching the "value omitted as it may
+  be secret-shaped" convention already used by the header validation checks in this file (#229).
+
 ### Changed
 
 - **`mcp-execution-skill`**: `validate_server_id` and `extract_skill_metadata` now return

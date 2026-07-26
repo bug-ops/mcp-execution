@@ -449,6 +449,14 @@ fn validate_timeout(timeout: Duration, field: &str) -> Result<()> {
 ///
 /// This is an internal helper that checks a string (command or argument)
 /// for dangerous shell metacharacters.
+///
+/// # Security
+///
+/// The offending value is never echoed into the error message. `context` is
+/// `"argument {idx}"` for CLI arguments, which routinely carry secrets in a
+/// `--api-key sk-...`-style value; the same "may be secret-shaped" treatment
+/// as `validate_header_value_string` and the duplicate-header-name check
+/// applies here.
 fn validate_command_string(value: &str, context: &str) -> Result<()> {
     // Check for empty
     let value = value.trim();
@@ -463,7 +471,8 @@ fn validate_command_string(value: &str, context: &str) -> Result<()> {
         if value.contains(*forbidden) {
             return Err(Error::SecurityViolation {
                 reason: format!(
-                    "{context} contains forbidden shell metacharacter '{forbidden}': {value}"
+                    "{context} contains forbidden shell metacharacter '{forbidden}'; \
+                     value omitted as it may be secret-shaped"
                 ),
             });
         }
@@ -652,6 +661,24 @@ mod tests {
                     "Error should mention argument and forbidden character: {reason}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_arg_with_metacharacter_does_not_leak_secret() {
+        // Regression test for #229: a rejected arg is routinely a
+        // misparsed `--api-key sk-...`-style secret; the metacharacter
+        // error must never echo the raw value.
+        let secret_shaped_arg = "--api-key sk-live-supersecretvalue1234567890;whoami";
+        let result = ServerConfig::builder()
+            .command("docker".to_string())
+            .arg(secret_shaped_arg.to_string())
+            .build();
+
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(!reason.contains(secret_shaped_arg));
+            assert!(!reason.contains("sk-live-supersecretvalue1234567890"));
         }
     }
 
