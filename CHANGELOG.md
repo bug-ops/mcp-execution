@@ -354,6 +354,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-server`**: `save_categorized_tools` collapsed its four copy-pasted per-field
+  byte-length checks (`name`, `category`, `keywords`, `short_description`) into a single private
+  `check_categorized_field_length` helper, called once per field. No behavior change: the exact
+  error message wording, the `INVALID_PARAMS` boundary (`>`, not `>=`), and check ordering are
+  unchanged (#285).
 - **`mcp-execution-codegen`**: `ProgressiveGenerator::generate` now delegates to
   `generate_with_categories` with an empty categorization map instead of duplicating the same
   eight-step file-generation pipeline (#279). Fixed a regression this introduced along the way:
