@@ -48,12 +48,14 @@ async fn main() -> Result<()> {
 
     runner::init_logging(cli.verbose)?;
 
-    let output_format = cli
-        .format
-        .parse::<OutputFormat>()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let exit_code = runner::execute_command(cli.command, output_format).await?;
+    // `OutputFormat::from_str`'s `Err` is a `mcp_execution_core::Error`
+    // (e.g. `--format xml`) — routed through the same
+    // `report_and_classify` used for command-handler failures so an invalid
+    // CLI argument here also exits `ExitCode::INVALID_INPUT`, not a bare 1.
+    let exit_code = match cli.format.parse::<OutputFormat>() {
+        Ok(output_format) => runner::execute_command(cli.command, output_format).await?,
+        Err(err) => runner::report_and_classify(&anyhow::Error::from(err)),
+    };
 
     std::process::exit(exit_code.as_i32());
 }

@@ -4,7 +4,7 @@
 //! and loading MCP server definitions from `~/.claude/mcp.json`.
 
 use anyhow::{Context, Result, bail};
-use mcp_execution_core::{ServerConfig, ServerConfigBuilder, ServerId};
+use mcp_execution_core::{Error as CoreError, ServerConfig, ServerConfigBuilder, ServerId};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -448,15 +448,47 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
 }
 
 /// Parses a single `KEY=VALUE` CLI argument (used for `--env` and `--header`).
+///
+/// Security: `s` routinely carries secrets (tokens, API keys) in the value
+/// portion, so it must never be echoed into an error message verbatim —
+/// mirrors the discipline in `mcp_execution_core::command::validate_header_value_string`.
+/// Every error here is a `CoreError::InvalidArgument` (rather than a bare
+/// anyhow string) so it classifies as `ExitCode::INVALID_INPUT` downstream
+/// in `runner::classify_exit_code`.
 fn parse_key_value(s: &str, kind: &str) -> Result<(String, String)> {
-    let parts: Vec<&str> = s.splitn(2, '=').collect();
-    if parts.len() != 2 {
-        bail!("invalid {kind} format: '{s}' (expected KEY=VALUE)");
+    // No `=` at all: the whole string could itself be the secret with no
+    // discernible key, so it is never echoed, not even its length (which
+    // would narrow the secret's type/format for free in CI logs).
+    let Some((key, value)) = s.split_once('=') else {
+        return Err(CoreError::InvalidArgument(format!(
+            "invalid {kind} format: no '=' separator found (expected KEY=VALUE)"
+        ))
+        .into());
+    };
+    if key.is_empty() {
+        return Err(CoreError::InvalidArgument(format!(
+            "invalid {kind} format: key cannot be empty (expected KEY=VALUE)"
+        ))
+        .into());
     }
-    if parts[0].is_empty() {
-        bail!("invalid {kind} format: '{s}' (key cannot be empty)");
+    // A real header/env key never legitimately contains whitespace, `:`, or
+    // control characters. Their presence is the signature of the `=` having
+    // matched somewhere inside the value instead of acting as the separator
+    // — e.g. a header written `Name: Value` by mistake, where the value
+    // happens to contain `=` (base64 padding, a JWT). Reject without echoing
+    // `key`, since in that scenario it *is* the secret.
+    if key
+        .chars()
+        .any(|c| c.is_whitespace() || c == ':' || c.is_control())
+    {
+        return Err(CoreError::InvalidArgument(format!(
+            "invalid {kind} format: text before '=' contains characters that are never valid \
+             in a key, suggesting '=' matched inside a value rather than as the separator; \
+             refusing to echo it since it may contain a secret (expected KEY=VALUE)"
+        ))
+        .into());
     }
-    Ok((parts[0].to_string(), parts[1].to_string()))
+    Ok((key.to_string(), value.to_string()))
 }
 
 /// CLI-flag mirror of [`McpTransport`], holding the raw, unvalidated
@@ -1042,36 +1074,93 @@ mod tests {
 
     #[test]
     fn test_build_server_config_invalid_env() {
+        // Regression test for #190: a malformed `--env` value with no `=` is
+        // itself indistinguishable from a raw secret and must never be
+        // echoed — checked against the `{:?}` chain, since that's what
+        // `runner::execute_command` actually prints to stderr.
+        let secret = "ghp_verySECRETtoken1234567890abcdef";
+        let result = build_server_config(
+            stdio_transport("server", vec![], vec![secret], None),
+            None,
+            None,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{err:?}").contains("expected KEY=VALUE"));
+        assert!(
+            !format!("{err:?}").contains(secret),
+            "error chain leaked the raw secret: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_invalid_header() {
+        // Regression test for #190: same guarantee for `--header` values,
+        // which routinely carry bearer tokens / API keys.
+        let secret = "Bearer sk-live-supersecretvalue1234567890";
+        let result = build_server_config(
+            http_transport("https://example.com", vec![secret]),
+            None,
+            None,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{err:?}").contains("expected KEY=VALUE"));
+        assert!(
+            !format!("{err:?}").contains(secret),
+            "error chain leaked the raw secret: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_header_name_value_typo_does_not_leak_secret() {
+        // Regression test for #190/S1: a header written with the conventional
+        // `Name: Value` syntax (colon) instead of `Name=Value`, where the
+        // value contains `=` (e.g. base64 padding), previously put the whole
+        // secret into the "key" slot. That key then reached
+        // `mcp_execution_core::command::validate_header_name_string`, whose
+        // error message assumes header names are never secret and echoes
+        // them verbatim — leaking the credential one function downstream of
+        // the original fix.
+        let secret = "c2VjcmV0dG9rZW4=";
+        let header = format!("Authorization: Bearer {secret}");
+        let result = build_server_config(
+            http_transport("https://example.com", vec![&header]),
+            None,
+            None,
+        );
+
+        let err = result.unwrap_err();
+        assert!(
+            !format!("{err:?}").contains(secret),
+            "error chain leaked the raw secret: {err:?}"
+        );
+        assert!(
+            !format!("{err:?}").contains(&header),
+            "error chain leaked the raw header argument: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_server_config_invalid_env_classifies_as_invalid_argument() {
+        // Regression test for #195/S3: malformed `--env`/`--header` values are
+        // the most common invalid-input path for `introspect`/`generate`. The
+        // error must carry a `CoreError::InvalidArgument` so
+        // `runner::classify_exit_code` maps it to `ExitCode::INVALID_INPUT`
+        // instead of silently falling through to the generic `ExitCode::ERROR`.
         let result = build_server_config(
             stdio_transport("server", vec![], vec!["INVALID_FORMAT"], None),
             None,
             None,
         );
 
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("expected KEY=VALUE")
-        );
-    }
-
-    #[test]
-    fn test_build_server_config_invalid_header() {
-        let result = build_server_config(
-            http_transport("https://example.com", vec!["InvalidHeader"]),
-            None,
-            None,
-        );
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("expected KEY=VALUE")
-        );
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<CoreError>(),
+            Some(CoreError::InvalidArgument(_))
+        ));
     }
 
     #[test]
@@ -1266,35 +1355,42 @@ mod tests {
 
     #[test]
     fn test_build_server_config_empty_key_in_env() {
+        // Regression test for #190: the pre-fix message echoed the raw `s`
+        // (e.g. "=secretvalue"), leaking the value even though the key was
+        // reported empty.
+        let secret = "topsecretvalue";
+        let env_arg = format!("={secret}");
         let result = build_server_config(
-            stdio_transport("server", vec![], vec!["=value"], None),
+            stdio_transport("server", vec![], vec![&env_arg], None),
             None,
             None,
         );
 
         assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{err:?}").contains("key cannot be empty"));
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("key cannot be empty")
+            !format!("{err:?}").contains(secret),
+            "error chain leaked the raw secret: {err:?}"
         );
     }
 
     #[test]
     fn test_build_server_config_empty_key_in_header() {
+        let secret = "topsecretheadervalue";
+        let header_arg = format!("={secret}");
         let result = build_server_config(
-            http_transport("https://example.com", vec!["=value"]),
+            http_transport("https://example.com", vec![&header_arg]),
             None,
             None,
         );
 
         assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(format!("{err:?}").contains("key cannot be empty"));
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("key cannot be empty")
+            !format!("{err:?}").contains(secret),
+            "error chain leaked the raw secret: {err:?}"
         );
     }
 
