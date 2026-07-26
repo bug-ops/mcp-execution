@@ -26,7 +26,7 @@
  * Import individual tools as needed for progressive loading:
  *
  * ```typescript
- * import { {{#if tools}}{{tools.[0].typescript_name}}{{/if}} } from './{{#if tools}}{{tools.[0].typescript_name}}{{/if}}.js';
+ * import { {{#if tools}}{{tools.[0].typescript_name}}{{/if}} } from './{{#if tools}}{{tools.[0].typescript_name}}{{/if}}.ts';
  *
  * const result = await {{#if tools}}{{tools.[0].typescript_name}}{{/if}}({ ...params });
  * ```
@@ -39,15 +39,15 @@
 {{#each categories}}
 // --- {{name}} ---
 {{#each tools}}
-export { {{typescript_name}}, type {{typescript_name}}Params, type {{typescript_name}}Result } from './{{typescript_name}}.js';
+export { {{typescript_name}}, type {{typescript_name}}Params, type {{typescript_name}}Result } from './{{typescript_name}}.ts';
 {{/each}}
 
 {{/each}}
 {{else}}
 {{#each tools}}
-export { {{typescript_name}}, type {{typescript_name}}Params, type {{typescript_name}}Result } from './{{typescript_name}}.js';
+export { {{typescript_name}}, type {{typescript_name}}Params, type {{typescript_name}}Result } from './{{typescript_name}}.ts';
 {{/each}}
 {{/if}}
 
 // Re-export runtime bridge
-export { callMCPTool } from './_runtime/mcp-bridge.js';
+export { callMCPTool } from './_runtime/mcp-bridge.ts';

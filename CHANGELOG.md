@@ -309,6 +309,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-codegen`**: the generated `index.ts` re-exported every tool file and the
+  runtime bridge with a `.js` specifier (e.g. `from './createIssue.js'`), while `tool.ts.hbs`
+  imported the bridge with a `.ts` specifier — but generated files are always written to disk
+  as `.ts`, never compiled to `.js` (#256). `tsc --noEmit` remaps a `.js` specifier back to a
+  sibling `.ts` file for type-checking purposes only, so this type-checked clean while throwing
+  `ERR_MODULE_NOT_FOUND` under Node's actual ESM resolution the moment `index.ts` was loaded.
+  `index.ts.hbs`'s specifiers now consistently use `.ts`, matching `tool.ts.hbs` and the files'
+  real on-disk extension.
+
+- **`mcp-execution-codegen`**: the generated runtime bridge (`_runtime/mcp-bridge.ts`)
+  dereferenced `response.result.content[0]` unguarded in both the `isError` and normal-result
+  paths, so a response with an empty `content` array threw an opaque
+  `Cannot read properties of undefined (reading 'text')` `TypeError` instead of surfacing the
+  tool's actual error or result (#255). Responses that carry only `structuredContent` (spec
+  2025-06-18+) and omit `content` entirely fell into the same unguarded path instead of being
+  handled at all. Both dereference sites are now guarded: an empty `content` array with
+  `structuredContent` present resolves with that value; an empty `content` array with neither
+  produces a clear, well-typed error instead of a crash.
+
 - **`mcp-execution-cli`**: `Cli`/`Commands` derived a plain `Debug`, so `Commands::Introspect`'s
   `env`/`headers` and `Commands::Generate`'s `server_env`/`server_headers` — raw `KEY=VALUE`
   strings straight from argv, routinely carrying secrets — were printed in full wherever the

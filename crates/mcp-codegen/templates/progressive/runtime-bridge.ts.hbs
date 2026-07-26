@@ -52,16 +52,24 @@ interface MCPToolCallRequest {
 
 /**
  * JSON-RPC 2.0 response from tool invocation
+ *
+ * `content` and `structuredContent` mirror `rmcp::model::CallToolResult`: `content` defaults
+ * to `[]` server-side, so it is legitimately absent or empty — never assume a first element.
+ * `callMCPTool` treats an empty `content` paired with `structuredContent` as a valid
+ * "no textual output" result; an empty `content` with no `structuredContent` either is
+ * surfaced as a thrown error, since the bridge cannot distinguish a genuinely void tool from a
+ * misbehaving server at this layer.
  */
 interface MCPToolCallResponse {
   jsonrpc: '2.0';
   id: number;
   result?: {
-    content: Array<{
+    content?: Array<{
       type: string;
       text?: string;
       [key: string]: unknown;
     }>;
+    structuredContent?: unknown;
     isError?: boolean;
   };
   error?: {
@@ -825,31 +833,44 @@ export async function callMCPTool(
     throw new Error(`No result in response from ${serverId}.${toolName}`);
   }
 
-  // Handle error flag in result
+  // Handle error flag in result. `content` legitimately defaults to `[]` server-side (see
+  // MCPToolCallResponse), so this must not assume a first element exists.
   if (response.result.isError) {
-    const errorContent = response.result.content[0];
-    const errorMessage = errorContent.text || 'Unknown error';
+    const errorContent = response.result.content?.[0];
+    const errorMessage = errorContent?.text || 'Unknown error';
     throw new Error(`Tool returned error: ${errorMessage}`);
   }
 
-  // Extract content from response
-  const content = response.result.content[0];
+  const content = response.result.content;
 
-  if (content.type === 'text' && content.text) {
+  // `structuredContent`-only responses (spec 2025-06-18+): surfaced as a distinct case rather
+  // than falling through to the content[0] handling below, which it was never meant to reach.
+  if ((!content || content.length === 0) && response.result.structuredContent !== undefined) {
+    return response.result.structuredContent;
+  }
+
+  if (!content || content.length === 0) {
+    throw new Error(`Tool ${serverId}.${toolName} returned an empty content array and no structuredContent`);
+  }
+
+  // Extract content from response
+  const firstContent = content[0];
+
+  if (firstContent.type === 'text' && firstContent.text) {
     // Try to parse as JSON if it looks like JSON
-    if (content.text.trim().startsWith('{') || content.text.trim().startsWith('[')) {
+    if (firstContent.text.trim().startsWith('{') || firstContent.text.trim().startsWith('[')) {
       try {
-        return JSON.parse(content.text);
+        return JSON.parse(firstContent.text);
       } catch {
         // Not valid JSON, return as string
-        return content.text;
+        return firstContent.text;
       }
     }
-    return content.text;
+    return firstContent.text;
   }
 
   // Return the entire content object for non-text types
-  return content;
+  return firstContent;
 }
 
 /**

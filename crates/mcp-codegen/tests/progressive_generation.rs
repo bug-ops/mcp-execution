@@ -316,6 +316,46 @@ fn test_progressive_index_doc_comment_not_prematurely_closed() {
     );
 }
 
+/// Regression guard for #256: `index.ts`'s `export ... from './...'` specifiers must use `.ts`,
+/// matching `tool.ts.hbs`'s import of the runtime bridge and the fact that generated files are
+/// always written to disk as `.ts` (never compiled to `.js`). A `.js` specifier type-checks
+/// under `tsc --noEmit` (which remaps it back to the sibling `.ts` file) but throws
+/// `ERR_MODULE_NOT_FOUND` under Node's real ESM resolution — see
+/// `test_generated_index_resolves_at_runtime_under_node_esm` for the full runtime
+/// reproduction; this is the cheap, toolchain-free companion check.
+#[test]
+fn test_progressive_index_uses_ts_specifiers_not_js() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+
+    let index_file = code
+        .files
+        .iter()
+        .find(|f| f.path == "index.ts")
+        .expect("index.ts not found");
+
+    let content = &index_file.content;
+
+    assert!(
+        content.contains("from './createIssue.ts';"),
+        "tool re-export must use a .ts specifier: {content}"
+    );
+    assert!(
+        content.contains("from './_runtime/mcp-bridge.ts';"),
+        "runtime bridge re-export must use a .ts specifier: {content}"
+    );
+    assert!(
+        !content.contains(".js';") && !content.contains(".js\";"),
+        "index.ts must not import/export any sibling file with a .js specifier — the files on \
+         disk are always .ts, and a .js specifier only resolves under tsc's type-checking, not \
+         Node's real ESM resolution: {content}"
+    );
+}
+
 #[test]
 fn test_progressive_runtime_bridge_structure() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
@@ -690,6 +730,82 @@ fn test_generated_tool_passes_tsc_noemit() {
     assert!(
         output.status.success(),
         "tsc --noEmit failed on the real generated package:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Ensures `node --experimental-strip-types` is usable before a test that depends on it runs.
+/// Same skip-locally/hard-fail-in-CI policy as [`require_ts_toolchain`].
+fn require_node_strip_types(test_name: &str) -> bool {
+    let supported = Command::new("node")
+        .args(["--experimental-strip-types", "--eval", ""])
+        .output()
+        .is_ok_and(|output| output.status.success());
+
+    if supported {
+        return true;
+    }
+
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{test_name}: `node --experimental-strip-types` not available in CI (needs Node \
+         22.6+) — this test exists to catch ERR_MODULE_NOT_FOUND regressions that `tsc \
+         --noEmit` cannot see."
+    );
+
+    eprintln!("skipping {test_name}: `node --experimental-strip-types` not available");
+    false
+}
+
+/// Regression guard for #256: `index.ts`'s relative import specifiers must resolve under
+/// Node's actual ESM module resolution, not merely under `tsc --noEmit`. `tsc --noEmit` remaps
+/// a `.js` specifier back to a sibling `.ts` file for type-checking purposes only; Node's real
+/// resolver does not, so a `.js` specifier pointing at a file that only exists as `.ts` throws
+/// `ERR_MODULE_NOT_FOUND` the moment `index.ts` is loaded.
+///
+/// Writes the full generated output to disk exactly as `mcp-execution-files` would, then loads
+/// `index.ts` directly under Node's native type-stripping — the same execution path the
+/// original bug was reported against — instead of compiling first: compiling with
+/// `--rewriteRelativeImportExtensions` (required to emit `allowImportingTsExtensions` sources)
+/// normalizes every specifier to `.js` regardless of what the source said, which would hide
+/// this exact bug.
+///
+/// Skips locally (hard-fails in CI) when `node --experimental-strip-types` is unavailable.
+#[test]
+fn test_generated_index_resolves_at_runtime_under_node_esm() {
+    if !require_node_strip_types("test_generated_index_resolves_at_runtime_under_node_esm") {
+        return;
+    }
+
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    for file in &code.files {
+        let path = dir.path().join(&file.path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .expect("Failed to create parent dir for generated file");
+        }
+        std::fs::write(&path, &file.content).expect("Failed to write generated file");
+    }
+
+    let output = Command::new("node")
+        .arg("--experimental-strip-types")
+        .arg("index.ts")
+        .current_dir(dir.path())
+        .output()
+        .expect("Failed to run node");
+
+    assert!(
+        output.status.success(),
+        "node failed to load the generated index.ts — likely a `.js` import specifier \
+         pointing at a file that only exists as `.ts` on disk (regression for #256):\n\
+         stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -1474,5 +1590,211 @@ Promise.all([first, second]).then(
         stdout.contains("MATCH"),
         "each caller must resolve with the response matching its own request id, not the \
          other caller's response: stdout: {stdout}, stderr: {stderr}"
+    );
+}
+
+/// Builds a minimal fake MCP server script that answers `initialize` normally and replies to
+/// the single `tools/call` request it receives with `result_json` verbatim as the `result`
+/// field. Shared by the #255 regression tests below, which each need a different `result`
+/// shape (empty `content`, `structuredContent`-only, etc.) but identical initialize/id
+/// plumbing.
+fn respond_once_fake_server_js(result_json: &str) -> String {
+    format!(
+        r"
+const readline = require('readline');
+const rl = readline.createInterface({{ input: process.stdin, terminal: false }});
+
+rl.on('line', (line) => {{
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return;
+  const message = JSON.parse(trimmed);
+
+  if (message.method === 'initialize') {{
+    const response = {{
+      jsonrpc: '2.0',
+      id: message.id,
+      result: {{
+        protocolVersion: '2024-11-05',
+        capabilities: {{}},
+        serverInfo: {{ name: 'fake', version: '0.0.0' }}
+      }}
+    }};
+    process.stdout.write(JSON.stringify(response) + '\n');
+    return;
+  }}
+
+  if (message.method === 'tools/call') {{
+    const response = {{
+      jsonrpc: '2.0',
+      id: message.id,
+      result: {result_json}
+    }};
+    process.stdout.write(JSON.stringify(response) + '\n');
+  }}
+}});
+"
+    )
+}
+
+/// Harness that calls `callMCPTool('fake', 'noop', {})` once, printing `RESOLVED: <json>` or
+/// `REJECTED: <message>` and exiting 0 in either case (the fake servers below never hang, so no
+/// watchdog is needed) — the assertions inspect stdout rather than the exit code.
+const SINGLE_CALL_HARNESS_TS: &str = r"
+import { callMCPTool } from './mcp-bridge.js';
+
+callMCPTool('fake', 'noop', {}).then(
+  (result: unknown) => {
+    console.log('RESOLVED:', JSON.stringify(result));
+    process.exit(0);
+  },
+  (err: unknown) => {
+    console.log('REJECTED:', String(err));
+    process.exit(0);
+  }
+);
+";
+
+/// Regression guard for #255: a tool-error response (`isError: true`) with an empty `content`
+/// array must surface as a clear rejection, not crash with an unguarded
+/// `Cannot read properties of undefined (reading 'text')` `TypeError`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_surfaces_tool_error_with_empty_content() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script(&respond_once_fake_server_js(
+        r#"{ "isError": true, "content": [] }"#,
+    ));
+    let mcp_json = json!({
+        "mcpServers": { "fake": { "command": "node", "args": [script_path] } }
+    });
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_surfaces_tool_error_with_empty_content",
+        &bridge.content,
+        &mcp_json,
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:") && stdout.contains("Tool returned error"),
+        "an empty content array on an isError response must reject with a clear \
+         'Tool returned error' message, not crash on an unguarded content[0] dereference: \
+         stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Cannot read properties"),
+        "must not crash with an unguarded property-access TypeError: stdout: {stdout}"
+    );
+}
+
+/// Regression guard for #255: a successful response carrying only `structuredContent` (no
+/// `content`, per spec 2025-06-18+) must resolve with that `structuredContent` value as a
+/// distinct, well-typed case, not crash or silently return `undefined`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_returns_structured_content_when_content_empty() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script(&respond_once_fake_server_js(
+        r#"{ "content": [], "structuredContent": { "answer": 42 } }"#,
+    ));
+    let mcp_json = json!({
+        "mcpServers": { "fake": { "command": "node", "args": [script_path] } }
+    });
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_returns_structured_content_when_content_empty",
+        &bridge.content,
+        &mcp_json,
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains(r#"RESOLVED: {"answer":42}"#),
+        "a structuredContent-only response must resolve with structuredContent, not crash or \
+         resolve with something else: stdout: {stdout}, stderr: {stderr}"
+    );
+}
+
+/// Regression guard for #255: a successful response with an empty `content` array and no
+/// `structuredContent` at all must surface as a clear rejection, not crash on an unguarded
+/// `content[0]` dereference.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_empty_content_without_structured_content() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script(&respond_once_fake_server_js(r#"{ "content": [] }"#));
+    let mcp_json = json!({
+        "mcpServers": { "fake": { "command": "node", "args": [script_path] } }
+    });
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_rejects_empty_content_without_structured_content",
+        &bridge.content,
+        &mcp_json,
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "an empty content array with no structuredContent must reject with a clear error, not \
+         crash or silently resolve: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Cannot read properties"),
+        "must not crash with an unguarded property-access TypeError: stdout: {stdout}"
     );
 }
