@@ -50,6 +50,7 @@
 //! - **Discoverable**: grep-friendly headers for tool discovery
 
 pub mod clock;
+mod output_dir;
 pub mod service;
 pub mod state;
 pub mod types;

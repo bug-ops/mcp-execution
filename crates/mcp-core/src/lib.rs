@@ -32,6 +32,7 @@
 
 mod command;
 mod error;
+mod path;
 mod server_config;
 mod types;
 
@@ -49,3 +50,6 @@ pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
 
 // Re-export command validation
 pub use command::validate_server_config;
+
+// Re-export path helpers shared by confinement checks
+pub use path::{sanitize_path_for_error, validate_path_segment};

@@ -69,10 +69,9 @@ async fn test_state_manager_workflow() {
     let server_info = create_test_server_info(server_id.clone());
 
     let config = ServerConfig::builder().command("echo".to_string()).build();
-    let output_dir = std::env::temp_dir().join("mcp-server-test");
 
     // Store pending generation
-    let pending = PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock);
+    let pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
     let session_id = state.store(pending.clone()).await;
 
     // Verify it's stored
@@ -112,10 +111,8 @@ async fn test_multiple_concurrent_sessions() {
         };
 
         let config = ServerConfig::builder().command("echo".to_string()).build();
-        let output_dir = std::env::temp_dir().join(format!("mcp-test-{i}"));
 
-        let pending =
-            PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock);
+        let pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
         let session_id = state.store(pending).await;
         sessions.push(session_id);
     }
@@ -140,11 +137,9 @@ async fn test_state_manager_handles_expiration() {
     let server_id = ServerId::new("test");
     let server_info = create_test_server_info(server_id.clone());
     let config = ServerConfig::builder().command("echo".to_string()).build();
-    let output_dir = std::env::temp_dir().join("mcp-expire-test");
 
     // Create and manually expire a session
-    let mut pending =
-        PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock);
+    let mut pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
     pending.expires_at = chrono::Utc::now() - Duration::hours(1);
 
     let session_id = state.store(pending).await;
@@ -350,7 +345,6 @@ fn create_test_pending(server_id_str: &str) -> PendingGeneration {
     let server_id = ServerId::new(server_id_str);
     let server_info = create_test_server_info(server_id.clone());
     let config = ServerConfig::builder().command("echo".to_string()).build();
-    let output_dir = std::env::temp_dir().join(format!("mcp-test-{server_id_str}"));
 
-    PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock)
+    PendingGeneration::new(server_id, server_info, config, None, &SystemClock)
 }
