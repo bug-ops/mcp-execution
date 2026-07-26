@@ -2,7 +2,7 @@
 //!
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
-use super::common::resolve_server_config;
+use super::common::{RawServerArgs, resolve_server_config};
 use anyhow::{Context, Result};
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_introspector::{Introspector, ServerInfo, ToolInfo};
@@ -126,21 +126,12 @@ pub struct ToolDisplay {
 ///
 /// # Arguments
 ///
-/// * `from_config` - Load server config from ~/.claude/mcp.json by name
-/// * `server` - Server command (binary name or path), None for HTTP/SSE
-/// * `args` - Arguments to pass to the server command
-/// * `env` - Environment variables in KEY=VALUE format
-/// * `cwd` - Working directory for the server process
-/// * `http` - HTTP transport URL
-/// * `sse` - SSE transport URL
-/// * `headers` - HTTP headers in KEY=VALUE format
+/// * `raw` - Server config-file selector, transport flags, and timeout
+///   overrides. `connect_timeout_secs` is ignored when `raw.from_config` is
+///   set (the `mcp.json` entry's `connectTimeoutSecs` applies instead); both
+///   timeout overrides share `mcp.json`'s bounds (greater than zero, at most
+///   600 seconds).
 /// * `detailed` - Whether to show detailed tool schemas
-/// * `connect_timeout_secs` - Connection (handshake) timeout override, in
-///   seconds. Ignored when `from_config` is set (the `mcp.json` entry's
-///   `connectTimeoutSecs` applies instead). Same bounds as `mcp.json`: must
-///   be greater than zero and at most 600 seconds.
-/// * `discover_timeout_secs` - Tool discovery timeout override, in seconds.
-///   Same rules as `connect_timeout_secs`.
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -154,74 +145,56 @@ pub struct ToolDisplay {
 /// # Examples
 ///
 /// ```no_run
+/// use mcp_execution_cli::commands::common::RawServerArgs;
 /// use mcp_execution_cli::commands::introspect;
 /// use mcp_execution_core::cli::OutputFormat;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// // Simple server
 /// let exit_code = introspect::run(
-///     None,
-///     Some("github-mcp-server".to_string()),
-///     vec!["stdio".to_string()],
-///     vec![],
-///     None,
-///     None,
-///     None,
-///     vec![],
+///     RawServerArgs {
+///         from_config: None,
+///         server: Some("github-mcp-server".to_string()),
+///         args: vec!["stdio".to_string()],
+///         env: vec![],
+///         cwd: None,
+///         http: None,
+///         sse: None,
+///         headers: vec![],
+///         connect_timeout_secs: None,
+///         discover_timeout_secs: None,
+///     },
 ///     false,
-///     None,
-///     None,
 ///     OutputFormat::Json
 /// ).await?;
 ///
 /// // HTTP transport with a shorter connect timeout
 /// let exit_code = introspect::run(
-///     None,
-///     None,
-///     vec![],
-///     vec![],
-///     None,
-///     Some("https://api.githubcopilot.com/mcp/".to_string()),
-///     None,
-///     vec!["Authorization=Bearer token".to_string()],
+///     RawServerArgs {
+///         from_config: None,
+///         server: None,
+///         args: vec![],
+///         env: vec![],
+///         cwd: None,
+///         http: Some("https://api.githubcopilot.com/mcp/".to_string()),
+///         sse: None,
+///         headers: vec!["Authorization=Bearer token".to_string()],
+///         connect_timeout_secs: Some(5),
+///         discover_timeout_secs: None,
+///     },
 ///     false,
-///     Some(5),
-///     None,
 ///     OutputFormat::Json
 /// ).await?;
 /// # Ok(())
 /// # }
 /// ```
-// One argument per CLI flag; clap already destructures flags for us, and
-// grouping them into a struct would only benefit this function, not caller ergonomics.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    from_config: Option<String>,
-    server: Option<String>,
-    args: Vec<String>,
-    env: Vec<String>,
-    cwd: Option<String>,
-    http: Option<String>,
-    sse: Option<String>,
-    headers: Vec<String>,
+    raw: RawServerArgs,
     detailed: bool,
-    connect_timeout_secs: Option<u64>,
-    discover_timeout_secs: Option<u64>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
-    let (server_id, config) = resolve_server_config(
-        from_config,
-        server,
-        args,
-        env,
-        cwd,
-        http,
-        sse,
-        headers,
-        connect_timeout_secs,
-        discover_timeout_secs,
-    )?;
+    let (server_id, config) = resolve_server_config(raw)?;
 
     info!("Introspecting server: {}", server_id);
     info!("Transport: {:?}", config.transport());
@@ -560,21 +533,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_server_connection_failure() {
-        let result = run(
-            None,
-            Some("nonexistent-server-xyz".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server-xyz".to_string()),
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -671,21 +634,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_text_format() {
         // Test that Text format output works correctly (compact JSON)
-        let result = run(
-            None,
-            Some("nonexistent-server".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            OutputFormat::Text,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server".to_string()),
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Text).await;
 
         // Connection should fail but format handling should not panic
         assert!(result.is_err());
@@ -694,21 +647,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_pretty_format() {
         // Test that Pretty format output works correctly (colorized)
-        let result = run(
-            None,
-            Some("nonexistent-server".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            OutputFormat::Pretty,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server".to_string()),
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Pretty).await;
 
         // Connection should fail but format handling should not panic
         assert!(result.is_err());
@@ -717,21 +660,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_detailed_mode() {
         // Test that detailed mode doesn't cause crashes even with connection failure
-        let result = run(
-            None,
-            Some("nonexistent-server".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            true, // detailed mode
-            None,
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server".to_string()),
+            ..Default::default()
+        };
+        let result = run(raw, true, OutputFormat::Json).await; // detailed mode
 
         assert!(result.is_err());
     }
@@ -741,21 +674,12 @@ mod tests {
     /// deterministic without a live server.
     #[tokio::test]
     async fn test_run_http_transport() {
-        let result = run(
-            None,
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://localhost:99999/invalid".to_string()),
-            None,
-            vec!["Authorization=Bearer test".to_string()],
-            false,
-            None,
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            http: Some("https://localhost:99999/invalid".to_string()),
+            headers: vec!["Authorization=Bearer test".to_string()],
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -782,21 +706,12 @@ mod tests {
     /// See `test_run_http_transport` — same deterministic-failure rationale.
     #[tokio::test]
     async fn test_run_sse_transport() {
-        let result = run(
-            None,
-            None,
-            vec![],
-            vec![],
-            None,
-            None,
-            Some("https://localhost:99999/sse".to_string()),
-            vec!["X-API-Key=test-key".to_string()],
-            false,
-            None,
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            sse: Some("https://localhost:99999/sse".to_string()),
+            headers: vec!["X-API-Key=test-key".to_string()],
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -820,21 +735,11 @@ mod tests {
     async fn test_run_all_output_formats() {
         // Test all output formats don't cause panics
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-            let result = run(
-                None,
-                Some("nonexistent".to_string()),
-                vec![],
-                vec![],
-                None,
-                None,
-                None,
-                vec![],
-                false,
-                None,
-                None,
-                format,
-            )
-            .await;
+            let raw = RawServerArgs {
+                server: Some("nonexistent".to_string()),
+                ..Default::default()
+            };
+            let result = run(raw, false, format).await;
 
             assert!(result.is_err());
         }
@@ -844,21 +749,11 @@ mod tests {
     async fn test_run_detailed_with_all_formats() {
         // Test detailed mode with all output formats
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-            let result = run(
-                None,
-                Some("nonexistent".to_string()),
-                vec![],
-                vec![],
-                None,
-                None,
-                None,
-                vec![],
-                true, // detailed
-                None,
-                None,
-                format,
-            )
-            .await;
+            let raw = RawServerArgs {
+                server: Some("nonexistent".to_string()),
+                ..Default::default()
+            };
+            let result = run(raw, true, format).await; // detailed
 
             assert!(result.is_err());
         }
@@ -1060,21 +955,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_from_config_not_found() {
-        let result = run(
-            Some("nonexistent-server-xyz".to_string()),
-            None,
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            from_config: Some("nonexistent-server-xyz".to_string()),
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -1090,21 +975,12 @@ mod tests {
     async fn test_run_from_config_takes_priority() {
         // When from_config is Some, it should be used for config loading
         // (server arg should be None due to clap conflicts, but we test the logic)
-        let result = run(
-            Some("test-server".to_string()),
-            None, // server is None when from_config is used
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            from_config: Some("test-server".to_string()),
+            server: None, // server is None when from_config is used
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         // Should fail because config doesn't exist, not because of server
         assert!(result.is_err());
@@ -1119,21 +995,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_manual_mode_backward_compatible() {
         // Existing behavior: from_config = None, use server arg
-        let result = run(
-            None, // from_config
-            Some("test-server-direct".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("test-server-direct".to_string()),
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -1148,21 +1014,12 @@ mod tests {
     async fn test_run_zero_connect_timeout_override_rejected_by_validation() {
         // A zero override must surface the same connect_timeout validation
         // error as the mcp.json path, not just a generic connection failure.
-        let result = run(
-            None,
-            Some("nonexistent-server-timeout-test".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            Some(0),
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server-timeout-test".to_string()),
+            connect_timeout_secs: Some(0),
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1180,21 +1037,13 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_valid_timeout_overrides_reaches_connection_attempt() {
         // Valid overrides must not be rejected before the connection attempt.
-        let result = run(
-            None,
-            Some("nonexistent-server-timeout-test-2".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            false,
-            Some(5),
-            Some(90),
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server-timeout-test-2".to_string()),
+            connect_timeout_secs: Some(5),
+            discover_timeout_secs: Some(90),
+            ..Default::default()
+        };
+        let result = run(raw, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

@@ -6,7 +6,7 @@
 //! 2. Generates TypeScript files for progressive loading (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
-use super::common::resolve_server_config;
+use super::common::{RawServerArgs, resolve_server_config};
 use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
@@ -88,23 +88,14 @@ fn format_size(bytes: usize) -> String {
 ///
 /// # Arguments
 ///
-/// * `from_config` - Load server config from ~/.claude/mcp.json by name
-/// * `server` - Server command (binary name or path), None for HTTP/SSE
-/// * `args` - Arguments to pass to the server command
-/// * `env` - Environment variables in KEY=VALUE format
-/// * `cwd` - Working directory for the server process
-/// * `http` - HTTP transport URL
-/// * `sse` - SSE transport URL
-/// * `headers` - HTTP headers in KEY=VALUE format
+/// * `raw` - Server config-file selector, transport flags, and timeout
+///   overrides. `connect_timeout_secs` is ignored when `raw.from_config` is
+///   set (the `mcp.json` entry's `connectTimeoutSecs` applies instead); both
+///   timeout overrides share `mcp.json`'s bounds (greater than zero, at most
+///   600 seconds).
 /// * `name` - Custom server name for directory (default: `server_id`)
 /// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
 /// * `dry_run` - When true, preview files without writing to disk
-/// * `connect_timeout_secs` - Connection (handshake) timeout override, in
-///   seconds. Ignored when `from_config` is set (the `mcp.json` entry's
-///   `connectTimeoutSecs` applies instead). Same bounds as `mcp.json`: must
-///   be greater than zero and at most 600 seconds.
-/// * `discover_timeout_secs` - Tool discovery timeout override, in seconds.
-///   Same rules as `connect_timeout_secs`.
 /// * `output_format` - Output format (json, text, pretty)
 ///
 /// # Errors
@@ -116,37 +107,14 @@ fn format_size(bytes: usize) -> String {
 /// - Tool introspection fails
 /// - Code generation fails
 /// - File export fails (skipped in dry-run mode)
-// One argument per CLI flag; clap already destructures flags for us, and
-// grouping them into a struct would only benefit this function, not caller ergonomics.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    from_config: Option<String>,
-    server: Option<String>,
-    args: Vec<String>,
-    env: Vec<String>,
-    cwd: Option<String>,
-    http: Option<String>,
-    sse: Option<String>,
-    headers: Vec<String>,
+    raw: RawServerArgs,
     name: Option<String>,
     output_dir: Option<PathBuf>,
     dry_run: bool,
-    connect_timeout_secs: Option<u64>,
-    discover_timeout_secs: Option<u64>,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    let (server_id, server_config) = resolve_server_config(
-        from_config,
-        server,
-        args,
-        env,
-        cwd,
-        http,
-        sse,
-        headers,
-        connect_timeout_secs,
-        discover_timeout_secs,
-    )?;
+    let (server_id, server_config) = resolve_server_config(raw)?;
 
     let server_info = discover_server_info(server_id, &server_config, name.as_deref()).await?;
 
@@ -550,23 +518,12 @@ mod tests {
     async fn test_run_zero_connect_timeout_override_rejected_by_validation() {
         // A zero override must surface the same connect_timeout validation
         // error as the mcp.json path, not just a generic connection failure.
-        let result = run(
-            None,
-            Some("nonexistent-server-timeout-test".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-            false,
-            Some(0),
-            None,
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server-timeout-test".to_string()),
+            connect_timeout_secs: Some(0),
+            ..Default::default()
+        };
+        let result = run(raw, None, None, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -584,23 +541,13 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_valid_timeout_overrides_reaches_connection_attempt() {
         // Valid overrides must not be rejected before the connection attempt.
-        let result = run(
-            None,
-            Some("nonexistent-server-timeout-test-2".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-            false,
-            Some(5),
-            Some(90),
-            OutputFormat::Json,
-        )
-        .await;
+        let raw = RawServerArgs {
+            server: Some("nonexistent-server-timeout-test-2".to_string()),
+            connect_timeout_secs: Some(5),
+            discover_timeout_secs: Some(90),
+            ..Default::default()
+        };
+        let result = run(raw, None, None, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
