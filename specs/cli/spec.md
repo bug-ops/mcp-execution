@@ -1,0 +1,302 @@
+---
+aliases:
+  - mcp-execution-cli spec
+  - CLI spec
+tags:
+  - sdd
+  - spec
+  - cli
+  - security
+created: 2026-07-27
+status: documented
+related:
+  - "[[../constitution]]"
+  - "[[../core/spec]]"
+  - "[[../introspector/spec]]"
+  - "[[../codegen/spec]]"
+  - "[[../files/spec]]"
+  - "[[../skill/spec]]"
+---
+
+# Block: Command-Line Interface (`mcp-execution-cli`)
+
+> [!abstract]
+> Path: `crates/mcp-cli`. `clap`-derived CLI binary (`mcp-execution-cli`)
+> that drives the whole pipeline directly (introspect → generate → skill),
+> plus server-config management, environment setup, and shell completions.
+> Depends on `mcp-execution-core`, `mcp-execution-introspector`,
+> `mcp-execution-codegen`, `mcp-execution-files`, `mcp-execution-skill`.
+
+## 1. Responsibility
+
+Provide the human/scriptable entry point to everything the other crates
+do, without going through the MCP-server layer at all: read
+`~/.claude/mcp.json` or accept transport flags directly, introspect a
+server, generate progressive-loading TypeScript, render SKILL.md, and
+manage/validate server configuration and the local runtime environment.
+
+## 2. Subcommands (`Commands` enum, `src/cli.rs`)
+
+| Subcommand | Purpose | Key flags |
+|---|---|---|
+| `introspect` | Connect + display server capabilities/tools | `--from-config`, `server` (positional), `--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header`, `--detailed`/`-d`, `--connect-timeout-secs`, `--discover-timeout-secs` |
+| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | same transport flags as `introspect` (long-form: `--arg`, `--env`, `--cwd`, `--http`, `--sse`, `--header`), plus `--name`, `--progressive-output`, `--dry-run` |
+| `skill` | Render SKILL.md directly from a generated server's tools (no LLM) | `-s/--server`, `--servers-dir`, `-o/--output`, `--skill-name`, `--hint` (repeatable), `--overwrite` |
+| `server` | Manage `~/.claude/mcp.json` entries | subcommand: `list`, `info <server>`, `validate <command>` |
+| `setup` | Validate the local runtime (Node.js version, executable bits, config presence) | none |
+| `completions` | Emit a shell completion script | `<shell>` (bash/zsh/fish/powershell/elvish) |
+
+Global flags on `Cli` (apply to every subcommand): `-v/--verbose` (DEBUG log
+level), `--format {json,text,pretty}` (default `pretty`, case-insensitive).
+
+`--from-config`/transport flags are **mutually exclusive** at the clap
+level (`conflicts_with_all`), and `server`/`http_url`/`sse_url` collectively
+satisfy `required_unless_present_any` — i.e. exactly one of "load from
+config" or "pick a transport" must be chosen, enforced before any command
+handler runs.
+
+## 3. `common.rs` — Shared Server-Resolution Machinery
+
+This module is the single place `introspect` and `generate` (which accept
+an identical flag surface) resolve "how do I reach this server":
+
+```rust
+pub struct RawServerArgs { from_config, server, args, env, cwd, http, sse, headers, connect_timeout_secs, discover_timeout_secs }
+pub(crate) fn resolve_server_config(raw: RawServerArgs) -> Result<(ServerId, ServerConfig)>;
+```
+`RawServerArgs` exists specifically to prevent transposing two
+same-typed fields (e.g. `http`/`sse`, both `Option<String>`) by positional
+argument order (issue #286's fix) — named fields instead.
+
+```rust
+pub struct McpConfig { pub mcp_servers: HashMap<String, McpServerEntry> }
+pub struct McpServerEntry { pub transport: McpTransport, pub connect_timeout_secs, pub discover_timeout_secs }
+pub enum McpTransport { Stdio{command,args,env,cwd}, Http{url,headers}, Sse{url,headers} }
+pub enum TransportArgs { Stdio{...}, Http{...}, Sse{...} } // raw, unparsed CLI-flag mirror of McpTransport
+impl TransportArgs { pub fn from_flags(...) -> Result<Self>; } // enforces "exactly one transport" as a safety net for direct callers
+```
+
+`McpServerEntry`'s `Deserialize` is **hand-written** (via a
+`RawMcpServerEntry` landing zone + `TryFrom`), not derived, so it can:
+- Infer `stdio` vs `http` when `"type"` is absent (via `command` vs `url`
+  presence) — an `mcp.json` entry can omit `"type"` for a bare `url`-only
+  http entry.
+- Reject cross-field violations with precise messages (`"http server entry
+  must not set \"command\""`, `"stdio server entry must not set
+  \"url\""`).
+- Silently accept-and-warn on unrecognized top-level keys (`extra:
+  HashMap<String, Value>`), since `~/.claude/mcp.json` is shared with other
+  MCP clients (e.g. Claude Code's own `disabled`/`alwaysAllow` keys) this
+  project doesn't model.
+
+`derive_server_id_from_url(url)` — the `ServerId` used for an Http/Sse
+config resolved from CLI flags (not `mcp.json`, which uses the config-file
+key as the id). Uses **only `host` + `path`** from the parsed URL, never
+`userinfo`, structurally excluding embedded credentials from the derived
+directory name; lowercased, runs of non-`[a-z0-9-]` collapsed to a single
+`-`, trimmed, truncated to `MAX_SERVER_ID_LENGTH`, falls back to
+`"http-server"` if the result would be empty (e.g. a bare `https://` with
+no host) or the URL fails to parse. This matters beyond cosmetics: the id
+becomes a directory name under `~/.claude/servers/{id}/` and is embedded in
+generated `.ts` literals, so a raw URL there would break
+`mcp-skill::validate_server_id`'s charset, could smuggle a `..` path
+segment, and (if not credential-excluded) would leak a token into a
+directory name and generated source.
+
+`parse_key_value(s, kind)` — parses a single `--env`/`--header` `KEY=VALUE`
+CLI argument. **Never echoes the raw input on failure** in any of its
+error paths (no `=` at all; empty key; key containing whitespace/`:`/
+control chars — the last case specifically catches a `Name: Value`-style
+mistake where the real `=` matched inside a secret value) — because the
+whole string, or the "key" half, may itself be the secret.
+
+## 4. Debug-Redaction Discipline
+
+Every CLI-facing type that can carry a secret (`Cli`/`Commands` themselves,
+`McpTransport`, `RawMcpServerEntry`, `TransportArgs`, `RawServerArgs`) hand-
+writes `Debug` rather than deriving it, applying `mcp-core`'s
+`RedactedItems`/`RedactedMapValues`/`RedactedUrl`/`sanitize_path_for_error`
+consistently — because `runner::report_and_classify` prints
+`format!("Error: {err:?}")` to stderr on any failure, and a `Commands`
+value routinely ends up inside that error's `anyhow::Context`. Regression
+tests assert specific secret substrings (e.g. `sk-verySECRETtoken...`)
+never appear in `format!("{:?}", cli.command)` for `--env`/`--header`/
+`--http`/`--sse` inputs.
+
+## 5. `runner.rs` — Dispatch and Exit-Code Classification
+
+```rust
+pub fn init_logging(verbose: bool) -> Result<()>;
+pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode>;
+pub fn report_and_classify(err: &anyhow::Error) -> ExitCode;
+```
+
+`execute_command` **never propagates a handler failure as `Err`** — it
+always resolves to `Ok(classified_exit_code)` (issue #195's fix, so `main`
+can always reach `std::process::exit` with a semantic code instead of
+falling back to anyhow's blanket exit-code-1 default). `main.rs` itself
+also routes pre-dispatch failures (e.g. clap already rejects an invalid
+`--format` before any command runs, but a hypothetical future pre-dispatch
+failure) through the same `report_and_classify`.
+
+`classify_exit_code`/`classify_core_error` walk the `anyhow::Error`'s cause
+chain (not just the top) looking first for a `mcp_execution_core::Error`,
+then (fallback) a `mcp_execution_files::FilesError` — the latter exists
+specifically because `generate`'s export step wraps `FilesError` via
+`anyhow::Context` rather than converting it to `CoreError`, so it would
+otherwise always fall through to the generic `ExitCode::ERROR` (issue #198
+M6's fix). `CoreError::ScriptGenerationError`'s wrapped `source` is
+recursed into, so e.g. a `ResourceLimitExceeded` wrapped inside it still
+classifies as `SERVER_ERROR`, not the generic fallback:
+
+| `Error` variant | `ExitCode` |
+|---|---|
+| `Timeout` | `TIMEOUT` (4) |
+| `ConnectionFailed`, `ResourceLimitExceeded` (core or files) | `SERVER_ERROR` (3) — "the remote MCP server is at fault," not the CLI caller |
+| `ValidationError`, `SecurityViolation`, `InvalidArgument` | `INVALID_INPUT` (2) |
+| `SerializationError`, everything else | `ERROR` (1) |
+| any `FilesError` other than `ResourceLimitExceeded` | `ERROR` (1) |
+
+## 6. `introspect` Command (`commands/introspect.rs`)
+
+`run(raw: RawServerArgs, detailed: bool, output_format: OutputFormat) -> Result<ExitCode>`.
+Resolves config via `resolve_server_config`, runs
+`Introspector::discover_server` once, formats an `IntrospectionResult`
+(`ServerMetadata` + `Vec<ToolDisplay>`, schemas included only when
+`detailed`). No output-directory writes at all — read-only, display-only
+command.
+
+## 7. `generate` Command (`commands/generate.rs`)
+
+`run(raw, name: Option<String>, output_dir: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
+
+1. `resolve_server_config` → `discover_server_info` (introspects; applies
+   `--name` override to `ServerInfo.id` if given, so generated
+   directory/literals use the custom name rather than the raw command).
+2. If the server has zero tools: logs a warning and returns
+   `ExitCode::SUCCESS` (not an error) without generating anything.
+3. `ProgressiveGenerator::generate` (uncategorized — no LLM step in this
+   path, unlike `mcp-server`'s `save_categorized_tools`).
+4. `resolve_base_dir(output_dir)` — defaults to `~/.claude/servers`.
+5. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
+   size, human-readable `format_size`) **without writing anything to
+   disk** — the only place in this workspace that previews generated
+   output without ever touching the filesystem.
+6. Otherwise: `FilesBuilder::from_generated_code(code, "/").build_and_export(&base_dir)`
+   — see [[../files/spec#FilesBuilder::build_and_export]] for the
+   per-top-level-group atomicity this implies (a re-run with fewer tools
+   deletes stale tool files in that server's own directory, but never
+   touches sibling servers under the same `base_dir`).
+7. Success output names the required post-export step
+   (`NPM_INSTALL_HINT`: run `npm install` before type-checking the
+   generated package — issue #257's fix, since the generated `package.json`
+   declares `@types/node` as a `devDependency` that isn't installed by
+   `generate` itself).
+
+## 8. `skill` Command (`commands/skill.rs`)
+
+`run(server, servers_dir, output_path, skill_name, hints, overwrite, output_format) -> Result<ExitCode>`:
+validates `server` via `mcp_execution_skill::validate_server_id`
+(mapped to `CoreError::InvalidArgument` for correct exit-code
+classification), resolves the tool directory (default
+`~/.claude/servers/{server}`), scans via `scan_tools_directory`, builds
+context via `build_skill_context`, and **renders `SKILL.md` directly**
+(`render_skill_md`) — no LLM/prompt round-trip, unlike `mcp-server`'s
+`generate_skill`/`save_skill` split. The crate's own doc comment recommends
+preferring the MCP server path for "optimal results," since it can leverage
+Claude's own summarization instead of the mechanical template-only
+rendering this command does. Refuses to overwrite an existing output file
+unless `--overwrite`.
+
+## 9. `server` Command (`commands/server.rs`)
+
+Three actions (`ServerAction`), all reading `~/.claude/mcp.json` as the
+single source of truth:
+
+- `list` — enumerates every entry, checking a **time-boxed** availability
+  signal per entry (`LIST_AVAILABILITY_TIMEOUT` = 3s, deliberately shorter
+  than — and independent of — the entry's own configured
+  `connect_timeout_secs`): stdio = PATH lookup only; http/sse = URL
+  well-formedness + a bounded real `Introspector::discover_server` attempt.
+  Checks run concurrently across entries so one slow/firewalled server
+  doesn't visibly hang the whole listing. Because http/sse `list` and
+  `info`/`validate` now share the **exact same connection path**
+  (`Introspector::discover_server`), they can disagree only about *how
+  long* the check is allowed to run, not *how* the transport is reached —
+  a server merely slower than 3s but within its own configured timeout can
+  legitimately show `unavailable` in `list` and `available` in
+  `validate`/`info` (an intentional, documented trade-off, distinct from
+  the unconditional-wrong-answer bug it replaced).
+- `info <server>` / `validate <command>` — perform a **full** introspection
+  handshake (the entry's own full configured timeout applies), the
+  authoritative single-target check.
+
+## 10. `setup` Command (`commands/setup.rs`)
+
+Validates the local runtime is ready to execute generated tools:
+1. Checks `node --version` is ≥ 18.0.0 (hard error if missing/older).
+2. On Unix only: makes every `.ts` file under `~/.claude/servers/` executable
+   (`files_made_executable` count) and reports whether a servers directory
+   exists at all.
+3. Reports whether `~/.claude/mcp.json` exists, printing a starter example
+   if not.
+
+Non-Unix platforms always report `servers_dir_found: false`,
+`files_made_executable: 0` (permission bits aren't a concept there).
+
+## 11. `completions` Command (`commands/completions.rs`)
+
+`generate_completions(shell, cmd)` — thin wrapper over `clap_complete::generate`,
+writing the script to stdout. Cannot fail (always returns
+`ExitCode::SUCCESS`); all error handling is internal to `clap_complete`.
+
+## 12. Output Formatting (`formatters.rs`)
+
+```rust
+pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<String>;
+pub fn escape_display(s: &str) -> String; // wraps s as a JSON string literal (quotes + backslash-escapes, including control chars)
+pub mod json; pub mod text; pub mod pretty;
+```
+`escape_display` exists for commands that build **freeform** lines (e.g.
+`"Server: {name} ({id})"`) rather than serializing a whole struct through
+`format_output` — a malicious MCP server could otherwise inject raw
+ANSI/control escape sequences into the user's terminal via handshake or
+tool-metadata text. `pretty`'s own internal value formatter delegates to
+this same function for `String` values, so both call sites share one
+implementation and one guarantee.
+
+## 13. Error Conditions
+
+CLI commands surface errors as `anyhow::Error` (wrapping
+`mcp_execution_core::Error`/`mcp_execution_files::FilesError` via `?`/
+`.context(...)`), classified at the `runner` layer per [[#5. runner.rs]]
+into a process exit code — no command handler calls `std::process::exit`
+itself.
+
+## 14. Cross-Crate Contracts
+
+- **Consumes**: `mcp-core` (`ServerConfig`, `cli::{OutputFormat,ExitCode}`,
+  redaction helpers, `Error`), `mcp-introspector::Introspector`,
+  `mcp-codegen::progressive::ProgressiveGenerator`,
+  `mcp-files::FilesBuilder`, `mcp-skill::{scan_tools_directory,
+  build_skill_context, render_skill_md, validate_server_id,
+  MAX_SERVER_ID_LENGTH}`.
+- Shares the exact `RawServerArgs`/`resolve_server_config` code path
+  between `introspect` and `generate` — any transport-resolution fix
+  applies to both simultaneously by construction.
+
+## 15. Edge Cases & Notable Behaviors
+
+- `generate` on a tool-less server is a **success**, not an error — a
+  deliberate "nothing to do" outcome, distinct from every failure path.
+- `--dry-run` and `server list` are the only two places in the CLI that
+  intentionally avoid a real filesystem write / a full-timeout network
+  call, respectively, in favor of a fast, bounded preview.
+- `mcp.json`'s `McpServerEntry` deserialization warns (not fails) on
+  unrecognized keys, so this project's CLI can coexist with a config file
+  shared by other MCP-aware tools.
+
+## 16. See Also
+
+- [[../core/spec]] — shared config/redaction/exit-code primitives
+- [[../introspector/spec]], [[../codegen/spec]], [[../files/spec]], [[../skill/spec]] — crates this CLI drives directly, without going through [[../server/spec]]
