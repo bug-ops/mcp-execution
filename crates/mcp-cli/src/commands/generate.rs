@@ -7,6 +7,7 @@
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
 use super::common::{RawServerArgs, resolve_server_config};
+use crate::formatters::escape_display;
 use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
@@ -236,38 +237,46 @@ fn render_dry_run(
         total_size,
     };
 
-    match output_format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        OutputFormat::Text => {
-            println!("Server: {} ({})", result.server_name, result.server_id);
-            println!(
-                "Would generate {} files ({}) to {}/",
-                result.total_files,
-                format_size(result.total_size),
-                result.output_path
-            );
-        }
+    println!("{}", format_dry_run(&result, output_format)?);
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Renders a [`DryRunResult`] for the given `output_format`.
+///
+/// `server_name` is server-supplied (untrusted), so `Text`/`Pretty` output escapes it via
+/// [`escape_display`] to neutralize embedded control characters; `Json` output is unaffected
+/// since `serde_json` already escapes string values.
+fn format_dry_run(result: &DryRunResult, output_format: OutputFormat) -> Result<String> {
+    Ok(match output_format {
+        OutputFormat::Json => serde_json::to_string_pretty(result)?,
+        OutputFormat::Text => format!(
+            "Server: {} ({})\nWould generate {} files ({}) to {}/",
+            escape_display(&result.server_name),
+            result.server_id,
+            result.total_files,
+            format_size(result.total_size),
+            result.output_path
+        ),
         OutputFormat::Pretty => {
-            println!(
-                "Would generate {} files to {}/:",
+            use std::fmt::Write as _;
+
+            let mut out = format!(
+                "Would generate {} files to {}/:\n\n",
                 result.total_files, result.output_path
             );
-            println!();
             for f in &result.files {
-                println!("  - {} ({})", f.path, format_size(f.size));
+                let _ = writeln!(out, "  - {} ({})", f.path, format_size(f.size));
             }
-            println!();
-            println!(
-                "Total: {} files, ~{}",
+            let _ = write!(
+                out,
+                "\nTotal: {} files, ~{}",
                 result.total_files,
                 format_size(result.total_size)
             );
+            out
         }
-    }
-
-    Ok(ExitCode::SUCCESS)
+    })
 }
 
 /// Builds the VFS from `generated_code` and exports it to `output_path` under `base_dir`.
@@ -314,26 +323,34 @@ fn render_success(
         next_step: NPM_INSTALL_HINT.to_string(),
     };
 
-    match output_format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        OutputFormat::Text => {
-            println!("Server: {} ({})", result.server_name, result.server_id);
-            println!("Generated {} tool files", result.tool_count);
-            println!("Output: {}", result.output_path);
-            println!("Next step: {NPM_INSTALL_HINT}");
-        }
-        OutputFormat::Pretty => {
-            println!("✓ Successfully generated progressive loading files");
-            println!("  Server: {} ({})", result.server_name, result.server_id);
-            println!("  Tools: {}", result.tool_count);
-            println!("  Location: {}", result.output_path);
-            println!("  Next step: {NPM_INSTALL_HINT}");
-        }
-    }
+    println!("{}", format_success(&result, output_format)?);
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Renders a [`GenerationResult`] for the given `output_format`.
+///
+/// `server_name` is server-supplied (untrusted), so `Text`/`Pretty` output escapes it via
+/// [`escape_display`] to neutralize embedded control characters; `Json` output is unaffected
+/// since `serde_json` already escapes string values.
+fn format_success(result: &GenerationResult, output_format: OutputFormat) -> Result<String> {
+    Ok(match output_format {
+        OutputFormat::Json => serde_json::to_string_pretty(result)?,
+        OutputFormat::Text => format!(
+            "Server: {} ({})\nGenerated {} tool files\nOutput: {}\nNext step: {NPM_INSTALL_HINT}",
+            escape_display(&result.server_name),
+            result.server_id,
+            result.tool_count,
+            result.output_path
+        ),
+        OutputFormat::Pretty => format!(
+            "✓ Successfully generated progressive loading files\n  Server: {} ({})\n  Tools: {}\n  Location: {}\n  Next step: {NPM_INSTALL_HINT}",
+            escape_display(&result.server_name),
+            result.server_id,
+            result.tool_count,
+            result.output_path
+        ),
+    })
 }
 
 #[cfg(test)]
@@ -381,6 +398,120 @@ mod tests {
         assert!(json.contains("\"server_id\":\"test\""));
         assert!(json.contains("\"tool_count\":5"));
         assert!(json.contains(NPM_INSTALL_HINT));
+    }
+
+    #[test]
+    fn test_format_success_text_escapes_control_chars() {
+        // A malicious MCP server can set its handshake `serverInfo.name` to anything,
+        // including raw ANSI/control escape sequences. Text output must not pass them through.
+        let result = GenerationResult {
+            server_id: "test".to_string(),
+            server_name: "evil\u{1b}[2J\u{1b}]0;pwned\u{7}".to_string(),
+            tool_count: 1,
+            output_path: "/path/to/output".to_string(),
+            next_step: NPM_INSTALL_HINT.to_string(),
+        };
+
+        let output = format_success(&result, OutputFormat::Text).unwrap();
+        assert!(!output.contains('\u{1b}'));
+        assert!(output.contains("\\u001b"));
+    }
+
+    #[test]
+    fn test_format_success_pretty_escapes_control_chars() {
+        let result = GenerationResult {
+            server_id: "test".to_string(),
+            server_name: "evil\u{1b}[2Jname".to_string(),
+            tool_count: 1,
+            output_path: "/path/to/output".to_string(),
+            next_step: NPM_INSTALL_HINT.to_string(),
+        };
+
+        let output = format_success(&result, OutputFormat::Pretty).unwrap();
+        assert!(!output.contains('\u{1b}'));
+        assert!(output.contains("\\u001b"));
+    }
+
+    #[test]
+    fn test_format_dry_run_text_escapes_control_chars() {
+        let result = DryRunResult {
+            server_id: "test".to_string(),
+            server_name: "evil\u{1b}[2Jname".to_string(),
+            output_path: "/path/to/output".to_string(),
+            files: vec![],
+            total_files: 0,
+            total_size: 0,
+        };
+
+        let output = format_dry_run(&result, OutputFormat::Text).unwrap();
+        assert!(!output.contains('\u{1b}'));
+        assert!(output.contains("\\u001b"));
+    }
+
+    #[test]
+    fn test_format_dry_run_pretty_never_prints_raw_control_chars() {
+        // The Pretty dry-run branch does not interpolate `server_name` at all (only file
+        // paths and computed sizes/counts), but assert this stays true rather than silently
+        // regressing if someone adds a server-name line later without escaping it.
+        let result = DryRunResult {
+            server_id: "test".to_string(),
+            server_name: "evil\u{1b}[2Jname".to_string(),
+            output_path: "/path/to/output".to_string(),
+            files: vec![],
+            total_files: 0,
+            total_size: 0,
+        };
+
+        let output = format_dry_run(&result, OutputFormat::Pretty).unwrap();
+        assert!(!output.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn test_format_success_json_unaffected_by_control_chars() {
+        // Json path already relies on serde_json escaping and must stay unchanged.
+        let result = GenerationResult {
+            server_id: "test".to_string(),
+            server_name: "evil\u{1b}[2Jname".to_string(),
+            tool_count: 1,
+            output_path: "/path/to/output".to_string(),
+            next_step: NPM_INSTALL_HINT.to_string(),
+        };
+
+        let output = format_success(&result, OutputFormat::Json).unwrap();
+        assert!(!output.contains('\u{1b}'));
+        assert!(output.contains("\\u001b"));
+    }
+
+    #[test]
+    fn test_format_success_text_quotes_benign_server_name() {
+        // Pin the visible output-format change: escape_display always JSON-quotes the server
+        // name, even when it contains no control characters, so `Server: Test Server (id)`
+        // becomes `Server: "Test Server" (id)` for every server, not just malicious ones.
+        let result = GenerationResult {
+            server_id: "test".to_string(),
+            server_name: "Test Server".to_string(),
+            tool_count: 1,
+            output_path: "/path/to/output".to_string(),
+            next_step: NPM_INSTALL_HINT.to_string(),
+        };
+
+        let output = format_success(&result, OutputFormat::Text).unwrap();
+        assert!(output.contains("Server: \"Test Server\" (test)"));
+    }
+
+    #[test]
+    fn test_format_dry_run_text_quotes_benign_server_name() {
+        let result = DryRunResult {
+            server_id: "test".to_string(),
+            server_name: "Test Server".to_string(),
+            output_path: "/path/to/output".to_string(),
+            files: vec![],
+            total_files: 0,
+            total_size: 0,
+        };
+
+        let output = format_dry_run(&result, OutputFormat::Text).unwrap();
+        assert!(output.contains("Server: \"Test Server\" (test)"));
     }
 
     #[test]

@@ -48,6 +48,35 @@ pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<Str
     }
 }
 
+/// Escapes a string for safe interpolation into hand-crafted `Text`/`Pretty` output lines.
+///
+/// Commands that render whole structs through [`format_output`] get escaping for free, since
+/// every string value is serialized through `serde_json` before printing. Commands that instead
+/// build freeform lines (e.g. `"Server: {name} ({id})"`) must escape server-supplied strings
+/// themselves, or a malicious MCP server could inject raw ANSI/control escape sequences into the
+/// user's terminal via handshake or tool metadata fields. `pretty`'s internal value formatter
+/// delegates to this same function for its `String` values, so control characters (including
+/// ESC) are backslash-escaped instead of passed through verbatim, and both call sites share one
+/// implementation. The returned string is always JSON-quoted, even for input with no control
+/// characters, since callers need one consistent (and unambiguous) rendering rather than
+/// conditionally-quoted output.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::formatters::escape_display;
+///
+/// assert_eq!(escape_display("hello"), "\"hello\"");
+/// assert_eq!(escape_display("esc\u{1b}[2J"), "\"esc\\u001b[2J\"");
+/// ```
+#[must_use]
+pub fn escape_display(s: &str) -> String {
+    // `Value::String`'s `Display` impl serializes through the same JSON string writer as
+    // `serde_json::to_string`, but is infallible (no `Result` to unwrap): formatting a `String`
+    // as a JSON string literal cannot fail.
+    serde_json::Value::String(s.to_owned()).to_string()
+}
+
 /// JSON output formatting.
 pub mod json {
     use super::{Result, Serialize};
@@ -140,7 +169,7 @@ pub mod text {
 
 /// Pretty (human-readable) output formatting.
 pub mod pretty {
-    use super::{Colorize, Result, Serialize};
+    use super::{Colorize, Result, Serialize, escape_display};
 
     /// Format data as colorized, human-readable output.
     ///
@@ -183,10 +212,7 @@ pub mod pretty {
             Value::Null => Ok("null".dimmed().to_string()),
             Value::Bool(b) => Ok(b.to_string().yellow().to_string()),
             Value::Number(n) => Ok(n.to_string().cyan().to_string()),
-            Value::String(s) => {
-                let quoted = serde_json::to_string(s)?;
-                Ok(quoted.green().to_string())
-            }
+            Value::String(s) => Ok(escape_display(s).green().to_string()),
             Value::Array(arr) => {
                 if arr.is_empty() {
                     return Ok("[]".to_string());
@@ -384,6 +410,18 @@ mod tests {
             }
         }
         result
+    }
+
+    #[test]
+    fn test_escape_display_neutralizes_control_chars() {
+        let escaped = escape_display("evil\u{1b}[2Jname");
+        assert!(!escaped.contains('\u{1b}'));
+        assert!(escaped.contains("\\u001b"));
+    }
+
+    #[test]
+    fn test_escape_display_plain_string() {
+        assert_eq!(escape_display("hello"), "\"hello\"");
     }
 
     #[test]
