@@ -226,33 +226,19 @@ pub fn report_and_classify(err: &anyhow::Error) -> ExitCode {
 /// semantic [`ExitCode`].
 ///
 /// Walks the error's cause chain looking for a [`CoreError`] — the concrete
-/// type every command handler ultimately produces via `?` — and maps its
-/// variant to the exit code that best communicates the failure category to
-/// scripts consuming this CLI. Falls back to checking for a [`FilesError`]
-/// (the `generate` command's `export_to_filesystem` errors are wrapped via `anyhow::Context`
-/// rather than converted to `CoreError`, so they would otherwise never match the first check
-/// and always fall through to the generic [`ExitCode::ERROR`] — issue #198 M6). Errors that
-/// match neither (e.g. CLI argument parsing, serialization) fall back to [`ExitCode::ERROR`].
+/// type every command handler ultimately produces via `?` — and delegates to
+/// [`classify_core_error`] for the variant-to-exit-code mapping. Falls back to checking for a
+/// [`FilesError`] (the `generate` command's `export_to_filesystem` errors are wrapped via
+/// `anyhow::Context` rather than converted to `CoreError`, so they would otherwise never match
+/// the first check and always fall through to the generic [`ExitCode::ERROR`] — issue #198 M6).
+/// Errors that match neither (e.g. CLI argument parsing, serialization) fall back to
+/// [`ExitCode::ERROR`].
 fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
     if let Some(core_error) = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<CoreError>())
     {
-        return match core_error {
-            CoreError::Timeout { .. } => ExitCode::TIMEOUT,
-            // A resource limit is exceeded by data the remote MCP server returned (tool
-            // count, schema size, etc.), not by the CLI caller's own arguments — same
-            // "the server is at fault" classification as `ConnectionFailed`.
-            CoreError::ConnectionFailed { .. } | CoreError::ResourceLimitExceeded { .. } => {
-                ExitCode::SERVER_ERROR
-            }
-            CoreError::ValidationError { .. }
-            | CoreError::SecurityViolation { .. }
-            | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
-            CoreError::SerializationError { .. } | CoreError::ScriptGenerationError { .. } => {
-                ExitCode::ERROR
-            }
-        };
+        return classify_core_error(core_error);
     }
 
     if let Some(files_error) = error
@@ -274,6 +260,35 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
     }
 
     ExitCode::ERROR
+}
+
+/// Classifies a single [`CoreError`] variant.
+///
+/// [`CoreError::ScriptGenerationError`] wraps an arbitrary underlying failure (schema
+/// extraction, template rendering, output tracking) behind one variant so a codegen error can
+/// always be attributed to the tool that caused it; that wrapping must not also collapse the
+/// wrapped cause's own exit-code classification (e.g. a wrapped
+/// [`CoreError::ResourceLimitExceeded`] should still report [`ExitCode::SERVER_ERROR`], not the
+/// generic code every other `ScriptGenerationError` gets). Recursing into `source` when it
+/// downcasts to another `CoreError` preserves that.
+fn classify_core_error(core_error: &CoreError) -> ExitCode {
+    match core_error {
+        CoreError::Timeout { .. } => ExitCode::TIMEOUT,
+        // A resource limit is exceeded by data the remote MCP server returned (tool
+        // count, schema size, etc.), not by the CLI caller's own arguments — same
+        // "the server is at fault" classification as `ConnectionFailed`.
+        CoreError::ConnectionFailed { .. } | CoreError::ResourceLimitExceeded { .. } => {
+            ExitCode::SERVER_ERROR
+        }
+        CoreError::ValidationError { .. }
+        | CoreError::SecurityViolation { .. }
+        | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
+        CoreError::SerializationError { .. } => ExitCode::ERROR,
+        CoreError::ScriptGenerationError { source, .. } => source
+            .as_deref()
+            .and_then(|source| source.downcast_ref::<CoreError>())
+            .map_or(ExitCode::ERROR, classify_core_error),
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +389,24 @@ mod tests {
             source: None,
         });
         assert_eq!(classify_exit_code(&err), ExitCode::ERROR);
+    }
+
+    /// `ScriptGenerationError` wraps its cause via `source` (see
+    /// `ProgressiveGenerator::wrap_tool_generation_error`) precisely so this recursion can
+    /// still find the original classification instead of collapsing every wrapped cause to the
+    /// generic exit code.
+    #[test]
+    fn test_classify_exit_code_script_generation_error_recurses_into_wrapped_source() {
+        let err = wrap(CoreError::ScriptGenerationError {
+            tool: "example_tool".to_string(),
+            message: "failed to track generated tool file".to_string(),
+            source: Some(Box::new(CoreError::ResourceLimitExceeded {
+                resource: "generated output size".to_string(),
+                actual: 10,
+                limit: 5,
+            })),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::SERVER_ERROR);
     }
 
     #[test]

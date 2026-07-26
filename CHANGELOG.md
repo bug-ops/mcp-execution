@@ -403,6 +403,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same "exited before responding" wording as the `close` handler, so the rejection a caller sees
   no longer depends on unpredictable event-loop timing.
 
+- **`mcp-execution-codegen`**: `sanitize_ts_identifier` replaced every non-ASCII-alphanumeric
+  character with its own `_`, so a run of several invalid characters (e.g. multiple
+  non-ASCII characters in a row, or an invalid character adjacent to a literal `_`) produced
+  one underscore per character instead of a single separator, needlessly widening generated
+  identifiers (#192). Any run of consecutive `_`-producing characters — invalid characters,
+  literal `_`s already in the input, or a mix — now collapses into a single `_`; a single
+  invalid character between other valid characters still becomes exactly one `_`, unchanged.
+  **Behavior change**: regenerating an existing server's tools can produce different
+  identifiers than before for any tool or property name that previously sanitized through a
+  run of two or more consecutive invalid/underscore characters (e.g. `a--b` sanitized to
+  `a__b`, now sanitizes to `a_b`, same as `a-b`); a resulting new collision is disambiguated
+  the same way any other sanitization collision already was (`a_b`, `a_b_2`, ...).
+
+- **`mcp-execution-codegen`**: `ProgressiveGenerator::create_tool_context`/`create_tool_metadata`
+  reported malformed schema properties as a generic `Error::ValidationError`, and a failure
+  while rendering a tool's template or tracking its generated file surfaced as a bare
+  `Error::SerializationError`/`Error::ResourceLimitExceeded` — in all three cases discarding the
+  name of the tool being generated even though the caller had it in scope (#185). All three call
+  sites, across both `generate` and `generate_with_categories`, now wrap the failure in
+  `Error::ScriptGenerationError`, attributing it to the specific tool and preserving the
+  original error as its `source`. `mcp-execution-cli`'s exit-code classifier now recurses into
+  that `source` so a wrapped `Error::ResourceLimitExceeded` still reports `ExitCode::SERVER_ERROR`
+  instead of the generic code every other `ScriptGenerationError` gets.
+
+- **`mcp-execution-server`**: `GeneratorService::save_categorized_tools` built its `McpError`
+  messages by interpolating `{e}` directly, which only prints an error's own `Display` text —
+  for a wrapping variant like `Error::ScriptGenerationError` (see above) that never repeats its
+  `#[source]`, so the underlying cause (e.g. which resource limit was exceeded) was silently
+  dropped from what an MCP client sees on the project's primary interface. The three call sites
+  that build code from categorized tools (generator construction, code generation, virtual
+  filesystem build) now walk the full `source()` chain when building the message.
+
 - **`mcp-execution-cli`**: `Cli`/`Commands` derived a plain `Debug`, so `Commands::Introspect`'s
   `env`/`headers` and `Commands::Generate`'s `server_env`/`server_headers` — raw `KEY=VALUE`
   strings straight from argv, routinely carrying secrets — were printed in full wherever the
