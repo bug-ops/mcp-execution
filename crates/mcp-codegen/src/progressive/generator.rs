@@ -46,6 +46,40 @@ use mcp_execution_core::{Error, Result};
 use mcp_execution_introspector::{ServerInfo, ToolInfo};
 use std::collections::{HashMap, HashSet};
 
+/// Files emitted by every `generate`/`generate_with_categories` call regardless of tool
+/// count: `index.ts`, the runtime bridge, `package.json`, and the `_meta.json` sidecar.
+const FIXED_FILE_COUNT: usize = 4;
+
+/// Maximum number of files a single `generate`/`generate_with_categories` call will produce
+/// (denial-of-service protection, CWE-400).
+///
+/// Each tool becomes its own `.ts` file, so this bounds the file-count amplification of a
+/// single generation run. Derived directly from
+/// `mcp_execution_introspector::MAX_TOOL_COUNT` (rather than an independently chosen number)
+/// plus this module's `FIXED_FILE_COUNT`, so a `ServerInfo` that already cleared introspection's
+/// own tool-count bound can never be deterministically rejected here for simply having "as many tools
+/// as introspection already allows" (issue #198 M1). This check remains meaningful
+/// defense-in-depth for callers that construct a `ServerInfo` directly rather than going
+/// through introspection.
+pub const MAX_GENERATED_FILES: usize =
+    mcp_execution_introspector::MAX_TOOL_COUNT + FIXED_FILE_COUNT;
+
+/// Maximum total bytes across every file in a single `generate`/`generate_with_categories`
+/// call's output (denial-of-service protection, CWE-400).
+///
+/// Derived from `mcp_execution_introspector`'s own per-tool bounds — up to `MAX_TOOL_COUNT`
+/// tools, each up to `MAX_TOOL_NAME_LEN` + `MAX_TOOL_DESCRIPTION_LEN` + `MAX_SCHEMA_SIZE_BYTES`
+/// — rather than chosen independently, so a `ServerInfo` that already cleared introspection's
+/// own bounds can never be deterministically rejected here for simply being "as large as
+/// introspection already allows" (issue #198 M1). The 2x multiplier accounts for `_meta.json`
+/// re-embedding every tool's raw name/description/schema alongside the already-rendered `.ts`
+/// file content, roughly doubling the total.
+pub const MAX_GENERATED_BYTES: usize = 2
+    * mcp_execution_introspector::MAX_TOOL_COUNT
+    * (mcp_execution_introspector::MAX_TOOL_NAME_LEN
+        + mcp_execution_introspector::MAX_TOOL_DESCRIPTION_LEN
+        + mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES);
+
 /// Generator for progressive loading TypeScript files.
 ///
 /// Creates one file per tool plus an index file and runtime bridge,
@@ -154,7 +188,10 @@ impl<'a> ProgressiveGenerator<'a> {
             server_info.name
         );
 
+        enforce_tool_count_bound(server_info)?;
+
         let mut code = GeneratedCode::new();
+        let mut total_bytes = 0usize;
         let server_id = server_info.id.as_str();
         let typescript_names = resolve_typescript_names(&server_info.tools);
         let mut tool_metadata = Vec::with_capacity(server_info.tools.len());
@@ -166,10 +203,14 @@ impl<'a> ProgressiveGenerator<'a> {
                 self.create_tool_context(server_id, tool, None, typescript_name.clone())?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
-            code.add_file(GeneratedFile {
-                path: format!("{}.ts", tool_context.typescript_name),
-                content: tool_code,
-            });
+            add_tracked(
+                &mut code,
+                &mut total_bytes,
+                GeneratedFile {
+                    path: format!("{}.ts", tool_context.typescript_name),
+                    content: tool_code,
+                },
+            )?;
 
             tracing::debug!("Generated tool file: {}.ts", tool_context.typescript_name);
 
@@ -180,10 +221,14 @@ impl<'a> ProgressiveGenerator<'a> {
         let index_context = self.create_index_context(server_info, None, &typescript_names)?;
         let index_code = self.engine.render("progressive/index", &index_context)?;
 
-        code.add_file(GeneratedFile {
-            path: "index.ts".to_string(),
-            content: index_code,
-        });
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "index.ts".to_string(),
+                content: index_code,
+            },
+        )?;
 
         tracing::debug!("Generated index.ts");
 
@@ -193,23 +238,35 @@ impl<'a> ProgressiveGenerator<'a> {
             .engine
             .render("progressive/runtime-bridge", &bridge_context)?;
 
-        code.add_file(GeneratedFile {
-            path: "_runtime/mcp-bridge.ts".to_string(),
-            content: bridge_code,
-        });
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "_runtime/mcp-bridge.ts".to_string(),
+                content: bridge_code,
+            },
+        )?;
 
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
 
         // Generate package.json for ES module identification
-        code.add_file(GeneratedFile {
-            path: "package.json".to_string(),
-            content: "{\"type\":\"module\"}\n".to_string(),
-        });
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "package.json".to_string(),
+                content: "{\"type\":\"module\"}\n".to_string(),
+            },
+        )?;
 
         tracing::debug!("Generated package.json");
 
         // Generate _meta.json sidecar with structured tool metadata
-        code.add_file(Self::create_metadata_file(server_info, tool_metadata)?);
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            Self::create_metadata_file(server_info, tool_metadata)?,
+        )?;
 
         tracing::debug!("Generated {}", METADATA_FILE_NAME);
 
@@ -289,7 +346,10 @@ impl<'a> ProgressiveGenerator<'a> {
             server_info.name
         );
 
+        enforce_tool_count_bound(server_info)?;
+
         let mut code = GeneratedCode::new();
+        let mut total_bytes = 0usize;
         let server_id = server_info.id.as_str();
         let typescript_names = resolve_typescript_names(&server_info.tools);
         let mut tool_metadata = Vec::with_capacity(server_info.tools.len());
@@ -303,10 +363,14 @@ impl<'a> ProgressiveGenerator<'a> {
                 self.create_tool_context(server_id, tool, categorization, typescript_name.clone())?;
             let tool_code = self.engine.render("progressive/tool", &tool_context)?;
 
-            code.add_file(GeneratedFile {
-                path: format!("{}.ts", tool_context.typescript_name),
-                content: tool_code,
-            });
+            add_tracked(
+                &mut code,
+                &mut total_bytes,
+                GeneratedFile {
+                    path: format!("{}.ts", tool_context.typescript_name),
+                    content: tool_code,
+                },
+            )?;
 
             tracing::debug!(
                 "Generated tool file: {}.ts (category: {:?})",
@@ -322,10 +386,14 @@ impl<'a> ProgressiveGenerator<'a> {
             self.create_index_context(server_info, Some(categorizations), &typescript_names)?;
         let index_code = self.engine.render("progressive/index", &index_context)?;
 
-        code.add_file(GeneratedFile {
-            path: "index.ts".to_string(),
-            content: index_code,
-        });
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "index.ts".to_string(),
+                content: index_code,
+            },
+        )?;
 
         tracing::debug!(
             "Generated index.ts with {} categorizations",
@@ -338,23 +406,35 @@ impl<'a> ProgressiveGenerator<'a> {
             .engine
             .render("progressive/runtime-bridge", &bridge_context)?;
 
-        code.add_file(GeneratedFile {
-            path: "_runtime/mcp-bridge.ts".to_string(),
-            content: bridge_code,
-        });
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "_runtime/mcp-bridge.ts".to_string(),
+                content: bridge_code,
+            },
+        )?;
 
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
 
         // Generate package.json for ES module identification
-        code.add_file(GeneratedFile {
-            path: "package.json".to_string(),
-            content: "{\"type\":\"module\"}\n".to_string(),
-        });
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "package.json".to_string(),
+                content: "{\"type\":\"module\"}\n".to_string(),
+            },
+        )?;
 
         tracing::debug!("Generated package.json");
 
         // Generate _meta.json sidecar with structured tool metadata
-        code.add_file(Self::create_metadata_file(server_info, tool_metadata)?);
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            Self::create_metadata_file(server_info, tool_metadata)?,
+        )?;
 
         tracing::debug!("Generated {}", METADATA_FILE_NAME);
 
@@ -652,6 +732,74 @@ impl<'a> ProgressiveGenerator<'a> {
             content,
         })
     }
+}
+
+/// Cheaply rejects an oversized `server_info.tools` list before any per-tool template
+/// rendering happens (denial-of-service protection, CWE-400).
+///
+/// A caller reaching [`ProgressiveGenerator::generate`]/`generate_with_categories` through
+/// `mcp_execution_introspector::Introspector::discover_server` already has its tool count
+/// bounded upstream, but this crate's generator functions are public API and can be called
+/// directly with a hand-built `ServerInfo`, so this check is not purely redundant.
+///
+/// # Errors
+///
+/// Returns [`Error::ResourceLimitExceeded`] if `server_info.tools.len()` plus the
+/// [`FIXED_FILE_COUNT`] files every call emits would exceed [`MAX_GENERATED_FILES`] — the same
+/// threshold [`add_tracked`] checks incrementally as each file is produced, so this
+/// short-circuits exactly the inputs that check would go on to reject anyway, before any
+/// template rendering happens at all.
+fn enforce_tool_count_bound(server_info: &ServerInfo) -> Result<()> {
+    let projected_file_count = server_info.tools.len() + FIXED_FILE_COUNT;
+    if projected_file_count > MAX_GENERATED_FILES {
+        return Err(Error::ResourceLimitExceeded {
+            resource: format!("tool count for server '{}'", server_info.id),
+            actual: server_info.tools.len(),
+            limit: MAX_GENERATED_FILES - FIXED_FILE_COUNT,
+        });
+    }
+    Ok(())
+}
+
+/// Adds `file` to `code`, tracking its contribution to `total_bytes` and bailing out
+/// immediately if either the running byte total or the file count would exceed its configured
+/// bound (denial-of-service protection, CWE-400).
+///
+/// Checked incrementally as each file is produced, rather than only after the entire
+/// [`GeneratedCode`] has been built: an oversized `ServerInfo` (or one whose fixed-overhead
+/// files, e.g. `_meta.json` re-embedding every tool's schema, push the total over the edge)
+/// is rejected as soon as the offending file is generated, so this generator never holds the
+/// full amplified output in memory before the bound is enforced (issue #198 S4).
+///
+/// # Errors
+///
+/// Returns [`Error::ResourceLimitExceeded`] if adding `file` would push the running byte total
+/// past [`MAX_GENERATED_BYTES`], or the file count past [`MAX_GENERATED_FILES`].
+fn add_tracked(
+    code: &mut GeneratedCode,
+    total_bytes: &mut usize,
+    file: GeneratedFile,
+) -> Result<()> {
+    *total_bytes += file.content.len();
+    if *total_bytes > MAX_GENERATED_BYTES {
+        return Err(Error::ResourceLimitExceeded {
+            resource: "generated output size".to_string(),
+            actual: *total_bytes,
+            limit: MAX_GENERATED_BYTES,
+        });
+    }
+
+    code.add_file(file);
+
+    if code.file_count() > MAX_GENERATED_FILES {
+        return Err(Error::ResourceLimitExceeded {
+            resource: "generated file count".to_string(),
+            actual: code.file_count(),
+            limit: MAX_GENERATED_FILES,
+        });
+    }
+
+    Ok(())
 }
 
 /// Sanitizes a server-controlled string for safe interpolation into JSDoc block comments.
@@ -1974,5 +2122,123 @@ mod tests {
         assert!(tool.content.contains("issues *\\/ injected next"));
         assert!(tool.content.contains("create,*\\/ injected next"));
         assert!(tool.content.contains("Create *\\/ injected next"));
+    }
+
+    // ── Resource-exhaustion bounds (issue #198) ──────────────────────────────
+
+    fn server_info_with_tool_count(count: usize) -> ServerInfo {
+        ServerInfo {
+            id: ServerId::new("bulk-server"),
+            name: "Bulk Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: (0..count)
+                .map(|i| ToolInfo {
+                    name: ToolName::new(format!("tool{i}")),
+                    description: String::new(),
+                    input_schema: json!({}),
+                    output_schema: None,
+                })
+                .collect(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        }
+    }
+
+    #[test]
+    fn test_generate_rejects_tool_count_that_would_exceed_max_generated_files() {
+        let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT + 1);
+        let generator = ProgressiveGenerator::new().unwrap();
+
+        let result = generator.generate(&server_info);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
+    }
+
+    #[test]
+    fn test_generate_accepts_tool_count_at_exact_max_generated_files() {
+        let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT);
+        let generator = ProgressiveGenerator::new().unwrap();
+
+        let code = generator.generate(&server_info).unwrap();
+
+        assert_eq!(code.file_count(), MAX_GENERATED_FILES);
+    }
+
+    #[test]
+    fn test_generate_with_categories_rejects_tool_count_that_would_exceed_max_generated_files() {
+        let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT + 1);
+        let generator = ProgressiveGenerator::new().unwrap();
+
+        let result = generator.generate_with_categories(&server_info, &HashMap::new());
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
+    }
+
+    #[test]
+    fn test_add_tracked_rejects_oversized_total_bytes() {
+        let mut code = GeneratedCode::new();
+        let mut total_bytes = 0usize;
+
+        let result = add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "big.ts".to_string(),
+                content: "a".repeat(MAX_GENERATED_BYTES + 1),
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
+    }
+
+    #[test]
+    fn test_add_tracked_accepts_total_bytes_at_exact_max() {
+        let mut code = GeneratedCode::new();
+        let mut total_bytes = 0usize;
+
+        let result = add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "big.ts".to_string(),
+                content: "a".repeat(MAX_GENERATED_BYTES),
+            },
+        );
+
+        assert!(result.is_ok());
+    }
+
+    /// #198 M8 — proves `generate()` itself (not just the private `add_tracked` helper)
+    /// enforces the byte budget, using a `total_bytes` starting point injected just below the
+    /// cap rather than materializing a real `MAX_GENERATED_BYTES`-sized (now several hundred
+    /// MB, after the M1 fix ties it to `mcp_execution_introspector`'s own bounds) `ServerInfo`
+    /// — which would make this test itself a slow, wasteful multi-hundred-MB allocation for
+    /// every CI run without proving anything `add_tracked`'s direct boundary tests don't
+    /// already cover more precisely.
+    #[test]
+    fn test_add_tracked_rejects_immediately_once_running_total_exceeds_max() {
+        let mut code = GeneratedCode::new();
+        let mut total_bytes = MAX_GENERATED_BYTES - 1;
+
+        let result = add_tracked(
+            &mut code,
+            &mut total_bytes,
+            GeneratedFile {
+                path: "second.ts".to_string(),
+                content: "ab".to_string(),
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_resource_limit_exceeded());
+        // The offending file must not have been added — the caller should not be able to
+        // observe a `GeneratedCode` that already exceeds the bound.
+        assert_eq!(code.file_count(), 0);
     }
 }

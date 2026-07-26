@@ -50,17 +50,37 @@ use uuid::Uuid;
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct IntrospectServerParams {
-    /// Unique identifier for the server (e.g., "github", "filesystem")
+    /// Unique identifier for the server (e.g., "github", "filesystem").
+    ///
+    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id`'s
+    /// `MAX_SERVER_ID_LENGTH`, mirrored here as a literal since schemars attributes cannot
+    /// reference a `const`).
+    #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
     pub server_id: String,
 
-    /// Command to start the server (e.g., "npx", "docker")
+    /// Command to start the server (e.g., "npx", "docker").
+    ///
+    /// Capped at `mcp_execution_core::MAX_ARG_LEN` (4096 bytes) at runtime; mirrored here as a
+    /// literal since schemars attributes cannot reference a `const`.
+    #[schemars(length(max = 4096))]
     pub command: String,
 
-    /// Arguments to pass to the command
+    /// Arguments to pass to the command.
+    ///
+    /// Capped at `mcp_execution_core::MAX_ARG_COUNT` (256) entries at runtime (enforced when
+    /// this becomes part of the `ServerConfig` built from these params); mirrored here as a
+    /// literal since schemars attributes cannot reference a `const`.
     #[serde(default)]
+    #[schemars(length(max = 256))]
     pub args: Vec<String>,
 
-    /// Environment variables for the server process
+    /// Environment variables for the server process.
+    ///
+    /// Capped at `mcp_execution_core::MAX_ENV_COUNT` (256) entries and
+    /// `mcp_execution_core::MAX_ENV_VALUE_LEN` (32KB) per value at runtime. No schemars
+    /// attribute is set here: schemars' `length` validation only emits `minProperties`/
+    /// `maxProperties` for `object`-typed schemas via the `map`/`set` traits it does not yet
+    /// support for derived struct fields, so a map-size constraint would be a silent no-op.
     #[serde(default)]
     pub env: HashMap<String, String>,
 
@@ -151,7 +171,13 @@ pub struct SaveCategorizedToolsParams {
     /// Session ID from `introspect_server` call
     pub session_id: Uuid,
 
-    /// Tools with Claude's categorization
+    /// Tools with Claude's categorization.
+    ///
+    /// The session-specific cap enforced at runtime is `min(introspected tool count,
+    /// MAX_TOOL_FILES)`, tighter than the flat limit below in nearly all cases; `MAX_TOOL_FILES`
+    /// (`mcp_execution_skill`, 500) is still the absolute ceiling regardless of session, so it
+    /// is what's mirrored here as a literal (schemars attributes cannot reference a `const`).
+    #[schemars(length(max = 500))]
     pub categorized_tools: Vec<CategorizedTool>,
 }
 
@@ -163,16 +189,40 @@ pub struct SaveCategorizedToolsParams {
 /// - A concise description for file headers
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CategorizedTool {
-    /// Original tool name (must match introspected tool)
+    /// Original tool name (must match introspected tool).
+    ///
+    /// Capped at `MAX_CATEGORIZED_TOOL_NAME_LEN` (128 bytes) at runtime; mirrored here as a
+    /// literal since schemars attributes cannot reference a `const`. Note: JSON Schema's
+    /// `maxLength` counts Unicode code points, not bytes, so the two bounds only coincide
+    /// exactly for ASCII input — for legitimate multi-byte UTF-8 text, the runtime byte check
+    /// can reject a string the declared schema would still accept (never the reverse), since
+    /// bytes-per-char >= 1 (issue #198 M2).
+    #[schemars(length(max = 128))]
     pub name: String,
 
-    /// Category assigned by Claude (e.g., "issues", "repos", "users")
+    /// Category assigned by Claude (e.g., "issues", "repos", "users").
+    ///
+    /// Capped at `MAX_CATEGORY_LEN` (100 bytes) at runtime; mirrored here as a literal since
+    /// schemars attributes cannot reference a `const`. See [`CategorizedTool::name`]'s doc
+    /// comment for the bytes-vs-characters caveat.
+    #[schemars(length(max = 100))]
     pub category: String,
 
-    /// Comma-separated keywords for discovery
+    /// Comma-separated keywords for discovery.
+    ///
+    /// Capped at `MAX_KEYWORDS_LEN` (500 bytes) at runtime; mirrored here as a literal since
+    /// schemars attributes cannot reference a `const`. See [`CategorizedTool::name`]'s doc
+    /// comment for the bytes-vs-characters caveat.
+    #[schemars(length(max = 500))]
     pub keywords: String,
 
-    /// Concise description (max 80 chars) for header comment
+    /// Concise description (max 80 chars) for header comment.
+    ///
+    /// Capped at `MAX_SHORT_DESCRIPTION_LEN` (320 bytes — 4x the 80-char target, headroom for
+    /// multi-byte UTF-8) at runtime; mirrored here as a literal since schemars attributes
+    /// cannot reference a `const`. See [`CategorizedTool::name`]'s doc comment for the
+    /// bytes-vs-characters caveat.
+    #[schemars(length(max = 320))]
     pub short_description: String,
 }
 
@@ -457,6 +507,58 @@ mod tests {
             connect_timeout_secs: _,
             discover_timeout_secs: _,
         } = params;
+    }
+
+    // ── schemars bounds (issue #205) ──────────────────────────────────────
+
+    #[test]
+    fn test_categorized_tool_schema_declares_length_bounds() {
+        use crate::service::{
+            MAX_CATEGORIZED_TOOL_NAME_LEN, MAX_CATEGORY_LEN, MAX_KEYWORDS_LEN,
+            MAX_SHORT_DESCRIPTION_LEN,
+        };
+
+        let schema = schemars::schema_for!(CategorizedTool);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+
+        // Asserted against the real runtime constants (not hardcoded literals), so bumping one
+        // without updating the matching `#[schemars(length(max = ..))]` literal fails this test
+        // instead of leaving the declared schema silently stale (issue #198 S3).
+        assert_eq!(props["name"]["maxLength"], MAX_CATEGORIZED_TOOL_NAME_LEN);
+        assert_eq!(props["category"]["maxLength"], MAX_CATEGORY_LEN);
+        assert_eq!(props["keywords"]["maxLength"], MAX_KEYWORDS_LEN);
+        assert_eq!(
+            props["short_description"]["maxLength"],
+            MAX_SHORT_DESCRIPTION_LEN
+        );
+    }
+
+    #[test]
+    fn test_save_categorized_tools_params_schema_declares_vec_length_bound() {
+        let schema = schemars::schema_for!(SaveCategorizedToolsParams);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+
+        assert_eq!(
+            props["categorized_tools"]["maxItems"],
+            mcp_execution_skill::MAX_TOOL_FILES
+        );
+    }
+
+    #[test]
+    fn test_introspect_server_params_schema_declares_server_id_bounds() {
+        let schema = schemars::schema_for!(IntrospectServerParams);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+
+        assert_eq!(
+            props["server_id"]["maxLength"],
+            mcp_execution_skill::MAX_SERVER_ID_LENGTH
+        );
+        assert_eq!(props["server_id"]["pattern"], "^[a-z0-9-]+$");
+        assert_eq!(props["args"]["maxItems"], mcp_execution_core::MAX_ARG_COUNT);
+        assert_eq!(
+            props["command"]["maxLength"],
+            mcp_execution_core::MAX_ARG_LEN
+        );
     }
 
     // Test helpers

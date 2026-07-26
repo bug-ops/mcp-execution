@@ -75,7 +75,7 @@ async fn test_state_manager_workflow() {
 
     // Store pending generation
     let pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
-    let session_id = state.store(pending.clone()).await;
+    let session_id = state.store(pending.clone()).await.unwrap();
 
     // Verify it's stored
     assert_eq!(state.pending_count().await, 1);
@@ -119,7 +119,7 @@ async fn test_multiple_concurrent_sessions() {
             .unwrap();
 
         let pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
-        let session_id = state.store(pending).await;
+        let session_id = state.store(pending).await.unwrap();
         sessions.push(session_id);
     }
 
@@ -151,7 +151,7 @@ async fn test_state_manager_handles_expiration() {
     let mut pending = PendingGeneration::new(server_id, server_info, config, None, &SystemClock);
     pending.expires_at = chrono::Utc::now() - Duration::hours(1);
 
-    let session_id = state.store(pending).await;
+    let session_id = state.store(pending).await.unwrap();
 
     // Should not be retrievable (expired)
     let retrieved = state.take(session_id).await;
@@ -170,12 +170,12 @@ async fn test_state_manager_lazy_cleanup() {
 
     // Create valid session
     let valid_pending = create_test_pending("valid-server");
-    state.store(valid_pending).await;
+    state.store(valid_pending).await.unwrap();
 
     // Create expired session
     let mut expired_pending = create_test_pending("expired-server");
     expired_pending.expires_at = chrono::Utc::now() - Duration::hours(1);
-    state.store(expired_pending).await;
+    state.store(expired_pending).await.unwrap();
 
     // Pending count should only include valid sessions
     assert_eq!(state.pending_count().await, 1);
@@ -190,7 +190,7 @@ async fn test_state_manager_get_without_consuming() {
     let state = StateManager::new();
 
     let pending = create_test_pending("test");
-    let session_id = state.store(pending).await;
+    let session_id = state.store(pending).await.unwrap();
 
     // Get without consuming
     let first = state.get(session_id).await;
@@ -283,7 +283,7 @@ async fn test_state_manager_concurrent_access() {
     // Wait for all operations to complete
     let mut session_ids = Vec::new();
     for handle in handles {
-        let session_id = handle.await.unwrap();
+        let session_id = handle.await.unwrap().unwrap();
         session_ids.push(session_id);
     }
 
@@ -304,7 +304,7 @@ async fn test_state_manager_concurrent_read_write() {
 
     // Store initial session
     let pending = create_test_pending("test");
-    let session_id = state.store(pending).await;
+    let session_id = state.store(pending).await.unwrap();
 
     let state_clone1 = Arc::clone(&state);
     let state_clone2 = Arc::clone(&state);

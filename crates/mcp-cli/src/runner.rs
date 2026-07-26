@@ -5,6 +5,7 @@
 use anyhow::Result;
 use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_files::FilesError;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::cli::Commands;
@@ -216,22 +217,52 @@ pub fn report_and_classify(err: &anyhow::Error) -> ExitCode {
 /// Walks the error's cause chain looking for a [`CoreError`] — the concrete
 /// type every command handler ultimately produces via `?` — and maps its
 /// variant to the exit code that best communicates the failure category to
-/// scripts consuming this CLI. Errors that never wrap a [`CoreError`] (e.g.
-/// CLI argument parsing, serialization) fall back to [`ExitCode::ERROR`].
+/// scripts consuming this CLI. Falls back to checking for a [`FilesError`]
+/// (the `generate` command's `export_to_filesystem` errors are wrapped via `anyhow::Context`
+/// rather than converted to `CoreError`, so they would otherwise never match the first check
+/// and always fall through to the generic [`ExitCode::ERROR`] — issue #198 M6). Errors that
+/// match neither (e.g. CLI argument parsing, serialization) fall back to [`ExitCode::ERROR`].
 fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
-    error
+    if let Some(core_error) = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<CoreError>())
-        .map_or(ExitCode::ERROR, |core_error| match core_error {
+    {
+        return match core_error {
             CoreError::Timeout { .. } => ExitCode::TIMEOUT,
-            CoreError::ConnectionFailed { .. } => ExitCode::SERVER_ERROR,
+            // A resource limit is exceeded by data the remote MCP server returned (tool
+            // count, schema size, etc.), not by the CLI caller's own arguments — same
+            // "the server is at fault" classification as `ConnectionFailed`.
+            CoreError::ConnectionFailed { .. } | CoreError::ResourceLimitExceeded { .. } => {
+                ExitCode::SERVER_ERROR
+            }
             CoreError::ValidationError { .. }
             | CoreError::SecurityViolation { .. }
             | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
             CoreError::SerializationError { .. } | CoreError::ScriptGenerationError { .. } => {
                 ExitCode::ERROR
             }
-        })
+        };
+    }
+
+    if let Some(files_error) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<FilesError>())
+    {
+        return match files_error {
+            // Same "the server is at fault" classification as `CoreError::ResourceLimitExceeded`
+            // above — the export this bounds is sized by what the (possibly hostile or
+            // misbehaving) introspected server returned, not by CLI-caller-supplied input.
+            FilesError::ResourceLimitExceeded { .. } => ExitCode::SERVER_ERROR,
+            FilesError::FileNotFound { .. }
+            | FilesError::NotADirectory { .. }
+            | FilesError::InvalidPath { .. }
+            | FilesError::PathNotAbsolute { .. }
+            | FilesError::InvalidPathComponent { .. }
+            | FilesError::IoError { .. } => ExitCode::ERROR,
+        };
+    }
+
+    ExitCode::ERROR
 }
 
 #[cfg(test)]
@@ -258,6 +289,41 @@ mod tests {
             source: "refused".into(),
         });
         assert_eq!(classify_exit_code(&err), ExitCode::SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_classify_exit_code_resource_limit_exceeded() {
+        let err = wrap(CoreError::ResourceLimitExceeded {
+            resource: "tool count".to_string(),
+            actual: 1500,
+            limit: 1000,
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::SERVER_ERROR);
+    }
+
+    /// #198 M6 — `FilesError` (e.g. from `generate`'s `export_to_filesystem`, wrapped via
+    /// `anyhow::Context` rather than converted to `CoreError`) must be classified too, not
+    /// fall through to the generic `ExitCode::ERROR` unconditionally.
+    #[test]
+    fn test_classify_exit_code_files_error_resource_limit_exceeded() {
+        let files_error = FilesError::ResourceLimitExceeded {
+            resource: "export file count".to_string(),
+            actual: 3000,
+            limit: 2000,
+        };
+        // Mirrors how `commands::generate::run` actually wraps this error.
+        let err: anyhow::Error =
+            anyhow::Error::new(files_error).context("failed to export files to filesystem");
+
+        assert_eq!(classify_exit_code(&err), ExitCode::SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_classify_exit_code_files_error_other_variant_falls_back_to_error() {
+        let err = anyhow::Error::new(FilesError::FileNotFound {
+            path: "/missing".to_string(),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::ERROR);
     }
 
     #[test]

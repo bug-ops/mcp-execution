@@ -50,7 +50,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mcp-cli`), and `ServerConfigBuilder` uses the more precise `ValidationError` (#199). Note
   `mcp_files::FilesError::is_not_found()` is a different type and is unchanged.
 
+- **`mcp-execution-server`**: `StateManager::store` now returns `Result<Uuid, StateError>`
+  instead of an infallible `Uuid`, rejecting new sessions once the pending-generation table is
+  at capacity (see the resource-exhaustion fix below, #198).
+
 ### Security
+
+- **`mcp-execution-core`**: `validate_server_config` now bounds `ServerConfig`'s `command`/
+  `args`/`env`/`headers`/`url` element counts and per-string lengths (`MAX_ARG_COUNT`,
+  `MAX_ARG_LEN`, `MAX_ENV_COUNT`, `MAX_ENV_VALUE_LEN`, `MAX_HEADER_COUNT`,
+  `MAX_HEADER_VALUE_LEN`, `MAX_URL_LEN`), closing a resource-exhaustion gap (CWE-400) where a
+  caller-supplied config could otherwise grow the spawned subprocess's argv/environment/header
+  set without bound. All of these element counts/lengths — including `headers`/`url`, not just
+  `command`/`args`/`env` — are now checked unconditionally before the transport-specific
+  dispatch (previously stdio-only for `command`/`args`/`env`, and Http/Sse-only for
+  `headers`/`url`), since a hand-edited or hostile `mcp.json`/JSON payload can populate any of
+  these fields regardless of declared transport, bypassing whichever transport-specific check
+  would otherwise have caught it; header *names* (previously unbounded) are now length-capped
+  as well (#198).
+
+- **`mcp-execution-introspector`**: `Introspector::discover_server` now bounds an MCP server's
+  reported tool count (`MAX_TOOL_COUNT`) and each tool's name/description length and serialized
+  input-schema size (`MAX_TOOL_NAME_LEN`, `MAX_TOOL_DESCRIPTION_LEN`, `MAX_SCHEMA_SIZE_BYTES` —
+  64KB, ~10x any real MCP tool schema observed in practice; this is the dominant term in every
+  budget derived from it downstream, so it is kept deliberately small), rejecting with the new
+  `Error::ResourceLimitExceeded` variant instead of accepting an unbounded response from an
+  untrusted or misbehaving server. Tool discovery now fetches pages via `list_tools` directly
+  and bails as soon as the accumulated count crosses `MAX_TOOL_COUNT`, rather than buffering
+  every page of a (potentially unbounded) response first the way `list_all_tools` does, so peak
+  memory during discovery is also bounded, not just what is kept afterward (#198).
+
+- **`mcp-execution-codegen`**: `ProgressiveGenerator::generate`/`generate_with_categories` now
+  reject a tool count or combined output size that would exceed `MAX_GENERATED_FILES`/
+  `MAX_GENERATED_BYTES` (both now derived from `mcp-execution-introspector`'s own bounds rather
+  than chosen independently, so a `ServerInfo` that already cleared introspection can never be
+  deterministically rejected here for simply being as large as introspection already allows).
+  The byte budget is now checked incrementally as each file is produced (tool file, index,
+  runtime bridge, `_meta.json`), bailing out on the first file that pushes the running total
+  over the limit, rather than only after the entire output has been built (#198).
+
+- **`mcp-execution-files`**: `FileSystem::export_to_filesystem`/`export_to_filesystem_parallel`
+  now reject an export whose file count or total byte size exceeds `MAX_EXPORT_FILES`/
+  `MAX_EXPORT_BYTES` (derived from `mcp-execution-codegen`'s own bounds, for the same
+  consistency reason as above), via the new `FilesError::ResourceLimitExceeded` variant (#198).
+
+- **`mcp-execution-server`**: `StateManager` now caps concurrent pending-generation sessions at
+  `MAX_PENDING_SESSIONS` (1000) *and* their combined approximate memory footprint at
+  `MAX_TOTAL_PENDING_BYTES`. The count cap alone does not bound memory, since a session's size
+  (driven by the introspected server's tool count) can vary by orders of magnitude — up to
+  hundreds of megabytes per session — so a count-only cap could still reach hundreds of
+  gigabytes in the worst case; the new byte budget is the one that actually bounds memory. A
+  rejection surfaces as a distinct JSON-RPC "Server error" range code rather than
+  `INTERNAL_ERROR`, signaling a transient capacity condition rather than an internal fault
+  (#198).
 
 - **`mcp-execution-cli`**: a malformed `--header`/`--env` value (missing the `=` separator, or
   with an empty key) no longer echoes the raw, unvalidated argument into the CLI error message.
@@ -178,7 +230,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point — the bare username is scrubbed from the rendered path as a defense-in-depth fallback
   rather than the previous behavior of returning the path unredacted.
 
+### Testing
+
+- **`mcp-execution-introspector`**: added `tests/tool_count_bound_test.rs`, an integration test
+  spawning a real in-process Streamable HTTP fixture whose `tools/list` handler serves pages
+  one at a time, proving `discover_server`'s early-bailout pagination logic
+  (`list_tools_bounded`, introduced for #198 S4) actually stops pulling pages as soon as the
+  accumulated tool count crosses `MAX_TOOL_COUNT` — against a fixture that never signals
+  completion on its own, so the test cannot pass by the client merely running out of data to
+  fetch — and separately that exactly `MAX_TOOL_COUNT` tools spread across multiple pages are
+  still accepted in full. Previously this behavior had no test coverage at all; the existing
+  `build_server_info` count-check test only exercises a direct call to that function, a branch
+  that is no longer reachable via `discover_server` in practice now that `list_tools_bounded`
+  bails out before ever handing it an over-limit list (#198).
+
 ### Changed
+
+- **`mcp-execution-server`, `mcp-execution-skill`**: fields with a documented numeric bound
+  (`CategorizedTool`'s `name`/`category`/`keywords`/`short_description`,
+  `SaveCategorizedToolsParams::categorized_tools`, `IntrospectServerParams`'s `server_id`/
+  `command`/`args`, `GenerateSkillParams`/`SaveSkillParams`'s `server_id`, and
+  `SaveSkillParams::content`) now declare matching `schemars` `length`/`regex` attributes, so
+  the generated JSON Schema surfaces `maxLength`/`maxItems`/`pattern` constraints that were
+  previously enforced only at runtime, not visible to a client inspecting the tool's input
+  schema. Each declared bound is now cross-checked in a test against the real runtime constant
+  it mirrors (not just another hardcoded literal), so the two can no longer silently drift
+  apart (#205).
 
 - **`mcp-execution-skill`**: `validate_server_id` and `extract_skill_metadata` now return
   `ServerIdError` and `SkillMetadataError` (both `thiserror`-derived enums) instead of a bare

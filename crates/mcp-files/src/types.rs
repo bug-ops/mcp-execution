@@ -80,6 +80,18 @@ pub enum FilesError {
         /// The underlying I/O error
         source: std::io::Error,
     },
+
+    /// The virtual filesystem being exported exceeds a configured file-count or total-byte-size
+    /// limit (denial-of-service protection, CWE-400).
+    #[error("export exceeds resource limit for {resource}: {actual} exceeds limit of {limit}")]
+    ResourceLimitExceeded {
+        /// Human-readable name of the bounded resource (e.g. "export file count").
+        resource: String,
+        /// The actual observed size/count that triggered the rejection.
+        actual: usize,
+        /// The configured maximum allowed for this resource.
+        limit: usize,
+    },
 }
 
 impl FilesError {
@@ -160,6 +172,26 @@ impl FilesError {
     #[must_use]
     pub const fn is_io_error(&self) -> bool {
         matches!(self, Self::IoError { .. })
+    }
+
+    /// Returns `true` if this is a resource-limit-exceeded error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_files::FilesError;
+    ///
+    /// let error = FilesError::ResourceLimitExceeded {
+    ///     resource: "export file count".to_string(),
+    ///     actual: 3000,
+    ///     limit: 2000,
+    /// };
+    ///
+    /// assert!(error.is_resource_limit_exceeded());
+    /// ```
+    #[must_use]
+    pub const fn is_resource_limit_exceeded(&self) -> bool {
+        matches!(self, Self::ResourceLimitExceeded { .. })
     }
 }
 

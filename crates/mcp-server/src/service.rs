@@ -36,7 +36,11 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 /// Maximum SKILL.md content size in bytes (100KB).
-const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
+///
+/// `pub(crate)` (rather than private) so `types.rs`'s schemars drift-guard test can assert the
+/// declared `SaveSkillParams::content` schema length against this real constant instead of a
+/// hardcoded literal (issue #198 S3).
+pub(crate) const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
 
 /// Maximum byte length for a [`CategorizedTool::name`] field.
 ///
@@ -57,21 +61,28 @@ const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
 /// bytes of headroom against the true 252-byte ceiling - kept well below it
 /// mainly so the check stays meaningful without depending on the exact
 /// shrink factor of that transform.
-const MAX_CATEGORIZED_TOOL_NAME_LEN: usize = 128;
+///
+/// `pub(crate)`: see [`MAX_SKILL_CONTENT_SIZE`]'s doc comment for why.
+pub(crate) const MAX_CATEGORIZED_TOOL_NAME_LEN: usize = 128;
 
 /// Maximum byte length for a [`CategorizedTool::category`] field.
-const MAX_CATEGORY_LEN: usize = 100;
+///
+/// `pub(crate)`: see [`MAX_SKILL_CONTENT_SIZE`]'s doc comment for why.
+pub(crate) const MAX_CATEGORY_LEN: usize = 100;
 
 /// Maximum byte length for a [`CategorizedTool::keywords`] field
 /// (a comma-separated list).
-const MAX_KEYWORDS_LEN: usize = 500;
+///
+/// `pub(crate)`: see [`MAX_SKILL_CONTENT_SIZE`]'s doc comment for why.
+pub(crate) const MAX_KEYWORDS_LEN: usize = 500;
 
 /// Maximum byte length for a [`CategorizedTool::short_description`] field.
 ///
 /// The field's doc comment targets 80 characters; this cap is 4x that (the
 /// maximum UTF-8 bytes per `char`) so legitimate multi-byte text is never
-/// rejected while the size is still bounded.
-const MAX_SHORT_DESCRIPTION_LEN: usize = 320;
+/// rejected while the size is still bounded. `pub(crate)`: see
+/// [`MAX_SKILL_CONTENT_SIZE`]'s doc comment for why.
+pub(crate) const MAX_SHORT_DESCRIPTION_LEN: usize = 320;
 
 /// MCP server for progressive loading generation.
 ///
@@ -434,7 +445,11 @@ impl GeneratorService {
             self.clock.as_ref(),
         );
 
-        let session_id = self.state.store(pending.clone()).await;
+        let session_id = self
+            .state
+            .store(pending.clone())
+            .await
+            .map_err(|e| capacity_error(e.to_string()))?;
 
         // Build result
         let result = IntrospectServerResult {
@@ -1149,6 +1164,19 @@ fn extract_parameter_names(schema: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Builds an [`McpError`] using the JSON-RPC 2.0 "Server error" range (`-32000` to `-32099`,
+/// reserved by the spec for implementation-defined server errors) rather than
+/// [`McpError::internal_error`] (`-32603`, `INTERNAL_ERROR`).
+///
+/// Used for [`crate::state::StateError`] (a capacity/overload condition — the pending-session
+/// table or its aggregate memory budget is temporarily full), which is not an internal fault:
+/// distinguishing it from `INTERNAL_ERROR` gives a well-behaved client a signal that retrying
+/// later, once existing sessions complete or expire, may succeed — rather than looking
+/// identical to a persistent bug worth escalating or giving up on (issue #198 M3).
+fn capacity_error(message: String) -> McpError {
+    McpError::new(rmcp::model::ErrorCode(-32000), message, None)
+}
+
 /// Generates code with categorization metadata.
 ///
 /// Converts the categorization map to the format expected by the generator
@@ -1205,6 +1233,29 @@ mod tests {
         assert_eq!(params.len(), 2);
         assert!(params.contains(&"name".to_string()));
         assert!(params.contains(&"age".to_string()));
+    }
+
+    /// #198 S3 — `SaveSkillParams::content`'s declared schema length must track the real
+    /// `MAX_SKILL_CONTENT_SIZE` this crate enforces at runtime, not a literal copy of it.
+    /// `mcp-execution-skill` cannot assert this itself (the constant lives here, the other way
+    /// around the dependency), so this crate — which already depends on `mcp-execution-skill`
+    /// — is the drift-proof home for this specific assertion.
+    #[test]
+    fn test_save_skill_params_content_schema_matches_max_skill_content_size() {
+        let schema = schemars::schema_for!(mcp_execution_skill::SaveSkillParams);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+
+        assert_eq!(props["content"]["maxLength"], MAX_SKILL_CONTENT_SIZE);
+    }
+
+    /// #198 M3 — capacity/overload conditions must be distinguishable from `INTERNAL_ERROR`.
+    #[test]
+    fn test_capacity_error_uses_server_error_range_not_internal_error() {
+        let err = capacity_error("at capacity".to_string());
+
+        assert_eq!(err.code, ErrorCode(-32000));
+        assert_ne!(err.code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(err.message.as_ref(), "at capacity");
     }
 
     #[test]
@@ -2308,7 +2359,7 @@ mod tests {
             &SystemClock,
         );
 
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         // Try to save with tool2 (doesn't exist)
         let params = SaveCategorizedToolsParams {
@@ -2402,7 +2453,11 @@ mod tests {
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_more_entries_than_introspected() {
         let service = GeneratorService::new();
-        let session_id = service.state.store(pending_with_tool_count(2)).await;
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(2))
+            .await
+            .unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2431,7 +2486,8 @@ mod tests {
         let session_id = service
             .state
             .store(pending_with_tool_count(MAX_TOOL_FILES + 10))
-            .await;
+            .await
+            .unwrap();
 
         let categorized_tools = (0..=MAX_TOOL_FILES)
             .map(|i| categorized_tool(&format!("tool{i}")))
@@ -2454,7 +2510,11 @@ mod tests {
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_duplicate_name() {
         let service = GeneratorService::new();
-        let session_id = service.state.store(pending_with_tool_count(2)).await;
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(2))
+            .await
+            .unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2499,7 +2559,7 @@ mod tests {
             None,
             &SystemClock,
         );
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2516,7 +2576,11 @@ mod tests {
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_oversized_category() {
         let service = GeneratorService::new();
-        let session_id = service.state.store(pending_with_tool_count(1)).await;
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(1))
+            .await
+            .unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2536,7 +2600,11 @@ mod tests {
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_oversized_keywords() {
         let service = GeneratorService::new();
-        let session_id = service.state.store(pending_with_tool_count(1)).await;
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(1))
+            .await
+            .unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2556,7 +2624,11 @@ mod tests {
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_oversized_short_description() {
         let service = GeneratorService::new();
-        let session_id = service.state.store(pending_with_tool_count(1)).await;
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(1))
+            .await
+            .unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2581,7 +2653,7 @@ mod tests {
         let service =
             GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
         let pending = pending_with_server_id_and_tool_count("test", 2);
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2635,7 +2707,7 @@ mod tests {
             None,
             &SystemClock,
         );
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2682,7 +2754,7 @@ mod tests {
         .unwrap();
 
         let pending = pending_with_server_id_and_tool_count("server-b", 1);
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2714,7 +2786,7 @@ mod tests {
 
         let mut pending = pending_with_server_id_and_tool_count("my-server", 1);
         pending.output_dir_override = Some(PathBuf::from("custom/nested"));
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2775,7 +2847,7 @@ mod tests {
             &past_clock,
         );
 
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         let params = SaveCategorizedToolsParams {
             session_id,
@@ -2828,7 +2900,7 @@ mod tests {
             clock.as_ref(),
         );
 
-        let session_id = service.state.store(pending).await;
+        let session_id = service.state.store(pending).await.unwrap();
 
         // Advance the service's own shared clock, not the real wall clock, past the TTL.
         clock.advance(
