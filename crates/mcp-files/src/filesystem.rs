@@ -505,7 +505,34 @@ impl FileSystem {
         self.check_export_bounds()?;
 
         let target = base_path.as_ref();
+        let (staging, canonical_staging) = self.stage_export(target)?;
 
+        // Phase 3: Write all files into the staging directory. If this fails,
+        // `staging` is dropped here and its `Drop` impl removes the partial
+        // tree — `target` is never touched.
+        self.write_files(&canonical_staging, options)?;
+
+        // Every file landed successfully; publish by swapping the staged
+        // directory into place.
+        Self::publish_staged_export(staging, target)
+    }
+
+    /// Prepares a staging directory for an atomic export into `target`,
+    /// shared by [`Self::export_to_filesystem_with_options`] and
+    /// [`Self::export_to_filesystem_parallel`] so both publish through the
+    /// same staging/atomic-rename mechanism.
+    ///
+    /// Returns the [`TempDir`] guard (whose `Drop` removes the staging tree
+    /// if the caller never reaches [`Self::publish_staged_export`]) together
+    /// with its canonicalized path, ready for [`Self::collect_directories`]
+    /// and file writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `target` has no parent directory, the parent does
+    /// not exist, or the staging directory cannot be created or
+    /// canonicalized.
+    fn stage_export(&self, target: &Path) -> Result<(TempDir, PathBuf)> {
         let parent = target.parent().ok_or_else(|| FilesError::InvalidPath {
             path: format!("Target path has no parent directory: {}", target.display()),
         })?;
@@ -552,26 +579,35 @@ impl FileSystem {
         // Phase 2: Create all directories in one pass
         Self::create_directories(&dirs)?;
 
-        // Phase 3: Write all files into the staging directory. If this fails,
-        // `staging` is dropped here and its `Drop` impl removes the partial
-        // tree — `target` is never touched.
-        self.write_files(&canonical_staging, options)?;
-
-        // Every file landed successfully; publish by swapping the staged
-        // directory into place.
-        Self::publish_staged_export(staging, target)
+        Ok((staging, canonical_staging))
     }
 
     /// Exports VFS contents using parallel writes (requires 'parallel' feature).
     ///
     /// Faster for large numbers of files (>50), but may not preserve write order.
     ///
+    /// Shares [`Self::export_to_filesystem`]'s staging/atomic-rename
+    /// mechanism: the export is staged in a temporary sibling directory next
+    /// to `base_path` and published by renaming that directory into place
+    /// only once every file has landed. A process interrupted before
+    /// publishing — mid-write, or by a parallel write failing partway
+    /// through — leaves `base_path` exactly as it was before this call; this
+    /// does not cover a kill during the publish step itself, which carries
+    /// the same narrow window `swap_into_place` documents. As a
+    /// consequence of sharing that mechanism, `base_path` is now replaced
+    /// wholesale rather than merged into: any pre-existing file under
+    /// `base_path` that is absent from this `FileSystem` is deleted, exactly
+    /// like [`Self::export_to_filesystem`]. See that method and the
+    /// [module-level docs](self) for the full atomicity and concurrency
+    /// guarantees.
+    ///
     /// # Errors
     ///
-    /// Returns error if:
-    /// - Base path doesn't exist or isn't a directory
+    /// Returns an error if:
+    /// - The parent directory of `base_path` does not exist
+    /// - The staging directory cannot be created or canonicalized
     /// - Permission denied during directory creation or file write
-    /// - I/O error during parallel write operations
+    /// - I/O error during parallel write operations or the final publish step
     ///
     /// # Examples
     ///
@@ -591,37 +627,30 @@ impl FileSystem {
     /// vfs.export_to_filesystem_parallel(base).unwrap();
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    // TODO(critic): not directory-atomic — needs staging treatment before any
-    // production caller is wired up (currently unused outside this crate's
-    // own tests/benches, so the interrupted-export bug fixed in
-    // `export_to_filesystem` does not apply here yet).
     #[cfg(feature = "parallel")]
     pub fn export_to_filesystem_parallel(&self, base_path: impl AsRef<Path>) -> Result<()> {
         use rayon::prelude::*;
 
         self.check_export_bounds()?;
 
-        let base = base_path.as_ref();
-        let canonical_base = base.canonicalize().map_err(|e| FilesError::InvalidPath {
-            path: format!("Failed to canonicalize {}: {}", base.display(), e),
-        })?;
+        let target = base_path.as_ref();
+        let (staging, canonical_staging) = self.stage_export(target)?;
 
-        // Phase 1: Collect and create directories (must be sequential)
-        let dirs = self.collect_directories(&canonical_base);
-        Self::create_directories(&dirs)?;
-
-        // Phase 2: Write files in parallel
-        let files: Vec<_> = self.files().collect();
+        // Write files in parallel into the staging directory. If this fails,
+        // `staging` is dropped here and its `Drop` impl removes the partial
+        // tree — `target` is never touched.
         let options = ExportOptions::default();
+        self.files().collect::<Vec<_>>().par_iter().try_for_each(
+            |(vfs_path, file)| -> Result<()> {
+                let staging_disk_path =
+                    Self::vfs_to_disk_path(vfs_path.as_str(), &canonical_staging);
+                write_file_atomic(&staging_disk_path, file.content(), options.atomic)
+            },
+        )?;
 
-        files
-            .par_iter()
-            .try_for_each(|(vfs_path, file)| -> Result<()> {
-                let disk_path = Self::vfs_to_disk_path(vfs_path.as_str(), &canonical_base);
-                write_file_atomic(&disk_path, file.content(), options.atomic)
-            })?;
-
-        Ok(())
+        // Every file landed successfully; publish by swapping the staged
+        // directory into place.
+        Self::publish_staged_export(staging, target)
     }
 
     /// Rejects an export whose file count or total byte size exceeds its configured bound
@@ -633,7 +662,11 @@ impl FileSystem {
     /// Returns [`FilesError::ResourceLimitExceeded`] if [`Self::file_count`] exceeds
     /// [`MAX_EXPORT_FILES`], or the combined byte size of every file's content exceeds
     /// [`MAX_EXPORT_BYTES`].
-    fn check_export_bounds(&self) -> Result<()> {
+    ///
+    /// `pub(crate)` so [`crate::builder::FilesBuilder::build_and_export`] can bound its
+    /// whole batch up front, before splitting it into the per-group sub-filesystems that
+    /// each perform this same check independently.
+    pub(crate) fn check_export_bounds(&self) -> Result<()> {
         if self.file_count() > MAX_EXPORT_FILES {
             return Err(FilesError::ResourceLimitExceeded {
                 resource: "export file count".to_string(),
@@ -757,7 +790,7 @@ impl FileSystem {
             });
         }
 
-        let _ = fs::remove_dir_all(&displaced);
+        Self::remove_artifact_best_effort(&displaced);
         Ok(())
     }
 
@@ -801,10 +834,22 @@ impl FileSystem {
     /// removed. Best-effort like [`Self::sweep_stale_artifacts`]: failure
     /// (e.g. a read-only directory) is silently ignored rather than failing
     /// the export.
+    ///
+    /// `dir` (despite the name, matching [`Self::displace_existing_target`]'s
+    /// caller) may also be a plain file — e.g. a bare top-level file being
+    /// displaced by a same-named subdirectory in
+    /// [`crate::builder::FilesBuilder::build_and_export`]'s per-group
+    /// publish. The marker-file trick above does not apply to a file, so
+    /// that case opens `dir` for writing and calls
+    /// [`std::fs::File::set_modified`] directly instead.
     fn touch_dir(dir: &Path) {
-        let marker = dir.join(format!(".mtime-touch-{}", std::process::id()));
-        if fs::File::create(&marker).is_ok() {
-            let _ = fs::remove_file(&marker);
+        if dir.is_dir() {
+            let marker = dir.join(format!(".mtime-touch-{}", std::process::id()));
+            if fs::File::create(&marker).is_ok() {
+                let _ = fs::remove_file(&marker);
+            }
+        } else if let Ok(file) = fs::OpenOptions::new().write(true).open(dir) {
+            let _ = file.set_modified(SystemTime::now());
         }
     }
 
@@ -898,8 +943,28 @@ impl FileSystem {
                 });
 
             if old_enough {
-                let _ = fs::remove_dir_all(entry.path());
+                Self::remove_artifact_best_effort(&entry.path());
             }
+        }
+    }
+
+    /// Best-effort removal of a displaced or stale artifact, which is
+    /// usually a directory (a previous export's published output) but can
+    /// also be a plain file — e.g. after
+    /// [`crate::builder::FilesBuilder::build_and_export`] displaces a bare
+    /// top-level file to make way for a same-named subdirectory.
+    /// `fs::remove_dir_all` always fails with `NotADirectory` on a plain
+    /// file, so this falls back to [`fs::remove_file`] when that happens.
+    /// Used by both [`Self::swap_into_place`]'s immediate cleanup and
+    /// [`Self::sweep_stale_artifacts_older_than`]'s periodic sweep, so
+    /// neither permanently leaks a displaced file the way both did before —
+    /// every future sweep would otherwise re-attempt (and silently fail) the
+    /// same `remove_dir_all` on it forever. Errors from either removal are
+    /// silently discarded, matching every other call site that manages
+    /// these artifacts: this is hygiene, not part of export correctness.
+    fn remove_artifact_best_effort(path: &Path) {
+        if fs::remove_dir_all(path).is_err() {
+            let _ = fs::remove_file(path);
         }
     }
 
@@ -980,9 +1045,13 @@ impl Default for ExportOptions {
 
 /// Writes file content to disk.
 ///
-/// If `atomic` is `true`, writes to a temp file then renames it into place.
-/// Otherwise, writes directly.
-fn write_file_atomic(path: &Path, content: &str, atomic: bool) -> Result<()> {
+/// If `atomic` is `true`, writes to a temp file, `fsync`s it for durability,
+/// then renames it into place. Otherwise, writes directly.
+///
+/// `pub(crate)` so [`crate::builder::FilesBuilder::build_and_export`] can reuse this for
+/// its own bare top-level files, rather than duplicating a weaker (no-`fsync`) atomic
+/// write helper.
+pub(crate) fn write_file_atomic(path: &Path, content: &str, atomic: bool) -> Result<()> {
     if atomic {
         // Atomic write: temp file + rename
         let temp_path = path.with_added_extension("tmp");
@@ -1066,8 +1135,7 @@ mod tests {
     fn test_read_file_not_found() {
         let vfs = FileSystem::new();
         let result = vfs.read_file("/missing.ts");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_not_found());
+        assert!(matches!(result, Err(FilesError::FileNotFound { .. })));
     }
 
     #[test]
@@ -1108,8 +1176,7 @@ mod tests {
         vfs.add_file("/file.ts", "").unwrap();
 
         let result = vfs.list_dir("/file.ts");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_not_directory());
+        assert!(matches!(result, Err(FilesError::NotADirectory { .. })));
     }
 
     #[test]
@@ -1455,6 +1522,29 @@ mod tests {
     }
 
     #[test]
+    fn displace_existing_target_refreshes_displaced_mtime_for_a_file() {
+        // Regression test: `touch_dir`'s marker-file trick only works on a
+        // directory `target`; before the fix it silently no-oped when
+        // `target` was a plain file (a bare top-level file being displaced
+        // by a same-named subdirectory), so the displaced file's mtime was
+        // never refreshed and it would look stale-eligible immediately.
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("out");
+        fs::write(&target, "not a directory").unwrap();
+        let target_created_at = fs::metadata(&target).unwrap().modified().unwrap();
+
+        std::thread::sleep(Duration::from_millis(1100));
+
+        let displaced = FileSystem::displace_existing_target(&target, tmp.path()).unwrap();
+        let displaced_modified = fs::metadata(&displaced).unwrap().modified().unwrap();
+
+        assert!(
+            displaced_modified > target_created_at,
+            "displaced file's mtime must be refreshed around the rename, not inherited from target"
+        );
+    }
+
+    #[test]
     fn sweep_stale_artifacts_skips_recent_orphans() {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("out");
@@ -1487,6 +1577,29 @@ mod tests {
         assert!(
             !staging_path.exists(),
             "an orphan past the age threshold must be swept"
+        );
+    }
+
+    #[test]
+    fn sweep_stale_artifacts_older_than_removes_a_displaced_file() {
+        // Regression test: a displaced artifact left over from a bare-file/
+        // subdirectory name collision is a plain file, not a directory.
+        // `fs::remove_dir_all` always fails on a file, so before
+        // `remove_artifact_best_effort` existed, this entry would never be
+        // swept — a permanent per-collision leak.
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("out");
+
+        let stale_file = tmp
+            .path()
+            .join(format!(".{}.stale-fake", FileSystem::target_stem(&target)));
+        fs::write(&stale_file, "displaced file content").unwrap();
+
+        FileSystem::sweep_stale_artifacts_older_than(tmp.path(), &target, Duration::ZERO);
+
+        assert!(
+            !stale_file.exists(),
+            "a displaced file, not just a displaced directory, must be swept"
         );
     }
 
@@ -1585,6 +1698,41 @@ mod tests {
             let path = temp.path().join(format!("file{i}.ts"));
             assert!(path.exists());
         }
+    }
+
+    #[test]
+    #[cfg(feature = "parallel")]
+    fn test_export_parallel_failure_leaves_existing_target_untouched() {
+        // Direct-entry-point counterpart to
+        // `test_export_failure_leaves_existing_target_untouched`: exercises the
+        // same staging-write failure through `export_to_filesystem_parallel`
+        // itself, rather than only through the shared helpers it delegates to.
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("out");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep.ts"), "keep").unwrap();
+
+        let vfs = FilesBuilder::new()
+            .add_file("/conflict", "file content")
+            .add_file("/conflict/child.ts", "child content")
+            .build()
+            .unwrap();
+
+        let result = vfs.export_to_filesystem_parallel(&target);
+        assert!(result.is_err());
+
+        // The previous export must be completely untouched by the failure.
+        assert!(target.join("keep.ts").exists());
+        assert_eq!(fs::read_to_string(target.join("keep.ts")).unwrap(), "keep");
+        assert!(!target.join("conflict").exists());
+
+        // No orphaned staging directory left behind by the failed export.
+        let siblings: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.path() != target)
+            .collect();
+        assert!(siblings.is_empty(), "unexpected siblings: {siblings:?}");
     }
 
     #[test]
