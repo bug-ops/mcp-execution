@@ -36,7 +36,18 @@ static SKILL_DESC_REGEX: LazyLock<Regex> =
 ///
 /// Replaces the home directory with `~` to avoid leaking usernames and
 /// full filesystem paths in error messages.
-fn sanitize_path_for_error(path: &Path) -> String {
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::sanitize_path_for_error;
+/// use std::path::Path;
+///
+/// // A path outside the home directory is left unchanged.
+/// assert_eq!(sanitize_path_for_error(Path::new("/tmp/x")), "/tmp/x");
+/// ```
+#[must_use]
+pub fn sanitize_path_for_error(path: &Path) -> String {
     dirs::home_dir().map_or_else(
         || path.display().to_string(),
         |home| {

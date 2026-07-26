@@ -123,6 +123,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets `kill_on_drop(true)`, which sends the kill signal synchronously from `Drop` regardless
   of why the `Child` was dropped.
 
+- **`mcp-execution-server`**, **`mcp-execution-skill`**: `save_skill`'s `output_path` is now
+  confined to `~/.claude/skills/{server_id}/` instead of being written to verbatim (#184).
+  Previously an absolute `output_path`, a `..`-relative path, or a path routed through a symlink
+  planted inside the skills directory could make `save_skill` write arbitrary content to any
+  location the process could reach. `output_path` is now treated as relative to the calling
+  server's own skills subdirectory: an absolute override or a path containing a `..` component
+  is rejected before any filesystem work happens. The new
+  `mcp_execution_skill::resolve_skill_output_path` walks `server_id` and the output path's
+  remaining directory components through one shared, confinement-checked loop rooted at the
+  skills directory — creating each missing component and confinement-checking each existing one
+  before descending into it, so a symlink already present anywhere along the path (including at
+  `server_id`'s own directory) is caught before being followed rather than after. The final path
+  component is rejected outright if it is a symlink — including a dangling one, which
+  `canonicalize` cannot resolve but a subsequent write would still follow. `server_id` is
+  validated as a single non-empty path segment before any of this, and `validate_server_id` now
+  rejects the empty string, which previously passed its character-class check vacuously. The
+  default path (`SKILL.md`, used when no `output_path` is supplied) now passes through the same
+  confinement check as a caller-supplied path, rather than being special-cased around it. Note
+  this confines writes to the shared skills directory as a whole, not strictly per-server: a
+  `server_id` directory that is itself a pre-planted symlink to another server's directory (which
+  requires the same filesystem write access as writing that server's files directly) is not
+  additionally isolated by this fix. Narrowing confinement to each server's own resolved
+  directory is tracked as a follow-up, alongside a separate, larger unvalidated-path issue in
+  `introspect_server`'s `output_dir` — neither is in scope here.
+
 - **`mcp-execution-core`**, **`mcp-execution-introspector`**: `--http`/`--sse` transports
   actually connect now, instead of failing validation with a misleading "command cannot be
   empty" `SecurityViolation` before the transport type was ever consulted (#180).

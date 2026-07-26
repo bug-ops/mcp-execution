@@ -24,14 +24,16 @@
 //! ```
 
 mod context;
+mod output_path;
 mod parser;
 mod template;
 pub mod types;
 
 pub use context::build_skill_context;
+pub use output_path::{OutputPathError, resolve_skill_output_path};
 pub use parser::{
     MAX_FILE_SIZE, MAX_TOOL_FILES, ParsedParameter, ParsedToolFile, ScanError, ScanResult,
-    extract_skill_metadata, scan_tools_directory,
+    extract_skill_metadata, sanitize_path_for_error, scan_tools_directory,
 };
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{

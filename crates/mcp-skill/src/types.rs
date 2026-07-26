@@ -228,11 +228,13 @@ pub struct SkillMetadata {
 /// # Errors
 ///
 /// Returns `Err` with descriptive message if:
+/// - Empty
 /// - Length exceeds 64 characters
 /// - Contains characters other than lowercase letters, digits, and hyphens
 ///
 /// # Validation Rules
 ///
+/// - Must not be empty
 /// - Length must not exceed 64 characters
 /// - Must contain only lowercase letters, digits, and hyphens
 ///
@@ -243,10 +245,18 @@ pub struct SkillMetadata {
 ///
 /// assert!(validate_server_id("github").is_ok());
 /// assert!(validate_server_id("my-server-123").is_ok());
+/// assert!(validate_server_id("").is_err()); // empty
 /// assert!(validate_server_id("GitHub").is_err()); // uppercase
 /// assert!(validate_server_id("my_server").is_err()); // underscore
 /// ```
 pub fn validate_server_id(server_id: &str) -> Result<(), String> {
+    // Check emptiness (the character-class check below is vacuously true for
+    // an empty string, and an empty server_id would collapse a per-server
+    // confinement directory back to its shared parent)
+    if server_id.is_empty() {
+        return Err("server_id must not be empty".to_string());
+    }
+
     // Check length
     if server_id.len() > MAX_SERVER_ID_LENGTH {
         return Err(format!(
@@ -279,6 +289,13 @@ mod tests {
         assert!(validate_server_id("my-server").is_ok());
         assert!(validate_server_id("server123").is_ok());
         assert!(validate_server_id("my-server-123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_id_empty() {
+        let result = validate_server_id("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
     }
 
     #[test]
