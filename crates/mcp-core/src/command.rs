@@ -257,8 +257,9 @@ const fn is_header_name_tchar(c: char) -> bool {
 /// is not a control character but is still an invalid header-name character
 /// that would otherwise pass here and fail later inside `http::HeaderName`
 /// construction with an opaque error that omits the offending name. The
-/// header name itself is not a secret, so it is safe to include in the error
-/// message.
+/// The header name may contain user-supplied data (e.g. bare base64 values
+/// that were never split into key/value). It is truncated in the error
+/// message to avoid echoing arbitrary strings.
 fn validate_header_name_string(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(Error::SecurityViolation {
@@ -268,7 +269,7 @@ fn validate_header_name_string(name: &str) -> Result<()> {
     if !name.chars().all(is_header_name_tchar) {
         return Err(Error::SecurityViolation {
             reason: format!(
-                "header name '{name}' contains characters outside the allowed HTTP token charset"
+                "header name contains characters outside the allowed HTTP token charset"
             ),
         });
     }
