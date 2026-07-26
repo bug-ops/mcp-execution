@@ -47,8 +47,9 @@ use mcp_execution_introspector::{ServerInfo, ToolInfo};
 use std::collections::{HashMap, HashSet};
 
 /// Files emitted by every `generate`/`generate_with_categories` call regardless of tool
-/// count: `index.ts`, the runtime bridge, `package.json`, and the `_meta.json` sidecar.
-const FIXED_FILE_COUNT: usize = 4;
+/// count: `index.ts`, the runtime bridge, `package.json`, `tsconfig.json`, and the `_meta.json`
+/// sidecar.
+const FIXED_FILE_COUNT: usize = 5;
 
 /// Maximum number of files a single `generate`/`generate_with_categories` call will produce
 /// (denial-of-service protection, CWE-400).
