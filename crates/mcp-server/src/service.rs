@@ -554,53 +554,30 @@ impl GeneratorService {
                 ));
             }
 
-            if cat_tool.name.len() > MAX_CATEGORIZED_TOOL_NAME_LEN {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "Tool name '{}' is {} bytes, exceeding the {} byte limit",
-                        cat_tool.name,
-                        cat_tool.name.len(),
-                        MAX_CATEGORIZED_TOOL_NAME_LEN
-                    ),
-                    None,
-                ));
-            }
-
-            if cat_tool.category.len() > MAX_CATEGORY_LEN {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "category for tool '{}' is {} bytes, exceeding the {} byte limit",
-                        cat_tool.name,
-                        cat_tool.category.len(),
-                        MAX_CATEGORY_LEN
-                    ),
-                    None,
-                ));
-            }
-
-            if cat_tool.keywords.len() > MAX_KEYWORDS_LEN {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "keywords for tool '{}' is {} bytes, exceeding the {} byte limit",
-                        cat_tool.name,
-                        cat_tool.keywords.len(),
-                        MAX_KEYWORDS_LEN
-                    ),
-                    None,
-                ));
-            }
-
-            if cat_tool.short_description.len() > MAX_SHORT_DESCRIPTION_LEN {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "short_description for tool '{}' is {} bytes, exceeding the {} byte limit",
-                        cat_tool.name,
-                        cat_tool.short_description.len(),
-                        MAX_SHORT_DESCRIPTION_LEN
-                    ),
-                    None,
-                ));
-            }
+            check_categorized_field_length(
+                &cat_tool.name,
+                "name",
+                &cat_tool.name,
+                MAX_CATEGORIZED_TOOL_NAME_LEN,
+            )?;
+            check_categorized_field_length(
+                &cat_tool.name,
+                "category",
+                &cat_tool.category,
+                MAX_CATEGORY_LEN,
+            )?;
+            check_categorized_field_length(
+                &cat_tool.name,
+                "keywords",
+                &cat_tool.keywords,
+                MAX_KEYWORDS_LEN,
+            )?;
+            check_categorized_field_length(
+                &cat_tool.name,
+                "short_description",
+                &cat_tool.short_description,
+                MAX_SHORT_DESCRIPTION_LEN,
+            )?;
         }
 
         // Build categorization map and category stats in single pass (avoid double iteration)
@@ -1171,6 +1148,33 @@ fn caller_or_internal_error(err: &mcp_execution_core::Error, internal_prefix: &s
     } else {
         McpError::internal_error(format!("{internal_prefix}: {err}"), None)
     }
+}
+
+/// Validates one [`CategorizedTool`] field against its byte-length limit, matching the
+/// wording each check used before this helper existed: the tool's own `name` field
+/// renders as `Tool name '<name>'`, every other field as `<field_label> for tool
+/// '<name>'`.
+fn check_categorized_field_length(
+    tool_name: &str,
+    field_label: &str,
+    field_value: &str,
+    limit: usize,
+) -> Result<(), McpError> {
+    if field_value.len() <= limit {
+        return Ok(());
+    }
+    let subject = if field_label == "name" {
+        format!("Tool name '{tool_name}'")
+    } else {
+        format!("{field_label} for tool '{tool_name}'")
+    };
+    Err(McpError::invalid_params(
+        format!(
+            "{subject} is {} bytes, exceeding the {limit} byte limit",
+            field_value.len()
+        ),
+        None,
+    ))
 }
 
 /// Builds the per-tool summaries `introspect_server` returns to Claude for categorization.
@@ -2659,6 +2663,7 @@ mod tests {
 
         let err = result.expect_err("an oversized tool name must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains(&format!("Tool name '{long_name}'")));
         assert!(err.message.contains("byte limit"));
     }
 
