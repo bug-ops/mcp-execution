@@ -102,6 +102,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mcp-execution-server` and `mcp-execution-cli` that only formatted the error via `Display` are
   unaffected; call sites that passed the error directly to `McpError::invalid_params` now call
   `.to_string()` first (#196).
+- **`mcp-execution-cli`**: `main.rs` no longer redeclares its own private copy of `actions`,
+  `commands`, and `formatters` alongside `lib.rs`'s public copy — the two module trees were
+  compiled twice with different visibility topologies. `cli` and `runner` (previously reachable
+  only from the bin target) moved into the library's module tree, and `main.rs` is now a thin
+  entry point that calls into `mcp_execution_cli` instead of declaring its own `mod` tree.
+  `mcp_execution_cli::cli` and `mcp_execution_cli::runner` are now genuine public API surface
+  (`pub mod cli`, `pub mod runner`) — not just an internal restructure — exposing `Cli`,
+  `Commands`, and the command-execution/exit-code-classification entry points for external
+  testing, consistent with the existing `actions`/`commands`/`formatters` modules. `runner`'s
+  three newly-public functions (`init_logging`, `execute_command`, `report_and_classify`) gained
+  `# Examples` doctests, per this crate's existing convention of a runnable example on every
+  public item (#188).
+- **`mcp-execution-cli`**: removed five clippy crate-level `#[allow(...)]` attributes
+  (`format_push_string`, `cast_possible_truncation`, `missing_errors_doc`, `unnecessary_wraps`,
+  `unnecessary_literal_unwrap`) from `lib.rs` that no longer suppress anything now that the
+  module tree compiles once instead of twice; verified vacuous via `cargo clippy -p
+  mcp-execution-cli --all-targets --all-features -- -D warnings` with all seven allows removed
+  and the resulting errors inspected. `unused_async` and `needless_collect` remain, as they
+  still fire; both now carry an explanatory comment per this project's `#[allow(...)]`
+  justification convention.
+- **`mcp-execution-cli`**: removed the unused `criterion`, `dhat`, `dialoguer`, and `toml`
+  entries from `[dependencies]` — none are referenced anywhere in the crate and it has no
+  `benches/` or `examples/` directory. Removed the unused `static_assertions`, `dialoguer`, and
+  `toml` entries from the root `[workspace.dependencies]` table, none of which any crate in the
+  workspace still referenced (#193).
 
 ### Fixed
 
