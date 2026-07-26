@@ -636,14 +636,20 @@ async function createConnection(
   // An async EPIPE reported here (rather than as a synchronous throw from `stdin.write`)
   // would otherwise leave the pending request(s) unrejected until they time out; tear down
   // the same way as other stream/process failures so they fail fast instead.
-  childProcess.stdin!.on('error', (error) => {
+  //
+  // EPIPE specifically means the child's stdin has already closed, which only happens once
+  // the child itself has exited — the same underlying condition the 'close' handler below
+  // reports. Whichever of the two fires first wins the race (teardownConnection only rejects
+  // each still-pending request once), so both must describe it the same way; otherwise the
+  // rejection message a caller sees would depend on unpredictable event-loop timing that
+  // differs across platforms.
+  childProcess.stdin!.on('error', (error: NodeJS.ErrnoException) => {
     debug(`stdin error for server ${serverId}:`, error);
-    teardownConnection(
-      serverId,
-      connection,
-      new Error(`MCP server stdin error: ${error.message}`),
-      getOwnPromise()
-    );
+    const message =
+      error.code === 'EPIPE'
+        ? 'MCP server process exited before responding (stdin closed)'
+        : `MCP server stdin error: ${error.message}`;
+    teardownConnection(serverId, connection, new Error(message), getOwnPromise());
   });
 
   childProcess.on('error', (error) => {
@@ -834,10 +840,16 @@ export async function callMCPTool(
   }
 
   // Handle error flag in result. `content` legitimately defaults to `[]` server-side (see
-  // MCPToolCallResponse), so this must not assume a first element exists.
+  // MCPToolCallResponse), so this must not assume a first element exists. When `content` has no
+  // usable text, fall back to `structuredContent` before giving up: a structured error response
+  // can carry real detail that plain `content` omits.
   if (response.result.isError) {
     const errorContent = response.result.content?.[0];
-    const errorMessage = errorContent?.text || 'Unknown error';
+    const errorMessage =
+      errorContent?.text ||
+      (response.result.structuredContent != null
+        ? JSON.stringify(response.result.structuredContent)
+        : 'Unknown error');
     throw new Error(`Tool returned error: ${errorMessage}`);
   }
 
@@ -845,16 +857,37 @@ export async function callMCPTool(
 
   // `structuredContent`-only responses (spec 2025-06-18+): surfaced as a distinct case rather
   // than falling through to the content[0] handling below, which it was never meant to reach.
-  if ((!content || content.length === 0) && response.result.structuredContent !== undefined) {
+  // `!= null` is deliberate (not `!== undefined`): a literal `null` must be treated the same as
+  // an absent field rather than returned as if it were real structured data.
+  if ((!content || content.length === 0) && response.result.structuredContent != null) {
     return response.result.structuredContent;
   }
 
+  // A tool that legitimately has no output (e.g. a side-effect-only action) is indistinguishable
+  // here from a misbehaving server that forgot to populate `content`: per the MCP spec,
+  // `CallToolResult::success(vec![])` is a valid empty-but-successful result. We treat it as an
+  // error until the per-tool Result type generated in tool.ts.hbs (currently
+  // `Record<string, unknown> | unknown[] | string`) gains a void/undefined member to represent
+  // this case explicitly.
   if (!content || content.length === 0) {
-    throw new Error(`Tool ${serverId}.${toolName} returned an empty content array and no structuredContent`);
+    throw new Error(`Tool ${serverId}.${toolName} returned no content and no structuredContent`);
   }
 
   // Extract content from response
   const firstContent = content[0];
+
+  if (!firstContent) {
+    // `content[0]` is present but null/falsy — a malformed entry, distinct from the
+    // empty/absent `content` case handled above. Prefer a populated `structuredContent` over
+    // failing, since the server may still have supplied usable structured data alongside a
+    // malformed content array.
+    if (response.result.structuredContent != null) {
+      return response.result.structuredContent;
+    }
+    throw new Error(
+      `Tool ${serverId}.${toolName} returned an invalid content[0] (null) and no structuredContent`
+    );
+  }
 
   if (firstContent.type === 'text' && firstContent.text) {
     // Try to parse as JSON if it looks like JSON
