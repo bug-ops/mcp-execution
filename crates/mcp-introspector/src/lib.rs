@@ -442,6 +442,16 @@ impl Default for Introspector {
 /// introspection completes; this crate does not keep the process alive for
 /// later tool invocation.
 ///
+/// `kill_on_drop(true)` is set as a backstop for the case where the
+/// `discover_via_stdio_process` future itself is dropped before it reaches
+/// its own explicit [`Child::kill`] call - e.g. a caller racing discovery
+/// against a cancellation signal via `tokio::select!`, which drops the
+/// losing future (and everything it owns, including `child`) without ever
+/// running the rest of its body. Unlike rmcp's `TokioChildProcess` cleanup
+/// (a `tokio::spawn`-ed background task that a short-lived runtime can starve,
+/// per issue #132), tokio's own `kill_on_drop` sends the kill signal
+/// synchronously inside `Drop`, so it fires reliably even then.
+///
 /// # Errors
 ///
 /// Returns [`Error::ConnectionFailed`] if the process cannot be spawned
@@ -455,6 +465,7 @@ fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Res
     }
     command.stdin(Stdio::piped());
     command.stdout(Stdio::piped());
+    command.kill_on_drop(true);
 
     command.spawn().map_err(|e| Error::ConnectionFailed {
         server: server_id.to_string(),

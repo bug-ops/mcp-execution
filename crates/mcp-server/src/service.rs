@@ -17,8 +17,8 @@ use mcp_execution_core::{ServerConfig, ServerId};
 use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::Introspector;
 use mcp_execution_skill::{
-    GenerateSkillParams, SaveSkillParams, SaveSkillResult, ScanError, build_skill_context,
-    extract_skill_metadata, scan_tools_directory, validate_server_id,
+    GenerateSkillParams, MAX_TOOL_FILES, SaveSkillParams, SaveSkillResult, ScanError,
+    build_skill_context, extract_skill_metadata, scan_tools_directory, validate_server_id,
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
@@ -31,9 +31,45 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 /// Maximum SKILL.md content size in bytes (100KB).
 const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
+
+/// Maximum byte length for a [`CategorizedTool::name`] field.
+///
+/// A legitimate value is always an already-introspected tool name (a short
+/// identifier), never free-form text, so this is a generous ceiling rather
+/// than a realistic expectation. Kept below common filesystem path-component
+/// limits (255 bytes on ext4/APFS/NTFS): the name feeds into the generated
+/// `.ts` filename via `save_categorized_tools`'s codegen/export pipeline, and
+/// export staging is directory-level (a sibling temp directory, later
+/// renamed into place - see `mcp_execution_files::FileSystem::export`), not a
+/// per-file `.tmp` suffix, so the only path-component overhead on the actual
+/// file is the `.ts` extension itself (true ceiling: 255 - 3 = 252 bytes).
+/// The name also isn't used unchanged: it first passes through
+/// `to_camel_case` and then `sanitize_ts_identifier`
+/// (`mcp_execution_codegen::common::typescript`), which can only shrink the
+/// string (each multi-byte UTF-8 `char` collapses to at most one ASCII byte)
+/// plus at most one inserted leading `_`. Combined, this cap has roughly 124
+/// bytes of headroom against the true 252-byte ceiling - kept well below it
+/// mainly so the check stays meaningful without depending on the exact
+/// shrink factor of that transform.
+const MAX_CATEGORIZED_TOOL_NAME_LEN: usize = 128;
+
+/// Maximum byte length for a [`CategorizedTool::category`] field.
+const MAX_CATEGORY_LEN: usize = 100;
+
+/// Maximum byte length for a [`CategorizedTool::keywords`] field
+/// (a comma-separated list).
+const MAX_KEYWORDS_LEN: usize = 500;
+
+/// Maximum byte length for a [`CategorizedTool::short_description`] field.
+///
+/// The field's doc comment targets 80 characters; this cap is 4x that (the
+/// maximum UTF-8 bytes per `char`) so legitimate multi-byte text is never
+/// rejected while the size is still bounded.
+const MAX_SHORT_DESCRIPTION_LEN: usize = 320;
 
 /// MCP server for progressive loading generation.
 ///
@@ -209,6 +245,7 @@ impl GeneratorService {
     async fn introspect_server(
         &self,
         Parameters(params): Parameters<IntrospectServerParams>,
+        ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format
         validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
@@ -247,21 +284,33 @@ impl GeneratorService {
 
         let config = config_builder.build();
 
-        // Connect and introspect, holding only the lock for this server_id
+        // Connect and introspect, holding only the lock for this server_id. A
+        // tokio::select! against `ct.cancelled()` lets a client-issued
+        // `notifications/cancelled` interrupt the (potentially up-to-600s)
+        // discovery round trip instead of always running it to completion.
+        // `biased;` prefers noticing cancellation over starting/continuing
+        // discovery, making the cancelled path deterministic rather than
+        // depending on `tokio::select!`'s (default-randomised) poll order.
         let introspector_handle = self.introspector_for(&server_id).await;
-        let discover_result = {
-            let mut introspector = introspector_handle.lock().await;
-            introspector
-                .discover_server(server_id.clone(), &config)
-                .await
+        let mut introspector = introspector_handle.lock().await;
+        let discover_outcome = tokio::select! {
+            biased;
+            () = ct.cancelled() => None,
+            result = introspector.discover_server(server_id.clone(), &config) => Some(result),
         };
+        drop(introspector);
 
-        // Evict the per-server-id handle regardless of outcome, so caller-supplied
-        // server_id values can't grow the introspectors map without bound. Only
-        // removes the entry if it is still this exact handle (see
-        // `evict_introspector` docs for why identity matters here).
+        // Evict the per-server-id handle regardless of outcome (including
+        // cancellation), so caller-supplied server_id values can't grow the
+        // introspectors map without bound. Only removes the entry if it is
+        // still this exact handle (see `evict_introspector` docs for why
+        // identity matters here).
         self.evict_introspector(&server_id, &introspector_handle)
             .await;
+
+        let discover_result = discover_outcome.ok_or_else(|| {
+            McpError::internal_error("introspect_server cancelled by client", None)
+        })?;
 
         let server_info = discover_result.map_err(|e| {
             if e.is_validation_error() {
@@ -319,6 +368,21 @@ impl GeneratorService {
     /// Generates progressive loading TypeScript files using Claude's
     /// categorization. Requires `session_id` from a previous `introspect_server`
     /// call.
+    ///
+    /// Does not observe request cancellation, unlike `introspect_server` and
+    /// `generate_skill`. An earlier version raced the wait for the
+    /// per-`output_dir` export lock against `ct.cancelled()`, but that
+    /// produced two correctness bugs in succession: cancelling while another
+    /// caller held the lock either leaked the `exports` map entry, or (once
+    /// that leak was fixed by evicting unconditionally) evicted the entry out
+    /// from under the still-running holder, handing the *next* caller a fresh
+    /// lock that no longer serializes against it - reopening the #169
+    /// data-loss race for the whole duration of the in-flight export, not
+    /// just a narrow timing window. The export itself was already
+    /// deliberately excluded from cancellation (see `export_lock_for`), so
+    /// cancelling only the lock *wait* bought little for two rounds of bugs;
+    /// removing it entirely, the same call S1 made for `save_skill`, removes
+    /// the whole class of problems.
     #[tool(
         description = "Generate progressive loading TypeScript files using Claude's categorization. Requires session_id from a previous introspect_server call."
     )]
@@ -342,10 +406,101 @@ impl GeneratorService {
             .map(|t| t.name.as_str())
             .collect();
 
+        // A legitimate call can never submit more entries than there are
+        // introspected tools: every name must be a member of
+        // `introspected_names` (checked below) and duplicates are rejected,
+        // so the entry count is bounded by that set's size. Reject early,
+        // before any per-entry validation, HashMap insertion, or codegen
+        // work (CWE-400 - see issue #197).
+        //
+        // `introspected_names.len()` alone is not a trustworthy ceiling: it
+        // comes from whatever tool count the *target* MCP server reported to
+        // `introspect_server`, so a hostile or buggy target could inflate it
+        // arbitrarily. `MAX_TOOL_FILES` is the same per-server tool-count
+        // ceiling `generate_skill` already enforces (via
+        // `mcp_execution_skill::scan_tools_directory`), so reusing it here
+        // keeps the two stages consistent - otherwise this call could
+        // happily generate more tool files than `generate_skill` will later
+        // accept.
+        let max_allowed_tools = introspected_names.len().min(MAX_TOOL_FILES);
+        if params.categorized_tools.len() > max_allowed_tools {
+            return Err(McpError::invalid_params(
+                format!(
+                    "categorized_tools has {} entries but at most {} are allowed \
+                     (min of {} introspected tools and the {} tool-file cap; \
+                     duplicates are not allowed)",
+                    params.categorized_tools.len(),
+                    max_allowed_tools,
+                    introspected_names.len(),
+                    MAX_TOOL_FILES,
+                ),
+                None,
+            ));
+        }
+
+        let mut seen_names: HashSet<&str> = HashSet::with_capacity(params.categorized_tools.len());
         for cat_tool in &params.categorized_tools {
             if !introspected_names.contains(cat_tool.name.as_str()) {
                 return Err(McpError::invalid_params(
                     format!("Tool '{}' not found in introspected tools", cat_tool.name),
+                    None,
+                ));
+            }
+
+            if !seen_names.insert(cat_tool.name.as_str()) {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Tool '{}' appears more than once in categorized_tools",
+                        cat_tool.name
+                    ),
+                    None,
+                ));
+            }
+
+            if cat_tool.name.len() > MAX_CATEGORIZED_TOOL_NAME_LEN {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Tool name '{}' is {} bytes, exceeding the {} byte limit",
+                        cat_tool.name,
+                        cat_tool.name.len(),
+                        MAX_CATEGORIZED_TOOL_NAME_LEN
+                    ),
+                    None,
+                ));
+            }
+
+            if cat_tool.category.len() > MAX_CATEGORY_LEN {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "category for tool '{}' is {} bytes, exceeding the {} byte limit",
+                        cat_tool.name,
+                        cat_tool.category.len(),
+                        MAX_CATEGORY_LEN
+                    ),
+                    None,
+                ));
+            }
+
+            if cat_tool.keywords.len() > MAX_KEYWORDS_LEN {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "keywords for tool '{}' is {} bytes, exceeding the {} byte limit",
+                        cat_tool.name,
+                        cat_tool.keywords.len(),
+                        MAX_KEYWORDS_LEN
+                    ),
+                    None,
+                ));
+            }
+
+            if cat_tool.short_description.len() > MAX_SHORT_DESCRIPTION_LEN {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "short_description for tool '{}' is {} bytes, exceeding the {} byte limit",
+                        cat_tool.name,
+                        cat_tool.short_description.len(),
+                        MAX_SHORT_DESCRIPTION_LEN
+                    ),
                     None,
                 ));
             }
@@ -427,6 +582,17 @@ impl GeneratorService {
     ///
     /// Scans the output directory (default: `~/.claude/servers`) for servers
     /// that have generated TypeScript files.
+    ///
+    /// Does not observe request cancellation, unlike `introspect_server` and
+    /// `generate_skill`. The scan runs inside a
+    /// single `spawn_blocking` task with no subprocess, network I/O, or
+    /// long-held lock, so it isn't worth the added complexity - but it is
+    /// *not* a small bounded read: it is a nested directory walk (one
+    /// `read_dir` over `base_dir`, plus a second `read_dir` per
+    /// subdirectory), and `base_dir` is caller-supplied and unvalidated, so a
+    /// large or adversarial directory tree can still make this call slow and
+    /// its result `Vec` large. That pre-existing surface is unrelated to
+    /// cancellation and out of scope here.
     #[tool(
         description = "List all MCP servers that have generated progressive loading files in ~/.claude/servers/"
     )]
@@ -519,6 +685,7 @@ impl GeneratorService {
     async fn generate_skill(
         &self,
         Parameters(params): Parameters<GenerateSkillParams>,
+        ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format and length
         validate_server_id(&params.server_id).map_err(|e| McpError::invalid_params(e, None))?;
@@ -547,8 +714,21 @@ impl GeneratorService {
         // Scan and parse tool files. A missing or version-mismatched sidecar reflects the
         // same "not generated / stale directory" caller situation as the `!server_dir.exists()`
         // check above, so it is reported the same way (`invalid_params`), not as a server fault.
-        let scan_result = scan_tools_directory(&server_dir)
-            .await
+        //
+        // The scan walks every tool file in the directory, so a large directory
+        // can take a while; a tokio::select! against `ct.cancelled()` lets the
+        // client abort instead of always waiting for it to finish. `biased;`
+        // prefers noticing cancellation over starting/continuing the scan, so
+        // the cancelled path is deterministic rather than depending on
+        // `tokio::select!`'s (default-randomised) poll order.
+        let scan_outcome = tokio::select! {
+            biased;
+            () = ct.cancelled() => None,
+            result = scan_tools_directory(&server_dir) => Some(result),
+        };
+
+        let scan_result = scan_outcome
+            .ok_or_else(|| McpError::internal_error("generate_skill cancelled by client", None))?
             .map_err(|e| match e {
                 ScanError::MissingMetadata { .. }
                 | ScanError::UnsupportedSchema { .. }
@@ -602,6 +782,17 @@ impl GeneratorService {
     ///
     /// Writes SKILL.md content to `~/.claude/skills/{server_id}/SKILL.md`.
     /// Validates that the content contains required YAML frontmatter.
+    ///
+    /// Does not observe request cancellation: `tokio::fs::write` runs on the
+    /// blocking-task pool and, once started, cannot be interrupted - dropping
+    /// its `JoinHandle` does not stop the queued write, it only stops this
+    /// handler from waiting for it. Racing it against `ct.cancelled()` would
+    /// therefore make the response lie (telling a cancelled client the write
+    /// never happened while it still lands on disk moments later), which is
+    /// worse than not attempting cancellation at all. The write is also
+    /// bounded by [`MAX_SKILL_CONTENT_SIZE`] (100KB), so it is not worth
+    /// pursuing genuine interruptibility (e.g. a hand-rolled chunked write)
+    /// for the marginal benefit.
     #[tool(
         description = "Save generated SKILL.md content to ~/.claude/skills/{server_id}/. Use after Claude generates skill content from generate_skill context."
     )]
@@ -979,7 +1170,9 @@ mod tests {
             discover_timeout_secs: None,
         };
 
-        let result = service.introspect_server(Parameters(params)).await;
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1000,7 +1193,9 @@ mod tests {
             discover_timeout_secs: None,
         };
 
-        let result = service.introspect_server(Parameters(params)).await;
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1021,7 +1216,9 @@ mod tests {
             discover_timeout_secs: None,
         };
 
-        let result = service.introspect_server(Parameters(params)).await;
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
     }
@@ -1041,7 +1238,9 @@ mod tests {
         };
 
         // This will fail because echo is not an MCP server, but validation should pass
-        let result = service.introspect_server(Parameters(params)).await;
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
 
         // Should fail with internal error (connection), not invalid params
         if let Err(err) = result {
@@ -1067,7 +1266,9 @@ mod tests {
             discover_timeout_secs: None,
         };
 
-        let result = service.introspect_server(Parameters(params)).await;
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
 
         // Should fail with internal error (connection), not invalid params
         if let Err(err) = result {
@@ -1092,13 +1293,50 @@ mod tests {
             discover_timeout_secs: None,
         };
 
-        let result = service.introspect_server(Parameters(params)).await;
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("zero connect_timeout must be rejected");
         assert_eq!(
             err.code,
             ErrorCode::INVALID_PARAMS,
             "zero timeout is a client input error, not an internal error"
+        );
+    }
+
+    // ========================================================================
+    // Cancellation Tests (issue #191)
+    // ========================================================================
+
+    /// A pre-cancelled token must short-circuit `discover_server` rather than
+    /// always running it to completion. The token is cancelled before the
+    /// call, and `discover_server` (spawning a real subprocess) can never
+    /// resolve on its first poll, so `tokio::select!` deterministically picks
+    /// the cancellation branch.
+    #[tokio::test]
+    async fn test_introspect_server_honors_pre_cancelled_token() {
+        let service = GeneratorService::new();
+        let ct = CancellationToken::new();
+        ct.cancel();
+
+        let params = IntrospectServerParams {
+            server_id: "cancel-test".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            output_dir: None,
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+
+        let result = service.introspect_server(Parameters(params), ct).await;
+
+        let err = result.expect_err("a cancelled request must return an error");
+        assert!(err.message.contains("cancelled"));
+        assert!(
+            service.introspectors.lock().await.is_empty(),
+            "the introspector handle must still be evicted on the cancellation path"
         );
     }
 
@@ -1134,7 +1372,9 @@ mod tests {
             discover_timeout_secs: None,
         };
 
-        let result = service.introspect_server(Parameters(params)).await;
+        let result = service
+            .introspect_server(Parameters(params), CancellationToken::new())
+            .await;
         assert!(
             result.is_err(),
             "echo is not an MCP server, expected a connection failure"
@@ -1470,6 +1710,322 @@ mod tests {
         assert!(err.message.contains("not found in introspected tools"));
     }
 
+    // ========================================================================
+    // save_categorized_tools Bounds Tests (issue #197)
+    // ========================================================================
+
+    /// Builds a pending generation whose `server_info.tools` contains `count`
+    /// distinct tools named `tool0`..`tool{count-1}`, with a fixed
+    /// `output_dir` that is never actually written to. Only safe for tests
+    /// that expect `save_categorized_tools` to return before reaching the
+    /// export step (e.g. bounds/validation rejections); a test that expects
+    /// `Ok(..)` must use [`pending_with_tool_count_and_output_dir`] with its
+    /// own `TempDir` instead, so concurrent test runs don't race a real
+    /// export against this same shared path (issue #169, inside the test
+    /// suite itself).
+    fn pending_with_tool_count(count: usize) -> PendingGeneration {
+        pending_with_tool_count_and_output_dir(count, PathBuf::from("/tmp/test"))
+    }
+
+    /// Same as [`pending_with_tool_count`], but with a caller-supplied
+    /// `output_dir` - use a fresh `tempfile::TempDir` per test that actually
+    /// exercises the export step.
+    fn pending_with_tool_count_and_output_dir(
+        count: usize,
+        output_dir: PathBuf,
+    ) -> PendingGeneration {
+        let tools = (0..count)
+            .map(|i| ToolInfo {
+                name: ToolName::new(format!("tool{i}")),
+                description: "Test tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            })
+            .collect();
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("test"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools,
+        };
+
+        PendingGeneration::new(
+            ServerId::new("test"),
+            server_info,
+            ServerConfig::builder().command("echo".to_string()).build(),
+            output_dir,
+            &SystemClock,
+        )
+    }
+
+    fn categorized_tool(name: &str) -> CategorizedTool {
+        CategorizedTool {
+            name: name.to_string(),
+            category: "cat".to_string(),
+            keywords: "kw".to_string(),
+            short_description: "desc".to_string(),
+        }
+    }
+
+    /// More entries than introspected tools can only happen via repeats of
+    /// valid names (since each name must be introspected), so this also
+    /// proves the length cap closes the CWE-400 array-bloat path even before
+    /// the per-entry duplicate check runs.
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_more_entries_than_introspected() {
+        let service = GeneratorService::new();
+        let session_id = service.state.store(pending_with_tool_count(2)).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![
+                categorized_tool("tool0"),
+                categorized_tool("tool1"),
+                categorized_tool("tool0"),
+            ],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err("more entries than introspected tools must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("at most 2 are allowed"));
+    }
+
+    /// The entry-count cap must also hold when a (possibly hostile) target
+    /// server reports more introspected tools than `MAX_TOOL_FILES`: the
+    /// effective ceiling is `min(introspected count, MAX_TOOL_FILES)`, not
+    /// the introspected count alone, so this can never generate more tool
+    /// files than `generate_skill` will later accept.
+    #[tokio::test]
+    async fn test_save_categorized_tools_caps_at_max_tool_files_regardless_of_introspected_count() {
+        let service = GeneratorService::new();
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(MAX_TOOL_FILES + 10))
+            .await;
+
+        let categorized_tools = (0..=MAX_TOOL_FILES)
+            .map(|i| categorized_tool(&format!("tool{i}")))
+            .collect();
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools,
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err("entry count above MAX_TOOL_FILES must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(
+            err.message
+                .contains(&format!("at most {MAX_TOOL_FILES} are allowed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_duplicate_name() {
+        let service = GeneratorService::new();
+        let session_id = service.state.store(pending_with_tool_count(2)).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool0")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err("a repeated tool name must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("appears more than once"));
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_oversized_name() {
+        let service = GeneratorService::new();
+        let long_name = "n".repeat(MAX_CATEGORIZED_TOOL_NAME_LEN + 1);
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("test"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new(long_name.clone()),
+                description: "Test tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("test"),
+            server_info,
+            ServerConfig::builder().command("echo".to_string()).build(),
+            PathBuf::from("/tmp/test"),
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool(&long_name)],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err("an oversized tool name must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("byte limit"));
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_oversized_category() {
+        let service = GeneratorService::new();
+        let session_id = service.state.store(pending_with_tool_count(1)).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![CategorizedTool {
+                category: "x".repeat(MAX_CATEGORY_LEN + 1),
+                ..categorized_tool("tool0")
+            }],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err("an oversized category must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("category for tool 'tool0'"));
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_oversized_keywords() {
+        let service = GeneratorService::new();
+        let session_id = service.state.store(pending_with_tool_count(1)).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![CategorizedTool {
+                keywords: "x".repeat(MAX_KEYWORDS_LEN + 1),
+                ..categorized_tool("tool0")
+            }],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err("oversized keywords must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("keywords for tool 'tool0'"));
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_rejects_oversized_short_description() {
+        let service = GeneratorService::new();
+        let session_id = service.state.store(pending_with_tool_count(1)).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![CategorizedTool {
+                short_description: "x".repeat(MAX_SHORT_DESCRIPTION_LEN + 1),
+                ..categorized_tool("tool0")
+            }],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        let err = result.expect_err("an oversized short_description must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("short_description for tool 'tool0'"));
+    }
+
+    #[tokio::test]
+    async fn test_save_categorized_tools_accepts_exact_introspected_count() {
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let pending = pending_with_tool_count_and_output_dir(2, temp_dir.path().join("out"));
+        let session_id = service.state.store(pending).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool1")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        assert!(
+            result.is_ok(),
+            "submitting exactly one entry per introspected tool must be accepted: {:?}",
+            result.err()
+        );
+    }
+
+    /// Pins the boundary semantics (`>`, not `>=`) for all four per-entry
+    /// byte caps at once: a `name`/`category`/`keywords`/`short_description`
+    /// each exactly at its limit must be accepted, not rejected.
+    #[tokio::test]
+    async fn test_save_categorized_tools_accepts_fields_at_exact_byte_caps() {
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let name_at_cap = "n".repeat(MAX_CATEGORIZED_TOOL_NAME_LEN);
+
+        let server_info = mcp_execution_introspector::ServerInfo {
+            id: ServerId::new("test"),
+            name: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+            tools: vec![ToolInfo {
+                name: ToolName::new(name_at_cap.clone()),
+                description: "Test tool".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }],
+        };
+        let pending = PendingGeneration::new(
+            ServerId::new("test"),
+            server_info,
+            ServerConfig::builder().command("echo".to_string()).build(),
+            temp_dir.path().join("out"),
+            &SystemClock,
+        );
+        let session_id = service.state.store(pending).await;
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![CategorizedTool {
+                name: name_at_cap,
+                category: "c".repeat(MAX_CATEGORY_LEN),
+                keywords: "k".repeat(MAX_KEYWORDS_LEN),
+                short_description: "d".repeat(MAX_SHORT_DESCRIPTION_LEN),
+            }],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params)).await;
+
+        assert!(
+            result.is_ok(),
+            "fields exactly at their byte caps must be accepted, not rejected: {:?}",
+            result.err()
+        );
+    }
+
     #[tokio::test]
     async fn test_save_categorized_tools_expired_session() {
         use crate::clock::TestClock;
@@ -1621,7 +2177,9 @@ mod tests {
             servers_dir: None,
         };
 
-        let result = service.generate_skill(Parameters(params)).await;
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1640,7 +2198,9 @@ mod tests {
             servers_dir: None,
         };
 
-        let result = service.generate_skill(Parameters(params)).await;
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1658,12 +2218,46 @@ mod tests {
             servers_dir: Some(PathBuf::from("/nonexistent/path")),
         };
 
-        let result = service.generate_skill(Parameters(params)).await;
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
         assert!(err.message.contains("not found"));
+    }
+
+    /// A pre-cancelled token must short-circuit `scan_tools_directory` rather
+    /// than always running it to completion. The server directory exists (so
+    /// the synchronous `!server_dir.exists()` check passes and the call
+    /// reaches the scan), and the scan's first poll can never resolve
+    /// immediately, so `tokio::select!` deterministically picks the
+    /// cancellation branch.
+    #[tokio::test]
+    async fn test_generate_skill_honors_pre_cancelled_token() {
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+        let target_dir = base_dir.join("test-server");
+        tokio::fs::create_dir_all(&target_dir).await.unwrap();
+
+        let ct = CancellationToken::new();
+        ct.cancel();
+
+        let params = GenerateSkillParams {
+            server_id: "test-server".to_string(),
+            skill_name: None,
+            use_case_hints: None,
+            servers_dir: Some(base_dir),
+        };
+
+        let result = service.generate_skill(Parameters(params), ct).await;
+
+        let err = result.expect_err("a cancelled request must return an error");
+        assert!(err.message.contains("cancelled"));
     }
 
     #[tokio::test]
@@ -1686,7 +2280,9 @@ mod tests {
             servers_dir: Some(base_dir),
         };
 
-        let result = service.generate_skill(Parameters(params)).await;
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1748,7 +2344,9 @@ mod tests {
             servers_dir: Some(base_dir),
         };
 
-        let result = service.generate_skill(Parameters(params)).await;
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1818,7 +2416,9 @@ mod tests {
             servers_dir: Some(base_dir),
         };
 
-        let result = service.generate_skill(Parameters(params)).await;
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(
             result.is_ok(),
