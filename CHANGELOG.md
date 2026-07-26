@@ -18,7 +18,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `generate::run` keep their existing flat parameter lists and build `TransportArgs`
   internally.
 
+### Security
+
+- **`mcp-execution-cli`**: a malformed `--header`/`--env` value (missing the `=` separator, or
+  with an empty key) no longer echoes the raw, unvalidated argument into the CLI error message.
+  Since both flags routinely carry secrets (bearer tokens, API keys) with no reliable KEY=VALUE
+  structure to fall back on, `build_server_config`'s `parse_key_value` never echoes the value
+  portion when the key is empty or absent — mirroring the existing discipline in
+  `mcp_execution_core::command::validate_header_value_string`. Also closes a second leak on the
+  same path: a header written with the conventional `Name: Value` syntax (colon) instead of
+  `Name=Value`, where the value itself contains `=` (e.g. base64 padding, a JWT), previously put
+  the entire secret into the *key* slot — which then reached
+  `validate_header_name_string`'s error message, which assumes header names are never secret and
+  echoes them verbatim. `parse_key_value` now rejects a key containing whitespace, `:`, or
+  control characters (never legitimate in a header/env name) before it can reach that assumption
+  (#190).
+
 ### Fixed
+
+- **`mcp-execution-cli`**: `introspect`, `generate`, `skill`, and `setup` now exit with the
+  semantic `ExitCode` (`TIMEOUT`, `SERVER_ERROR`, `INVALID_INPUT`) documented on
+  `mcp_execution_core::cli::ExitCode`, instead of always collapsing to exit code 1 via anyhow's
+  default `main`-error handling. `runner::execute_command` now classifies a failing command's
+  underlying `mcp_execution_core::Error` (found by walking the `anyhow::Error` cause chain) into
+  the matching exit code before returning, so `main` can always turn the result into a process
+  exit code. `main` routes an invalid `--format` value through the same classification (it
+  previously bypassed `execute_command` entirely and always exited 1). Malformed `--header`/
+  `--env` values, an invalid `--server` id passed to `skill`, and path-traversal attempts in
+  `skill`'s output/server paths now carry a `CoreError` (`InvalidArgument`/`SecurityViolation`)
+  so they classify as `ExitCode::INVALID_INPUT` (2) instead of the generic `ExitCode::ERROR` (1)
+  (#195).
 
 - **`mcp-execution-cli`**: a `~/.claude/mcp.json` mixing stdio entries with http/sse entries
   (`{"type": "http", "url": "...", ...}`, no `command` key) failed to deserialize the *entire*

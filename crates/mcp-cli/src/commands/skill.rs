@@ -8,6 +8,7 @@
 //! 4. Returns a prompt for Claude to generate optimal SKILL.md content
 
 use anyhow::{Context, Result, bail};
+use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_skill::{
     build_skill_context, render_skill_md, scan_tools_directory, validate_server_id,
@@ -110,7 +111,11 @@ pub async fn run(
     debug!("Output format: {}", output_format);
 
     // Step 1: Validate server ID
-    validate_server_id(&server).map_err(|e| anyhow::anyhow!("Invalid server ID: {e}"))?;
+    // A malformed `server` id is a CLI-argument mistake, so this is wrapped
+    // as `CoreError::InvalidArgument` (rather than a bare anyhow string) to
+    // classify as `ExitCode::INVALID_INPUT` in `runner::classify_exit_code`.
+    validate_server_id(&server)
+        .map_err(|e| CoreError::InvalidArgument(format!("Invalid server ID: {e}")))?;
     info!("Server ID validated: {}", server);
 
     // Step 2: Resolve servers directory
@@ -287,9 +292,15 @@ fn resolve_skills_dir() -> Result<PathBuf> {
 /// - Path cannot be canonicalized
 /// - Path is outside the base directory (symlink escape)
 fn validate_path_security(path: &Path, base: &Path) -> Result<PathBuf> {
-    // Check for path traversal in components (more robust than string check)
+    // Check for path traversal in components (more robust than string check).
+    // A traversal attempt is a malicious/invalid argument, so it is wrapped
+    // as `CoreError::SecurityViolation` to classify as
+    // `ExitCode::INVALID_INPUT` in `runner::classify_exit_code`.
     if has_path_traversal(path) {
-        bail!("Path traversal detected: {}", path.display());
+        return Err(CoreError::SecurityViolation {
+            reason: format!("path traversal detected: {}", path.display()),
+        }
+        .into());
     }
 
     // If the path doesn't exist yet, validation passed
@@ -312,11 +323,14 @@ fn validate_path_security(path: &Path, base: &Path) -> Result<PathBuf> {
 
     // Verify path is within base directory
     if !canonical_path.starts_with(&canonical_base) {
-        bail!(
-            "Security error: path {} is outside base directory {}",
-            canonical_path.display(),
-            canonical_base.display()
-        );
+        return Err(CoreError::SecurityViolation {
+            reason: format!(
+                "path {} is outside base directory {}",
+                canonical_path.display(),
+                canonical_base.display()
+            ),
+        }
+        .into());
     }
 
     Ok(canonical_path)
@@ -333,10 +347,13 @@ fn validate_path_security(path: &Path, base: &Path) -> Result<PathBuf> {
 /// Returns error if path contains traversal components (`..`).
 fn validate_output_path(path: &Path) -> Result<()> {
     if has_path_traversal(path) {
-        bail!(
-            "Invalid output path (path traversal detected): {}",
-            path.display()
-        );
+        return Err(CoreError::SecurityViolation {
+            reason: format!(
+                "invalid output path (path traversal detected): {}",
+                path.display()
+            ),
+        }
+        .into());
     }
     Ok(())
 }
@@ -435,7 +452,15 @@ mod tests {
 
         let result = validate_path_security(&evil_path, base);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("traversal"));
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("traversal"));
+        // Regression test for #195/S3: a path traversal attempt is a
+        // malicious/invalid argument, so it must carry a `CoreError` that
+        // `runner::classify_exit_code` maps to `ExitCode::INVALID_INPUT`.
+        assert!(matches!(
+            err.downcast_ref::<CoreError>(),
+            Some(CoreError::SecurityViolation { .. })
+        ));
     }
 
     #[test]
@@ -533,12 +558,15 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid server ID")
-        );
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Invalid server ID"));
+        // Regression test for #195/S3: an invalid `server` id is a
+        // CLI-argument mistake, so it must carry a `CoreError` that
+        // `runner::classify_exit_code` maps to `ExitCode::INVALID_INPUT`.
+        assert!(matches!(
+            err.downcast_ref::<CoreError>(),
+            Some(CoreError::InvalidArgument(_))
+        ));
     }
 
     #[tokio::test]

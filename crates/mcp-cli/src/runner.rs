@@ -3,6 +3,7 @@
 //! Contains the main command execution loop and logging initialization.
 
 use anyhow::Result;
+use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -41,7 +42,12 @@ pub fn init_logging(verbose: bool) -> Result<()> {
 
 /// Executes the specified CLI command.
 ///
-/// Routes commands to their respective handlers and returns an exit code.
+/// Routes commands to their respective handlers. On success, returns the exit
+/// code reported by the handler. If the handler fails, the error is printed
+/// to stderr and classified into a semantic [`ExitCode`] via
+/// [`classify_exit_code`] rather than propagated — this lets `main` always
+/// turn the result into a process exit code without falling back to anyhow's
+/// default behavior of collapsing every `Err` to exit code 1.
 ///
 /// # Arguments
 ///
@@ -50,14 +56,11 @@ pub fn init_logging(verbose: bool) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns an error from the specific command handler if:
-/// - Server configuration is invalid (bad args, env vars, or headers)
-/// - Server connection or introspection fails
-/// - Configuration file is missing or malformed
-/// - File I/O or export operations fail
-/// - Output formatting fails (e.g., serialization errors)
+/// This function does not propagate command execution failures as `Err` —
+/// see above. It is fallible in signature to match this crate's convention
+/// of using `Result` consistently across command handlers.
 pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
-    match command {
+    let result = match command {
         Commands::Introspect {
             from_config,
             server,
@@ -147,5 +150,169 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
             let mut cmd = Cli::command();
             commands::completions::run(shell, &mut cmd).await
         }
+    };
+
+    Ok(match result {
+        Ok(code) => code,
+        Err(err) => report_and_classify(&err),
+    })
+}
+
+/// Prints `err` to stderr (matching anyhow's default `main`-error format) and
+/// classifies it into a semantic [`ExitCode`] via [`classify_exit_code`].
+///
+/// Shared by [`execute_command`] (command-handler failures) and `main`
+/// (pre-dispatch failures, e.g. an invalid `--format` value), so every
+/// failure this CLI can produce is reported and exits the same way.
+pub fn report_and_classify(err: &anyhow::Error) -> ExitCode {
+    eprintln!("Error: {err:?}");
+    classify_exit_code(err)
+}
+
+/// Classifies an [`anyhow::Error`] returned by a command handler into a
+/// semantic [`ExitCode`].
+///
+/// Walks the error's cause chain looking for a [`CoreError`] — the concrete
+/// type every command handler ultimately produces via `?` — and maps its
+/// variant to the exit code that best communicates the failure category to
+/// scripts consuming this CLI. Errors that never wrap a [`CoreError`] (e.g.
+/// CLI argument parsing, serialization) fall back to [`ExitCode::ERROR`].
+fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<CoreError>())
+        .map_or(ExitCode::ERROR, |core_error| match core_error {
+            CoreError::Timeout { .. } => ExitCode::TIMEOUT,
+            CoreError::ConnectionFailed { .. } => ExitCode::SERVER_ERROR,
+            CoreError::ValidationError { .. }
+            | CoreError::SecurityViolation { .. }
+            | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
+            CoreError::ResourceNotFound { .. }
+            | CoreError::ConfigError { .. }
+            | CoreError::SerializationError { .. }
+            | CoreError::ScriptGenerationError { .. } => ExitCode::ERROR,
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wrap(core_error: CoreError) -> anyhow::Error {
+        anyhow::Error::new(core_error)
+    }
+
+    #[test]
+    fn test_classify_exit_code_timeout() {
+        let err = wrap(CoreError::Timeout {
+            operation: "discover".to_string(),
+            duration_secs: 30,
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::TIMEOUT);
+    }
+
+    #[test]
+    fn test_classify_exit_code_connection_failed() {
+        let err = wrap(CoreError::ConnectionFailed {
+            server: "test".to_string(),
+            source: "refused".into(),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_classify_exit_code_validation_error() {
+        let err = wrap(CoreError::ValidationError {
+            field: "connect_timeout".to_string(),
+            reason: "must be greater than zero".to_string(),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::INVALID_INPUT);
+    }
+
+    #[test]
+    fn test_classify_exit_code_security_violation() {
+        let err = wrap(CoreError::SecurityViolation {
+            reason: "forbidden env var".to_string(),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::INVALID_INPUT);
+    }
+
+    #[test]
+    fn test_classify_exit_code_invalid_argument() {
+        let err = wrap(CoreError::InvalidArgument("bad flag".to_string()));
+        assert_eq!(classify_exit_code(&err), ExitCode::INVALID_INPUT);
+    }
+
+    #[test]
+    fn test_classify_exit_code_other_core_errors_fall_back_to_error() {
+        let err = wrap(CoreError::ResourceNotFound {
+            resource: "server:missing".to_string(),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::ERROR);
+
+        let err = wrap(CoreError::ConfigError {
+            message: "bad config".to_string(),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::ERROR);
+    }
+
+    #[test]
+    fn test_classify_exit_code_non_core_error_falls_back_to_error() {
+        let err = anyhow::anyhow!("plain CLI-layer failure");
+        assert_eq!(classify_exit_code(&err), ExitCode::ERROR);
+    }
+
+    #[test]
+    fn test_classify_exit_code_finds_core_error_through_context_chain() {
+        // The command handlers wrap `mcp_execution_core::Error` with
+        // `.with_context(...)` before it reaches `execute_command` — the
+        // classifier must find it through that wrapping, not just at the top.
+        let err = wrap(CoreError::Timeout {
+            operation: "connect".to_string(),
+            duration_secs: 5,
+        })
+        .context("failed to connect to server 'test' - ensure the server is installed");
+        assert_eq!(classify_exit_code(&err), ExitCode::TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn test_execute_command_converts_failure_into_classified_exit_code_not_err() {
+        // Regression test for #195: a failing command must surface as
+        // `Ok(non_success_exit_code)`, never as `Err`, so `main` can always
+        // reach `std::process::exit` with the classified code instead of
+        // falling back to anyhow's default exit-code-1 handling. Asserting
+        // the exact `SERVER_ERROR` value (not just `!is_success()`) so a
+        // regression to the generic `ExitCode::ERROR` fallback is caught.
+        let result = execute_command(
+            Commands::Introspect {
+                from_config: None,
+                server: Some("nonexistent-server-for-exit-code-test".to_string()),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+                http: None,
+                sse: None,
+                headers: vec![],
+                detailed: false,
+                connect_timeout_secs: None,
+                discover_timeout_secs: None,
+            },
+            OutputFormat::Json,
+        )
+        .await;
+
+        let exit_code = result.expect("execute_command must not propagate Err");
+        assert_eq!(exit_code, ExitCode::SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_report_and_classify_prints_and_classifies() {
+        // Regression test for #195/S2: `main` routes pre-dispatch failures
+        // (e.g. an invalid `--format` value) through this same function, not
+        // just command-handler failures via `execute_command`.
+        let err = anyhow::Error::from(CoreError::InvalidArgument(
+            "invalid output format: 'xml' (expected: json, text, or pretty)".to_string(),
+        ));
+        assert_eq!(report_and_classify(&err), ExitCode::INVALID_INPUT);
     }
 }
