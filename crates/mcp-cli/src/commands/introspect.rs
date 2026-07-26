@@ -2,12 +2,12 @@
 //!
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
-use super::common::{TransportArgs, build_server_config, load_server_from_config};
+use super::common::resolve_server_config;
 use anyhow::{Context, Result};
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_introspector::{Introspector, ServerInfo, ToolInfo};
 use serde::Serialize;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Result of server introspection.
 ///
@@ -178,16 +178,18 @@ pub async fn run(
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
-    let (server_id, config) = if let Some(config_name) = from_config {
-        debug!(
-            "Loading server configuration from ~/.claude/mcp.json: {}",
-            config_name
-        );
-        load_server_from_config(&config_name)?
-    } else {
-        let transport = TransportArgs::from_flags(server, args, env, cwd, http, sse, headers)?;
-        build_server_config(transport, connect_timeout_secs, discover_timeout_secs)?
-    };
+    let (server_id, config) = resolve_server_config(
+        from_config,
+        server,
+        args,
+        env,
+        cwd,
+        http,
+        sse,
+        headers,
+        connect_timeout_secs,
+        discover_timeout_secs,
+    )?;
 
     info!("Introspecting server: {}", server_id);
     info!("Transport: {:?}", config.transport());
