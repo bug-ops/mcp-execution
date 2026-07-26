@@ -278,7 +278,12 @@ fn classify_core_error(core_error: &CoreError) -> ExitCode {
         CoreError::ValidationError { .. }
         | CoreError::SecurityViolation { .. }
         | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
-        CoreError::SerializationError { .. } => ExitCode::ERROR,
+        // A duplicate generated-file path indicates a codegen invariant was violated (e.g. a
+        // reserved output filename not seeded into name-collision resolution), not something
+        // caused by the remote server's data or the CLI caller's own arguments.
+        CoreError::SerializationError { .. } | CoreError::DuplicateGeneratedFilePath { .. } => {
+            ExitCode::ERROR
+        }
         CoreError::ScriptGenerationError { source, .. } => source
             .as_deref()
             .and_then(|source| source.downcast_ref::<CoreError>())

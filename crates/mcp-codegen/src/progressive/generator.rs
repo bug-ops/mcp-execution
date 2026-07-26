@@ -833,7 +833,11 @@ fn enforce_tool_count_bound(server_info: &ServerInfo) -> Result<()> {
 /// # Errors
 ///
 /// Returns [`Error::ResourceLimitExceeded`] if adding `file` would push the running byte total
-/// past [`MAX_GENERATED_BYTES`], or the file count past [`MAX_GENERATED_FILES`].
+/// past [`MAX_GENERATED_BYTES`], or the file count past [`MAX_GENERATED_FILES`]. Returns
+/// [`Error::DuplicateGeneratedFilePath`] if `file.path` was already added earlier in this
+/// call — see [`GeneratedCode::add_file`]; this is defense-in-depth once
+/// [`resolve_typescript_names`] seeds its collision set with this module's own reserved
+/// output filenames (issue #312), not a path this function expects to hit in practice.
 fn add_tracked(
     code: &mut GeneratedCode,
     total_bytes: &mut usize,
@@ -848,7 +852,7 @@ fn add_tracked(
         });
     }
 
-    code.add_file(file);
+    code.add_file(file)?;
 
     if code.file_count() > MAX_GENERATED_FILES {
         return Err(Error::ResourceLimitExceeded {
@@ -951,6 +955,14 @@ const RESERVED_WORDS: &[&str] = &[
     "yield",
 ];
 
+/// Output filenames (without extension) that [`ProgressiveGenerator`] itself always emits
+/// alongside per-tool files, regardless of the introspected tool list. Seeded into
+/// [`resolve_typescript_names`]'s collision set for the same reason [`RESERVED_WORDS`] is: a
+/// tool whose sanitized name matches one of these would otherwise silently overwrite this
+/// generator's own fixed output file (issue #312) instead of being disambiguated like any
+/// other name collision.
+const RESERVED_OUTPUT_NAMES: &[&str] = &["index"];
+
 /// Resolves a collision-free TypeScript identifier for each tool, in tool order.
 ///
 /// `sanitize_ts_identifier` can map distinct tool names to the same identifier (e.g.
@@ -964,21 +976,53 @@ const RESERVED_WORDS: &[&str] = &[
 /// resolved identifiers even though both were correctly disambiguated. Callers must look up
 /// entries by the tool's index in the same `tools` slice.
 ///
-/// `used` is seeded with [`RESERVED_WORDS`] before any tool is processed, so a sanitized name
-/// that exactly matches a JS/TS reserved word (e.g. a tool literally named `delete`) is treated
-/// as already taken by [`disambiguate_identifier`] and gets the same numeric-suffix
-/// disambiguation as a collision: `export async function delete(...)` is a hard syntax error,
-/// so it becomes `delete_2` instead.
+/// Collision detection is case-insensitive (via [`disambiguate_output_filename`]'s
+/// case-folded `used_lower` set), even though the *emitted* identifier preserves each tool's
+/// original case. `typescript_name` is not just a language-level identifier — it doubles as an
+/// output filename, and filenames collide regardless of case on a case-insensitive filesystem
+/// (macOS APFS, Windows NTFS by default, this project's primary dev platforms). Folding case for
+/// the collision check alone means: a sanitized name that matches a JS/TS reserved word (e.g. a
+/// tool literally named `delete`) or one of this generator's own fixed output filenames (e.g.
+/// `index`, in any case — `Index`, `INDEX`, ...) is treated as already taken and gets the same
+/// numeric-suffix disambiguation a same-case collision would (`delete` becomes `delete_2`, `index`
+/// or `Index` becomes `index_2`/`Index_2`); and two distinct tools whose names differ only by
+/// case (`getUser`/`GetUser`) are disambiguated from each other too, not just from the reserved
+/// sets (issue #312 S1, N2).
 fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
-    let mut used: HashSet<String> = RESERVED_WORDS.iter().map(|&s| s.to_string()).collect();
+    let mut used_lower: HashSet<String> = RESERVED_WORDS
+        .iter()
+        .chain(RESERVED_OUTPUT_NAMES.iter())
+        .map(|&s| s.to_ascii_lowercase())
+        .collect();
     let mut resolved = Vec::with_capacity(tools.len());
 
     for tool in tools {
         let base = sanitize_ts_identifier(&to_camel_case(tool.name.as_str()));
-        resolved.push(disambiguate_identifier(&base, &mut used));
+        resolved.push(disambiguate_output_filename(&base, &mut used_lower));
     }
 
     resolved
+}
+
+/// Disambiguates `base` against `used_lower` case-insensitively, appending a numeric suffix
+/// (`_2`, `_3`, ...) — mirroring [`disambiguate_identifier`]'s suffix scheme — until a
+/// case-insensitively-unique candidate is found, then reserves that candidate's lowercased form
+/// in `used_lower`. The returned identifier preserves `base`'s original casing; only the
+/// collision *check* is case-folded.
+///
+/// A dedicated function rather than reusing [`disambiguate_identifier`]: that one is shared with
+/// property-name disambiguation, which must stay case-sensitive — `name` and `Name` are
+/// legitimately distinct object keys in the generated `Params` interface. Output *filenames* have
+/// no such case-sensitive guarantee once a case-insensitive filesystem is in play, which is what
+/// [`resolve_typescript_names`] uses this for (issue #312 S1/N2).
+fn disambiguate_output_filename(base: &str, used_lower: &mut HashSet<String>) -> String {
+    let mut candidate = base.to_string();
+    let mut suffix = 2;
+    while !used_lower.insert(candidate.to_ascii_lowercase()) {
+        candidate = format!("{base}_{suffix}");
+        suffix += 1;
+    }
+    candidate
 }
 
 fn sanitize_schema_jsdoc_descriptions(mut value: serde_json::Value) -> serde_json::Value {
@@ -1573,6 +1617,231 @@ mod tests {
         assert_eq!(context.tools.len(), 2);
         assert_eq!(context.tools[0].typescript_name, "createIssue");
         assert!(context.categories.is_none());
+    }
+
+    /// Regression guard for #312: a tool whose raw MCP name sanitizes to `index` must not
+    /// collide with the always-emitted `index.ts` re-export. `resolve_typescript_names` seeds
+    /// its collision set with this generator's own reserved output filenames, so the tool gets
+    /// disambiguated (`index_2`) exactly like a JS/TS reserved-word collision would.
+    #[test]
+    fn test_tool_named_index_does_not_collide_with_index_ts() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = ServerInfo {
+            id: ServerId::new("test-server"),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: vec![ToolInfo {
+                name: ToolName::new("index"),
+                description: "A tool literally named index".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+                output_schema: None,
+            }],
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        };
+
+        let code = generator.generate(&server_info).unwrap();
+
+        let typescript_names = resolve_typescript_names(&server_info.tools);
+        assert_eq!(
+            typescript_names[0], "index_2",
+            "a tool named `index` must be disambiguated, not collide with the fixed index.ts"
+        );
+
+        let tool_file = code
+            .files
+            .iter()
+            .find(|f| f.path == "index_2.ts")
+            .expect("the tool's own file must exist at its disambiguated path");
+        assert!(
+            tool_file.content.contains("A tool literally named index"),
+            "the tool's own generated content must not have been lost: {}",
+            tool_file.content
+        );
+
+        let index_file = code
+            .files
+            .iter()
+            .find(|f| f.path == "index.ts")
+            .expect("the fixed index.ts re-export must still exist");
+        assert!(
+            index_file.content.contains("index_2"),
+            "index.ts must re-export the tool's disambiguated identifier: {}",
+            index_file.content
+        );
+        assert!(
+            index_file
+                .content
+                .contains("export { callMCPTool } from './_runtime/mcp-bridge.ts';"),
+            "index.ts must be the fixed re-export (with the runtime bridge re-export), \
+             not the overwritten tool file: {}",
+            index_file.content
+        );
+
+        // Exactly one file at each path: the collision never happened.
+        assert_eq!(
+            code.files.iter().filter(|f| f.path == "index.ts").count(),
+            1
+        );
+        assert_eq!(
+            code.files.iter().filter(|f| f.path == "index_2.ts").count(),
+            1
+        );
+    }
+
+    /// Regression guard for #312 S1: `RESERVED_OUTPUT_NAMES` membership alone only catches an
+    /// exact-case match, but `index.ts`/`Index.ts` are the same file on a case-insensitive
+    /// filesystem (macOS APFS, Windows NTFS by default — this project's primary dev platforms).
+    /// A tool named `Index` must be disambiguated the same way a tool literally named `index`
+    /// is, via `disambiguate_output_filename`'s case-insensitive collision check.
+    #[test]
+    fn test_tool_named_index_with_different_case_is_disambiguated() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = ServerInfo {
+            id: ServerId::new("test-server"),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: vec![ToolInfo {
+                name: ToolName::new("Index"),
+                description: "A tool literally named Index".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+                output_schema: None,
+            }],
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        };
+
+        let code = generator.generate(&server_info).unwrap();
+
+        let typescript_names = resolve_typescript_names(&server_info.tools);
+        assert_eq!(
+            typescript_names[0], "Index_2",
+            "a tool named `Index` must be disambiguated case-insensitively against the \
+             reserved `index` output name"
+        );
+
+        assert!(
+            code.files.iter().any(|f| f.path == "Index_2.ts"),
+            "the tool's own file must exist at its disambiguated path: {:?}",
+            code.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+        // Exactly one file at each path: on a case-insensitive filesystem, "index.ts" and
+        // "Index.ts" would otherwise be the same file.
+        assert_eq!(
+            code.files.iter().filter(|f| f.path == "index.ts").count(),
+            1
+        );
+        assert!(!code.files.iter().any(|f| f.path == "Index.ts"));
+    }
+
+    /// Regression guard for #312 N2: a server exposing BOTH `Index` and `index` as distinct
+    /// tools must not have their resolved output filenames collide case-insensitively with
+    /// EACH OTHER, not just with the fixed `index.ts`. Both are already disambiguated away
+    /// from the reserved `index` name; they must additionally be disambiguated from each
+    /// other, since `Index_2`/`index_2` would themselves collide case-insensitively.
+    #[test]
+    fn test_tools_named_index_and_capital_index_do_not_collide_with_each_other() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = ServerInfo {
+            id: ServerId::new("test-server"),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: vec![
+                ToolInfo {
+                    name: ToolName::new("Index"),
+                    description: "Capitalized".to_string(),
+                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
+                    output_schema: None,
+                },
+                ToolInfo {
+                    name: ToolName::new("index"),
+                    description: "Lowercase".to_string(),
+                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
+                    output_schema: None,
+                },
+            ],
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        };
+
+        let code = generator.generate(&server_info).unwrap();
+        let typescript_names = resolve_typescript_names(&server_info.tools);
+
+        assert_ne!(
+            typescript_names[0].to_ascii_lowercase(),
+            typescript_names[1].to_ascii_lowercase(),
+            "the two tools' resolved names must not collide case-insensitively: {typescript_names:?}"
+        );
+
+        let paths: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
+        let mut lowercased_paths: Vec<String> =
+            paths.iter().map(|p| p.to_ascii_lowercase()).collect();
+        let before = lowercased_paths.len();
+        lowercased_paths.sort();
+        lowercased_paths.dedup();
+        assert_eq!(
+            lowercased_paths.len(),
+            before,
+            "no two generated file paths may be case-insensitive duplicates of each other: {paths:?}"
+        );
+    }
+
+    /// Regression guard for #312 N2's side effect: two DIFFERENT tools whose sanitized names
+    /// differ only by case (not involving the reserved `index` name at all) must also be
+    /// disambiguated from each other, since a case-insensitive filesystem would otherwise merge
+    /// their output files exactly like the `Index`/`index` case.
+    #[test]
+    fn test_tools_differing_only_by_case_are_disambiguated_from_each_other() {
+        let server_info = ServerInfo {
+            id: ServerId::new("test-server"),
+            name: "Test Server".to_string(),
+            version: "1.0.0".to_string(),
+            tools: vec![
+                ToolInfo {
+                    name: ToolName::new("get_user"),
+                    description: "snake_case".to_string(),
+                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
+                    output_schema: None,
+                },
+                ToolInfo {
+                    name: ToolName::new("GetUser"),
+                    description: "PascalCase".to_string(),
+                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
+                    output_schema: None,
+                },
+            ],
+            capabilities: ServerCapabilities {
+                supports_tools: true,
+                supports_resources: false,
+                supports_prompts: false,
+            },
+        };
+
+        let typescript_names = resolve_typescript_names(&server_info.tools);
+
+        assert_eq!(typescript_names[0], "getUser");
+        assert_ne!(
+            typescript_names[0].to_ascii_lowercase(),
+            typescript_names[1].to_ascii_lowercase(),
+            "getUser/GetUser must not collide case-insensitively: {typescript_names:?}"
+        );
     }
 
     #[test]

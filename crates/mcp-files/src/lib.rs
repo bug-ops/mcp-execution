@@ -45,11 +45,13 @@
 //! code.add_file(GeneratedFile {
 //!     path: "manifest.json".to_string(),
 //!     content: r#"{"version": "1.0"}"#.to_string(),
-//! });
+//! })
+//! .unwrap();
 //! code.add_file(GeneratedFile {
 //!     path: "tools/sendMessage.ts".to_string(),
 //!     content: "export function sendMessage() {}".to_string(),
-//! });
+//! })
+//! .unwrap();
 //!
 //! let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/github")
 //!     .build()

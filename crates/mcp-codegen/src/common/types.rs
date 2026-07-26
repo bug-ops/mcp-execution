@@ -20,6 +20,7 @@
 //! assert_eq!(code.files.len(), 1);
 //! ```
 
+use mcp_execution_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -64,6 +65,14 @@ impl GeneratedCode {
 
     /// Adds a generated file to the collection.
     ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DuplicateGeneratedFilePath`] if `file.path` is already present in
+    /// this collection. Silently overwriting an existing entry would discard the file
+    /// already added at that path with no signal to the caller (issue #312); every path
+    /// added here is expected to already be unique by construction, so this only fires
+    /// when that invariant has actually been violated upstream.
+    ///
     /// # Examples
     ///
     /// ```
@@ -73,12 +82,25 @@ impl GeneratedCode {
     /// code.add_file(GeneratedFile {
     ///     path: "index.ts".to_string(),
     ///     content: "export {}".to_string(),
-    /// });
+    /// })
+    /// .unwrap();
     ///
     /// assert_eq!(code.file_count(), 1);
+    ///
+    /// let err = code
+    ///     .add_file(GeneratedFile {
+    ///         path: "index.ts".to_string(),
+    ///         content: "export const x = 1;".to_string(),
+    ///     })
+    ///     .unwrap_err();
+    /// assert!(err.is_duplicate_generated_file_path());
     /// ```
-    pub fn add_file(&mut self, file: GeneratedFile) {
+    pub fn add_file(&mut self, file: GeneratedFile) -> Result<()> {
+        if self.files.iter().any(|existing| existing.path == file.path) {
+            return Err(Error::DuplicateGeneratedFilePath { path: file.path });
+        }
         self.files.push(file);
+        Ok(())
     }
 
     /// Returns the number of generated files.
@@ -280,8 +302,31 @@ mod tests {
         code.add_file(GeneratedFile {
             path: "test.ts".to_string(),
             content: "content".to_string(),
-        });
+        })
+        .unwrap();
         assert_eq!(code.file_count(), 1);
+    }
+
+    #[test]
+    fn test_add_file_rejects_duplicate_path() {
+        let mut code = GeneratedCode::new();
+        code.add_file(GeneratedFile {
+            path: "index.ts".to_string(),
+            content: "first".to_string(),
+        })
+        .unwrap();
+
+        let err = code
+            .add_file(GeneratedFile {
+                path: "index.ts".to_string(),
+                content: "second".to_string(),
+            })
+            .unwrap_err();
+
+        assert!(err.is_duplicate_generated_file_path());
+        // The original file must be left untouched, not silently overwritten.
+        assert_eq!(code.file_count(), 1);
+        assert_eq!(code.files[0].content, "first");
     }
 
     #[test]

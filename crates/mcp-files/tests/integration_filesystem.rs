@@ -60,11 +60,13 @@ fn test_meta_json_sidecar_survives_export() {
     code.add_file(GeneratedFile {
         path: "index.ts".to_string(),
         content: "export {};".to_string(),
-    });
+    })
+    .unwrap();
     code.add_file(GeneratedFile {
         path: "_meta.json".to_string(),
         content: r#"{"schema_version":1,"server_id":"github"}"#.to_string(),
-    });
+    })
+    .unwrap();
 
     let vfs = FilesBuilder::from_generated_code(code, "/github")
         .build_and_export(temp_dir.path())
@@ -91,7 +93,8 @@ fn test_export_github_server_structure() {
     code.add_file(GeneratedFile {
         path: "index.ts".to_string(),
         content: "// GitHub MCP Server\nexport * from './tools';".to_string(),
-    });
+    })
+    .unwrap();
 
     // Simulate 30 GitHub tools
     let tool_names = vec![
@@ -131,14 +134,16 @@ fn test_export_github_server_structure() {
         code.add_file(GeneratedFile {
             path: format!("tools/{tool}.ts"),
             content: format!("export function {tool}(params: any) {{ return {{}}; }}"),
-        });
+        })
+        .unwrap();
     }
 
     // Add manifest
     code.add_file(GeneratedFile {
         path: "manifest.json".to_string(),
         content: format!(r#"{{"version": "1.0.0", "tools": {}}}"#, tool_names.len()),
-    });
+    })
+    .unwrap();
 
     // Export to filesystem
     let vfs = FilesBuilder::from_generated_code(code, "/github")
@@ -175,11 +180,13 @@ fn test_export_multiple_servers() {
         code.add_file(GeneratedFile {
             path: "createIssue.ts".to_string(),
             content: "export function createIssue() {}".to_string(),
-        });
+        })
+        .unwrap();
         code.add_file(GeneratedFile {
             path: "getIssue.ts".to_string(),
             content: "export function getIssue() {}".to_string(),
-        });
+        })
+        .unwrap();
         code
     };
 
@@ -189,11 +196,13 @@ fn test_export_multiple_servers() {
         code.add_file(GeneratedFile {
             path: "sendMessage.ts".to_string(),
             content: "export function sendMessage() {}".to_string(),
-        });
+        })
+        .unwrap();
         code.add_file(GeneratedFile {
             path: "listChannels.ts".to_string(),
             content: "export function listChannels() {}".to_string(),
-        });
+        })
+        .unwrap();
         code
     };
 
@@ -360,19 +369,22 @@ fn test_export_typescript_module() {
         content: r"export * from './types';
 export * from './tools';"
             .to_string(),
-    });
+    })
+    .unwrap();
 
     code.add_file(GeneratedFile {
         path: "types/index.ts".to_string(),
         content: "export type ToolParams = { id: number };".to_string(),
-    });
+    })
+    .unwrap();
 
     code.add_file(GeneratedFile {
         path: "tools/create.ts".to_string(),
         content: r"import type { ToolParams } from '../types';
 export function create(params: ToolParams) { return params.id; }"
             .to_string(),
-    });
+    })
+    .unwrap();
 
     let vfs = FilesBuilder::from_generated_code(code, "/module")
         .build_and_export(temp_dir.path())

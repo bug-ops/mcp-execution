@@ -56,7 +56,8 @@ use std::path::{Path, PathBuf};
 /// code.add_file(GeneratedFile {
 ///     path: "manifest.json".to_string(),
 ///     content: "{}".to_string(),
-/// });
+/// })
+/// .unwrap();
 ///
 /// let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
 ///     .build()
@@ -107,7 +108,8 @@ impl FilesBuilder {
     /// code.add_file(GeneratedFile {
     ///     path: "types.ts".to_string(),
     ///     content: "export type Params = {};".to_string(),
-    /// });
+    /// })
+    /// .unwrap();
     ///
     /// let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
     ///     .build()
@@ -500,11 +502,13 @@ mod tests {
         code.add_file(GeneratedFile {
             path: "manifest.json".to_string(),
             content: "{}".to_string(),
-        });
+        })
+        .unwrap();
         code.add_file(GeneratedFile {
             path: "types.ts".to_string(),
             content: "export {};".to_string(),
-        });
+        })
+        .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
             .build()
@@ -521,7 +525,8 @@ mod tests {
         code.add_file(GeneratedFile {
             path: "tools/sendMessage.ts".to_string(),
             content: "export function sendMessage() {}".to_string(),
-        });
+        })
+        .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
             .build()
@@ -572,7 +577,8 @@ mod tests {
         code.add_file(GeneratedFile {
             path: "generated.ts".to_string(),
             content: "// generated".to_string(),
-        });
+        })
+        .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
             .add_file("/mcp-tools/servers/test/manual.ts", "// manual")
@@ -953,11 +959,13 @@ mod tests {
         code.add_file(GeneratedFile {
             path: "index.ts".to_string(),
             content: "export {};".to_string(),
-        });
+        })
+        .unwrap();
         code.add_file(GeneratedFile {
             path: "tools/create.ts".to_string(),
             content: "export function create() {}".to_string(),
-        });
+        })
+        .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/github")
             .build_and_export(temp_dir.path())
