@@ -1798,3 +1798,196 @@ fn test_runtime_bridge_rejects_empty_content_without_structured_content() {
         "must not crash with an unguarded property-access TypeError: stdout: {stdout}"
     );
 }
+
+/// Regression guard for #262: a successful response whose `content` array contains a `null`
+/// first element must surface as a clear rejection, not crash on an unguarded
+/// `firstContent.type` dereference.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_null_first_content_element() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script(&respond_once_fake_server_js(r#"{ "content": [null] }"#));
+    let mcp_json = json!({
+        "mcpServers": { "fake": { "command": "node", "args": [script_path] } }
+    });
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_rejects_null_first_content_element",
+        &bridge.content,
+        &mcp_json,
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "a null first content element must reject with a clear error, not crash or silently \
+         resolve: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Cannot read properties"),
+        "must not crash with an unguarded property-access TypeError: stdout: {stdout}"
+    );
+}
+
+/// Regression guard for #262: a successful response whose `content` array contains a `null`
+/// first element but also carries a populated `structuredContent` must resolve with the
+/// `structuredContent` value instead of discarding it and throwing — a malformed `content[0]`
+/// should not shadow otherwise-usable structured data.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_falls_back_to_structured_content_on_null_first_content_element() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script(&respond_once_fake_server_js(
+        r#"{ "content": [null], "structuredContent": { "answer": 42 } }"#,
+    ));
+    let mcp_json = json!({
+        "mcpServers": { "fake": { "command": "node", "args": [script_path] } }
+    });
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_falls_back_to_structured_content_on_null_first_content_element",
+        &bridge.content,
+        &mcp_json,
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains(r#"RESOLVED: {"answer":42}"#),
+        "a null first content element with populated structuredContent must resolve with \
+         structuredContent, not discard it and reject: stdout: {stdout}, stderr: {stderr}"
+    );
+}
+
+/// Regression guard for #262: a successful response carrying a literal `structuredContent: null`
+/// alongside an empty `content` array must be treated the same as an absent `structuredContent`
+/// (i.e. reject with the standard empty-content error), not returned as if `null` were real data.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_treats_null_structured_content_as_absent() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script(&respond_once_fake_server_js(
+        r#"{ "content": [], "structuredContent": null }"#,
+    ));
+    let mcp_json = json!({
+        "mcpServers": { "fake": { "command": "node", "args": [script_path] } }
+    });
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_treats_null_structured_content_as_absent",
+        &bridge.content,
+        &mcp_json,
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:") && stdout.contains("no content and no structuredContent"),
+        "a literal structuredContent: null must be treated as absent and reject with the \
+         standard empty-content error, not resolve with null: stdout: {stdout}, stderr: {stderr}"
+    );
+}
+
+/// Regression guard for #262: an `isError: true` response with an empty `content` array but a
+/// populated `structuredContent` must surface that structured detail in the thrown error message
+/// instead of discarding it behind a generic 'Unknown error'.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_surfaces_structured_content_on_tool_error() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let script_path = write_test_script(&respond_once_fake_server_js(
+        r#"{ "isError": true, "content": [], "structuredContent": { "reason": "boom" } }"#,
+    ));
+    let mcp_json = json!({
+        "mcpServers": { "fake": { "command": "node", "args": [script_path] } }
+    });
+
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        "test_runtime_bridge_surfaces_structured_content_on_tool_error",
+        &bridge.content,
+        &mcp_json,
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:")
+            && stdout.contains("Tool returned error")
+            && stdout.contains(r#"{"reason":"boom"}"#),
+        "an isError response with populated structuredContent must surface it in the error \
+         message instead of falling back to 'Unknown error': stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Unknown error"),
+        "structuredContent detail must take priority over the generic fallback: stdout: {stdout}"
+    );
+}

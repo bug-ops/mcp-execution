@@ -262,6 +262,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is no longer reachable via `discover_server` in practice now that `list_tools_bounded`
   bails out before ever handing it an over-limit list (#198).
 
+- **`mcp-execution-codegen`**: added four `crates/mcp-codegen/tests/progressive_generation.rs`
+  integration tests that compile the real generated runtime bridge and run it under Node against
+  a fake MCP server, covering the `callMCPTool` edge cases fixed above (#262):
+  `test_runtime_bridge_rejects_null_first_content_element` (a `null` first `content` element with
+  no `structuredContent` rejects cleanly), `test_runtime_bridge_falls_back_to_structured_content_on_null_first_content_element`
+  (the same `null` element resolves with `structuredContent` when one is populated, rather than
+  discarding it), `test_runtime_bridge_treats_null_structured_content_as_absent` (a literal
+  `structuredContent: null` is treated as absent, not returned as real data), and
+  `test_runtime_bridge_surfaces_structured_content_on_tool_error` (an `isError: true` response
+  with populated `structuredContent` surfaces it in the thrown error instead of a generic
+  `'Unknown error'`).
+
 ### Changed
 
 - **`mcp-execution-server`, `mcp-execution-skill`**: fields with a documented numeric bound
@@ -364,6 +376,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that already guards `input_schema` now applies to `output_schema` too. `mcp-execution-server`'s
   documented per-session memory budget derivation (`MAX_SINGLE_SESSION_BYTES` in `state.rs`) is
   updated to account for both schemas per tool instead of one.
+
+- **`mcp-execution-codegen`**: five follow-up edge cases in the generated runtime bridge's
+  `callMCPTool` (#262). A `content` array whose first element is `null` (e.g. `content: [null]`)
+  is now guarded on the success path the same way the `isError` path already was, instead of
+  throwing a raw `TypeError`; if a populated `structuredContent` is also present it is returned
+  in preference to failing, and otherwise a message naming the actual defect (an invalid
+  `content[0]`, not an absent/empty `content`) is thrown. A literal `structuredContent: null` is
+  now treated as absent (`!= null`, matching `undefined`) instead of being returned or cast as if
+  it were real data. An `isError: true` response with a populated `structuredContent` but no
+  `content[0].text` now surfaces the serialized `structuredContent` in the thrown error instead
+  of a generic `'Unknown error'`. The genuinely-empty-`content` error message now reads "returned
+  no content and no structuredContent", accurate for both a missing and a zero-length `content`
+  field. A code comment documents that a legitimately void, side-effect-only tool result
+  (`CallToolResult::success(vec![])` per the MCP spec) is indistinguishable here from a
+  misbehaving server and is treated as an error until the generated per-tool result type gains a
+  void/undefined member; no behavior changed for that case.
 
 - **`mcp-execution-cli`**: `Cli`/`Commands` derived a plain `Debug`, so `Commands::Introspect`'s
   `env`/`headers` and `Commands::Generate`'s `server_env`/`server_headers` — raw `KEY=VALUE`
