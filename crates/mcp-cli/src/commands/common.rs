@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::warn;
 use url::Url;
 
 /// Fallback slug used when a URL sanitizes down to nothing (e.g. no host).
@@ -26,26 +27,207 @@ pub struct McpConfig {
     pub mcp_servers: HashMap<String, McpServerEntry>,
 }
 
+/// Canonical in-crate representation of an MCP server's transport.
+///
+/// This is the single source of truth for "stdio vs http vs sse", shared by
+/// both the `mcp.json` config path ([`McpServerEntry`]) and the CLI-flag path
+/// ([`TransportArgs`] converts into this via `TryFrom`).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::common::McpTransport;
+/// use std::collections::HashMap;
+///
+/// let transport = McpTransport::Http {
+///     url: "https://api.example.com/mcp".to_string(),
+///     headers: HashMap::new(),
+/// };
+/// assert!(matches!(transport, McpTransport::Http { .. }));
+/// ```
+#[derive(Debug, Clone)]
+pub enum McpTransport {
+    /// Stdio transport: spawn a subprocess and speak MCP over stdin/stdout.
+    Stdio {
+        /// Command to execute (binary name or absolute path).
+        command: String,
+        /// Arguments to pass to the command.
+        args: Vec<String>,
+        /// Environment variables for the server process.
+        env: HashMap<String, String>,
+        /// Working directory for the server process.
+        cwd: Option<PathBuf>,
+    },
+    /// Streamable HTTP transport.
+    Http {
+        /// Server endpoint URL.
+        url: String,
+        /// HTTP headers sent with every request (e.g. `Authorization`).
+        headers: HashMap<String, String>,
+    },
+    /// Server-Sent Events transport.
+    Sse {
+        /// Server endpoint URL.
+        url: String,
+        /// HTTP headers sent with every request (e.g. `Authorization`).
+        headers: HashMap<String, String>,
+    },
+}
+
 /// Individual MCP server configuration entry from `mcp.json`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct McpServerEntry {
-    /// Command to execute (binary name or absolute path).
-    pub command: String,
-    /// Arguments to pass to the command.
-    #[serde(default)]
-    pub args: Vec<String>,
-    /// Environment variables for the server process.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
+    /// The server's transport and its transport-specific settings.
+    pub transport: McpTransport,
     /// Connection (handshake) timeout in seconds, overriding the 30-second
     /// default when set. JSON key: `connectTimeoutSecs`.
-    #[serde(default)]
     pub connect_timeout_secs: Option<u64>,
     /// Tool discovery timeout in seconds, overriding the 30-second default
     /// when set. JSON key: `discoverTimeoutSecs`.
-    #[serde(default)]
     pub discover_timeout_secs: Option<u64>,
+}
+
+/// Discriminant for the optional `"type"` field in an `mcp.json` server entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TransportTag {
+    Stdio,
+    Http,
+    Sse,
+}
+
+impl TransportTag {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::Http => "http",
+            Self::Sse => "sse",
+        }
+    }
+}
+
+/// Flat, all-optional serde landing zone for a raw `mcp.json` server entry.
+///
+/// Every field is optional so that stdio, http, and sse shapes can share one
+/// deserialization pass; [`McpServerEntry`]'s manual `Deserialize` converts
+/// this via `TryFrom` and raises precise, field-naming errors for
+/// cross-field violations that a derived `Deserialize` can't express (e.g.
+/// "http entries must not set `command`"). Unknown keys land in `extra`
+/// rather than hard-failing, since `~/.claude/mcp.json` is shared with other
+/// MCP clients that store keys this project doesn't model (`disabled`,
+/// `alwaysAllow`, ...).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", rename = "McpServerEntry")]
+struct RawMcpServerEntry {
+    #[serde(rename = "type")]
+    transport_type: Option<TransportTag>,
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    cwd: Option<String>,
+    url: Option<String>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    connect_timeout_secs: Option<u64>,
+    discover_timeout_secs: Option<u64>,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+/// Resolves the `url`/`command` pair for an http-like (`http` or `sse`)
+/// transport tag, rejecting a `command` field and requiring `url`.
+fn http_like_transport(
+    tag_name: &str,
+    command: Option<&str>,
+    url: Option<String>,
+    headers: HashMap<String, String>,
+) -> Result<(String, HashMap<String, String>), String> {
+    if command.is_some() {
+        return Err(format!("{tag_name} server entry must not set \"command\""));
+    }
+    let url = url.ok_or_else(|| format!("{tag_name} server entry requires \"url\""))?;
+    Ok((url, headers))
+}
+
+impl TryFrom<RawMcpServerEntry> for McpServerEntry {
+    type Error = String;
+
+    fn try_from(raw: RawMcpServerEntry) -> Result<Self, Self::Error> {
+        if !raw.extra.is_empty() {
+            let mut keys: Vec<&str> = raw.extra.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            warn!(
+                "mcp.json server entry has unrecognized field(s), ignoring: {}",
+                keys.join(", ")
+            );
+        }
+
+        let tag = match raw.transport_type {
+            Some(tag) => tag,
+            None if raw.command.is_some() => TransportTag::Stdio,
+            None if raw.url.is_some() => TransportTag::Http,
+            None => {
+                return Err(
+                    "server entry must set either \"command\" (stdio) or \"type\" and \"url\" \
+                     (http/sse)"
+                        .to_string(),
+                );
+            }
+        };
+
+        let transport = match tag {
+            TransportTag::Stdio => {
+                if raw.url.is_some() {
+                    return Err("stdio server entry must not set \"url\"".to_string());
+                }
+                let command = raw
+                    .command
+                    .ok_or_else(|| "stdio server entry requires \"command\"".to_string())?;
+                McpTransport::Stdio {
+                    command,
+                    args: raw.args,
+                    env: raw.env,
+                    cwd: raw.cwd.map(PathBuf::from),
+                }
+            }
+            TransportTag::Http => {
+                let (url, headers) = http_like_transport(
+                    tag.as_str(),
+                    raw.command.as_deref(),
+                    raw.url,
+                    raw.headers,
+                )?;
+                McpTransport::Http { url, headers }
+            }
+            TransportTag::Sse => {
+                let (url, headers) = http_like_transport(
+                    tag.as_str(),
+                    raw.command.as_deref(),
+                    raw.url,
+                    raw.headers,
+                )?;
+                McpTransport::Sse { url, headers }
+            }
+        };
+
+        Ok(Self {
+            transport,
+            connect_timeout_secs: raw.connect_timeout_secs,
+            discover_timeout_secs: raw.discover_timeout_secs,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for McpServerEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawMcpServerEntry::deserialize(deserializer)?;
+        raw.try_into().map_err(serde::de::Error::custom)
+    }
 }
 
 /// Loads MCP configuration from the given path.
@@ -130,7 +312,7 @@ pub fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)
 /// use mcp_execution_cli::commands::common::list_mcp_servers;
 ///
 /// for (name, entry) in list_mcp_servers().unwrap() {
-///     println!("{}: {} {:?}", name, entry.command, entry.args);
+///     println!("{}: {:?}", name, entry.transport);
 /// }
 /// ```
 pub fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
@@ -149,7 +331,7 @@ pub fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 /// A tuple of `(ServerId, ServerConfig, McpServerEntry)`:
 /// - [`ServerId`] — typed server identifier
 /// - [`ServerConfig`] — ready-to-use connection config for `Introspector`
-/// - [`McpServerEntry`] — raw entry for display purposes (command, args, env)
+/// - [`McpServerEntry`] — raw entry for display purposes
 ///
 /// # Errors
 ///
@@ -161,9 +343,8 @@ pub fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 /// ```no_run
 /// use mcp_execution_cli::commands::common::get_mcp_server;
 ///
-/// let (id, _config, entry) = get_mcp_server("github").unwrap();
+/// let (id, _config, _entry) = get_mcp_server("github").unwrap();
 /// assert_eq!(id.as_str(), "github");
-/// println!("command: {}", entry.command);
 /// ```
 pub fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
     let config = load_mcp_config()?;
@@ -209,17 +390,51 @@ pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
     Ok((id, config))
 }
 
+/// Applies transport-specific settings onto a fresh [`ServerConfig`] builder.
+///
+/// The single place where [`ServerConfig::builder()`] is invoked; both the
+/// `mcp.json` path ([`build_core_config`]) and the CLI-flag path
+/// ([`build_server_config`]) funnel through this.
+fn builder_for_transport(transport: McpTransport) -> ServerConfigBuilder {
+    match transport {
+        McpTransport::Stdio {
+            command,
+            args,
+            env,
+            cwd,
+        } => {
+            let mut builder = ServerConfig::builder().command(command);
+            if !args.is_empty() {
+                builder = builder.args(args);
+            }
+            for (key, value) in env {
+                builder = builder.env(key, value);
+            }
+            if let Some(dir) = cwd {
+                builder = builder.cwd(dir);
+            }
+            builder
+        }
+        McpTransport::Http { url, headers } => {
+            let mut builder = ServerConfig::builder().http_transport(url);
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+            builder
+        }
+        McpTransport::Sse { url, headers } => {
+            let mut builder = ServerConfig::builder().sse_transport(url);
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+            builder
+        }
+    }
+}
+
 /// Builds a core [`ServerConfig`] from an [`McpServerEntry`].
 fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
-    let mut builder = ServerConfig::builder().command(entry.command.clone());
-
-    if !entry.args.is_empty() {
-        builder = builder.args(entry.args.clone());
-    }
-
-    for (key, value) in &entry.env {
-        builder = builder.env(key.clone(), value.clone());
-    }
+    let mut builder = builder_for_transport(entry.transport.clone());
 
     if let Some(secs) = entry.connect_timeout_secs {
         builder = builder.connect_timeout(Duration::from_secs(secs));
@@ -232,19 +447,174 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
     builder.build()
 }
 
-/// Builds `ServerConfig` from CLI arguments.
+/// Parses a single `KEY=VALUE` CLI argument (used for `--env` and `--header`).
+fn parse_key_value(s: &str, kind: &str) -> Result<(String, String)> {
+    let parts: Vec<&str> = s.splitn(2, '=').collect();
+    if parts.len() != 2 {
+        bail!("invalid {kind} format: '{s}' (expected KEY=VALUE)");
+    }
+    if parts[0].is_empty() {
+        bail!("invalid {kind} format: '{s}' (key cannot be empty)");
+    }
+    Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// CLI-flag mirror of [`McpTransport`], holding the raw, unvalidated
+/// `Option`/`Vec<String>` values clap hands back.
 ///
-/// Parses CLI arguments into a `ServerConfig` for connecting to an MCP server.
+/// [`TransportArgs::from_flags`] is the single place that enforces "exactly
+/// one transport selected". `TryFrom<TransportArgs> for McpTransport` does
+/// the `KEY=VALUE` parsing for environment variables and headers.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::common::TransportArgs;
+///
+/// let transport = TransportArgs::Stdio {
+///     command: "github-mcp-server".to_string(),
+///     args: vec!["stdio".to_string()],
+///     env: vec![],
+///     cwd: None,
+/// };
+/// assert!(matches!(transport, TransportArgs::Stdio { .. }));
+/// ```
+#[derive(Debug, Clone)]
+pub enum TransportArgs {
+    /// Stdio transport (default): raw CLI flags.
+    Stdio {
+        /// Command to execute (binary name or path).
+        command: String,
+        /// Arguments to pass to the command.
+        args: Vec<String>,
+        /// Environment variables in `KEY=VALUE` format.
+        env: Vec<String>,
+        /// Working directory for the server process.
+        cwd: Option<String>,
+    },
+    /// HTTP transport: raw CLI flags.
+    Http {
+        /// Server endpoint URL.
+        url: String,
+        /// HTTP headers in `KEY=VALUE` format.
+        headers: Vec<String>,
+    },
+    /// SSE transport: raw CLI flags.
+    Sse {
+        /// Server endpoint URL.
+        url: String,
+        /// HTTP headers in `KEY=VALUE` format.
+        headers: Vec<String>,
+    },
+}
+
+impl TransportArgs {
+    /// Builds a [`TransportArgs`] from the CLI's flat `--http`/`--sse`/positional
+    /// flag surface, enforcing that exactly one transport was selected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if both `http` and `sse` are set, or if none of
+    /// `server`, `http`, or `sse` is set. Clap's `conflicts_with` /
+    /// `required_unless_present_any` already prevent both cases when parsing
+    /// real CLI input; this is the safety net for callers that build
+    /// `TransportArgs` directly (e.g. as a library).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_cli::commands::common::TransportArgs;
+    ///
+    /// let transport = TransportArgs::from_flags(
+    ///     Some("github-mcp-server".to_string()),
+    ///     vec!["stdio".to_string()],
+    ///     vec![],
+    ///     None,
+    ///     None,
+    ///     None,
+    ///     vec![],
+    /// )
+    /// .unwrap();
+    /// assert!(matches!(transport, TransportArgs::Stdio { .. }));
+    ///
+    /// let err = TransportArgs::from_flags(None, vec![], vec![], None, None, None, vec![]);
+    /// assert!(err.is_err());
+    /// ```
+    #[allow(clippy::too_many_arguments)] // mirrors the CLI's flat argument surface; grouping would add an abstraction for no behavioral benefit
+    pub fn from_flags(
+        server: Option<String>,
+        args: Vec<String>,
+        env: Vec<String>,
+        cwd: Option<String>,
+        http: Option<String>,
+        sse: Option<String>,
+        headers: Vec<String>,
+    ) -> Result<Self> {
+        match (http, sse) {
+            (Some(_), Some(_)) => bail!("cannot use both --http and --sse transports"),
+            (Some(url), None) => Ok(Self::Http { url, headers }),
+            (None, Some(url)) => Ok(Self::Sse { url, headers }),
+            (None, None) => {
+                let command = server.context(
+                    "server command is required for stdio transport (or use --http/--sse)",
+                )?;
+                Ok(Self::Stdio {
+                    command,
+                    args,
+                    env,
+                    cwd,
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<TransportArgs> for McpTransport {
+    type Error = anyhow::Error;
+
+    fn try_from(args: TransportArgs) -> Result<Self> {
+        match args {
+            TransportArgs::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => {
+                let env = env
+                    .iter()
+                    .map(|s| parse_key_value(s, "environment variable"))
+                    .collect::<Result<HashMap<_, _>>>()?;
+                Ok(Self::Stdio {
+                    command,
+                    args,
+                    env,
+                    cwd: cwd.map(PathBuf::from),
+                })
+            }
+            TransportArgs::Http { url, headers } => {
+                let headers = headers
+                    .iter()
+                    .map(|s| parse_key_value(s, "header"))
+                    .collect::<Result<HashMap<_, _>>>()?;
+                Ok(Self::Http { url, headers })
+            }
+            TransportArgs::Sse { url, headers } => {
+                let headers = headers
+                    .iter()
+                    .map(|s| parse_key_value(s, "header"))
+                    .collect::<Result<HashMap<_, _>>>()?;
+                Ok(Self::Sse { url, headers })
+            }
+        }
+    }
+}
+
+/// Builds `ServerConfig` from CLI transport arguments.
 ///
 /// # Arguments
 ///
-/// * `server` - Server command (binary name or path)
-/// * `args` - Arguments to pass to the server command
-/// * `env` - Environment variables in KEY=VALUE format
-/// * `cwd` - Working directory for the server process
-/// * `http` - HTTP transport URL
-/// * `sse` - SSE transport URL
-/// * `headers` - HTTP headers in KEY=VALUE format
+/// * `transport` - The selected transport and its raw CLI flags; build with
+///   [`TransportArgs::from_flags`].
 /// * `connect_timeout_secs` - Connection (handshake) timeout override, in
 ///   seconds. Same semantics as `mcp.json`'s `connectTimeoutSecs`: must be
 ///   greater than zero and at most 600 seconds, enforced by
@@ -255,20 +625,15 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
 ///
 /// # Errors
 ///
-/// Returns an error if environment variables or headers are not in KEY=VALUE format.
-///
-/// # Panics
-///
-/// Panics if `server` is `None` when using stdio transport (i.e., when neither
-/// `http` nor `sse` is provided). This is enforced by CLI argument validation.
+/// Returns an error if environment variables or headers are not in
+/// `KEY=VALUE` format.
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_cli::commands::common::build_server_config;
+/// use mcp_execution_cli::commands::common::{TransportArgs, build_server_config};
 ///
-/// // Stdio transport
-/// let (id, config) = build_server_config(
+/// let transport = TransportArgs::from_flags(
 ///     Some("github-mcp-server".to_string()),
 ///     vec!["stdio".to_string()],
 ///     vec!["TOKEN=abc".to_string()],
@@ -276,81 +641,27 @@ fn build_core_config(entry: &McpServerEntry) -> ServerConfig {
 ///     None,
 ///     None,
 ///     vec![],
-///     None,
-///     None,
-/// ).unwrap();
+/// )
+/// .unwrap();
+///
+/// let (id, config) = build_server_config(transport, None, None).unwrap();
 ///
 /// assert_eq!(id.as_str(), "github-mcp-server");
 /// assert_eq!(config.args(), &["stdio"]);
 /// ```
-#[allow(clippy::too_many_arguments)] // mirrors the CLI's flat argument surface; grouping would add an abstraction for no behavioral benefit
 pub fn build_server_config(
-    server: Option<String>,
-    args: Vec<String>,
-    env: Vec<String>,
-    cwd: Option<String>,
-    http: Option<String>,
-    sse: Option<String>,
-    headers: Vec<String>,
+    transport: TransportArgs,
     connect_timeout_secs: Option<u64>,
     discover_timeout_secs: Option<u64>,
 ) -> Result<(ServerId, ServerConfig)> {
-    // Parse environment variables / headers in KEY=VALUE format
-    let parse_key_value = |s: &str, kind: &str| -> Result<(String, String)> {
-        let parts: Vec<&str> = s.splitn(2, '=').collect();
-        if parts.len() != 2 {
-            bail!("invalid {kind} format: '{s}' (expected KEY=VALUE)");
+    let server_id = match &transport {
+        TransportArgs::Stdio { command, .. } => ServerId::new(command),
+        TransportArgs::Http { url, .. } | TransportArgs::Sse { url, .. } => {
+            derive_server_id_from_url(url)
         }
-        if parts[0].is_empty() {
-            bail!("invalid {kind} format: '{s}' (key cannot be empty)");
-        }
-        Ok((parts[0].to_string(), parts[1].to_string()))
     };
 
-    // Build config based on transport type
-    let (server_id, mut builder) = if let Some(url) = http {
-        // HTTP transport
-        let id = derive_server_id_from_url(&url);
-        let mut builder = ServerConfig::builder().http_transport(url);
-
-        for header in headers {
-            let (key, value) = parse_key_value(&header, "header")?;
-            builder = builder.header(key, value);
-        }
-
-        (id, builder)
-    } else if let Some(url) = sse {
-        // SSE transport
-        let id = derive_server_id_from_url(&url);
-        let mut builder = ServerConfig::builder().sse_transport(url);
-
-        for header in headers {
-            let (key, value) = parse_key_value(&header, "header")?;
-            builder = builder.header(key, value);
-        }
-
-        (id, builder)
-    } else {
-        // Stdio transport (default)
-        let command = server.expect("server is required for stdio transport");
-        let id = ServerId::new(&command);
-        let mut builder: ServerConfigBuilder = ServerConfig::builder().command(command);
-
-        if !args.is_empty() {
-            builder = builder.args(args);
-        }
-
-        for env_var in env {
-            let (key, value) = parse_key_value(&env_var, "environment variable")?;
-            builder = builder.env(key, value);
-        }
-
-        if let Some(dir) = cwd {
-            builder = builder.cwd(PathBuf::from(dir));
-        }
-
-        (id, builder)
-    };
+    let mut builder = builder_for_transport(McpTransport::try_from(transport)?);
 
     if let Some(secs) = connect_timeout_secs {
         builder = builder.connect_timeout(Duration::from_secs(secs));
@@ -434,6 +745,34 @@ mod tests {
         file
     }
 
+    fn stdio_transport(
+        command: &str,
+        args: Vec<&str>,
+        env: Vec<&str>,
+        cwd: Option<&str>,
+    ) -> TransportArgs {
+        TransportArgs::Stdio {
+            command: command.to_string(),
+            args: args.into_iter().map(String::from).collect(),
+            env: env.into_iter().map(String::from).collect(),
+            cwd: cwd.map(String::from),
+        }
+    }
+
+    fn http_transport(url: &str, headers: Vec<&str>) -> TransportArgs {
+        TransportArgs::Http {
+            url: url.to_string(),
+            headers: headers.into_iter().map(String::from).collect(),
+        }
+    }
+
+    fn sse_transport(url: &str, headers: Vec<&str>) -> TransportArgs {
+        TransportArgs::Sse {
+            url: url.to_string(),
+            headers: headers.into_iter().map(String::from).collect(),
+        }
+    }
+
     #[test]
     fn test_load_mcp_config_from_valid() {
         let json = r#"{"mcpServers": {"github": {"command": "node", "args": ["server.js"]}}}"#;
@@ -456,15 +795,22 @@ mod tests {
 
     #[test]
     fn test_load_mcp_config_from_minimal_server() {
-        // Server with only command (args and env should default)
+        // Server with only command (args and env should default), no "type" key
         let json = r#"{"mcpServers": {"minimal": {"command": "python"}}}"#;
         let file = create_test_config(json);
 
         let config = load_mcp_config_from(file.path()).unwrap();
         let entry = &config.mcp_servers["minimal"];
-        assert_eq!(entry.command, "python");
-        assert!(entry.args.is_empty());
-        assert!(entry.env.is_empty());
+        match &entry.transport {
+            McpTransport::Stdio {
+                command, args, env, ..
+            } => {
+                assert_eq!(command, "python");
+                assert!(args.is_empty());
+                assert!(env.is_empty());
+            }
+            other => panic!("expected Stdio transport, got {other:?}"),
+        }
     }
 
     #[test]
@@ -498,16 +844,116 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("parse MCP config"));
     }
 
+    // ── mixed stdio/http/sse configs (#210) ──
+
+    #[test]
+    fn test_load_mcp_config_mixed_stdio_http_sse() {
+        let json = r#"{
+            "mcpServers": {
+                "local": {"command": "node", "args": ["server.js"]},
+                "remote-http": {"type": "http", "url": "https://api.example.com/mcp", "headers": {"Authorization": "Bearer x"}},
+                "remote-sse": {"type": "sse", "url": "https://example.com/sse"}
+            }
+        }"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        assert_eq!(config.mcp_servers.len(), 3);
+
+        assert!(matches!(
+            config.mcp_servers["local"].transport,
+            McpTransport::Stdio { .. }
+        ));
+        assert!(matches!(
+            config.mcp_servers["remote-http"].transport,
+            McpTransport::Http { .. }
+        ));
+        assert!(matches!(
+            config.mcp_servers["remote-sse"].transport,
+            McpTransport::Sse { .. }
+        ));
+    }
+
+    #[test]
+    fn test_load_mcp_config_http_entry_type_absent_but_url_present() {
+        // "type" is optional: a bare `url` key alone resolves to Http.
+        let json = r#"{"mcpServers": {"remote": {"url": "https://api.example.com/mcp"}}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        assert!(matches!(
+            config.mcp_servers["remote"].transport,
+            McpTransport::Http { .. }
+        ));
+    }
+
+    #[test]
+    fn test_load_mcp_config_http_entry_missing_url_errors_naming_url() {
+        let json = r#"{"mcpServers": {"remote": {"type": "http"}}}"#;
+        let file = create_test_config(json);
+
+        let result = load_mcp_config_from(file.path());
+        assert!(result.is_err());
+        // anyhow's `Display` only prints the outermost context; the field
+        // name lives in the wrapped serde_json error, so inspect the chain.
+        assert!(format!("{:#}", result.unwrap_err()).contains("url"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_entry_with_neither_command_nor_type_errors() {
+        let json = r#"{"mcpServers": {"broken": {}}}"#;
+        let file = create_test_config(json);
+
+        let result = load_mcp_config_from(file.path());
+        assert!(result.is_err());
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(msg.contains("command"));
+        assert!(msg.contains("url"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_http_entry_with_command_errors() {
+        let json = r#"{"mcpServers": {"bad": {"type": "http", "url": "https://x.com", "command": "node"}}}"#;
+        let file = create_test_config(json);
+
+        let result = load_mcp_config_from(file.path());
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("command"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_stdio_entry_with_url_errors() {
+        let json = r#"{"mcpServers": {"bad": {"command": "node", "url": "https://x.com"}}}"#;
+        let file = create_test_config(json);
+
+        let result = load_mcp_config_from(file.path());
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("url"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_unknown_field_still_parses() {
+        // Unrecognized keys (owned by other MCP clients sharing the file,
+        // e.g. Claude Code's "disabled") must warn, not fail the whole file.
+        let json = r#"{"mcpServers": {"github": {"command": "node", "disabled": false, "description": "x"}}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        assert!(matches!(
+            config.mcp_servers["github"].transport,
+            McpTransport::Stdio { .. }
+        ));
+    }
+
     #[test]
     fn test_build_server_config_stdio() {
         let (id, config) = build_server_config(
-            Some("github-mcp-server".to_string()),
-            vec!["stdio".to_string()],
-            vec!["TOKEN=abc123".to_string()],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport(
+                "github-mcp-server",
+                vec!["stdio"],
+                vec!["TOKEN=abc123"],
+                None,
+            ),
             None,
             None,
         )
@@ -522,18 +968,12 @@ mod tests {
     #[test]
     fn test_build_server_config_docker() {
         let (id, config) = build_server_config(
-            Some("docker".to_string()),
-            vec![
-                "run".to_string(),
-                "-i".to_string(),
-                "--rm".to_string(),
-                "ghcr.io/github/github-mcp-server".to_string(),
-            ],
-            vec!["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx".to_string()],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport(
+                "docker",
+                vec!["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"],
+                vec!["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"],
+                None,
+            ),
             None,
             None,
         )
@@ -554,13 +994,10 @@ mod tests {
     #[test]
     fn test_build_server_config_http() {
         let (id, config) = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://api.githubcopilot.com/mcp/".to_string()),
-            None,
-            vec!["Authorization=Bearer token123".to_string()],
+            http_transport(
+                "https://api.githubcopilot.com/mcp/",
+                vec!["Authorization=Bearer token123"],
+            ),
             None,
             None,
         )
@@ -577,13 +1014,7 @@ mod tests {
     #[test]
     fn test_build_server_config_sse() {
         let (id, config) = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            None,
-            Some("https://example.com/sse".to_string()),
-            vec!["X-API-Key=secret".to_string()],
+            sse_transport("https://example.com/sse", vec!["X-API-Key=secret"]),
             None,
             None,
         )
@@ -600,13 +1031,7 @@ mod tests {
     #[test]
     fn test_build_server_config_with_cwd() {
         let (_, config) = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec![],
-            Some("/tmp/workdir".to_string()),
-            None,
-            None,
-            vec![],
+            stdio_transport("server", vec![], vec![], Some("/tmp/workdir")),
             None,
             None,
         )
@@ -618,13 +1043,7 @@ mod tests {
     #[test]
     fn test_build_server_config_invalid_env() {
         let result = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec!["INVALID_FORMAT".to_string()],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport("server", vec![], vec!["INVALID_FORMAT"], None),
             None,
             None,
         );
@@ -641,13 +1060,7 @@ mod tests {
     #[test]
     fn test_build_server_config_invalid_header() {
         let result = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://example.com".to_string()),
-            None,
-            vec!["InvalidHeader".to_string()],
+            http_transport("https://example.com", vec!["InvalidHeader"]),
             None,
             None,
         );
@@ -664,17 +1077,12 @@ mod tests {
     #[test]
     fn test_build_server_config_multiple_env_vars() {
         let (_, config) = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec![
-                "TOKEN=abc123".to_string(),
-                "API_KEY=secret456".to_string(),
-                "DEBUG=true".to_string(),
-            ],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport(
+                "server",
+                vec![],
+                vec!["TOKEN=abc123", "API_KEY=secret456", "DEBUG=true"],
+                None,
+            ),
             None,
             None,
         )
@@ -690,17 +1098,16 @@ mod tests {
     fn test_build_server_config_env_with_special_chars() {
         // Test environment variable values containing equals signs
         let (_, config) = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec![
-                "TOKEN=abc=def=123".to_string(),
-                "URL=https://example.com?key=value".to_string(),
-                "ENCODED=a=b=c=d".to_string(),
-            ],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport(
+                "server",
+                vec![],
+                vec![
+                    "TOKEN=abc=def=123",
+                    "URL=https://example.com?key=value",
+                    "ENCODED=a=b=c=d",
+                ],
+                None,
+            ),
             None,
             None,
         )
@@ -717,13 +1124,7 @@ mod tests {
     #[test]
     fn test_build_server_config_empty_args_stdio() {
         let (id, config) = build_server_config(
-            Some("simple-server".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport("simple-server", vec![], vec![], None),
             None,
             None,
         )
@@ -738,17 +1139,14 @@ mod tests {
     #[test]
     fn test_build_server_config_http_multiple_headers() {
         let (_, config) = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://api.example.com".to_string()),
-            None,
-            vec![
-                "Authorization=Bearer token123".to_string(),
-                "X-API-Key=secret".to_string(),
-                "Content-Type=application/json".to_string(),
-            ],
+            http_transport(
+                "https://api.example.com",
+                vec![
+                    "Authorization=Bearer token123",
+                    "X-API-Key=secret",
+                    "Content-Type=application/json",
+                ],
+            ),
             None,
             None,
         )
@@ -773,16 +1171,10 @@ mod tests {
     fn test_build_server_config_header_with_special_chars() {
         // Test header values containing equals signs
         let (_, config) = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://api.example.com".to_string()),
-            None,
-            vec![
-                "X-Custom=value=with=equals".to_string(),
-                "X-Query=a=b&c=d".to_string(),
-            ],
+            http_transport(
+                "https://api.example.com",
+                vec!["X-Custom=value=with=equals", "X-Query=a=b&c=d"],
+            ),
             None,
             None,
         )
@@ -801,13 +1193,10 @@ mod tests {
     #[test]
     fn test_build_server_config_sse_with_headers() {
         let (id, config) = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            None,
-            Some("https://sse.example.com/events".to_string()),
-            vec!["Authorization=Bearer xyz".to_string()],
+            sse_transport(
+                "https://sse.example.com/events",
+                vec!["Authorization=Bearer xyz"],
+            ),
             None,
             None,
         )
@@ -825,13 +1214,7 @@ mod tests {
     fn test_build_server_config_empty_value_in_env() {
         // Test environment variable with empty value after equals
         let (_, config) = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec!["EMPTY=".to_string()],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport("server", vec![], vec!["EMPTY="], None),
             None,
             None,
         )
@@ -844,13 +1227,7 @@ mod tests {
     fn test_build_server_config_empty_value_in_header() {
         // Test header with empty value after equals
         let (_, config) = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://example.com".to_string()),
-            None,
-            vec!["X-Empty=".to_string()],
+            http_transport("https://example.com", vec!["X-Empty="]),
             None,
             None,
         )
@@ -862,22 +1239,12 @@ mod tests {
     #[test]
     fn test_build_server_config_complex_docker_scenario() {
         let (id, config) = build_server_config(
-            Some("docker".to_string()),
-            vec![
-                "run".to_string(),
-                "-i".to_string(),
-                "--rm".to_string(),
-                "--network=host".to_string(),
-                "my-image:latest".to_string(),
-            ],
-            vec![
-                "API_TOKEN=secret123".to_string(),
-                "LOG_LEVEL=debug".to_string(),
-            ],
-            Some("/app/workdir".to_string()),
-            None,
-            None,
-            vec![],
+            stdio_transport(
+                "docker",
+                vec!["run", "-i", "--rm", "--network=host", "my-image:latest"],
+                vec!["API_TOKEN=secret123", "LOG_LEVEL=debug"],
+                Some("/app/workdir"),
+            ),
             None,
             None,
         )
@@ -900,13 +1267,7 @@ mod tests {
     #[test]
     fn test_build_server_config_empty_key_in_env() {
         let result = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec!["=value".to_string()],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport("server", vec![], vec!["=value"], None),
             None,
             None,
         );
@@ -923,13 +1284,7 @@ mod tests {
     #[test]
     fn test_build_server_config_empty_key_in_header() {
         let result = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://example.com".to_string()),
-            None,
-            vec!["=value".to_string()],
+            http_transport("https://example.com", vec!["=value"]),
             None,
             None,
         );
@@ -949,13 +1304,7 @@ mod tests {
         // both end up calling the same `validate_server_config`, so a zero
         // override must trip the same `connect_timeout` ValidationError.
         let (_, config) = build_server_config(
-            Some("docker".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport("docker", vec![], vec![], None),
             Some(0),
             None,
         )
@@ -974,13 +1323,7 @@ mod tests {
     #[test]
     fn test_build_server_config_timeout_overrides() {
         let (_, config) = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
+            stdio_transport("server", vec![], vec![], None),
             Some(5),
             Some(90),
         )
@@ -992,18 +1335,9 @@ mod tests {
 
     #[test]
     fn test_build_server_config_default_timeouts_without_overrides() {
-        let (_, config) = build_server_config(
-            Some("server".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-            None,
-            None,
-        )
-        .unwrap();
+        let (_, config) =
+            build_server_config(stdio_transport("server", vec![], vec![], None), None, None)
+                .unwrap();
 
         assert_eq!(config.connect_timeout(), Duration::from_secs(30));
         assert_eq!(config.discover_timeout(), Duration::from_secs(30));
@@ -1047,7 +1381,10 @@ mod tests {
         let servers = list_mcp_servers_from(file.path()).unwrap();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].0, "github");
-        assert_eq!(servers[0].1.command, "node");
+        assert!(matches!(
+            servers[0].1.transport,
+            McpTransport::Stdio { ref command, .. } if command == "node"
+        ));
     }
 
     #[test]
@@ -1094,6 +1431,37 @@ mod tests {
     }
 
     #[test]
+    fn test_build_core_config_http_entry_reaches_server_config() {
+        // The mcp.json -> ServerConfig path (what #210 is literally about),
+        // as opposed to the CLI-flag path already covered by
+        // `test_build_server_config_http`.
+        let json = r#"{"mcpServers": {"remote": {"type": "http", "url": "https://api.example.com/mcp", "headers": {"Authorization": "Bearer x"}}}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        let entry = &config.mcp_servers["remote"];
+
+        let server_config = build_core_config(entry);
+        assert_eq!(server_config.url(), Some("https://api.example.com/mcp"));
+        assert_eq!(
+            server_config.headers().get("Authorization"),
+            Some(&"Bearer x".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_core_config_stdio_cwd_reaches_server_config() {
+        let json = r#"{"mcpServers": {"local": {"command": "node", "cwd": "/tmp/workdir"}}}"#;
+        let file = create_test_config(json);
+
+        let config = load_mcp_config_from(file.path()).unwrap();
+        let entry = &config.mcp_servers["local"];
+
+        let server_config = build_core_config(entry);
+        assert_eq!(server_config.cwd(), Some(&PathBuf::from("/tmp/workdir")));
+    }
+
+    #[test]
     fn test_load_mcp_config_serde_default_on_missing_mcp_servers() {
         // When mcp.json has no mcpServers key, should deserialize to empty map
         let json = r#"{"someOtherKey": "value"}"#;
@@ -1104,6 +1472,75 @@ mod tests {
             config.mcp_servers.is_empty(),
             "missing mcpServers key must produce empty map, not error"
         );
+    }
+
+    // ── TransportArgs::from_flags ──
+
+    #[test]
+    fn test_transport_args_from_flags_stdio() {
+        let transport = TransportArgs::from_flags(
+            Some("server".to_string()),
+            vec![],
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+        assert!(matches!(transport, TransportArgs::Stdio { .. }));
+    }
+
+    #[test]
+    fn test_transport_args_from_flags_http() {
+        let transport = TransportArgs::from_flags(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://example.com".to_string()),
+            None,
+            vec![],
+        )
+        .unwrap();
+        assert!(matches!(transport, TransportArgs::Http { .. }));
+    }
+
+    #[test]
+    fn test_transport_args_from_flags_sse() {
+        let transport = TransportArgs::from_flags(
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+            Some("https://example.com/sse".to_string()),
+            vec![],
+        )
+        .unwrap();
+        assert!(matches!(transport, TransportArgs::Sse { .. }));
+    }
+
+    #[test]
+    fn test_transport_args_from_flags_none_set_errors() {
+        // Regression test: this used to be an `.expect()` panic in
+        // `build_server_config`'s stdio branch.
+        let result = TransportArgs::from_flags(None, vec![], vec![], None, None, None, vec![]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_transport_args_from_flags_both_http_and_sse_errors() {
+        let result = TransportArgs::from_flags(
+            None,
+            vec![],
+            vec![],
+            None,
+            Some("https://example.com".to_string()),
+            Some("https://example.com/sse".to_string()),
+            vec![],
+        );
+        assert!(result.is_err());
     }
 
     // ── derive_server_id_from_url (review S1: raw-URL server ids are unsafe) ──
@@ -1244,13 +1681,7 @@ mod tests {
     #[test]
     fn test_build_server_config_http_id_passes_validate_server_id() {
         let (id, _config) = build_server_config(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://user:token@api.example.com/mcp/../secret".to_string()),
-            None,
-            vec![],
+            http_transport("https://user:token@api.example.com/mcp/../secret", vec![]),
             None,
             None,
         )

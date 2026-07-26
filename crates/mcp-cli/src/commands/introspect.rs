@@ -2,7 +2,7 @@
 //!
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
-use super::common::{build_server_config, load_server_from_config};
+use super::common::{TransportArgs, build_server_config, load_server_from_config};
 use anyhow::{Context, Result};
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_introspector::{Introspector, ServerInfo, ToolInfo};
@@ -185,17 +185,8 @@ pub async fn run(
         );
         load_server_from_config(&config_name)?
     } else {
-        build_server_config(
-            server,
-            args,
-            env,
-            cwd,
-            http,
-            sse,
-            headers,
-            connect_timeout_secs,
-            discover_timeout_secs,
-        )?
+        let transport = TransportArgs::from_flags(server, args, env, cwd, http, sse, headers)?;
+        build_server_config(transport, connect_timeout_secs, discover_timeout_secs)?
     };
 
     info!("Introspecting server: {}", server_id);

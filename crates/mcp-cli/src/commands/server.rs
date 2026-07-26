@@ -4,7 +4,7 @@
 //! `~/.claude/mcp.json` as the single source of truth for server definitions.
 
 use crate::actions::ServerAction;
-use crate::commands::common::{McpServerEntry, get_mcp_server, list_mcp_servers};
+use crate::commands::common::{McpServerEntry, McpTransport, get_mcp_server, list_mcp_servers};
 use anyhow::{Context, Result};
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_introspector::Introspector;
@@ -154,7 +154,7 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
     let mut entries = Vec::new();
     for (name, entry) in servers {
         let command = build_command_string(&entry);
-        let status = if check_command_exists(&entry.command) {
+        let status = if transport_available(&entry) {
             ServerStatus::Available
         } else {
             ServerStatus::Unavailable
@@ -267,11 +267,16 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
     let command = build_command_string(&entry);
     info!("Validating server '{}'...", server_name);
 
-    if !check_command_exists(&entry.command) {
+    if let McpTransport::Stdio {
+        command: bin_command,
+        ..
+    } = &entry.transport
+        && !check_command_exists(bin_command)
+    {
         let result = ValidationResult {
             command: command.clone(),
             valid: false,
-            message: format!("Command '{}' not found in PATH", entry.command),
+            message: format!("Command '{bin_command}' not found in PATH"),
         };
         let formatted = crate::formatters::format_output(&result, output_format)?;
         println!("{formatted}");
@@ -315,17 +320,37 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
 }
 
 /// Builds a displayable command string from a server entry.
+///
+/// Stdio entries render as `command args…`; http/sse entries render as the
+/// endpoint URL.
 fn build_command_string(entry: &McpServerEntry) -> String {
-    if entry.args.is_empty() {
-        entry.command.clone()
-    } else {
-        format!("{} {}", entry.command, entry.args.join(" "))
+    match &entry.transport {
+        McpTransport::Stdio { command, args, .. } => {
+            if args.is_empty() {
+                command.clone()
+            } else {
+                format!("{} {}", command, args.join(" "))
+            }
+        }
+        McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => url.clone(),
     }
 }
 
 /// Returns `true` if the given command binary is available in PATH.
 fn check_command_exists(command: &str) -> bool {
     which::which(command).is_ok()
+}
+
+/// Returns `true` if the entry's transport is ready to attempt a connection.
+///
+/// Stdio checks PATH for the command; http/sse have no PATH concept and are
+/// always considered available (an unreachable server surfaces as a
+/// connection error during introspection instead).
+fn transport_available(entry: &McpServerEntry) -> bool {
+    match &entry.transport {
+        McpTransport::Stdio { command, .. } => check_command_exists(command),
+        McpTransport::Http { .. } | McpTransport::Sse { .. } => true,
+    }
 }
 
 #[cfg(test)]
@@ -342,9 +367,12 @@ mod tests {
     #[test]
     fn test_build_command_string_no_args() {
         let entry = McpServerEntry {
-            command: "node".to_string(),
-            args: Vec::new(),
-            env: HashMap::default(),
+            transport: McpTransport::Stdio {
+                command: "node".to_string(),
+                args: Vec::new(),
+                env: HashMap::default(),
+                cwd: None,
+            },
             connect_timeout_secs: None,
             discover_timeout_secs: None,
         };
@@ -354,9 +382,12 @@ mod tests {
     #[test]
     fn test_build_command_string_with_args() {
         let entry = McpServerEntry {
-            command: "node".to_string(),
-            args: vec!["/path/to/server.js".to_string(), "--verbose".to_string()],
-            env: HashMap::default(),
+            transport: McpTransport::Stdio {
+                command: "node".to_string(),
+                args: vec!["/path/to/server.js".to_string(), "--verbose".to_string()],
+                env: HashMap::default(),
+                cwd: None,
+            },
             connect_timeout_secs: None,
             discover_timeout_secs: None,
         };
@@ -364,6 +395,32 @@ mod tests {
             build_command_string(&entry),
             "node /path/to/server.js --verbose"
         );
+    }
+
+    #[test]
+    fn test_build_command_string_http() {
+        let entry = McpServerEntry {
+            transport: McpTransport::Http {
+                url: "https://api.example.com/mcp".to_string(),
+                headers: HashMap::default(),
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+        assert_eq!(build_command_string(&entry), "https://api.example.com/mcp");
+    }
+
+    #[test]
+    fn test_transport_available_http_always_true() {
+        let entry = McpServerEntry {
+            transport: McpTransport::Http {
+                url: "https://api.example.com/mcp".to_string(),
+                headers: HashMap::default(),
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+        assert!(transport_available(&entry));
     }
 
     #[test]
