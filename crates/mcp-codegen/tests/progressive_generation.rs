@@ -586,6 +586,11 @@ const fn npm_program() -> &'static str {
 /// network) skips rather than hard-failing, since CI is presumed to have registry access but a
 /// local sandbox may not.
 ///
+/// Passes `--include=dev` explicitly: with `NODE_ENV=production` set in the environment, `npm
+/// install` silently omits `devDependencies` (exit success, nothing installed) instead of
+/// failing, which would otherwise let a missing `@types/node` regression slip through with no
+/// signal — `--include=dev` overrides that regardless of `NODE_ENV`.
+///
 /// Returns `true` if the install succeeded and the caller should proceed to `tsc`.
 fn install_declared_dev_dependencies(dir: &std::path::Path, test_name: &str) -> bool {
     if Command::new(npm_program())
@@ -604,7 +609,13 @@ fn install_declared_dev_dependencies(dir: &std::path::Path, test_name: &str) -> 
     }
 
     let output = Command::new(npm_program())
-        .args(["install", "--no-save", "--no-audit", "--no-fund"])
+        .args([
+            "install",
+            "--no-save",
+            "--no-audit",
+            "--no-fund",
+            "--include=dev",
+        ])
         .current_dir(dir)
         .output()
         .expect("Failed to run npm install");
