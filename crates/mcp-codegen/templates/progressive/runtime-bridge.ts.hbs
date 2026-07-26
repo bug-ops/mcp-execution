@@ -636,14 +636,20 @@ async function createConnection(
   // An async EPIPE reported here (rather than as a synchronous throw from `stdin.write`)
   // would otherwise leave the pending request(s) unrejected until they time out; tear down
   // the same way as other stream/process failures so they fail fast instead.
-  childProcess.stdin!.on('error', (error) => {
+  //
+  // EPIPE specifically means the child's stdin has already closed, which only happens once
+  // the child itself has exited — the same underlying condition the 'close' handler below
+  // reports. Whichever of the two fires first wins the race (teardownConnection only rejects
+  // each still-pending request once), so both must describe it the same way; otherwise the
+  // rejection message a caller sees would depend on unpredictable event-loop timing that
+  // differs across platforms.
+  childProcess.stdin!.on('error', (error: NodeJS.ErrnoException) => {
     debug(`stdin error for server ${serverId}:`, error);
-    teardownConnection(
-      serverId,
-      connection,
-      new Error(`MCP server stdin error: ${error.message}`),
-      getOwnPromise()
-    );
+    const message =
+      error.code === 'EPIPE'
+        ? 'MCP server process exited before responding (stdin closed)'
+        : `MCP server stdin error: ${error.message}`;
+    teardownConnection(serverId, connection, new Error(message), getOwnPromise());
   });
 
   childProcess.on('error', (error) => {

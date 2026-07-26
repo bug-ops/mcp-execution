@@ -393,6 +393,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   misbehaving server and is treated as an error until the generated per-tool result type gains a
   void/undefined member; no behavior changed for that case.
 
+- **`mcp-execution-codegen`**: the generated runtime bridge's `stdin.on('error', ...)` handler
+  reported every stdin write failure with a generic `MCP server stdin error: ...` message, even
+  when the underlying cause was `EPIPE` from the child process having already exited — the exact
+  same condition the `close` handler separately reports as `MCP server process exited before
+  responding`. Since whichever handler fires first wins the race to reject a still-pending
+  request, and their firing order is not guaranteed across platforms, callers could see either
+  message for what is really always the same failure. The `EPIPE` case is now reported with the
+  same "exited before responding" wording as the `close` handler, so the rejection a caller sees
+  no longer depends on unpredictable event-loop timing.
+
 - **`mcp-execution-cli`**: `Cli`/`Commands` derived a plain `Debug`, so `Commands::Introspect`'s
   `env`/`headers` and `Commands::Generate`'s `server_env`/`server_headers` — raw `KEY=VALUE`
   strings straight from argv, routinely carrying secrets — were printed in full wherever the
