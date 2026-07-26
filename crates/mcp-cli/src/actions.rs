@@ -18,6 +18,8 @@ use clap::Subcommand;
 #[derive(Subcommand, Debug)]
 pub enum ServerAction {
     /// List all configured servers
+    ///
+    /// Performs a brief, bounded live check against each http/sse server.
     List,
 
     /// Show detailed information about a server

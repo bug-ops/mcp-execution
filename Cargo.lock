@@ -1297,6 +1297,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "dirs",
+ "futures-util",
  "mcp-execution-codegen",
  "mcp-execution-core",
  "mcp-execution-files",

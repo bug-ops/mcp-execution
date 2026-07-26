@@ -988,7 +988,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directly could panic or silently drop a valid response when a whitespace-only line was split
   across two reads.
 
+- **`mcp-execution-cli`**: `server list` reported `"status": "available"` for every configured
+  `http`/`sse` entry unconditionally, with no actual signal behind it, while `stdio` entries got
+  a real PATH-existence check. `http`/`sse` entries are now checked for URL well-formedness
+  (`http`/`https` scheme with a host, validated via the same rule `mcp-execution-core` uses)
+  and, if well-formed, the same MCP introspection attempt `server info`/`server validate`
+  already make (`Introspector::discover_server`) — not a separate, hand-rolled reachability
+  probe, so it automatically honors the entry's configured `connect_timeout_secs`, IPv6
+  literals, and any proxy handling the transport applies, instead of risking disagreement with
+  the rest of the CLI. Per-server checks run concurrently so `list`'s total latency stays
+  bounded by the slowest single check; each individual check is additionally bounded to a fixed
+  3-second timeout (independent of, and shorter than, the entry's own configured timeout), since
+  a `list` that enumerates several servers must stay responsive even when one entry is
+  firewalled or otherwise unresponsive — a server slower than that bound may show
+  `unavailable` in `list` while `server validate`/`server info` (which wait out the entry's
+  full configured timeout) correctly report it `available`; this is a documented, intentional
+  trade-off distinct from the unconditional-wrong-answer bug this entry otherwise fixes.
+  `server validate`'s introspection-failure message also referenced a nonexistent "command" for
+  `http`/`sse` entries; it now says "endpoint failed to respond to MCP protocol" for those
+  transports (#280).
+
 ### Added
+
+- **`mcp-execution-core`**: `validate_url_scheme` is now a public function, re-exported from
+  the crate root. It backed `ServerConfig`'s internal http/sse scheme check already; exposing it
+  lets other crates validating the same transport (e.g. `mcp-execution-cli`'s `server list`
+  status check) share this exact rule instead of maintaining a second, differently-behaved
+  check (#280).
 
 - **`mcp-execution-cli`**: `generate` now prints a "Next step: run 'npm install' in the
   output directory before type-checking the generated package" hint after a successful

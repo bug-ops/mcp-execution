@@ -25,6 +25,7 @@ clap = { workspace = true, features = ["derive", "env", "cargo", "color"] }
 clap_complete.workspace = true
 colored = { workspace = true }
 dirs = { workspace = true }
+futures-util = { workspace = true }
 mcp-execution-codegen = { workspace = true }
 mcp-execution-core = { workspace = true }
 mcp-execution-introspector = { workspace = true }
@@ -32,7 +33,7 @@ mcp-execution-files = { workspace = true }
 mcp-execution-skill = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 url = { workspace = true }

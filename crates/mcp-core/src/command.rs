@@ -560,7 +560,30 @@ fn validate_network_config(config: &ServerConfig) -> Result<()> {
 /// schemes at the `mcp-core` validation boundary rather than relying on the
 /// HTTP client to reject them. The scheme comparison is case-insensitive per
 /// RFC 3986 (`HTTP://host` is a valid URL, not a different scheme).
-fn validate_url_scheme(url: &str) -> Result<()> {
+///
+/// This is a minimal, string-based scheme check — it does not validate the
+/// rest of the URL's structure (e.g. it does not require a host). It is
+/// exposed publicly so that other crates checking URL validity for the same
+/// http/sse transport (e.g. `mcp-execution-cli`'s server status/validation
+/// commands) can share this exact rule instead of drifting from it with a
+/// second, differently-behaved check.
+///
+/// # Errors
+///
+/// Returns [`Error::SecurityViolation`] if `url` does not start with an
+/// `http://` or `https://` scheme (case-insensitive).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::validate_url_scheme;
+///
+/// assert!(validate_url_scheme("https://example.com/mcp").is_ok());
+/// assert!(validate_url_scheme("HTTP://example.com").is_ok());
+/// assert!(validate_url_scheme("ftp://example.com").is_err());
+/// assert!(validate_url_scheme("  https://example.com").is_err());
+/// ```
+pub fn validate_url_scheme(url: &str) -> Result<()> {
     let is_valid = url.split_once("://").is_some_and(|(scheme, _)| {
         scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
     });
