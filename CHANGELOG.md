@@ -149,6 +149,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-codegen`**: the generated runtime bridge (`_runtime/mcp-bridge.ts`) attached a
+  fresh `stdout` listener per `callMCPTool` call and resolved on the first complete JSON-RPC
+  message with an `id`, without checking that the `id` matched the request it sent. Two
+  concurrent calls to the same server raced on the shared stream, so one caller could receive
+  another's response (#232). The bridge now spawns a single shared response dispatcher per
+  connection that demultiplexes incoming messages by request id into a per-connection pending
+  map, so each call only ever resolves with its own response; entries are removed on
+  resolve/reject/timeout so the map cannot grow unbounded. Related hardening: `getConnection`
+  now caches the in-flight connection-setup promise (not just the resolved connection), so
+  concurrent calls on a cold server share one spawn instead of racing to spawn duplicate
+  processes; pending requests are rejected on the process `close` event rather than `exit` (Node
+  emits `exit` before stdio has fully drained, which could spuriously reject a request whose
+  response was still in the OS pipe buffer); stdout is read via `setEncoding('utf8')` instead of
+  manually concatenating `Buffer` chunks, so multi-byte UTF-8 characters split across chunk
+  boundaries no longer corrupt into unparseable replacement characters; a stdin write error no
+  longer leaks its pending-request entry, and a `stdin` error listener rejects the connection's
+  pending requests immediately (rather than only logging) so a broken pipe fails fast instead of
+  waiting out the full request timeout; a stdout stream error now also evicts the connection from
+  the server cache so a broken connection isn't reused and left to hang all subsequent requests.
+  Every cache eviction (on `close`, process `error`, stdout `error`, or stdin `error`) now checks
+  that the cache still points at the exact connection attempt being torn down before deleting it,
+  so a stale teardown can no longer race a concurrent reconnect and delete a newer, live
+  connection out from under it — leaving its process both running and unreachable. A bare JSON
+  primitive line (e.g. a lone `null`) from the server is now dropped like any other
+  non-response line instead of crashing the host process, since checking for an `id` property on
+  a non-object value threw a `TypeError` when only wrapped in a `try`/`catch` that covered
+  `JSON.parse` alone. The stale-connection liveness check also inspects `signalCode` (not just
+  `exitCode`), so a process killed by signal is no longer misclassified as alive.
+  `closeAllConnections` (used by the `SIGINT`/`SIGTERM` handlers) now signals every tracked child
+  process synchronously and immediately, then lets in-flight connection attempts settle
+  concurrently, instead of `await`-ing each cached connection sequentially first — which could
+  stall shutdown behind a single slow-initializing server for up to the full request timeout and
+  delay killing every other server behind it.
+
 - **`mcp-execution-skill`**: `extract_skill_metadata` parsed a `SKILL.md`'s YAML frontmatter with
   hand-rolled, single-line regexes, so a `description: |`/`description: >` block scalar had its
   multi-line body discarded in favor of the literal marker character, and a quoted scalar (e.g.
