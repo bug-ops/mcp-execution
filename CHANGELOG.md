@@ -148,6 +148,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory is tracked as a follow-up, alongside a separate, larger unvalidated-path issue in
   `introspect_server`'s `output_dir` — neither is in scope here.
 
+- **`mcp-execution-codegen`**, **`mcp-execution-core`**: hardened, defense-in-depth mitigation
+  for the generated runtime bridge (`_runtime/mcp-bridge.ts`) re-reading `~/.claude/mcp.json`
+  unvalidated at every tool call. The bridge now re-validates each stdio server's command,
+  arguments, and environment variable names against the same forbidden-shell-metacharacter
+  and forbidden-env-var rules as `mcp_execution_core::validate_server_config` before every
+  `spawn()` call, failing closed (throwing) rather than silently stripping the offending
+  value. This is **not** a complete closure of the underlying injection primitive: an
+  attacker who can already edit `~/.claude/mcp.json` could equally edit the generated
+  `_runtime/mcp-bridge.ts` itself (e.g. delete the new validation call), and the forbidden
+  env-var list does not cover every RCE-relevant variable (e.g. arbitrary env vars honored by
+  the target subprocess's own runtime). Treat this as raising the bar, not as a sandbox
+  boundary. A tracking issue for the remaining gaps (broader env-var coverage, full parity
+  with `validate_server_config`'s absolute-path/transport/URL/header checks, and a
+  Rust/TypeScript validation-drift guard) will be filed as a follow-up.
+  - `FORBIDDEN_ENV_NAMES` (`mcp-core`'s `command.rs`, mirrored in the bridge) now additionally
+    blocks `NODE_OPTIONS` (can inject e.g. `--require /tmp/evil.js` into any Node subprocess)
+    and `BASH_ENV` (sourced by non-interactive `bash` before running a script).
+  - The bridge's validation error messages no longer echo the offending command/argument
+    value verbatim — MCP server arguments routinely carry secrets (e.g. `--token=...`), and
+    this error can surface into tool output visible to the calling model, not just an
+    operator's terminal.
+  - `{"transport":"http"/"sse",...}` server entries (valid `mcp.json` since #200) are now
+    rejected by the bridge with a clear, intentional error ("this runtime bridge only
+    supports stdio transport servers") instead of an opaque `TypeError` from validating an
+    `undefined` command/args.
+  - `sanitize_jsdoc` (used for tool/category/keyword text embedded in generated comments) now
+    also strips U+2028/U+2029 (ECMAScript line terminators not covered by `\r`/`\n`
+    stripping), closing a `//`-comment-termination gap in `index.ts`'s category header.
+
+  **BREAKING CHANGE:** the forbidden-env-var check (`PATH`, `LD_LIBRARY_PATH`, `DYLD_*`,
+  `LD_PRELOAD`, and now `NODE_OPTIONS`/`BASH_ENV`) now runs on *every* tool invocation via the
+  generated bridge, not just once at `generate` time. An `mcp.json` entry that legitimately
+  pins one of these names (e.g. `PATH` or `LD_LIBRARY_PATH` for an nvm/pyenv/Homebrew-wrapped
+  server) previously worked at call time and will now fail closed with a validation error.
+
+- **`mcp-execution-codegen`**: `TemplateEngine` no longer HTML-escapes Handlebars output.
+  Generated templates interpolate tool/server metadata into TypeScript JSDoc comments, not
+  HTML, so the default escaping of `&`, `<`, `>`, `"`, and `'` was corrupting benign
+  punctuation (apostrophes, comparison operators, ampersands) in generated source. JSDoc
+  comment-injection protection continues to come from `sanitize_jsdoc`'s `*/`-stripping and
+  newline-flattening, which run before rendering and are unaffected by this change.
+
 - **`mcp-execution-core`**, **`mcp-execution-introspector`**: `--http`/`--sse` transports
   actually connect now, instead of failing validation with a misleading "command cannot be
   empty" `SecurityViolation` before the transport type was ever consulted (#180).

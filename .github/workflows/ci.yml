@@ -115,6 +115,18 @@ jobs:
         with:
           tool: nextest
 
+      # mcp-execution-codegen's test suite compiles and executes generated TypeScript under
+      # `tsc`/`node` (e.g. the #201 runtime-bridge regression tests) to catch TypeScript-level
+      # regressions that a Rust-only check can't see. Those tests hard-fail (rather than
+      # silently skip) when the `CI` env var is set, so this toolchain must be present here.
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install TypeScript
+        run: npm install -g typescript
+
       - name: Build (all targets, all features)
         run: cargo build --all-targets --all-features --workspace
 
@@ -148,6 +160,16 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: nextest
+
+      # See the `test` job for why this toolchain is required: mcp-execution-codegen's
+      # TypeScript-executing regression tests hard-fail under `CI` rather than skip.
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install TypeScript
+        run: npm install -g typescript
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2

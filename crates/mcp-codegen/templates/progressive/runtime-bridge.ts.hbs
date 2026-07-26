@@ -21,6 +21,9 @@ import { Readable } from 'stream';
  * Configuration for an MCP server
  */
 interface ServerConfig {
+  /** Transport type; "stdio" if omitted. Only "stdio" is validated/supported here — see
+   * {@link validateServerConfig}. */
+  transport?: string;
   /** Command to execute (e.g., "docker", "node", "npx") */
   command: string;
   /** Arguments to pass to the command */
@@ -110,13 +113,135 @@ function debug(...args: unknown[]): void {
 }
 
 /**
+ * Shell metacharacters that indicate potential command injection.
+ * Mirrors `FORBIDDEN_CHARS` in `mcp-execution-core`'s `command.rs`.
+ */
+const FORBIDDEN_CHARS = [';', '|', '&', '>', '<', '`', '$', '(', ')', '\n', '\r'];
+
+/**
+ * Forbidden environment variable names that pose security risks.
+ * Mirrors `FORBIDDEN_ENV_NAMES` in `mcp-execution-core`'s `command.rs`.
+ * `DYLD_*` is additionally rejected as a prefix match, not just these exact names.
+ */
+const FORBIDDEN_ENV_NAMES = [
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH',
+  'DYLD_FRAMEWORK_PATH',
+  'PATH',
+  'NODE_OPTIONS',
+  'BASH_ENV',
+];
+
+/**
+ * Validates a command or argument string for forbidden shell metacharacters.
+ *
+ * Mirrors `validate_command_string` in `mcp-execution-core`'s `command.rs`. The offending
+ * value itself is never included in the thrown message: MCP server commands/arguments
+ * routinely carry secrets (e.g. `--token=...`), and this error can surface into tool output
+ * visible to the calling model, not just an operator's terminal — mirroring the header-value
+ * redaction rule in `mcp-execution-core`'s `command.rs`.
+ *
+ * @param value - The command or argument string to validate
+ * @param context - Human-readable description of the value, used in error messages
+ * @throws {Error} If the value is not a string, is empty/whitespace-only, or contains a
+ *   forbidden character
+ */
+function validateCommandString(value: unknown, context: string): void {
+  if (typeof value !== 'string') {
+    throw new Error(`${context} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${context} cannot be empty`);
+  }
+  for (const forbidden of FORBIDDEN_CHARS) {
+    if (trimmed.includes(forbidden)) {
+      throw new Error(
+        `${context} contains forbidden shell metacharacter '${forbidden}' (value redacted: ` +
+        `MCP server commands/arguments may carry secrets)`
+      );
+    }
+  }
+}
+
+/**
+ * Validates an environment variable name against the forbidden list.
+ *
+ * Mirrors `validate_env_name` in `mcp-execution-core`'s `command.rs`.
+ *
+ * @param name - The environment variable name to validate
+ * @throws {Error} If the name is forbidden (exact match or `DYLD_*` prefix)
+ */
+function validateEnvName(name: string): void {
+  if (FORBIDDEN_ENV_NAMES.includes(name)) {
+    throw new Error(`Forbidden environment variable name: ${name}`);
+  }
+  if (name.startsWith('DYLD_')) {
+    throw new Error(`Forbidden environment variable prefix DYLD_: ${name}`);
+  }
+}
+
+/**
+ * Validates a server configuration for safe subprocess execution.
+ *
+ * `~/.claude/mcp.json` is re-read from disk on every server (re)connection, so
+ * a config that passed validation at `generate` time can later be edited to
+ * add e.g. `LD_PRELOAD` and bypass that one-time check. This re-validates the
+ * command, arguments, and environment variable names on every load, mirroring
+ * `mcp_execution_core::validate_server_config`'s stdio-transport checks
+ * (`command.rs`) — full parity with that function's http/sse checks (URL
+ * scheme, headers, timeouts) is intentionally out of scope, since this bridge
+ * only ever spawns a subprocess and has no http/sse client of its own. Fails
+ * closed by throwing rather than silently stripping the offending value, so
+ * an invalid config surfaces as a clear error instead of an unexpectedly
+ * sanitized spawn.
+ *
+ * @param config - The server configuration to validate
+ * @param serverId - Server identifier, used in error messages
+ * @throws {Error} If the transport is not "stdio", or the command, an argument, or an
+ *   environment variable name is unsafe
+ */
+function validateServerConfig(config: ServerConfig, serverId: string): void {
+  // `{"transport":"http",...}` is a valid mcp.json entry (all ServerConfig fields are
+  // optional on the Rust side), but this bridge only ever spawns a subprocess — reject it
+  // here with a clear message rather than letting `command`/`args` being `undefined` throw
+  // an opaque TypeError out of validateCommandString or Node's own spawn().
+  const transport = config.transport ?? 'stdio';
+  if (transport !== 'stdio') {
+    throw new Error(
+      `Server '${serverId}' is configured for '${transport}' transport, but this generated ` +
+      `runtime bridge only supports stdio transport servers.`
+    );
+  }
+
+  validateCommandString(config.command, `command for server '${serverId}'`);
+
+  const args: unknown = config.args ?? [];
+  if (!Array.isArray(args)) {
+    throw new Error(`args for server '${serverId}' must be an array of strings`);
+  }
+  args.forEach((arg, idx) => {
+    validateCommandString(arg, `argument ${idx} for server '${serverId}'`);
+  });
+
+  for (const envName of Object.keys(config.env ?? {})) {
+    validateEnvName(envName);
+  }
+}
+
+/**
  * Load server configuration from filesystem
  *
- * Looks for config in ~/.claude/mcp.json under mcpServers.{serverId}
+ * Looks for config in ~/.claude/mcp.json under mcpServers.{serverId}. The
+ * resolved configuration is validated via {@link validateServerConfig} before
+ * being returned, since this file can be edited after code generation.
  *
  * @param serverId - Server identifier (e.g., "github", "gdrive")
  * @returns Server configuration
- * @throws {Error} If config file not found or serverId not in config
+ * @throws {Error} If config file not found, serverId not in config, or the
+ *   resolved configuration fails security validation
  */
 async function loadServerConfig(serverId: string): Promise<ServerConfig> {
   const configPath = join(homedir(), '.claude', 'mcp.json');
@@ -133,7 +258,9 @@ async function loadServerConfig(serverId: string): Promise<ServerConfig> {
       );
     }
 
-    return config.mcpServers[serverId];
+    const serverConfig: ServerConfig = config.mcpServers[serverId];
+    validateServerConfig(serverConfig, serverId);
+    return serverConfig;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(
