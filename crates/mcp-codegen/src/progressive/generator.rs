@@ -213,6 +213,9 @@ impl<'a> ProgressiveGenerator<'a> {
     /// - `package.json`: ES module type declaration
     /// - `tsconfig.json`: compiler options allowing the `.ts`-extensioned imports above
     ///
+    /// Delegates to [`generate_with_categories`](Self::generate_with_categories) with an empty
+    /// categorization map, so `index.ts` contains no category grouping.
+    ///
     /// # Arguments
     ///
     /// * `server_info` - MCP server introspection data
@@ -261,127 +264,8 @@ impl<'a> ProgressiveGenerator<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    #[tracing::instrument(
-        skip_all,
-        fields(server_id = %server_info.id, tool_count = server_info.tools.len())
-    )]
     pub fn generate(&self, server_info: &ServerInfo) -> Result<GeneratedCode> {
-        tracing::info!(
-            "Generating progressive loading code for server: {}",
-            server_info.name
-        );
-
-        enforce_tool_count_bound(server_info)?;
-
-        let mut code = GeneratedCode::new();
-        let mut total_bytes = 0usize;
-        let server_id = server_info.id.as_str();
-        let typescript_names = resolve_typescript_names(&server_info.tools);
-        let mut tool_metadata = Vec::with_capacity(server_info.tools.len());
-
-        // Generate tool files (one per tool)
-        for (idx, tool) in server_info.tools.iter().enumerate() {
-            let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
-            let tool_context =
-                self.create_tool_context(server_id, tool, None, typescript_name.clone())?;
-            let tool_code = self
-                .engine
-                .render("progressive/tool", &tool_context)
-                .map_err(|source| {
-                    Self::wrap_tool_generation_error(tool, "render tool template", source)
-                })?;
-
-            add_tracked(
-                &mut code,
-                &mut total_bytes,
-                GeneratedFile {
-                    path: format!("{}.ts", tool_context.typescript_name),
-                    content: tool_code,
-                },
-            )
-            .map_err(|source| {
-                Self::wrap_tool_generation_error(tool, "track generated tool file", source)
-            })?;
-
-            tracing::debug!("Generated tool file: {}.ts", tool_context.typescript_name);
-
-            tool_metadata.push(self.create_tool_metadata(tool, None, typescript_name)?);
-        }
-
-        // Generate index.ts
-        let index_context = self.create_index_context(server_info, None, &typescript_names)?;
-        let index_code = self.engine.render("progressive/index", &index_context)?;
-
-        add_tracked(
-            &mut code,
-            &mut total_bytes,
-            GeneratedFile {
-                path: "index.ts".to_string(),
-                content: index_code,
-            },
-        )?;
-
-        tracing::debug!("Generated index.ts");
-
-        // Generate runtime bridge
-        let bridge_context = BridgeContext::default();
-        let bridge_code = self
-            .engine
-            .render("progressive/runtime-bridge", &bridge_context)?;
-
-        add_tracked(
-            &mut code,
-            &mut total_bytes,
-            GeneratedFile {
-                path: "_runtime/mcp-bridge.ts".to_string(),
-                content: bridge_code,
-            },
-        )?;
-
-        tracing::debug!("Generated _runtime/mcp-bridge.ts");
-
-        // Generate package.json for ES module identification and the @types/node devDependency
-        // needed for the runtime bridge to type-check (see PACKAGE_JSON doc comment)
-        add_tracked(
-            &mut code,
-            &mut total_bytes,
-            GeneratedFile {
-                path: "package.json".to_string(),
-                content: PACKAGE_JSON.to_string(),
-            },
-        )?;
-
-        tracing::debug!("Generated package.json");
-
-        // Generate tsconfig.json so `tsc --noEmit` accepts the `.ts`-extensioned import in
-        // each tool file (see TSCONFIG_JSON doc comment)
-        add_tracked(
-            &mut code,
-            &mut total_bytes,
-            GeneratedFile {
-                path: "tsconfig.json".to_string(),
-                content: TSCONFIG_JSON.to_string(),
-            },
-        )?;
-
-        tracing::debug!("Generated tsconfig.json");
-
-        // Generate _meta.json sidecar with structured tool metadata
-        add_tracked(
-            &mut code,
-            &mut total_bytes,
-            Self::create_metadata_file(server_info, tool_metadata)?,
-        )?;
-
-        tracing::debug!("Generated {}", METADATA_FILE_NAME);
-
-        tracing::info!(
-            "Successfully generated {} files for {} (progressive loading)",
-            code.file_count(),
-            server_info.name
-        );
-
-        Ok(code)
+        self.generate_with_categories(server_info, &HashMap::new())
     }
 
     /// Generates progressive loading files with categorization metadata.
@@ -446,10 +330,17 @@ impl<'a> ProgressiveGenerator<'a> {
         server_info: &ServerInfo,
         categorizations: &HashMap<String, ToolCategorization>,
     ) -> Result<GeneratedCode> {
-        tracing::info!(
-            "Generating progressive loading code with categorizations for server: {}",
-            server_info.name
-        );
+        if categorizations.is_empty() {
+            tracing::info!(
+                "Generating progressive loading code for server: {}",
+                server_info.name
+            );
+        } else {
+            tracing::info!(
+                "Generating progressive loading code with categorizations for server: {}",
+                server_info.name
+            );
+        }
 
         enforce_tool_count_bound(server_info)?;
 
@@ -565,11 +456,19 @@ impl<'a> ProgressiveGenerator<'a> {
 
         tracing::debug!("Generated {}", METADATA_FILE_NAME);
 
-        tracing::info!(
-            "Successfully generated {} files for {} with categorizations (progressive loading)",
-            code.file_count(),
-            server_info.name
-        );
+        if categorizations.is_empty() {
+            tracing::info!(
+                "Successfully generated {} files for {} (progressive loading)",
+                code.file_count(),
+                server_info.name
+            );
+        } else {
+            tracing::info!(
+                "Successfully generated {} files for {} with categorizations (progressive loading)",
+                code.file_count(),
+                server_info.name
+            );
+        }
 
         Ok(code)
     }
@@ -650,8 +549,12 @@ impl<'a> ProgressiveGenerator<'a> {
             })
             .collect();
 
-        // Build category groups if categorizations are provided
-        let category_groups = categorizations.map(|_| {
+        // Build category groups if categorizations are provided and non-empty. Filtering on
+        // emptiness (not just Option-ness) matters because `generate` delegates to
+        // `generate_with_categories` with `Some(&HashMap::new())`: an empty-but-`Some` map must
+        // behave identically to `None` (no category grouping), not synthesize a spurious
+        // "uncategorized" group.
+        let category_groups = categorizations.filter(|c| !c.is_empty()).map(|_| {
             let mut groups: HashMap<String, Vec<ToolSummary>> = HashMap::new();
 
             for tool in &tools {
@@ -1193,6 +1096,26 @@ mod tests {
         assert!(tool_files.contains(&"package.json"));
         assert!(tool_files.contains(&"tsconfig.json"));
         assert!(tool_files.contains(&"_meta.json"));
+    }
+
+    /// Regression guard for #279: `generate` delegates to `generate_with_categories` with an
+    /// empty categorization map, so `create_index_context` must gate its category-grouping
+    /// branch on emptiness, not just `Option`-ness — otherwise `Some(&HashMap::new())` produces
+    /// a spurious "uncategorized" `CategoryInfo` group in `index.ts` that `generate` never
+    /// produced before the delegation.
+    #[test]
+    fn test_generate_index_ts_has_no_category_grouping() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let code = generator.generate(&server_info).unwrap();
+        let index_file = code.files.iter().find(|f| f.path == "index.ts").unwrap();
+
+        assert!(
+            !index_file.content.contains("uncategorized"),
+            "generate()'s index.ts must not contain category grouping: {}",
+            index_file.content
+        );
     }
 
     /// Regression guard for #183: tool files import the runtime bridge with an explicit `.ts`
