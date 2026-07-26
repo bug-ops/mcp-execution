@@ -24,6 +24,7 @@ criterion = "0.8"
 dhat = "0.3"
 dialoguer = "0.12"
 dirs = "6.0"
+futures-util = "0.3"
 handlebars = "6.4"
 http = "1"
 mcp-execution-codegen = { path = "crates/mcp-codegen", version = "0.8.0" }

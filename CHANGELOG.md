@@ -49,6 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so they classify as `ExitCode::INVALID_INPUT` (2) instead of the generic `ExitCode::ERROR` (1)
   (#195).
 
+- **`mcp-execution-server`**: the stdio transport buffered incoming JSON-RPC request lines
+  without any size limit (`rmcp`'s `stdio()` reads via an unbounded `BufReader::read_until`,
+  bypassing its own codec's length check), so a single oversized line could grow memory use
+  without bound (#213). This closes the residual gap noted below in the `save_categorized_tools`
+  fix (#197), which bounded the processed array but not the raw wire payload. `main.rs` now
+  builds the transport from a `FramedRead`/`FramedWrite` pair using
+  `JsonRpcMessageCodec::new_with_max_length` (4 MiB cap) instead of `stdio()` directly; note the
+  cap bounds peak buffer growth to roughly 4x itself (~16 MiB), not 1:1, since `tokio_util`'s
+  internal buffer only checks the bound after doubling its capacity on a read — still strictly
+  bounded, just not as tight as the raw constant suggests. Because `tokio_util`'s `FramedImpl`
+  treats any decode error as terminal (the poll immediately following an `Err` unconditionally
+  yields `None`, ending the stream), a `bounded_request_stream` wrapper (now generic over
+  `AsyncRead` and unit-tested) swallows exactly that one sentinel `None` for a line-length or
+  parse error so an oversized or malformed line is dropped (logged via `tracing::warn!`) without
+  dropping the whole session — a genuine I/O error on the underlying reader still ends the
+  session, matching the prior transport's behavior.
+
 - **`mcp-execution-cli`**: a `~/.claude/mcp.json` mixing stdio entries with http/sse entries
   (`{"type": "http", "url": "...", ...}`, no `command` key) failed to deserialize the *entire*
   file with a misleading "missing field `command`" error, since `McpServerEntry` hardcoded a

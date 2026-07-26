@@ -1413,6 +1413,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs",
+ "futures-util",
  "mcp-execution-codegen",
  "mcp-execution-core",
  "mcp-execution-files",
