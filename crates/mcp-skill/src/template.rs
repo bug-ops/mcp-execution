@@ -268,6 +268,94 @@ mod tests {
         );
     }
 
+    /// Issue #298 (end-to-end): a tool description containing embedded line breaks
+    /// that mimic Markdown structure must not be able to inject a heading, a fenced
+    /// code block, or an extra list item into the rendered SKILL.md body. The
+    /// sanitization happens in `build_skill_context` (`context::group_by_category`),
+    /// so this exercises the real production pipeline rather than a hand-built
+    /// `GenerateSkillResult`.
+    #[test]
+    fn test_render_skill_md_end_to_end_flattens_injected_markdown_structure() {
+        use crate::build_skill_context;
+        use crate::parser::ParsedToolFile;
+
+        let hostile = ParsedToolFile {
+            name: "evil_tool".to_string(),
+            typescript_name: "evilTool".to_string(),
+            server_id: "test".to_string(),
+            category: Some("test".to_string()),
+            keywords: vec![],
+            description: Some(
+                "safe text\n### Injected Heading\n```\ninjected fenced block\n```\n\
+                 - fake list item"
+                    .to_string(),
+            ),
+            parameters: vec![],
+        };
+
+        let context = build_skill_context("test", std::slice::from_ref(&hostile), None);
+        let md = render_skill_md(&context).unwrap();
+
+        // The hostile description must be flattened to a single line before reaching
+        // the template: no new heading line (only the one legitimate "### Test"
+        // category heading may start a line), and no new fenced-code-block *delimiter
+        // line* beyond the 4 static ```bash ... ``` pairs already present in the
+        // "Usage" section. A literal "```" surviving mid-line (not at line start) is
+        // inert Markdown-wise — a fence only opens/closes at the start of a line —
+        // so the check must look at line starts, not raw substring counts.
+        assert_eq!(
+            md.lines().filter(|l| l.starts_with("###")).count(),
+            1,
+            "tool description must not introduce a new heading line: {md}"
+        );
+        assert_eq!(
+            md.lines()
+                .filter(|l| l.trim_start().starts_with("```"))
+                .count(),
+            8,
+            "tool description must not introduce a new fenced-code-block delimiter line: {md}"
+        );
+        assert!(
+            md.contains("Injected Heading"),
+            "sanitized content must still render, just inert"
+        );
+    }
+
+    /// S2 (end-to-end): `category` is exactly as untrusted as `description` — the
+    /// `_meta.json` sidecar stores it raw — and it reaches SKILL.md as a `###
+    /// {{display_name}}` heading via `humanize_category`. A malicious category must
+    /// not be able to inject its own heading line.
+    #[test]
+    fn test_render_skill_md_end_to_end_flattens_injected_category_heading() {
+        use crate::build_skill_context;
+        use crate::parser::ParsedToolFile;
+
+        let hostile = ParsedToolFile {
+            name: "evil_tool".to_string(),
+            typescript_name: "evilTool".to_string(),
+            server_id: "test".to_string(),
+            category: Some("issues\n### Injected Heading".to_string()),
+            keywords: vec![],
+            description: Some("safe description".to_string()),
+            parameters: vec![],
+        };
+
+        let context = build_skill_context("test", std::slice::from_ref(&hostile), None);
+        let md = render_skill_md(&context).unwrap();
+
+        // Only the one legitimate category heading may start a line; the injected
+        // "### Injected Heading" must have been flattened into that same line.
+        assert_eq!(
+            md.lines().filter(|l| l.starts_with("###")).count(),
+            1,
+            "hostile category must not introduce a new heading line: {md}"
+        );
+        assert!(
+            md.contains("Injected Heading"),
+            "sanitized content must still render, just inert"
+        );
+    }
+
     #[test]
     fn test_yaml_quote() {
         assert_eq!(yaml_quote("simple"), "\"simple\"");
