@@ -36,7 +36,26 @@ static SKILL_DESC_REGEX: LazyLock<Regex> =
 ///
 /// Replaces the home directory with `~` to avoid leaking usernames and
 /// full filesystem paths in error messages.
-fn sanitize_path_for_error(path: &Path) -> String {
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::sanitize_path_for_error;
+/// use std::path::Path;
+///
+/// // A path outside the home directory is left unchanged.
+/// assert_eq!(sanitize_path_for_error(Path::new("/tmp/x")), "/tmp/x");
+///
+/// // A path under the home directory has it redacted to `~`.
+/// let home = dirs::home_dir().expect("home dir available in this environment");
+/// let under_home = home.join("secret-file.md");
+/// assert_eq!(
+///     sanitize_path_for_error(&under_home),
+///     format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
+/// );
+/// ```
+#[must_use]
+pub fn sanitize_path_for_error(path: &Path) -> String {
     dirs::home_dir().map_or_else(
         || path.display().to_string(),
         |home| {
@@ -440,6 +459,21 @@ mod tests {
     use super::*;
     use mcp_execution_core::metadata::{ParameterMetadata, ToolMetadata};
     use tempfile::TempDir;
+
+    #[test]
+    fn sanitize_path_for_error_redacts_home_directory() {
+        let home = dirs::home_dir().expect("home dir available in this environment");
+        let under_home = home.join("secret-file.md");
+        assert_eq!(
+            sanitize_path_for_error(&under_home),
+            format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
+        );
+    }
+
+    #[test]
+    fn sanitize_path_for_error_leaves_non_home_path_unchanged() {
+        assert_eq!(sanitize_path_for_error(Path::new("/tmp/x")), "/tmp/x");
+    }
 
     fn sample_metadata(tool_count: usize) -> ServerMetadata {
         ServerMetadata {
