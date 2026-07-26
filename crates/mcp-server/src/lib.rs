@@ -48,6 +48,7 @@
 //! - **Progressive loading**: 98% token savings (30,000 → 500-1,500 tokens)
 //! - **Type-safe**: Full TypeScript types from MCP schemas
 //! - **Discoverable**: grep-friendly headers for tool discovery
+#![warn(missing_docs, missing_debug_implementations)]
 
 pub mod clock;
 mod output_dir;

@@ -353,7 +353,12 @@ async fn test_scan_directory_permission_denied() {
             .unwrap();
 
         let result = scan_tools_directory(&restricted_dir).await;
-        assert!(result.is_err());
+        match result {
+            Err(ScanError::Io(err)) => {
+                assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+            }
+            other => panic!("expected ScanError::Io(PermissionDenied), got: {other:?}"),
+        }
 
         // Restore permissions for cleanup
         let mut perms = tokio::fs::metadata(&restricted_dir)
