@@ -19,6 +19,7 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 dirs = { workspace = true }
+futures-util = { workspace = true }
 mcp-execution-codegen = { workspace = true }
 mcp-execution-core = { workspace = true }
 mcp-execution-files = { workspace = true }
@@ -36,7 +37,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "sync",
 ] }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["codec"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
