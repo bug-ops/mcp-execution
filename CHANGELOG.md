@@ -214,6 +214,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-cli`**: `Cli`/`Commands` derived a plain `Debug`, so `Commands::Introspect`'s
+  `env`/`headers` and `Commands::Generate`'s `server_env`/`server_headers` — raw `KEY=VALUE`
+  strings straight from argv, routinely carrying secrets — were printed in full wherever the
+  parsed CLI value was debug-formatted, before `TransportArgs`/`McpTransport` ever got a chance
+  to redact them (#245). `Cli` and `Commands` now have hand-written `Debug` impls that reuse
+  `mcp_execution_core::RedactedItems` (the shared redaction helper introduced above) to replace
+  each `env`/`headers`/`server_env`/`server_headers` entry wholesale with `<redacted>`;
+  `args`/`server_args` (positional, not secret-shaped) are printed unchanged.
+
+- **`mcp-execution-cli`**: `--format` was declared as a raw `String` and parsed into
+  `mcp_execution_core::cli::OutputFormat` by hand in `main.rs` after clap had already finished
+  parsing, so an invalid value (e.g. `--format xml`) surfaced as a generic anyhow error instead
+  of clap's own usage error, `--help` gave no indication of the accepted values beyond the doc
+  comment, and generated shell completions offered filename completion for `--format` instead of
+  its three valid values (#206). `--format` is now typed as `OutputFormat` directly, using a
+  `PossibleValuesParser` mapped through `OutputFormat::from_str` rather than clap's blanket
+  `FromStr`-based parser, so all three symptoms are fixed together: `--help` now lists
+  `[possible values: json, text, pretty]`, an invalid value is rejected by clap itself with that
+  same list, `completions bash` (and the other supported shells) now complete `--format` from
+  `json`/`text`/`pretty` instead of the filesystem, and `main.rs` no longer needs its own
+  post-parse `parse::<OutputFormat>()` step. The `#[arg(...)]` also sets `ignore_case = true`, so
+  `--format JSON`/`--format Pretty` (mixed/upper case) still parse successfully, matching the
+  case-insensitive matching `OutputFormat::from_str` already performed on the previous
+  `String`-typed field.
+
 - **`mcp-execution-codegen`**: the generated runtime bridge (`_runtime/mcp-bridge.ts`) attached a
   fresh `stdout` listener per `callMCPTool` call and resolved on the first complete JSON-RPC
   message with an `id`, without checking that the `id` matched the request it sent. Two
