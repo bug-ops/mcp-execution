@@ -1361,6 +1361,7 @@ version = "0.8.0"
 dependencies = [
  "axum",
  "criterion",
+ "futures-util",
  "http",
  "mcp-execution-core",
  "rmcp",

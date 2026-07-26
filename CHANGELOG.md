@@ -261,6 +261,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point — the bare username is scrubbed from the rendered path as a defense-in-depth fallback
   rather than the previous behavior of returning the path unredacted.
 
+- **`mcp-execution-introspector`**: `Introspector::discover_server`'s stdio discovery path read
+  each response line from a spawned MCP server's stdout via rmcp's default `(ChildStdout,
+  ChildStdin)` transport, which buffers via an unbounded `read_until` that bypasses
+  `JsonRpcMessageCodec`'s own `max_length` entirely — a malicious or misbehaving server could
+  grow a single unterminated line without limit, and this also bypassed this crate's own
+  `MAX_TOOL_COUNT`/`MAX_SCHEMA_SIZE_BYTES` bounds, since those only run after the line has
+  already been fully buffered (#225, raised from P3 to P2 during audit: reachable from the
+  long-running `mcp-execution-server` process, not just the CLI). Stdio discovery now wires
+  stdout through a size-bounded `FramedRead` (new private `bounded_response_stream` helper,
+  4 MiB cap, matching `mcp-execution-server`'s own request-line bound though not its
+  derivation — see the constant's doc comment) instead, dropping an oversized or malformed
+  line without ending the session — a malformed-JSON line is treated as recoverable, not
+  fatal, since real MCP servers commonly log free-form text to stdout alongside the protocol
+  stream and the previous transport already tolerated that. A genuine I/O error on the
+  underlying pipe still ends the session. Recovery itself goes through a new private
+  `BoundedResponseDecoder` wrapper, not the codec directly: `tokio_util`'s `FramedRead`
+  treats any decoder error (or a bare "needs more data" signal) as reason to stop re-scanning
+  its buffer and instead wait on another underlying read, which stranded a message that was
+  already fully buffered right behind a bad line whenever the peer had nothing further to send
+  — turning the "tolerate a noisy line" policy into a stall ending in `Error::Timeout` instead.
+  The wrapper folds recoverable errors into the decoded item type and keeps decoding the
+  residual buffer immediately, so `FramedRead` never leaves its normal readable state on a
+  recoverable error. The HTTP/SSE discovery path (#226) has no equivalent fix available: `rmcp` 2.2.0's Streamable HTTP
+  client transport buffers each response body and SSE event fully in memory with no size-limit
+  config knob, and adding one from this crate would mean reimplementing a large part of that
+  transport. `Introspector::discover_server` now documents this gap in a `# Security` doc
+  section; `rmcp` 3.0.0's `max_sse_event_size` (currently only in a beta release) is the
+  concrete condition to revisit it under.
+
 - **`mcp-execution-cli`**: `Commands::Introspect`'s `http`/`sse` and `Commands::Generate`'s
   `http_url`/`sse_url` fields are now wrapped in `RedactedUrl` in their hand-written `Debug`
   impls, closing the last unredacted path by which a raw, unparsed URL argument — which can
