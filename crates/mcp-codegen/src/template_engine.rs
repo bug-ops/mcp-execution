@@ -55,6 +55,14 @@ impl<'a> TemplateEngine<'a> {
         // Strict mode: fail on missing variables
         handlebars.set_strict_mode(true);
 
+        // Handlebars HTML-escapes `{{var}}` by default (`&`, `<`, `>`, `"`, `'`),
+        // which corrupts the TypeScript/JSDoc source this engine generates. Injection
+        // safety is instead enforced upstream by `sanitize_jsdoc` and
+        // `sanitize_ts_string_literal` (see `progressive/generator.rs`), which run
+        // before rendering and strip the sequences that actually matter (`*/`,
+        // unescaped quotes, newlines).
+        handlebars.register_escape_fn(handlebars::no_escape);
+
         // Register progressive loading templates
         Self::register_progressive_templates(&mut handlebars)?;
 
@@ -228,5 +236,20 @@ mod tests {
     #[test]
     fn test_default_trait() {
         let _engine = TemplateEngine::default();
+    }
+
+    #[test]
+    fn test_render_does_not_html_escape() {
+        // Handlebars HTML-escapes `{{var}}` by default; this project's templates
+        // interpolate into TypeScript/JSDoc, not HTML, so that must be disabled.
+        let mut engine = TemplateEngine::new().unwrap();
+        engine
+            .register_template_string("test-no-escape", "{{value}}")
+            .unwrap();
+
+        let context = json!({"value": "a && b < c > d \"e\" 'f'"});
+        let result = engine.render("test-no-escape", &context).unwrap();
+
+        assert_eq!(result, "a && b < c > d \"e\" 'f'");
     }
 }

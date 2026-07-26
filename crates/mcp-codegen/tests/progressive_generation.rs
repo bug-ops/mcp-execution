@@ -506,18 +506,69 @@ fn test_progressive_tool_with_complex_types() {
     );
 }
 
+/// Name of the `tsc` executable to spawn directly via [`std::process::Command`].
+///
+/// `npm install -g typescript` installs `tsc` as a `.cmd`/`.ps1` shim script on Windows, not
+/// a `.exe`. Windows' `CreateProcess` (which `Command` calls into directly, bypassing a
+/// shell) only appends the `.exe` extension when none is given — it does not consult
+/// `PATHEXT` the way `cmd.exe` does — so `Command::new("tsc")` silently fails to find it even
+/// though `tsc` resolves fine when typed at a Windows shell prompt. Elsewhere, the real `tsc`
+/// binary (or symlink to one) is on `PATH` unqualified.
+const fn tsc_program() -> &'static str {
+    if cfg!(windows) { "tsc.cmd" } else { "tsc" }
+}
+
+/// Ensures `tsc` (and, if `require_node`, `node`) are available on `PATH` before a test that
+/// depends on the TypeScript/Node toolchain runs.
+///
+/// In CI (the `CI` env var is set — GitHub Actions sets it for every job) a missing
+/// toolchain is a hard test failure rather than a silent skip: these tests exist
+/// specifically to catch TypeScript-level regressions (e.g. #201's runtime-bridge
+/// validation, #176's generated-wrapper type errors) that no Rust-only check can see, and a
+/// CI runner missing Node/tsc would otherwise report green while running zero of that
+/// coverage. Locally (no `CI` env var), a missing toolchain just skips the test with a
+/// message, since not everyone running `cargo test` has Node installed.
+///
+/// Returns `true` if the required tools are present and the test should proceed.
+fn require_ts_toolchain(test_name: &str, require_node: bool) -> bool {
+    let tsc_missing = Command::new(tsc_program())
+        .arg("--version")
+        .output()
+        .is_err();
+    let node_missing = require_node && Command::new("node").arg("--version").output().is_err();
+
+    if !tsc_missing && !node_missing {
+        return true;
+    }
+
+    let missing = match (tsc_missing, node_missing) {
+        (true, true) => "`tsc` and `node`",
+        (true, false) => "`tsc`",
+        (false, true) => "`node`",
+        (false, false) => unreachable!("checked above"),
+    };
+
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{test_name}: {missing} not found on PATH in CI — this test exists to catch \
+         TypeScript-level regressions and must not silently skip in CI. Install Node.js and \
+         run `npm install -g typescript` in this CI job."
+    );
+
+    eprintln!("skipping {test_name}: {missing} not found on PATH");
+    false
+}
+
 /// Regression guard for #176: generated tool wrappers must actually type-check under
 /// `tsc --strict --noEmit`, not merely contain the right substrings. Type-checks the real
 /// generated `createIssue.ts` against a minimal stub of `callMCPTool` (mirroring the
 /// signature declared in `runtime-bridge.ts.hbs`) rather than the full runtime bridge, so
 /// the test stays offline and doesn't depend on `@types/node` being installed.
 ///
-/// Skips (does not fail) when `tsc` is not on `PATH`, since the TypeScript toolchain isn't
-/// guaranteed to be present in every environment this suite runs in.
+/// Skips locally (hard-fails in CI — see `require_ts_toolchain`) when `tsc` is not on `PATH`.
 #[test]
 fn test_generated_tool_passes_tsc_noemit() {
-    if Command::new("tsc").arg("--version").output().is_err() {
-        eprintln!("skipping test_generated_tool_passes_tsc_noemit: `tsc` not found on PATH");
+    if !require_ts_toolchain("test_generated_tool_passes_tsc_noemit", false) {
         return;
     }
 
@@ -601,7 +652,7 @@ fn test_generated_tool_passes_tsc_noemit() {
     )
     .expect("Failed to write tsconfig.json");
 
-    let output = Command::new("tsc")
+    let output = Command::new(tsc_program())
         .arg("--noEmit")
         .arg("-p")
         .arg(dir.path().join("tsconfig.json"))
@@ -613,5 +664,247 @@ fn test_generated_tool_passes_tsc_noemit() {
         "tsc --noEmit failed on generated createIssue.ts:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Compiles `bridge_ts` (the rendered runtime bridge) alongside a harness that calls
+/// `callMCPTool(server_id, "noop", {})`, runs it under Node with `$HOME`/`%USERPROFILE%`
+/// pointed at a temp directory containing `mcp_json` as `~/.claude/mcp.json`, and returns
+/// `(exit_success, stdout, stderr)`.
+///
+/// Uses `tsc --noCheck` (type-erasure only, no type-checking) so this doesn't need
+/// `@types/node` installed to resolve the bridge's Node builtin imports (`child_process`,
+/// `fs/promises`, `os`, `path`, `stream`).
+///
+/// A hostile/unvalidated config that reaches `spawn()` can hang forever here (the bridge
+/// waits on a JSON-RPC response from a subprocess that will never send one) — that's
+/// exactly the failure mode these tests exist to catch, so the harness itself races a 5s
+/// watchdog against `callMCPTool`'s promise, and this helper additionally bounds the whole
+/// Node run at 15s so a regression fails the test suite instead of hanging it.
+///
+/// Returns `None` if `tsc`/`node` are not on `PATH` and the caller should skip locally; hard
+/// fails (via `require_ts_toolchain`) instead of returning `None` when running in CI.
+fn run_bridge_harness(
+    test_name: &str,
+    bridge_ts: &str,
+    mcp_json: &serde_json::Value,
+    server_id: &str,
+) -> Option<(bool, String, String)> {
+    if !require_ts_toolchain(test_name, true) {
+        return None;
+    }
+
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let home_dir = dir.path().join("home");
+    let claude_dir = home_dir.join(".claude");
+    std::fs::create_dir_all(&claude_dir).expect("Failed to create fake $HOME/.claude");
+    std::fs::write(claude_dir.join("mcp.json"), mcp_json.to_string())
+        .expect("Failed to write mcp.json");
+
+    let src_dir = dir.path().join("src");
+    std::fs::create_dir_all(&src_dir).expect("Failed to create src dir");
+    // `--module NodeNext` picks CJS vs. ESM emit per-file based on the nearest
+    // `package.json`'s "type" field, resolved from the *source* file's location — not the
+    // `--outDir`. Without this, tsc silently emits CommonJS (`require`/`exports`), which
+    // then fails at runtime once Node sees `dist/package.json`'s `"type": "module"`.
+    std::fs::write(src_dir.join("package.json"), "{\"type\":\"module\"}\n")
+        .expect("Failed to write src/package.json");
+    std::fs::write(src_dir.join("mcp-bridge.ts"), bridge_ts)
+        .expect("Failed to write mcp-bridge.ts");
+    std::fs::write(
+        src_dir.join("harness.ts"),
+        format!(
+            "import {{ callMCPTool }} from './mcp-bridge.js';\n\
+             \n\
+             const watchdog = setTimeout(() => {{\n\
+             \x20\x20console.log('TIMEOUT: did not settle before spawning');\n\
+             \x20\x20process.exit(2);\n\
+             }}, 5000);\n\
+             \n\
+             callMCPTool('{server_id}', 'noop', {{}}).then(\n\
+             \x20\x20() => {{\n\
+             \x20\x20\x20\x20clearTimeout(watchdog);\n\
+             \x20\x20\x20\x20console.log('UNEXPECTED_SUCCESS');\n\
+             \x20\x20\x20\x20process.exit(1);\n\
+             \x20\x20}},\n\
+             \x20\x20(err: unknown) => {{\n\
+             \x20\x20\x20\x20clearTimeout(watchdog);\n\
+             \x20\x20\x20\x20console.log('REJECTED:', String(err));\n\
+             \x20\x20\x20\x20process.exit(0);\n\
+             \x20\x20}}\n\
+             );\n"
+        ),
+    )
+    .expect("Failed to write harness.ts");
+
+    let dist_dir = dir.path().join("dist");
+    let tsc_output = Command::new(tsc_program())
+        .args(["--noCheck", "--module", "NodeNext", "--moduleResolution"])
+        .arg("NodeNext")
+        .arg("--target")
+        .arg("ES2022")
+        .arg("--outDir")
+        .arg(&dist_dir)
+        .arg(src_dir.join("mcp-bridge.ts"))
+        .arg(src_dir.join("harness.ts"))
+        .output()
+        .expect("Failed to run tsc");
+    assert!(
+        tsc_output.status.success(),
+        "tsc failed to compile the rendered runtime bridge:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&tsc_output.stdout),
+        String::from_utf8_lossy(&tsc_output.stderr)
+    );
+    std::fs::write(dist_dir.join("package.json"), "{\"type\":\"module\"}\n")
+        .expect("Failed to write dist/package.json");
+
+    let harness_path = dist_dir.join("harness.js");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = Command::new("node")
+            .arg(&harness_path)
+            // Node's `os.homedir()` — which `loadServerConfig()` uses to find
+            // `~/.claude/mcp.json` — reads `$HOME` on POSIX but `%USERPROFILE%` on Windows;
+            // both must point at the fake home directory for the harness to isolate itself
+            // from the real runner's home on every platform.
+            .env("HOME", &home_dir)
+            .env("USERPROFILE", &home_dir)
+            .output();
+        let _ = tx.send(result);
+    });
+
+    let output = rx
+        .recv_timeout(std::time::Duration::from_secs(15))
+        .unwrap_or_else(|_| {
+            panic!(
+                "node harness did not exit within 15s; the bridge may be hanging on an \
+                 unvalidated spawn instead of rejecting the hostile config"
+            )
+        })
+        .expect("Failed to run node");
+
+    Some((
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    ))
+}
+
+/// Behavioral regression guard for #201: a hostile `~/.claude/mcp.json` entry (a forbidden
+/// `LD_PRELOAD` env var) must be rejected by the rendered `_runtime/mcp-bridge.ts` before it
+/// ever spawns the configured subprocess. Unlike a string-grep over the rendered source (see
+/// `test_generate_runtime_bridge_declares_forbidden_env_var_list` in
+/// `progressive/generator.rs`, which can pass even against dead/unreachable validation code),
+/// this actually compiles and executes the bridge under Node.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_forbidden_env_var_before_spawn() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    // Benign command/args (no shell metacharacters) so the metacharacter check doesn't fire
+    // first and mask the env-var check under test.
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": { "LD_PRELOAD": "/tmp/evil.so" }
+            }
+        }
+    });
+
+    // `require_ts_toolchain` (called inside `run_bridge_harness`) already prints the skip
+    // reason locally and hard-fails in CI, so a missing toolchain here just means "skip".
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_forbidden_env_var_before_spawn",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the hostile LD_PRELOAD config before spawning:\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("LD_PRELOAD"),
+        "rejection reason should name the forbidden env var: {stdout}"
+    );
+}
+
+/// Behavioral regression guard for #201's critic follow-up (S3): `{"transport":"http",...}`
+/// is a valid `mcp.json` entry since #200 (all `ServerConfig` fields are `#[serde(default)]`
+/// on the Rust side). Before this fix, the bridge's validator called `.trim()` on the
+/// `undefined` `command`/`args` an http-transport entry has, throwing an opaque
+/// `TypeError: Cannot read properties of undefined (reading 'trim')`. This runtime bridge
+/// only ever spawns a subprocess (stdio transport); a non-stdio config must be rejected with
+/// a clear, intentional error instead of that crash.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_with_clear_error_not_crash() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp"
+            }
+        }
+    });
+
+    // `require_ts_toolchain` (called inside `run_bridge_harness`) already prints the skip
+    // reason locally and hard-fails in CI, so a missing toolchain here just means "skip".
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_with_clear_error_not_crash",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the http-transport config cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Cannot read properties of undefined"),
+        "must fail with a clear, intentional error, not the pre-fix opaque TypeError: {stdout}"
+    );
+    assert!(
+        stdout.contains("http") || stdout.contains("transport"),
+        "rejection reason should mention the unsupported transport: {stdout}"
     );
 }

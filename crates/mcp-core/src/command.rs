@@ -45,7 +45,9 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
     "DYLD_INSERT_LIBRARIES",
     "DYLD_LIBRARY_PATH",
     "DYLD_FRAMEWORK_PATH",
-    "PATH", // Block PATH override to prevent binary substitution
+    "PATH",         // Block PATH override to prevent binary substitution
+    "NODE_OPTIONS", // Lets a config inject e.g. `--require /tmp/evil.js` into any Node subprocess
+    "BASH_ENV",     // Sourced by non-interactive `bash` before running a script/command
 ];
 
 /// Upper bound for `connect_timeout`/`discover_timeout`, matching the
@@ -67,7 +69,8 @@ const MAX_TIMEOUT: Duration = Duration::from_mins(10);
 /// # Security Rules
 ///
 /// - **Forbidden chars in command/args**: `;`, `|`, `&`, `>`, `<`, `` ` ``, `$`, `(`, `)`, `\n`, `\r`
-/// - **Forbidden env names**: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`
+/// - **Forbidden env names**: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`,
+///   `NODE_OPTIONS`, `BASH_ENV`
 /// - **Absolute paths**: Must exist and be executable
 /// - **Binary names**: Allowed (resolved via PATH at runtime)
 /// - **URL scheme**: Must be `http://` or `https://`
@@ -593,6 +596,38 @@ mod tests {
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("PATH"));
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_forbidden_env_node_options() {
+        // NODE_OPTIONS lets a config inject e.g. `--require /tmp/evil.js` into any Node
+        // subprocess the server itself spawns.
+        let config = ServerConfig::builder()
+            .command("node".to_string())
+            .env(
+                "NODE_OPTIONS".to_string(),
+                "--require /tmp/evil.js".to_string(),
+            )
+            .build();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("NODE_OPTIONS"));
+        }
+    }
+
+    #[test]
+    fn test_validate_server_config_forbidden_env_bash_env() {
+        // BASH_ENV is sourced by non-interactive `bash` before running a script or command.
+        let config = ServerConfig::builder()
+            .command("bash".to_string())
+            .env("BASH_ENV".to_string(), "/tmp/evil.sh".to_string())
+            .build();
+        let result = validate_server_config(&config);
+        assert!(result.is_err());
+        if let Err(Error::SecurityViolation { reason }) = result {
+            assert!(reason.contains("BASH_ENV"));
         }
     }
 

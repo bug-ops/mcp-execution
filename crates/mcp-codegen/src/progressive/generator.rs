@@ -649,9 +649,14 @@ impl<'a> ProgressiveGenerator<'a> {
 /// Sanitizes a server-controlled string for safe interpolation into JSDoc block comments.
 ///
 /// Prevents JSDoc comment terminator injection by replacing `*/` sequences,
-/// stripping newlines, and truncating to a safe maximum length.
+/// stripping newlines (including U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR,
+/// which ECMAScript treats as line terminators and which therefore also terminate a `//`
+/// line comment even though they aren't ASCII `\r`/`\n`), and truncating to a safe maximum
+/// length.
 fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
-    let sanitized = s.replace("*/", "*\\/").replace(['\r', '\n'], " ");
+    let sanitized = s
+        .replace("*/", "*\\/")
+        .replace(['\r', '\n', '\u{2028}', '\u{2029}'], " ");
     if sanitized.chars().count() > max_len {
         sanitized.chars().take(max_len).collect()
     } else {
@@ -663,12 +668,16 @@ fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
 ///
 /// Backslashes are escaped before quotes so the backslash introduced by quote-escaping
 /// is not itself re-escaped. Carriage returns and newlines are escaped so the value
-/// cannot terminate the literal by injecting a raw line break.
+/// cannot terminate the literal by injecting a raw line break. U+2028/U+2029 are also
+/// escaped: legal but unescaped inside a string literal only since ES2019, so a raw
+/// occurrence would be a syntax error for consumers targeting an older ECMAScript target.
 fn sanitize_ts_string_literal(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('\'', "\\'")
         .replace('\r', "\\r")
         .replace('\n', "\\n")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
 }
 
 /// JavaScript/TypeScript reserved words that cannot be used as a function or export
@@ -1326,6 +1335,57 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_jsdoc_replaces_unicode_line_terminators() {
+        // U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) are treated as line
+        // terminators by ECMAScript, so they terminate a `//` line comment (e.g.
+        // `index.ts.hbs`'s `// --- {{name}} ---` category header) even though they are not
+        // ASCII `\r`/`\n` and were never covered by Handlebars' HTML-escaping either.
+        assert_eq!(
+            sanitize_jsdoc("line1\u{2028}line2\u{2029}line3", 256),
+            "line1 line2 line3"
+        );
+    }
+
+    #[test]
+    fn test_generate_with_categories_sanitizes_unicode_line_terminator_in_category() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let mut categorizations = HashMap::new();
+        categorizations.insert(
+            "create_issue".to_string(),
+            ToolCategorization {
+                category: "issues\u{2028}export const pwned = 1;".to_string(),
+                keywords: String::new(),
+                short_description: "Create a new issue".to_string(),
+            },
+        );
+
+        let code = generator
+            .generate_with_categories(&server_info, &categorizations)
+            .unwrap();
+        let index = code.files.iter().find(|f| f.path == "index.ts").unwrap();
+
+        // The sanitized category text (including the literal "export const pwned = 1;"
+        // substring) is expected to still appear, harmlessly, inside the `// --- ... ---`
+        // comment. What must NOT happen is U+2028 terminating that comment early and
+        // letting "export const pwned" start a fresh, live top-level statement.
+        assert!(
+            index
+                .content
+                .contains("// --- issues export const pwned = 1; ---"),
+            "sanitized category text should remain inert inside the comment: {}",
+            index.content
+        );
+        assert!(
+            !index.content.contains("\nexport const pwned"),
+            "U+2028 must not terminate the `// --- {{category}} ---` line comment and \
+             inject a live top-level statement: {}",
+            index.content
+        );
+    }
+
+    #[test]
     fn test_sanitize_jsdoc_truncates() {
         let long = "a".repeat(300);
         assert_eq!(sanitize_jsdoc(&long, 256).chars().count(), 256);
@@ -1359,6 +1419,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_sanitize_ts_string_literal_escapes_unicode_line_terminators() {
+        // U+2028/U+2029 are legal-but-unescaped inside a string literal only since ES2019;
+        // a raw occurrence is a syntax error for consumers targeting an older ES target.
+        assert_eq!(
+            sanitize_ts_string_literal("line1\u{2028}line2\u{2029}line3"),
+            "line1\\u2028line2\\u2029line3"
+        );
+    }
+
     // `sanitize_ts_identifier`'s core behavior (invalid-char replacement, leading-digit
     // and empty-string prefixing) is unit-tested in `common::typescript`, its canonical
     // home now that it's a shared `pub fn`; this test covers the passthrough case that's
@@ -1386,10 +1456,24 @@ mod tests {
             })
             .unwrap();
 
+        // Scoped to the `callMCPTool(...)` call site itself: the JSDoc header above it
+        // legitimately echoes the raw tool name inside a `/** */` block comment (quotes
+        // there are inert, not code), so a whole-file substring check would false-positive
+        // on that comment. The security property under test is that `name_literal`
+        // (escaped via `sanitize_ts_string_literal`) can't break out of the single-quoted
+        // string literal actually passed to `callMCPTool`.
+        // Matches the actual invocation (`return (await callMCPTool(...`) rather than any
+        // line merely containing "callMCPTool(" — a future `@example` line in the JSDoc
+        // above (which legitimately shows `callMCPTool(...)` usage in prose) would otherwise
+        // silently redirect this assertion to the wrong line.
+        let call_site_line = tool
+            .content
+            .lines()
+            .find(|line| line.contains("return (await callMCPTool("))
+            .expect("generated tool file must contain a callMCPTool(...) invocation");
         assert!(
-            !tool.content.contains("'); alert('pwned"),
-            "raw quote must not break out of the callMCPTool string literal: {}",
-            tool.content
+            !call_site_line.contains("'); alert('pwned"),
+            "raw quote must not break out of the callMCPTool string literal: {call_site_line}"
         );
     }
 
@@ -1721,6 +1805,81 @@ mod tests {
             "truncation must not re-open the JSDoc comment: {sanitized}"
         );
         assert_eq!(sanitized.chars().count(), max_len);
+    }
+
+    #[test]
+    fn test_generate_runtime_bridge_declares_forbidden_env_var_list() {
+        // Cheap, offline snapshot check that the rendered bridge's `FORBIDDEN_ENV_NAMES`
+        // literal contains the expected names. This is NOT a drift guard: the names below
+        // are hardcoded here a third time, independent of `mcp-core`'s `command.rs` — adding
+        // a name to `command.rs` alone would not fail this test, since nothing here reads
+        // that list. (A real Rust/TypeScript drift guard is tracked separately; the two
+        // copies are currently kept in sync by hand.) This also does NOT prove the validator
+        // is reachable or enforced at runtime — a `grep`-style assertion can pass even
+        // against dead code (e.g. an unreachable function, or one whose result is never
+        // checked). The actual behavioral regression guard for #201 — that a hostile
+        // `~/.claude/mcp.json` is rejected before any subprocess is spawned — lives in
+        // `crates/mcp-codegen/tests/progressive_generation.rs`
+        // (`test_runtime_bridge_rejects_forbidden_env_var_before_spawn`), which compiles and
+        // actually executes the rendered bridge under Node.
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let code = generator.generate(&server_info).unwrap();
+        let bridge = code
+            .files
+            .iter()
+            .find(|f| f.path == "_runtime/mcp-bridge.ts")
+            .unwrap();
+
+        for forbidden_env in [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+            "PATH",
+            "NODE_OPTIONS",
+            "BASH_ENV",
+        ] {
+            assert!(
+                bridge.content.contains(&format!("'{forbidden_env}'")),
+                "runtime bridge must list forbidden env var {forbidden_env}: {}",
+                bridge.content
+            );
+        }
+    }
+
+    #[test]
+    fn test_generate_preserves_benign_punctuation() {
+        // Issue #204 regression: Handlebars' default HTML-escaping corrupted benign
+        // punctuation (apostrophes, ampersands, comparison operators) in JSDoc comments,
+        // turning e.g. `don't` into `don&#x27;t` or `a < b` into `a &lt; b`.
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        server_info.tools[0].description =
+            "Compares values: a < b && b > c, or use \"quotes\" & don't forget 'em".to_string();
+
+        let code = generator.generate(&server_info).unwrap();
+        let tool = code
+            .files
+            .iter()
+            .find(|f| f.path == "createIssue.ts")
+            .unwrap();
+
+        assert!(
+            tool.content
+                .contains("a < b && b > c, or use \"quotes\" & don't forget 'em"),
+            "benign punctuation must survive verbatim, not be HTML-escaped: {}",
+            tool.content
+        );
+        for entity in ["&lt;", "&gt;", "&amp;", "&quot;", "&#x27;", "&#39;"] {
+            assert!(
+                !tool.content.contains(entity),
+                "output must not contain HTML entity {entity}: {}",
+                tool.content
+            );
+        }
     }
 
     #[test]
