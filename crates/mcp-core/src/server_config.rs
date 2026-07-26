@@ -123,7 +123,9 @@ pub enum TransportType {
 /// `Authorization: Bearer <token>` header, a `GITHUB_PERSONAL_ACCESS_TOKEN`
 /// environment variable, an `--api-key sk-...`-style argument, or a
 /// `?token=`-style query string), so this type's [`Debug`] implementation is
-/// hand-written to redact them:
+/// hand-written to redact them (this guarantee is `Debug`-only — see
+/// "Serialization Hazard" below for `Serialize`, which does not redact
+/// anything):
 ///
 /// - `headers`/`env`: keys stay visible, values are replaced — a legitimately
 ///   configured key (a chosen header or env var name, e.g. `"Authorization"`)
@@ -159,8 +161,39 @@ pub enum TransportType {
 /// a debug impl for a type whose purpose is to be inspected before
 /// `build()`.
 ///
-/// `Serialize`/`Deserialize` are deliberately left unredacted: config
-/// persistence and the wire format must still round-trip real values.
+/// ## Serialization Hazard
+///
+/// `Serialize` is a separate code path from [`Debug`] and is deliberately
+/// left unredacted: whatever consumes the serialized form must still be able
+/// to round-trip real values, so `serde_json::to_string(&config)` (or any
+/// other `Serialize`-driven output) emits every field, including secrets, in
+/// full. **The `Debug`-redaction guarantee documented above does not extend
+/// to `Serialize` in any way** — do not assume "this type redacts secrets"
+/// covers both.
+///
+/// Consequently, a serialized `ServerConfig` must never be logged or printed
+/// directly. It exists for whatever trusted persistence an embedder builds
+/// on top of this crate (a caller-owned config store, for instance) — not
+/// for a specific path this crate implements itself; as of this writing no
+/// non-test code in this workspace serializes a `ServerConfig` and then
+/// logs or prints the result.
+///
+/// ```
+/// use mcp_execution_core::ServerConfig;
+///
+/// let config = ServerConfig::builder()
+///     .command("docker".to_string())
+///     .env(
+///         "GITHUB_PERSONAL_ACCESS_TOKEN".to_string(),
+///         "ghp_supersecretvalue".to_string(),
+///     )
+///     .build()
+///     .unwrap();
+///
+/// // Unlike `Debug`, `Serialize` does not redact anything.
+/// let json = serde_json::to_string(&config).unwrap();
+/// assert!(json.contains("ghp_supersecretvalue"));
+/// ```
 ///
 /// # Examples
 ///
