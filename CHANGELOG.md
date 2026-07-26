@@ -39,6 +39,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could crash the process (#194). It now returns `Err` via the new `TransportArgs::from_flags`,
   which is the single place enforcing "exactly one transport selected".
 
+- **`mcp-execution-server`**: `save_categorized_tools` no longer amplifies an oversized
+  `categorized_tools` array into unbounded processing, and no longer accepts oversized
+  `category`/`keywords`/`short_description` fields (CWE-400; #197). A malicious or buggy
+  client could previously submit millions of entries - each unconditionally inserted into two
+  `HashMap`s and fed into codegen - driving RSS from 12MB to 5.13GB in testing. The entry count
+  is now rejected once it exceeds `min(introspected tool count, MAX_TOOL_FILES)` (every `name`
+  must already be a member of the introspected set, and duplicates are rejected, so a
+  legitimate call can never exceed the introspected count; the `MAX_TOOL_FILES` term additionally
+  bounds a hostile or buggy *target* server that reports an inflated tool count, and keeps this
+  cap consistent with the ceiling `generate_skill` already enforces on the same generated
+  directory), duplicate tool names are rejected outright instead of silently overwriting each
+  other, and `name`/`category`/`keywords`/`short_description` are capped at 128/100/500/320
+  bytes respectively (`name`'s cap is kept comfortably below the true ~252-byte filesystem
+  path-component ceiling - 255 minus the `.ts` extension, since export staging is
+  directory-level rather than a per-file suffix - and the name feeds into the generated
+  filename via codegen's `to_camel_case` + `sanitize_ts_identifier`, a transform that can only
+  shrink the string, so the cap has roughly 124 bytes of headroom to spare). Note this bounds
+  the amplification (the `HashMap` population, codegen,
+  and generated files), not the raw request payload itself - the array is still fully
+  deserialized before any of these checks run, so an oversized `categorized_tools` array still
+  costs the deserialization pass; closing that residual gap would require a transport-level
+  size limit, tracked separately.
+
+- **`mcp-execution-server`**: `introspect_server` and `generate_skill` now observe
+  client-issued `notifications/cancelled` instead of always running to completion (#191). Each
+  handler accepts an `rmcp`-injected `tokio_util::sync::CancellationToken` and races it (via a
+  `biased` `tokio::select!`, so noticing cancellation always wins a simultaneous readiness tie -
+  as a side effect, a pre-cancelled `introspect_server` call never even spawns the target
+  subprocess) against its longest-running await point: the introspection round trip (up to the
+  caller-configured 600s timeout) while holding the per-`server_id` introspector lock, and the
+  tool-directory scan, respectively. `save_categorized_tools`, `save_skill`, and
+  `list_generated_servers` are unchanged. `save_categorized_tools` originally raced the wait
+  for its per-`output_dir` export lock, but that produced two correctness bugs in two rounds
+  (a leaked `exports` map entry on cancellation, then - once fixed - evicting a *live* entry out
+  from under the caller still holding it, reopening the #169 data-loss race for the entire
+  in-flight export instead of a narrow timing window); since the export itself was already
+  deliberately excluded from cancellation, racing only the lock wait bought little for two
+  rounds of bugs, so it was removed entirely. `save_skill`'s write runs on tokio's
+  blocking-task pool and cannot actually be interrupted once started, so racing it would tell
+  a cancelled client the write never happened while it still lands on disk - worse than not
+  attempting cancellation, and not worth it for a write already bounded to 100KB;
+  `list_generated_servers`'s scan has no subprocess, network I/O, or long-held lock to
+  interrupt.
+
+- **`mcp-execution-introspector`**: cancelling `introspect_server` (see above) no longer
+  orphans the spawned target-server subprocess. The `discover_server` future owns the spawned
+  `Child` and only reaches its own `child.kill().await` cleanup on the path where it runs to
+  completion; a `tokio::select!` caller that abandons the future on cancellation was dropping
+  `Child` without ever running that cleanup, and `tokio::process::Child` does not kill its
+  process on drop by default - a cooperative target exits on stdin EOF, but a wedged or
+  malicious one (exactly the case cancellation exists for) would survive indefinitely, and
+  repeated cancellation could accumulate processes without bound. The spawned `Command` now
+  sets `kill_on_drop(true)`, which sends the kill signal synchronously from `Drop` regardless
+  of why the `Child` was dropped.
+
 - **`mcp-execution-core`**, **`mcp-execution-introspector`**: `--http`/`--sse` transports
   actually connect now, instead of failing validation with a misleading "command cannot be
   empty" `SecurityViolation` before the transport type was ever consulted (#180).

@@ -285,6 +285,59 @@ async fn test_discover_server_success_kills_child_process() {
     );
 }
 
+/// Regression test for `discover_server`'s *future* being dropped before
+/// completion - e.g. by a `tokio::select!` racing it against a client
+/// cancellation signal, exactly the pattern `mcp-execution-server`'s
+/// `introspect_server` handler uses. This is a different code path from the
+/// timeout tests above: those let `discover_server` run to its own internal
+/// timeout and kill the child itself; here the *caller* abandons the future
+/// mid-flight, so `discover_server`'s own `child.kill().await` cleanup code
+/// never runs at all. Before `kill_on_drop(true)` was added to the spawned
+/// `Command`, this left the child process running indefinitely, since
+/// `tokio::process::Child` does not kill on drop by default.
+#[tokio::test]
+async fn test_dropping_discover_server_future_kills_child_process() {
+    let mut introspector = Introspector::new();
+    let server_id = ServerId::new("test-drop-future-kills-child");
+
+    let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
+    let pid_path = pid_file.path().to_path_buf();
+
+    let config = ServerConfig::builder()
+        .command(FIXTURE_BIN.to_string())
+        .arg("30000".to_string()) // fixture delays the handshake by 30s
+        .arg("0".to_string())
+        .arg(pid_path.display().to_string())
+        // Long enough that our own 150ms sleep below wins the race, not
+        // Introspector's internal timeout handling (already covered above).
+        .connect_timeout(Duration::from_secs(5))
+        .build();
+
+    tokio::select! {
+        _ = introspector.discover_server(server_id, &config) => {
+            panic!("discover_server should not complete before the simulated cancellation");
+        }
+        () = tokio::time::sleep(Duration::from_millis(150)) => {
+            // Simulates the cancellation branch winning `tokio::select!` in
+            // `mcp-execution-server`'s `introspect_server` handler, which
+            // drops the `discover_server` future (and the `Child` it owns)
+            // right here.
+        }
+    }
+
+    let pid_contents = wait_for_file_contents(&pid_path, Duration::from_secs(2)).await;
+    let pid: u32 = pid_contents
+        .trim()
+        .parse()
+        .expect("fixture wrote a valid pid");
+
+    assert!(
+        wait_for_process_exit(pid, Duration::from_secs(2)).await,
+        "expected introspection child process (pid {pid}) to be terminated after \
+         its discover_server future was dropped, but it is still running"
+    );
+}
+
 /// Name of the environment variable the fixture echoes into its env/cwd
 /// report file. Must match the `ENV_MARKER_VAR` constant in
 /// `tests/fixtures/slow_mcp_server.rs`.
