@@ -33,6 +33,7 @@
 
 mod command;
 mod error;
+mod path;
 mod server_config;
 mod types;
 
@@ -52,3 +53,6 @@ pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
 pub use command::{
     forbidden_chars, forbidden_env_names, forbidden_env_prefix, validate_server_config,
 };
+
+// Re-export path helpers shared by confinement checks
+pub use path::{sanitize_path_for_error, validate_path_segment};

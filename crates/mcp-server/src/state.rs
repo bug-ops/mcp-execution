@@ -24,7 +24,6 @@ use uuid::Uuid;
 /// use mcp_execution_server::clock::SystemClock;
 /// use mcp_execution_core::{ServerId, ServerConfig};
 /// use mcp_execution_introspector::ServerInfo;
-/// use std::path::PathBuf;
 ///
 /// # async fn example() {
 /// let state = StateManager::new();
@@ -44,7 +43,7 @@ use uuid::Uuid;
 ///     ServerId::new("github"),
 ///     server_info,
 ///     ServerConfig::builder().command("npx".to_string()).build().unwrap(),
-///     PathBuf::from("/tmp/output"),
+///     None,
 ///     &SystemClock,
 /// );
 ///
@@ -246,7 +245,6 @@ mod tests {
     use crate::types::PendingGeneration;
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use mcp_execution_introspector::ServerInfo;
-    use std::path::PathBuf;
 
     fn create_test_pending() -> PendingGeneration {
         create_test_pending_with_clock(&SystemClock)
@@ -276,9 +274,8 @@ mod tests {
             .command("echo".to_string())
             .build()
             .unwrap();
-        let output_dir = PathBuf::from("/tmp/test");
 
-        PendingGeneration::new(server_id, server_info, config, output_dir, clock)
+        PendingGeneration::new(server_id, server_info, config, None, clock)
     }
 
     /// Builds an already-expired pending generation by constructing it with a

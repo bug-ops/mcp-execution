@@ -41,38 +41,9 @@ pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024;
 static FRONTMATTER_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---").expect("valid regex"));
 
-/// Sanitize file path for error messages to prevent information disclosure.
-///
-/// Replaces the home directory with `~` to avoid leaking usernames and
-/// full filesystem paths in error messages.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_skill::sanitize_path_for_error;
-/// use std::path::Path;
-///
-/// // A path outside the home directory is left unchanged.
-/// assert_eq!(sanitize_path_for_error(Path::new("/tmp/x")), "/tmp/x");
-///
-/// // A path under the home directory has it redacted to `~`.
-/// let home = dirs::home_dir().expect("home dir available in this environment");
-/// let under_home = home.join("secret-file.md");
-/// assert_eq!(
-///     sanitize_path_for_error(&under_home),
-///     format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
-/// );
-/// ```
-#[must_use]
-pub fn sanitize_path_for_error(path: &Path) -> String {
-    dirs::home_dir().map_or_else(
-        || path.display().to_string(),
-        |home| {
-            let path_str = path.display().to_string();
-            path_str.replace(&home.display().to_string(), "~")
-        },
-    )
-}
+// `sanitize_path_for_error` lives in `mcp-execution-core`, the workspace's
+// security-validation foundation crate.
+use mcp_execution_core::sanitize_path_for_error;
 
 /// Errors that can occur while scanning a server directory for its `_meta.json` sidecar.
 #[derive(Debug, Error)]
@@ -555,21 +526,6 @@ mod tests {
     use super::*;
     use mcp_execution_core::metadata::{ParameterMetadata, ToolMetadata};
     use tempfile::TempDir;
-
-    #[test]
-    fn sanitize_path_for_error_redacts_home_directory() {
-        let home = dirs::home_dir().expect("home dir available in this environment");
-        let under_home = home.join("secret-file.md");
-        assert_eq!(
-            sanitize_path_for_error(&under_home),
-            format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
-        );
-    }
-
-    #[test]
-    fn sanitize_path_for_error_leaves_non_home_path_unchanged() {
-        assert_eq!(sanitize_path_for_error(Path::new("/tmp/x")), "/tmp/x");
-    }
 
     fn sample_metadata(tool_count: usize) -> ServerMetadata {
         ServerMetadata {

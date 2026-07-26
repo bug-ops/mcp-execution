@@ -53,7 +53,10 @@ pub struct IntrospectServerParams {
     #[serde(default)]
     pub env: HashMap<String, String>,
 
-    /// Custom output directory (default: `~/.claude/servers/{server_id}`)
+    /// Custom output subdirectory, relative to `~/.claude/servers/{server_id}/`
+    /// (default: `~/.claude/servers/{server_id}` itself). Confined to that
+    /// directory: an absolute path, a `..` component, or a path that escapes it
+    /// via a symlink is rejected.
     pub output_dir: Option<PathBuf>,
 
     /// Connection (handshake) timeout in seconds, overriding the 30-second
@@ -251,8 +254,15 @@ pub struct PendingGeneration {
     /// Server configuration for regeneration if needed
     pub config: ServerConfig,
 
-    /// Output directory
-    pub output_dir: PathBuf,
+    /// Caller-supplied `output_dir` override from `introspect_server`, exactly as received
+    /// (already validated as syntactically safe - relative, no `..` - but not yet confinement-
+    /// checked against the filesystem). `None` when the default `{server_id}` directory was
+    /// used.
+    ///
+    /// `save_categorized_tools` derives the real export target fresh from this and
+    /// [`Self::server_id`] immediately before writing anything - see
+    /// `crate::output_dir::resolve_output_dir`.
+    pub output_dir_override: Option<PathBuf>,
 
     /// Session creation time
     pub created_at: DateTime<Utc>,
@@ -288,13 +298,11 @@ impl PendingGeneration {
     ///     .arg("@anthropic/mcp-server-github".to_string())
     ///     .build()
     ///     .unwrap();
-    /// let output_dir = PathBuf::from("/tmp/output");
-    ///
     /// let pending = PendingGeneration::new(
     ///     server_id,
     ///     server_info,
     ///     config,
-    ///     output_dir,
+    ///     None,
     ///     &SystemClock,
     /// );
     /// # }
@@ -304,7 +312,7 @@ impl PendingGeneration {
         server_id: ServerId,
         server_info: ServerInfo,
         config: ServerConfig,
-        output_dir: PathBuf,
+        output_dir_override: Option<PathBuf>,
         clock: &dyn Clock,
     ) -> Self {
         let now = clock.now();
@@ -312,7 +320,7 @@ impl PendingGeneration {
             server_id,
             server_info,
             config,
-            output_dir,
+            output_dir_override,
             created_at: now,
             expires_at: now + chrono::Duration::minutes(Self::DEFAULT_TIMEOUT_MINUTES),
         }
@@ -327,14 +335,13 @@ impl PendingGeneration {
     /// use mcp_execution_server::clock::SystemClock;
     /// # use mcp_execution_core::{ServerId, ServerConfig};
     /// # use mcp_execution_introspector::ServerInfo;
-    /// # use std::path::PathBuf;
     ///
     /// # fn example(server_info: ServerInfo) {
     /// let pending = PendingGeneration::new(
     ///     ServerId::new("test"),
     ///     server_info,
     ///     ServerConfig::builder().command("echo".to_string()).build().unwrap(),
-    ///     PathBuf::from("/tmp"),
+    ///     None,
     ///     &SystemClock,
     /// );
     ///
@@ -437,8 +444,7 @@ mod tests {
             .command("echo".to_string())
             .build()
             .unwrap();
-        let output_dir = PathBuf::from("/tmp/test");
 
-        PendingGeneration::new(server_id, server_info, config, output_dir, clock)
+        PendingGeneration::new(server_id, server_info, config, None, clock)
     }
 }

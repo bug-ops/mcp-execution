@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `generate::run` keep their existing flat parameter lists and build `TransportArgs`
   internally.
 
+- **`mcp-execution-server`**: `introspect_server`'s `output_dir` parameter changed meaning from
+  an absolute target directory (any path the caller supplied was used verbatim) to a directory
+  *relative to* `~/.claude/servers/{server_id}/`, as part of the path-confinement fix below
+  (#216). A caller previously passing an absolute `output_dir` now gets `INVALID_PARAMS`.
+
 ### Security
 
 - **`mcp-execution-cli`**: a malformed `--header`/`--env` value (missing the `=` separator, or
@@ -253,13 +258,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated as a single non-empty path segment before any of this, and `validate_server_id` now
   rejects the empty string, which previously passed its character-class check vacuously. The
   default path (`SKILL.md`, used when no `output_path` is supplied) now passes through the same
-  confinement check as a caller-supplied path, rather than being special-cased around it. Note
-  this confines writes to the shared skills directory as a whole, not strictly per-server: a
-  `server_id` directory that is itself a pre-planted symlink to another server's directory (which
-  requires the same filesystem write access as writing that server's files directly) is not
-  additionally isolated by this fix. Narrowing confinement to each server's own resolved
-  directory is tracked as a follow-up, alongside a separate, larger unvalidated-path issue in
-  `introspect_server`'s `output_dir` — neither is in scope here.
+  confinement check as a caller-supplied path, rather than being special-cased around it.
+  Path-sanitization for confinement error messages (`sanitize_path_for_error`) now lives in
+  `mcp-execution-core`, the workspace's security-validation foundation crate, and is re-exported
+  from `mcp-execution-skill` for existing callers.
+
+- **`mcp-execution-skill`**: `save_skill`'s confinement (above, #184) confined writes to the
+  shared `~/.claude/skills/` directory as a whole, not strictly per-server: a `server_id`
+  directory that was itself a pre-planted symlink to another server's directory still resolved
+  under the shared base and was therefore accepted (#217). `resolve_skill_output_path` now
+  resolves `server_id`'s own directory first and rejects it outright if it already exists as a
+  symlink (a new `OutputPathError::ServerIdIsSymlink` variant, rather than the generic `Escape` -
+  the old message was misleading for this case, since the symlink target does not actually
+  escape the shared base), and confines every subsequent `output_path` component to that
+  resolved directory specifically rather than to the shared base as a whole — so a `server_id`
+  scoped to one server can no longer reach another server's directory this way.
+
+- **`mcp-execution-server`**: `introspect_server`'s `output_dir` parameter was written unchanged
+  into `create_dir_all` and, later, `export_to_filesystem`, with no path validation at all — an
+  absolute path, a `..`-relative path, or a path routed through a symlink could redirect the
+  entire generated file tree (index, per-tool files, runtime bridge, metadata) anywhere the
+  process could write (#216). The same class of issue as `save_skill`'s (#184), but for a whole
+  directory tree rather than a single file, and split across two calls (`introspect_server` then
+  `save_categorized_tools`) rather than one. `output_dir`, if supplied, is now confined to
+  `~/.claude/servers/{server_id}/` (a breaking change to its semantics — see above): absolute or
+  `..`-containing values are rejected, and `server_id`'s own directory is rejected outright if it
+  is a pre-existing symlink (mirroring #217's fix, including its own defensive `server_id`
+  validation - `resolve_output_dir` does not trust that its caller already validated `server_id`
+  either). The confinement-checking, directory-creating
+  walk (`resolve_output_dir`) runs once, in `save_categorized_tools`, immediately before
+  `export_to_filesystem` - not at `introspect_server` time - for two reasons: caching a resolved
+  path on the session for its full (up to 30-minute) lifetime would leave a window in which a
+  symlink planted after resolution but before export was never re-checked, and `introspect_server`
+  previously did no filesystem work at all, so eagerly creating directories there would let a
+  caller populate `~/.claude/servers/` without ever completing a real generation.
+  `introspect_server` still rejects an absolute or `..`-containing `output_dir` immediately, via
+  the cheaper, I/O-free `relative_subpath` check, for fast caller feedback. The final target
+  directory is confinement-checked but deliberately left uncreated, since `export_to_filesystem`
+  publishes it atomically via a staged rename. `PendingGeneration` now carries only the raw
+  `output_dir_override` (via its `new` constructor) instead of also caching a resolved-looking
+  preview path that nothing read. The `server_id`-as-single-path-segment check both crates'
+  confinement walks depend on (`validate_path_segment`) now lives in `mcp-execution-core`
+  alongside `sanitize_path_for_error`, rather than being duplicated in each crate.
 
 - **`mcp-execution-codegen`**, **`mcp-execution-core`**: hardened, defense-in-depth mitigation
   for the generated runtime bridge (`_runtime/mcp-bridge.ts`) re-reading `~/.claude/mcp.json`

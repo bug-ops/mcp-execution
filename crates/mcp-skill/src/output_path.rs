@@ -8,7 +8,7 @@
 //! confinement already used by [`crate::scan_tools_directory`], adapted for
 //! a target that may not exist yet.
 
-use crate::parser::sanitize_path_for_error;
+use mcp_execution_core::sanitize_path_for_error;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
@@ -42,6 +42,16 @@ pub enum OutputPathError {
     #[error("output_path is not a valid file path: {path}")]
     InvalidPath {
         /// Sanitized display form of the rejected path.
+        path: String,
+    },
+
+    /// `server_id`'s own directory already exists as a symlink, which is
+    /// rejected outright regardless of where it points - including at a
+    /// sibling server's own directory, which would otherwise pass a
+    /// resolve-and-confine check (issue #217).
+    #[error("server_id directory must not be a symlink: {path}")]
+    ServerIdIsSymlink {
+        /// Sanitized display form of the offending path.
         path: String,
     },
 
@@ -100,15 +110,15 @@ pub enum OutputPathError {
 /// `"a/."`, where `Path::components()` normalizes away the trailing `.` and
 /// this function sees a single `Normal("a")`, but a fresh
 /// `Component::Normal(OsStr::new("a/."))` would still carry the embedded
-/// separator.
+/// separator. Delegates to `mcp_execution_core::validate_path_segment`, shared
+/// with `mcp-execution-server`'s equivalent check for `introspect_server`'s
+/// `output_dir`, so both crates reject the same malformed `server_id` shapes.
 fn validate_server_id_segment(server_id: &str) -> Result<Component<'_>, OutputPathError> {
-    let mut components = Path::new(server_id).components();
-    match (components.next(), components.next()) {
-        (Some(component @ Component::Normal(_)), None) => Ok(component),
-        _ => Err(OutputPathError::InvalidServerId {
+    mcp_execution_core::validate_path_segment(server_id).ok_or_else(|| {
+        OutputPathError::InvalidServerId {
             server_id: server_id.to_string(),
-        }),
-    }
+        }
+    })
 }
 
 /// Validates a caller-supplied `output_path` and returns it as a safe,
@@ -150,15 +160,16 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 /// resolves to the default `SKILL.md`. Confining to `base_dir/server_id`
 /// (rather than just `base_dir`) matches the documented `save_skill`
 /// contract, in the sense that both the default path and every accepted
-/// `output_path` land under `server_id`'s own directory. This is *not* a
-/// cross-server isolation guarantee: every path this function builds is
-/// confinement-checked against `base_dir` as a whole (not against
-/// `server_id`'s own resolved directory specifically), so if
-/// `base_dir/server-b` is itself a symlink to `base_dir/server-a` — which
-/// requires the same write access to `base_dir` that would let an attacker
-/// write `server-a`'s files directly — `server-b`'s `output_path` can still
-/// land under `server-a`. Closing that residual gap is tracked separately
-/// (see issue #184's follow-ups) rather than folded into this function.
+/// `output_path` land under `server_id`'s own directory.
+///
+/// `server_id`'s own directory is resolved before anything else and is
+/// rejected outright if it already exists as a symlink, regardless of where
+/// it points: a resolve-and-confine check alone would accept a symlink from
+/// `base_dir/server-b` to `base_dir/server-a`, since the target still
+/// resolves under `base_dir` (issue #217). Every subsequent `output_path`
+/// directory component is then confined to that resolved `server_id`
+/// directory specifically, not merely to `base_dir` as a whole, so no
+/// deeper component can reach a different server's directory either.
 ///
 /// Each component is created and confinement-checked one at a time (rather
 /// than via a single recursive create-and-canonicalize), so that a symlink
@@ -212,20 +223,57 @@ pub async fn resolve_skill_output_path(
         })?;
     let canonical_root = tokio::fs::canonicalize(base_dir).await?;
 
+    // Resolve server_id's own directory first, rejecting it outright if it already exists as
+    // a symlink - regardless of where it points - rather than resolving and re-checking it as
+    // the loop below does for deeper components. A symlink here could point at a *sibling*
+    // server's own directory, which still resolves under `canonical_root` and would therefore
+    // pass a resolve-and-confine check; only an unconditional rejection closes that gap
+    // (issue #217). Every subsequent component is then confined to `server_dir` specifically,
+    // not just to `canonical_root` as a whole, so a caller scoped to this `server_id` can never
+    // reach another server's directory through a deeper `output_path` component either.
+    let mut server_dir = canonical_root.clone();
+    server_dir.push(server_component);
+    if !server_dir.starts_with(&canonical_root) {
+        return Err(OutputPathError::Escape {
+            path: sanitize_path_for_error(&server_dir),
+        });
+    }
+    match tokio::fs::symlink_metadata(&server_dir).await {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return Err(OutputPathError::ServerIdIsSymlink {
+                    path: sanitize_path_for_error(&server_dir),
+                });
+            }
+            if !meta.is_dir() {
+                return Err(OutputPathError::NotADirectory {
+                    path: sanitize_path_for_error(&server_dir),
+                });
+            }
+        }
+        Err(_) => {
+            tokio::fs::create_dir(&server_dir).await.map_err(|source| {
+                OutputPathError::CreateDir {
+                    path: sanitize_path_for_error(&server_dir),
+                    source,
+                }
+            })?;
+        }
+    }
+
     let output_dir_components = relative
         .parent()
         .map(|parent| parent.components().collect::<Vec<_>>())
         .unwrap_or_default();
 
-    let mut current = canonical_root.clone();
-    for component in std::iter::once(server_component).chain(output_dir_components) {
+    let mut current = server_dir.clone();
+    for component in output_dir_components {
         current.push(component);
-        // Cheap for `server_id` and for a `..`-free relative path pushed
-        // onto an absolute root (a named component can't leave it), but
-        // load-bearing on Windows: a root-without-prefix component like
-        // `\pwn` is not caught by `Path::is_absolute` and would otherwise
-        // reach `create_dir` unconfined.
-        if !current.starts_with(&canonical_root) {
+        // Cheap for a `..`-free relative path pushed onto an absolute root (a
+        // named component can't leave it), but load-bearing on Windows: a
+        // root-without-prefix component like `\pwn` is not caught by
+        // `Path::is_absolute` and would otherwise reach `create_dir` unconfined.
+        if !current.starts_with(&server_dir) {
             return Err(OutputPathError::Escape {
                 path: sanitize_path_for_error(&current),
             });
@@ -233,7 +281,7 @@ pub async fn resolve_skill_output_path(
         match tokio::fs::symlink_metadata(&current).await {
             Ok(_) => {
                 let resolved = tokio::fs::canonicalize(&current).await?;
-                if !resolved.starts_with(&canonical_root) {
+                if !resolved.starts_with(&server_dir) {
                     return Err(OutputPathError::Escape {
                         path: sanitize_path_for_error(&current),
                     });
@@ -448,8 +496,29 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::Escape { .. }));
+        assert!(matches!(err, OutputPathError::ServerIdIsSymlink { .. }));
         assert!(!outside.path().join("SKILL.md").exists());
+    }
+
+    /// #217 regression: a symlink at `server_id`'s own directory pointing at
+    /// a *sibling* directory that lives inside the same base must still be
+    /// rejected outright, not merely allowed because it resolves under the
+    /// base as a whole.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn symlinked_server_id_directory_to_sibling_is_rejected() {
+        let base = TempDir::new().unwrap();
+        tokio::fs::create_dir_all(base.path().join("server-a"))
+            .await
+            .unwrap();
+        std::os::unix::fs::symlink(base.path().join("server-a"), base.path().join("server-b"))
+            .unwrap();
+
+        let err = resolve_skill_output_path(base.path(), "server-b", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OutputPathError::ServerIdIsSymlink { .. }));
+        assert!(!base.path().join("server-a").join("SKILL.md").exists());
     }
 
     /// S2 regression guard, now running through the unified walk shared
