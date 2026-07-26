@@ -146,6 +146,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   builder chain that produces it is now a standalone `build_stdio_server_config` function so this
   last test can assert on it directly, rather than only on the params type feeding it (#209).
 
+- **`mcp-execution-core`**/**`mcp-execution-cli`**: the `#208`/`#229` `Debug` redaction only
+  covered `headers`/`env`; `args`, `url`, `command`, and `cwd` were still printed verbatim on
+  `ServerConfig`, `ServerConfigBuilder`, `McpTransport`, and `TransportArgs`, so an
+  `--api-key sk-...`-style argument or a `user:token@host`/`?token=`-style URL could still leak
+  through `{:?}`. `RawMcpServerEntry` (the raw `mcp.json` landing zone `McpTransport` is built
+  from) derived `Debug` outright, with no redaction at all (#241). Three shared, dependency-free
+  helpers now live in `mcp-execution-core::redact` (#240) — `RedactedMapValues` (keys visible,
+  values replaced), `RedactedItems` (every entry replaced wholesale), and `RedactedUrl`
+  (userinfo and query string stripped, scheme/host/path kept readable) — and every one of the
+  five types above now redacts `args`/`url` through them, while `command`/`cwd` are passed
+  through the existing `sanitize_path_for_error` (an absolute path leaks the OS username; the
+  program name itself, e.g. `docker`, stays readable) (#239, #241). `RedactedUrl` itself closes
+  two edge cases found during review: an unencoded `/` or `?` inside userinfo (e.g.
+  `user:p/assw0rd@host`) could previously move the authority terminator into the middle of the
+  credentials and leak them verbatim, and a "scheme" containing a character that can never
+  legally appear in a URI scheme (e.g. `ghp_leakedtoken://host.com/`) was echoed unbounded; both
+  now fall back to redacting the entire URL rather than risk a partial leak. A fragment-only URL
+  (no query string) is now labeled `#<redacted>` rather than the misleading `?<redacted>`.
+
 ### Changed
 
 - **`mcp-execution-skill`**: `validate_server_id` and `extract_skill_metadata` now return
