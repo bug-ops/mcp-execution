@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *relative to* `~/.claude/servers/{server_id}/`, as part of the path-confinement fix below
   (#216). A caller previously passing an absolute `output_dir` now gets `INVALID_PARAMS`.
 
+- **`mcp-execution-cli`**: `commands::common::get_mcp_server`/`list_mcp_servers` downgraded
+  from `pub` to `pub(crate)`, and `load_mcp_config`/`load_mcp_config_from`/
+  `list_mcp_servers_from` downgraded to private — none had callers outside the crate; the
+  first two are still used cross-module by `commands::server`, the rest only within
+  `commands::common` itself (#276).
+
 - **`mcp-execution-core`**: `ServerConfigBuilder::try_build()` removed — use `build()`, which
   has returned `Result<ServerConfig, Error>` since #177 and runs identical validation; the
   alias left the workspace's two builders with divergent surfaces where `FilesBuilder` exposes
@@ -403,6 +409,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lock/eviction ordering are unchanged (#179).
 
 ### Fixed
+
+- **`mcp-execution-server`**: `bounded_request_stream` could strand an already-buffered valid
+  request behind an oversized, malformed, or non-standard (silently-ignored) line on the same
+  read chunk, stalling it until more bytes arrived on the pipe — possibly forever on an
+  otherwise-idle connection (#273). Two independent `tokio-util` behaviors caused this, both of
+  which clear its internal `is_readable` flag and so make the next poll issue a real `poll_read`
+  instead of rescanning the buffer: continuing to poll `FramedRead` after swallowing the
+  mandatory `None` that follows a `Decoder::Err` (oversized/malformed lines), and `tokio-util`
+  clearing `is_readable` on *every* `Ok(None)` — including when the inner codec's own
+  non-standard-message compatibility handling silently discards a well-formed but non-MCP line
+  via `Ok(None)` without decoding anything. Recoverable decode failures
+  (`MaxLineLengthExceeded`, `Serde`) and silently-discarded lines are now folded into a
+  `RecoveringCodec` wrapper's `Ok` item type (`DecodedFrame::Malformed`/`::Skipped`) instead of
+  surfacing through `Decoder::Error` or an unshrunk `Ok(None)`, so `tokio-util` never clears
+  `is_readable` and a buffered valid request decodes on the very next poll with no I/O wait; a
+  genuine `Io` error still ends the session as before.
 
 - **`mcp-execution-files`**: `FileSystem::export_to_filesystem_parallel` and
   `FilesBuilder::build_and_export` were not directory-atomic — a process interrupted mid-export
