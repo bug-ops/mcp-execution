@@ -10,6 +10,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::cli::Commands;
 use crate::commands;
+use crate::commands::common::RawServerArgs;
 
 /// Initializes logging infrastructure.
 ///
@@ -114,7 +115,7 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
             connect_timeout_secs,
             discover_timeout_secs,
         } => {
-            commands::introspect::run(
+            let raw = RawServerArgs {
                 from_config,
                 server,
                 args,
@@ -123,12 +124,10 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
                 http,
                 sse,
                 headers,
-                detailed,
                 connect_timeout_secs,
                 discover_timeout_secs,
-                output_format,
-            )
-            .await
+            };
+            commands::introspect::run(raw, detailed, output_format).await
         }
         Commands::Skill {
             server,
@@ -164,23 +163,19 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
             connect_timeout_secs,
             discover_timeout_secs,
         } => {
-            commands::generate::run(
+            let raw = RawServerArgs {
                 from_config,
                 server,
-                server_args,
-                server_env,
-                server_cwd,
-                http_url,
-                sse_url,
-                server_headers,
-                name,
-                progressive_output,
-                dry_run,
+                args: server_args,
+                env: server_env,
+                cwd: server_cwd,
+                http: http_url,
+                sse: sse_url,
+                headers: server_headers,
                 connect_timeout_secs,
                 discover_timeout_secs,
-                output_format,
-            )
-            .await
+            };
+            commands::generate::run(raw, name, progressive_output, dry_run, output_format).await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
         Commands::Setup => commands::setup::run(output_format).await,

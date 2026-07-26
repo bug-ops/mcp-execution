@@ -47,6 +47,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `generate::run` keep their existing flat parameter lists and build `TransportArgs`
   internally.
 
+- **`mcp-execution-cli`**: `resolve_server_config`'s ten same-typed positional parameters
+  (`from_config`, `server`, `args`, `env`, `cwd`, `http`, `sse`, `headers`,
+  `connect_timeout_secs`, `discover_timeout_secs`) are now bundled into a single
+  `RawServerArgs` struct, which `introspect::run`/`generate::run` also take instead of
+  forwarding the same ten values positionally — superseding the "keep their existing flat
+  parameter lists" note above; `runner::dispatch` now builds `RawServerArgs` from each
+  `Commands` variant's already-named fields instead of re-listing them positionally. Several
+  of these parameters share a type and sit adjacent in the old signatures (`http`/`sse` most
+  notably), so a future reorder or insertion could previously compile cleanly while silently
+  swapping which transport a value was routed to; the struct's named-field construction removes
+  that risk. `RawServerArgs` is `pub`, not `pub(crate)`, because `introspect::run`/
+  `generate::run` are themselves `pub` in the `pub mod commands` — this widens the crate's
+  public API surface, though `mcp-execution-cli` is pre-1.0 with no known downstream library
+  consumers depending on this shape (#286).
+
 - **`mcp-execution-server`**: `introspect_server`'s `output_dir` parameter changed meaning from
   an absolute target directory (any path the caller supplied was used verbatim) to a directory
   *relative to* `~/.claude/servers/{server_id}/`, as part of the path-confinement fix below
