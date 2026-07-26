@@ -127,6 +127,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`mcp-cli`**: `generate`'s `Text`/`Pretty` output (both the success summary and the dry-run
+  preview) now escapes the MCP server's handshake-supplied name before printing it, closing a
+  terminal-injection gap (CWE-150-adjacent: unescaped output) where a malicious server could embed
+  raw ANSI/control escape sequences (e.g. `\x1b`) in `serverInfo.name` and have them written
+  verbatim to the user's terminal — every other subcommand already routed all output formats
+  through `formatters::format_output`, which escapes string values via `serde_json`, but `generate`
+  built its `Text`/`Pretty` lines by hand and bypassed that escaping. `Json` output was already
+  unaffected. The new `formatters::escape_display` helper always JSON-quotes the name it escapes,
+  even when it contains no control characters — so `generate`'s `Text`/`Pretty` output changes for
+  every server, not just malicious ones: e.g. `Server: Test Server (id)` is now
+  `Server: "Test Server" (id)` (#299).
+
 - **`mcp-execution-core`**: `validate_server_config` now bounds `ServerConfig`'s `command`/
   `args`/`env`/`headers`/`url` element counts and per-string lengths (`MAX_ARG_COUNT`,
   `MAX_ARG_LEN`, `MAX_ENV_COUNT`, `MAX_ENV_VALUE_LEN`, `MAX_HEADER_COUNT`,
