@@ -155,6 +155,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropping the whole session — a genuine I/O error on the underlying reader still ends the
   session, matching the prior transport's behavior.
 
+- **`mcp-execution-server`**: the stdio transport placed no bound on the number of
+  concurrently in-flight requests — `rmcp` spawns a bare `tokio::spawn` per inbound request
+  with no concurrency knob of its own, so a pipelining client could drive an unbounded
+  number of concurrent handler tasks (#227). `bounded_request_stream` now gates admission
+  behind an 8-permit semaphore reached through a bounded decode-ahead queue: requests keep
+  being decoded while the queue fills, but only its head is ever offered a permit, so
+  notifications and responses behind it are never blocked and FIFO admission order is
+  preserved. The acquired permit is carried in the request's `Extensions` and released once
+  the handler's `RequestContext` (which owns those `Extensions`) is dropped, on completion
+  or panic — not on cancellation alone, since `rmcp`'s cancel path never aborts the handler
+  task itself.
+
 - **`mcp-execution-cli`**: a `~/.claude/mcp.json` mixing stdio entries with http/sse entries
   (`{"type": "http", "url": "...", ...}`, no `command` key) failed to deserialize the *entire*
   file with a misleading "missing field `command`" error, since `McpServerEntry` hardcoded a
