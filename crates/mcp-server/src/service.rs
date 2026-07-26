@@ -333,25 +333,14 @@ impl GeneratorService {
         let output_dir_override = params.output_dir;
 
         // Build server config (consume args and env to avoid clones)
-        let mut config_builder = ServerConfig::builder().command(params.command);
-
-        for arg in params.args {
-            config_builder = config_builder.arg(arg);
-        }
-
-        for (key, value) in params.env {
-            config_builder = config_builder.env(key, value);
-        }
-
-        if let Some(secs) = params.connect_timeout_secs {
-            config_builder = config_builder.connect_timeout(std::time::Duration::from_secs(secs));
-        }
-
-        if let Some(secs) = params.discover_timeout_secs {
-            config_builder = config_builder.discover_timeout(std::time::Duration::from_secs(secs));
-        }
-
-        let config = config_builder.build().map_err(|e| {
+        let config = build_stdio_server_config(
+            params.command,
+            params.args,
+            params.env,
+            params.connect_timeout_secs,
+            params.discover_timeout_secs,
+        )
+        .map_err(|e| {
             // A `SecurityViolation` here (shell metacharacters, forbidden env var, etc.) is
             // caused by the caller's own params, same as a `ValidationError` — not an
             // internal server fault — so both map to `invalid_params`.
@@ -677,16 +666,20 @@ impl GeneratorService {
     /// Scans the output directory (default: `~/.claude/servers`) for servers
     /// that have generated TypeScript files.
     ///
+    /// `base_dir`, if supplied, is confined to [`Self::servers_base_dir`] via
+    /// [`resolve_list_base_dir`]: it is treated as relative to that directory, and an absolute
+    /// path, a `..` component, or a path that escapes via a symlink is rejected outright rather
+    /// than silently falling back to the default (issue #236).
+    ///
     /// Does not observe request cancellation, unlike `introspect_server` and
     /// `generate_skill`. The scan runs inside a
     /// single `spawn_blocking` task with no subprocess, network I/O, or
     /// long-held lock, so it isn't worth the added complexity - but it is
     /// *not* a small bounded read: it is a nested directory walk (one
     /// `read_dir` over `base_dir`, plus a second `read_dir` per
-    /// subdirectory), and `base_dir` is caller-supplied and unvalidated, so a
-    /// large or adversarial directory tree can still make this call slow and
-    /// its result `Vec` large. That pre-existing surface is unrelated to
-    /// cancellation and out of scope here.
+    /// subdirectory), so a large directory tree can still make this call slow
+    /// and its result `Vec` large. That surface is unrelated to cancellation
+    /// and out of scope here.
     #[tool(
         description = "List all MCP servers that have generated progressive loading files in ~/.claude/servers/"
     )]
@@ -694,15 +687,29 @@ impl GeneratorService {
         &self,
         Parameters(params): Parameters<ListGeneratedServersParams>,
     ) -> Result<CallToolResult, McpError> {
-        let base_dir = params.base_dir.map_or_else(
-            || {
-                dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".claude")
-                    .join("servers")
-            },
-            PathBuf::from,
-        );
+        let base_dir = resolve_list_base_dir(
+            &self.servers_base_dir(),
+            params.base_dir.as_deref().map(Path::new),
+        )
+        .await
+        .map_err(|e| match e {
+            OutputDirError::AbsolutePath { .. }
+            | OutputDirError::ParentTraversal { .. }
+            | OutputDirError::Escape { .. } => {
+                McpError::invalid_params(format!("Invalid base_dir: {e}"), None)
+            }
+            // Never produced by `resolve_list_base_dir` (no `server_id` segment, no directory
+            // creation), but matched exhaustively rather than via a wildcard so a future
+            // `OutputDirError` variant forces a deliberate categorization here, mirroring
+            // `save_categorized_tools`'s equivalent match.
+            OutputDirError::InvalidServerId { .. }
+            | OutputDirError::ServerDirIsSymlink { .. }
+            | OutputDirError::NotADirectory { .. }
+            | OutputDirError::CreateDir { .. }
+            | OutputDirError::Io(_) => {
+                McpError::internal_error(format!("Failed to resolve base_dir: {e}"), None)
+            }
+        })?;
 
         // Scan directories (blocking operation wrapped in spawn_blocking)
         let servers = tokio::task::spawn_blocking(move || {
@@ -1022,6 +1029,88 @@ impl ServerHandler for GeneratorService {
 // Helper functions
 // ============================================================================
 
+/// Builds the stdio [`ServerConfig`] `introspect_server` uses to connect to the target server.
+///
+/// Extracted out of `introspect_server` so a unit test can assert directly on the resulting
+/// [`ServerConfig::transport`] rather than only on [`IntrospectServerParams`]'s field set (see
+/// the SSRF invariant documented on that type in `types.rs`): this function is the single place
+/// `IntrospectServerParams`'s fields become a `ServerConfig`, and it must never call
+/// `ServerConfigBuilder::http_transport`/`sse_transport`/`url` without SSRF allowlisting logic
+/// added alongside it (issue #209).
+fn build_stdio_server_config(
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+    connect_timeout_secs: Option<u64>,
+    discover_timeout_secs: Option<u64>,
+) -> mcp_execution_core::Result<ServerConfig> {
+    let mut config_builder = ServerConfig::builder().command(command);
+
+    for arg in args {
+        config_builder = config_builder.arg(arg);
+    }
+
+    for (key, value) in env {
+        config_builder = config_builder.env(key, value);
+    }
+
+    if let Some(secs) = connect_timeout_secs {
+        config_builder = config_builder.connect_timeout(std::time::Duration::from_secs(secs));
+    }
+
+    if let Some(secs) = discover_timeout_secs {
+        config_builder = config_builder.discover_timeout(std::time::Duration::from_secs(secs));
+    }
+
+    config_builder.build()
+}
+
+/// Resolves `list_generated_servers`'s `base_dir` override, confining it to `servers_base_dir`.
+///
+/// Unlike [`resolve_output_dir`], there is no `server_id` segment here — a `base_dir` override
+/// addresses the servers directory itself, not a subdirectory keyed by an id — so it is
+/// validated with the cheaper, I/O-free [`relative_subpath`] (rejecting an absolute path or a
+/// `..` component) and then joined onto `servers_base_dir`. The joined path is confinement-
+/// checked lexically first - `Path::join` replaces the whole path when `relative` is itself
+/// rooted without a prefix (e.g. `\pwn\evil` on Windows, which is not `is_absolute()` but still
+/// escapes on join) - and this lexical check runs even when the joined path does not exist yet,
+/// matching every other confinement check in [`resolve_output_dir`] (including its final,
+/// deliberately-not-created component, output_dir.rs:306-310), rather than being the one path in
+/// this crate that skips it. When the joined path exists, it is additionally canonicalized and
+/// re-checked against the canonicalized `servers_base_dir` to catch a symlink planted inside it
+/// that points outside (the same class of check `resolve_output_dir` performs for `output_dir`,
+/// see issue #216). This call only scans (`read_dir`), so unlike `resolve_output_dir` nothing is
+/// created: a confined path that does not exist yet is returned as-is, and the caller's existing
+/// `exists() && is_dir()` check yields an empty listing for it.
+async fn resolve_list_base_dir(
+    servers_base_dir: &Path,
+    base_dir_override: Option<&Path>,
+) -> Result<PathBuf, OutputDirError> {
+    let relative = relative_subpath(base_dir_override)?;
+    if relative.as_os_str().is_empty() {
+        return Ok(servers_base_dir.to_path_buf());
+    }
+
+    let joined = servers_base_dir.join(&relative);
+    if !joined.starts_with(servers_base_dir) {
+        return Err(OutputDirError::Escape {
+            path: sanitize_path_for_error(&joined),
+        });
+    }
+    if !joined.exists() {
+        return Ok(joined);
+    }
+
+    let canonical_root = tokio::fs::canonicalize(servers_base_dir).await?;
+    let canonical_joined = tokio::fs::canonicalize(&joined).await?;
+    if !canonical_joined.starts_with(&canonical_root) {
+        return Err(OutputDirError::Escape {
+            path: sanitize_path_for_error(&joined),
+        });
+    }
+    Ok(canonical_joined)
+}
+
 /// Extracts parameter names from a JSON Schema.
 fn extract_parameter_names(schema: &serde_json::Value) -> Vec<String> {
     schema
@@ -1275,6 +1364,28 @@ mod tests {
         assert!(info.instructions.is_some());
         assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
         assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    /// Regression guard for issue #209: `introspect_server` must only ever build a stdio
+    /// `ServerConfig`. Unlike the exhaustive-destructure test in `types.rs` (which only pins
+    /// `IntrospectServerParams`'s field set), this asserts the actual transport `build_stdio_
+    /// server_config` produces, so it would also fail if that function were ever changed to
+    /// call `http_transport`/`sse_transport` without an accompanying SSRF-allowlisting change.
+    #[test]
+    fn test_build_stdio_server_config_always_uses_stdio_transport() {
+        let config = build_stdio_server_config(
+            "echo".to_string(),
+            vec!["hello".to_string()],
+            HashMap::new(),
+            Some(10),
+            Some(20),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.transport(),
+            &mcp_execution_core::TransportType::Stdio
+        );
     }
 
     // ========================================================================
@@ -2491,11 +2602,15 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
-    async fn test_list_generated_servers_nonexistent_dir() {
-        let service = GeneratorService::new();
+    async fn test_list_generated_servers_nonexistent_relative_dir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = ListGeneratedServersParams {
-            base_dir: Some("/nonexistent/path/that/does/not/exist".to_string()),
+            base_dir: Some("nonexistent/nested".to_string()),
         };
 
         let result = service.list_generated_servers(Parameters(params)).await;
@@ -2519,6 +2634,179 @@ mod tests {
 
         // Should succeed even if directory doesn't exist
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_generated_servers_rejects_absolute_base_dir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        // A bare `/etc`-style path has no drive prefix, so `Path::is_absolute()` is false for
+        // it on Windows; use a path that is genuinely absolute on the current platform.
+        let absolute = if cfg!(windows) {
+            r"C:\Windows\System32\config"
+        } else {
+            "/etc"
+        };
+        let params = ListGeneratedServersParams {
+            base_dir: Some(absolute.to_string()),
+        };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_list_generated_servers_rejects_parent_traversal_base_dir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = ListGeneratedServersParams {
+            base_dir: Some("../../etc".to_string()),
+        };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn test_list_generated_servers_accepts_legitimate_relative_subdir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let nested_server_dir = temp_dir.path().join("nested").join("my-server");
+        tokio::fs::create_dir_all(&nested_server_dir).await.unwrap();
+        tokio::fs::write(nested_server_dir.join("tool.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = ListGeneratedServersParams {
+            base_dir: Some("nested".to_string()),
+        };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text_content = content.content[0].as_text().unwrap();
+        let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
+
+        assert_eq!(parsed.total_servers, 1);
+        assert_eq!(parsed.servers[0].id, "my-server");
+        assert_eq!(parsed.servers[0].tool_count, 1);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_list_generated_servers_rejects_symlink_escape_in_base_dir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        tokio::fs::create_dir_all(outside.path().join("secret-server"))
+            .await
+            .unwrap();
+
+        std::os::unix::fs::symlink(outside.path(), temp_dir.path().join("escape")).unwrap();
+
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = ListGeneratedServersParams {
+            base_dir: Some("escape".to_string()),
+        };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    /// `base_dir` pointing (via symlink) at a *sibling* directory that lives inside the same
+    /// `servers_base_dir` is accepted, unlike `resolve_output_dir`'s `server_id` component
+    /// (#217), which rejects that outright. The asymmetry is deliberate, not an oversight: this
+    /// call only reads (`read_dir`), and the symlink target still resolves under
+    /// `servers_base_dir`, so following it discloses nothing a caller couldn't already see by
+    /// passing that sibling's own name as `base_dir` directly. `resolve_output_dir` rejects it
+    /// for a different reason - a *write* target must not be redirectable onto another server's
+    /// directory by a symlink planted at the `server_id` position - which does not apply here.
+    /// Unlike `resolve_output_dir`'s `server_id`, which addresses a single server's own
+    /// directory, `base_dir` addresses a *container* of per-server subdirectories, so the sibling
+    /// here (`real-servers`) is itself a container - not a single server's leaf directory.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_list_generated_servers_accepts_symlink_to_sibling_inside_base_dir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let real_servers_dir = temp_dir.path().join("real-servers");
+        let my_server_dir = real_servers_dir.join("my-server");
+        tokio::fs::create_dir_all(&my_server_dir).await.unwrap();
+        tokio::fs::write(my_server_dir.join("tool.ts"), "export {}")
+            .await
+            .unwrap();
+
+        std::os::unix::fs::symlink(&real_servers_dir, temp_dir.path().join("alias")).unwrap();
+
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = ListGeneratedServersParams {
+            base_dir: Some("alias".to_string()),
+        };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text_content = content.content[0].as_text().unwrap();
+        let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
+
+        assert_eq!(parsed.total_servers, 1);
+        assert_eq!(parsed.servers[0].id, "my-server");
+    }
+
+    /// Windows path semantics differ enough from Unix (root-without-prefix components) that the
+    /// confinement guard needs its own coverage rather than relying on the Unix-shaped tests
+    /// above - mirrors `output_dir.rs`'s `windows_root_relative_path_cannot_escape_base`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_list_generated_servers_rejects_windows_root_relative_base_dir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        // `is_absolute()` is false for a root-without-prefix path like this on Windows, so it
+        // passes `relative_subpath`'s absolute-path check; the lexical `starts_with` guard in
+        // `resolve_list_base_dir` must catch it instead (see S1 in the review that added this
+        // guard).
+        let params = ListGeneratedServersParams {
+            base_dir: Some(r"\pwn\evil".to_string()),
+        };
+
+        let result = service.list_generated_servers(Parameters(params)).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
     }
 
     // ========================================================================

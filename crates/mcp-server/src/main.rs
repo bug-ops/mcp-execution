@@ -759,7 +759,7 @@ mod tests {
 
         client_write
             .write_all(
-                br#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_generated_servers","arguments":{"base_dir":"/nonexistent-mcp-permit-test-dir"}}}
+                br#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_generated_servers","arguments":{"base_dir":"nonexistent-mcp-permit-test-dir"}}}
 "#,
             )
             .await
@@ -776,6 +776,15 @@ mod tests {
         assert!(
             tool_response.contains(r#""id":2"#),
             "expected a tools/call response, got: {tool_response}"
+        );
+        // The relative `base_dir` above must resolve and scan successfully - it just isn't
+        // expected to find anything - so this exercises the same `spawn_blocking` scan path
+        // as before `base_dir` confinement (#236) started rejecting absolute paths. A rejected
+        // `base_dir` surfaces as a JSON-RPC `error` object rather than a `result`, so checking
+        // for `result` distinguishes an actual scan from an early confinement bail-out.
+        assert!(
+            tool_response.contains(r#""result":"#),
+            "expected list_generated_servers to succeed, got: {tool_response}"
         );
 
         // Permit release (on `RequestContext` drop) is not coupled to when the response
