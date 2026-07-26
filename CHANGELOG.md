@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`mcp-execution-core`**: `ServerConfigBuilder::build()` now returns
+  `Result<ServerConfig, Error>` instead of an infallible `ServerConfig` (#177). Security
+  validation (shell metacharacters, forbidden environment variables, URL scheme, header
+  safety, timeout bounds — everything `validate_server_config` checks) now runs inside
+  `build()`/`try_build()` itself, so a `ServerConfig` built through the builder can no longer
+  be constructed without having already passed it; previously `build()` only checked
+  structural completeness (command/url presence), leaving `validate_server_config` as a
+  separate call callers had to remember to invoke before spawning a process. This is a
+  builder-level guarantee, not a type-level one — every `ServerConfig` field is `pub` and the
+  type derives `Deserialize`, so a config assembled by other means (a struct literal, or
+  deserializing untrusted JSON directly) is not covered by it. `try_build()` is now an alias
+  for `build()` (both run the same validation) and its error type changed from `String` to
+  `Error`. Every in-tree caller (`mcp-cli`, `mcp-server`, `mcp-introspector`) has been updated;
+  `Introspector::discover_server` still re-validates its `config` argument as defense in
+  depth, since it cannot assume every caller went through the builder.
+
 - **`mcp-execution-cli`**: `McpServerEntry` no longer has `command`/`args`/`env` fields
   directly; they now live under a new `transport: McpTransport` field (`Stdio { command, args,
   env, cwd }` / `Http { url, headers }` / `Sse { url, headers }`), since a single stdio-shaped
@@ -33,6 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   echoes them verbatim. `parse_key_value` now rejects a key containing whitespace, `:`, or
   control characters (never legitimate in a header/env name) before it can reach that assumption
   (#190).
+
+- **`mcp-execution-core`**: the forbidden environment variable list gained `LD_AUDIT` (Linux
+  dynamic-linker audit hooks, a sibling vector to `LD_PRELOAD`) and several interpreter-specific
+  code-execution vectors for the runtimes this project's bridge actually spawns —
+  `PYTHONPATH`/`PYTHONSTARTUP` (Python), `RUBYOPT` (Ruby), `PERL5OPT` (Perl), and
+  `JAVA_TOOL_OPTIONS` (JVM) — alongside the existing `NODE_OPTIONS`/`BASH_ENV`. The
+  `FORBIDDEN_ENV_NAMES` constant now documents the threat model precisely: this is an
+  accidental/indirect-misconfiguration guard, not a sandbox boundary, and does not protect
+  against a malicious command/binary itself or code the spawned server executes once running
+  (#221 item 1).
 
 - **`mcp-execution-core`**: `validate_network_config`'s duplicate-header-name check echoed the
   raw header name verbatim in its `SecurityViolation` reason, even though the check only runs
@@ -300,6 +326,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of only rejecting control characters, so a space/`:`/`@` in a header name is caught here with
   a clear message instead of failing later inside `http::HeaderName` construction with an
   opaque error.
+
+- **`mcp-execution-codegen`**: the generated runtime bridge (`_runtime/mcp-bridge.ts`) now
+  validates an http/sse `mcp.json` entry's URL scheme and header name/value safety to the same
+  depth as `mcp_execution_core::validate_server_config`, instead of only checking this for
+  stdio configs and rejecting every other transport outright with a generic message (#221 item
+  2). The bridge still cannot execute tool calls against an http/sse server — it has no HTTP
+  client of its own — so such a config is still ultimately rejected as unsupported, but a
+  malformed URL/header now surfaces its own precise error first; this also means the
+  validation is already correct and tested for whenever the bridge gains real http/sse
+  tool-call support.
+
+- **`mcp-execution-codegen`**: the rendered runtime bridge's `FORBIDDEN_CHARS`/
+  `FORBIDDEN_ENV_NAMES`/`DYLD_`-prefix literals are now generated directly from
+  `mcp_execution_core`'s `forbidden_chars()`/`forbidden_env_names()`/`forbidden_env_prefix()`
+  accessors at code-generation time (via a new `BridgeContext`, whose fields are only ever
+  populated by its hand-written `Default` impl — not derived, and not otherwise
+  constructible), instead of being hand-copied into the `.hbs` template as a second,
+  independently maintained literal. This structurally eliminates the drift these two copies
+  were previously exposed to: a future addition to `command.rs`'s forbidden lists is picked up
+  by every newly generated bridge automatically, and the existing snapshot test now reads the
+  same Rust accessors rather than asserting against a third hardcoded copy (#221 item 3). A
+  derived `Default` was caught and rejected during review: it would have rendered
+  `FORBIDDEN_CHARS = []` for any caller that didn't go through the codegen pipeline's own
+  `generate()` call sites, silently disabling the shell-metacharacter check.
+
+- **`mcp-execution-codegen`**: the generated runtime bridge's `readJsonRpcMessage` no longer
+  hangs forever when the spawned MCP server process dies or simply never replies (#221 item
+  4). It only listened for `data`/`error` events on the child's stdout stream; a process that
+  exited before writing a JSON-RPC response (crash, misconfiguration, or
+  `node -e "process.exit(1)"`-style immediate exit) left the awaiting tool call pending
+  indefinitely. It now also listens for the child process's `exit` event, rejecting with a
+  clear "process exited before responding" error, and applies a request timeout (30s default,
+  overridable via `MCPBRIDGE_REQUEST_TIMEOUT_MS`) that rejects with a clear timeout error
+  otherwise. All listeners and the timer are cleaned up on every settlement path (success,
+  stream error, process exit, or timeout) to avoid accumulating listeners across repeated tool
+  calls on the same connection.
+
+- **`mcp-execution-server`**: `introspect_server` now reports a `SecurityViolation` (e.g. a
+  shell metacharacter or forbidden environment variable in caller-supplied `command`/`args`/
+  `env`) as `INVALID_PARAMS`, matching how a `ValidationError` was already handled. Both error
+  variants map to the same "malformed request from this client" client-input-error condition;
+  `SecurityViolation` was previously excluded from the check and fell through to
+  `internal_error`, misreporting a hostile caller-supplied parameter as a server-side fault.
 
 ### Added
 

@@ -219,8 +219,15 @@ pub struct CategoryInfo {
 
 /// Context for rendering the runtime bridge template.
 ///
-/// Currently minimal, but allows for future extension with
-/// server-specific configuration or metadata.
+/// The forbidden-char/forbidden-env-name fields are rendered directly from
+/// `mcp_execution_core`'s canonical lists so the generated bridge's copies structurally
+/// cannot drift from the Rust source of truth — see [`BridgeContext::default`], the only way
+/// to construct one, which populates them from `mcp_execution_core::forbidden_chars`/
+/// `forbidden_env_names`/`forbidden_env_prefix` rather than leaving them empty. This
+/// deliberately does *not* derive `Default`: an empty `forbidden_chars` would render a bridge
+/// whose `validateCommandString` accepts every shell metacharacter (fail-open on exactly the
+/// check this exists to enforce), so `Default` is hand-written to make "always populated" a
+/// property of the type rather than a convention callers must remember to uphold.
 ///
 /// # Examples
 ///
@@ -228,11 +235,41 @@ pub struct CategoryInfo {
 /// use mcp_execution_codegen::progressive::BridgeContext;
 ///
 /// let context = BridgeContext::default();
-/// // Currently no fields, but provides extensibility
+/// assert!(!context.forbidden_chars.is_empty());
+/// assert!(context.forbidden_chars.contains(&";".to_string()));
+/// assert!(!context.forbidden_env_prefix.is_empty());
 /// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeContext {
-    // Future: could include server-specific config, auth info, etc.
+    /// Shell metacharacters forbidden in a command or argument string, each pre-escaped for
+    /// safe embedding inside a single-quoted TypeScript string literal.
+    pub forbidden_chars: Vec<String>,
+    /// Forbidden environment variable names (exact match).
+    pub forbidden_env_names: Vec<String>,
+    /// Environment-variable-name prefix rejected regardless of exact match (e.g. `DYLD_`).
+    pub forbidden_env_prefix: String,
+}
+
+impl Default for BridgeContext {
+    /// Populates the forbidden-char/forbidden-env-name fields directly from
+    /// `mcp_execution_core`'s canonical lists, so `BridgeContext::default()` can never render
+    /// a bridge with an empty (fail-open) `FORBIDDEN_CHARS`. Each character is passed through
+    /// `sanitize_ts_string_literal` (this crate's TS-string-literal escaper) so it renders as
+    /// a syntactically valid single-quoted TypeScript string literal regardless of what the
+    /// Rust list contains.
+    fn default() -> Self {
+        Self {
+            forbidden_chars: mcp_execution_core::forbidden_chars()
+                .iter()
+                .map(|c| crate::progressive::generator::sanitize_ts_string_literal(&c.to_string()))
+                .collect(),
+            forbidden_env_names: mcp_execution_core::forbidden_env_names()
+                .iter()
+                .map(|&s| s.to_string())
+                .collect(),
+            forbidden_env_prefix: mcp_execution_core::forbidden_env_prefix().to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -310,7 +347,13 @@ mod tests {
     #[test]
     fn test_bridge_context_default() {
         let context = BridgeContext::default();
-        // Just verify it can be constructed
         let _serialized = serde_json::to_string(&context).unwrap();
+
+        // #221 critique S2: `Default` must never render a fail-open (empty) forbidden-char
+        // list, since an empty `FORBIDDEN_CHARS` in the rendered bridge would make
+        // `validateCommandString` accept every shell metacharacter.
+        assert!(!context.forbidden_chars.is_empty());
+        assert!(!context.forbidden_env_names.is_empty());
+        assert!(!context.forbidden_env_prefix.is_empty());
     }
 }

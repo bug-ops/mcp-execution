@@ -68,7 +68,10 @@ async fn test_state_manager_workflow() {
     let server_id = ServerId::new("test-server");
     let server_info = create_test_server_info(server_id.clone());
 
-    let config = ServerConfig::builder().command("echo".to_string()).build();
+    let config = ServerConfig::builder()
+        .command("echo".to_string())
+        .build()
+        .unwrap();
     let output_dir = std::env::temp_dir().join("mcp-server-test");
 
     // Store pending generation
@@ -111,7 +114,10 @@ async fn test_multiple_concurrent_sessions() {
             tools: vec![],
         };
 
-        let config = ServerConfig::builder().command("echo".to_string()).build();
+        let config = ServerConfig::builder()
+            .command("echo".to_string())
+            .build()
+            .unwrap();
         let output_dir = std::env::temp_dir().join(format!("mcp-test-{i}"));
 
         let pending =
@@ -139,7 +145,10 @@ async fn test_state_manager_handles_expiration() {
 
     let server_id = ServerId::new("test");
     let server_info = create_test_server_info(server_id.clone());
-    let config = ServerConfig::builder().command("echo".to_string()).build();
+    let config = ServerConfig::builder()
+        .command("echo".to_string())
+        .build()
+        .unwrap();
     let output_dir = std::env::temp_dir().join("mcp-expire-test");
 
     // Create and manually expire a session
@@ -349,7 +358,10 @@ fn create_test_server_info(server_id: ServerId) -> ServerInfo {
 fn create_test_pending(server_id_str: &str) -> PendingGeneration {
     let server_id = ServerId::new(server_id_str);
     let server_info = create_test_server_info(server_id.clone());
-    let config = ServerConfig::builder().command("echo".to_string()).build();
+    let config = ServerConfig::builder()
+        .command("echo".to_string())
+        .build()
+        .unwrap();
     let output_dir = std::env::temp_dir().join(format!("mcp-test-{server_id_str}"));
 
     PendingGeneration::new(server_id, server_info, config, output_dir, &SystemClock)

@@ -95,7 +95,8 @@ async fn test_discover_server_connect_timeout_fires() {
         .command(FIXTURE_BIN.to_string())
         .arg("30000".to_string()) // fixture delays the handshake itself by 30s
         .connect_timeout(Duration::from_millis(150))
-        .build();
+        .build()
+        .unwrap();
 
     let started = Instant::now();
     let result = introspector.discover_server(server_id, &config).await;
@@ -128,7 +129,8 @@ async fn test_discover_server_discover_timeout_fires() {
         .arg("0".to_string()) // no handshake delay
         .arg("30000".to_string()) // fixture delays tools/list by 30s
         .discover_timeout(Duration::from_millis(150))
-        .build();
+        .build()
+        .unwrap();
 
     let started = Instant::now();
     let result = introspector.discover_server(server_id, &config).await;
@@ -169,7 +171,8 @@ async fn test_discover_server_connect_timeout_kills_child_process() {
         .arg("0".to_string())
         .arg(pid_path.display().to_string())
         .connect_timeout(Duration::from_millis(150))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector.discover_server(server_id, &config).await;
     assert!(
@@ -206,7 +209,8 @@ async fn test_discover_server_discover_timeout_kills_child_process() {
         .arg("30000".to_string()) // fixture delays tools/list by 30s
         .arg(pid_path.display().to_string())
         .discover_timeout(Duration::from_millis(150))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector.discover_server(server_id, &config).await;
     assert!(
@@ -240,7 +244,8 @@ async fn test_discover_server_succeeds_when_within_timeouts() {
         .arg("0".to_string())
         .connect_timeout(Duration::from_secs(5))
         .discover_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector.discover_server(server_id, &config).await;
 
@@ -267,7 +272,8 @@ async fn test_discover_server_success_kills_child_process() {
         .arg(pid_path.display().to_string())
         .connect_timeout(Duration::from_secs(5))
         .discover_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector.discover_server(server_id, &config).await;
     assert!(result.is_ok(), "expected success, got {result:?}");
@@ -311,7 +317,8 @@ async fn test_dropping_discover_server_future_kills_child_process() {
         // Long enough that our own 150ms sleep below wins the race, not
         // Introspector's internal timeout handling (already covered above).
         .connect_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
 
     tokio::select! {
         _ = introspector.discover_server(server_id, &config) => {
@@ -370,7 +377,8 @@ async fn test_discover_server_passes_env_and_cwd_to_child_process() {
         .cwd(configured_cwd.path().to_path_buf())
         .connect_timeout(Duration::from_secs(5))
         .discover_timeout(Duration::from_secs(5))
-        .build();
+        .build()
+        .unwrap();
 
     let result = introspector.discover_server(server_id, &config).await;
     assert!(result.is_ok(), "expected success, got {result:?}");

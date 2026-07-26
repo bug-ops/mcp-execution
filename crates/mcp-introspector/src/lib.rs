@@ -25,7 +25,7 @@
 //! let server_id = ServerId::new("github");
 //! let config = ServerConfig::builder()
 //!     .command("github-server".to_string())
-//!     .build();
+//!     .build()?;
 //!
 //! let info = introspector
 //!     .discover_server(server_id, &config)
@@ -186,13 +186,13 @@ pub struct ServerCapabilities {
 /// let server1 = ServerId::new("server1");
 /// let config1 = ServerConfig::builder()
 ///     .command("server1-cmd".to_string())
-///     .build();
+///     .build()?;
 /// introspector.discover_server(server1.clone(), &config1).await?;
 ///
 /// let server2 = ServerId::new("server2");
 /// let config2 = ServerConfig::builder()
 ///     .command("server2-cmd".to_string())
-///     .build();
+///     .build()?;
 /// introspector.discover_server(server2.clone(), &config2).await?;
 ///
 /// // Retrieve information
@@ -232,17 +232,26 @@ impl Introspector {
     /// Connects to an MCP server via stdio and discovers its capabilities.
     ///
     /// This method:
-    /// 1. Validates the server configuration for security
+    /// 1. Re-validates the server configuration for security (defense in depth)
     /// 2. Spawns the server process using stdio transport
     /// 3. Connects via rmcp client
     /// 4. Queries server information using `ServiceExt::list_all_tools`
     /// 5. Extracts tools and capabilities
     /// 6. Caches the information for later retrieval
     ///
+    /// `config` should normally come from
+    /// [`ServerConfigBuilder::build`](mcp_execution_core::ServerConfigBuilder::build), which
+    /// already runs full security validation — but `ServerConfig`'s fields are all `pub` and
+    /// the type derives `Deserialize`, so a caller can still hand this method an unvalidated
+    /// config obtained by other means (a struct literal, or deserializing untrusted JSON
+    /// directly). This method re-validates via [`validate_server_config`] as defense in
+    /// depth, so it never spawns a process or opens a connection for a config that fails
+    /// that check, even when the caller bypassed the builder.
+    ///
     /// # Errors
     ///
     /// Returns error if:
-    /// - Server configuration contains security violations
+    /// - `config` fails [`validate_server_config`]
     /// - The server process cannot be spawned
     /// - Connection to the server fails
     /// - Server does not respond to capability queries
@@ -259,7 +268,7 @@ impl Introspector {
     /// let server_id = ServerId::new("github");
     /// let config = ServerConfig::builder()
     ///     .command("github-server".to_string())
-    ///     .build();
+    ///     .build()?;
     ///
     /// let info = introspector
     ///     .discover_server(server_id, &config)
@@ -276,7 +285,12 @@ impl Introspector {
     ) -> Result<ServerInfo> {
         tracing::info!("Discovering MCP server: {}", server_id);
 
-        // Validate server config for security (prevents command injection)
+        // Defense in depth: `config` is normally pre-validated by `ServerConfigBuilder::build`,
+        // but every field is `pub` and `ServerConfig` derives `Deserialize`, so a caller can
+        // still construct an unvalidated config directly. Re-validating here (rather than
+        // trusting the builder alone) means this method never spawns a process or opens a
+        // connection for a config that fails security validation, regardless of how it was
+        // constructed.
         validate_server_config(config)?;
 
         let (tool_list, server_name, server_version, has_resources, has_prompts) =
@@ -323,7 +337,7 @@ impl Introspector {
     /// // Discover it
     /// let config = ServerConfig::builder()
     ///     .command("test-cmd".to_string())
-    ///     .build();
+    ///     .build()?;
     /// introspector.discover_server(server_id.clone(), &config).await?;
     ///
     /// // Now available
@@ -385,7 +399,7 @@ impl Introspector {
     /// let server_id = ServerId::new("test");
     /// let config = ServerConfig::builder()
     ///     .command("test-cmd".to_string())
-    ///     .build();
+    ///     .build()?;
     ///
     /// introspector.discover_server(server_id.clone(), &config).await?;
     /// assert_eq!(introspector.server_count(), 1);
@@ -411,8 +425,8 @@ impl Introspector {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
     ///
-    /// let config1 = ServerConfig::builder().command("cmd1".to_string()).build();
-    /// let config2 = ServerConfig::builder().command("cmd2".to_string()).build();
+    /// let config1 = ServerConfig::builder().command("cmd1".to_string()).build()?;
+    /// let config2 = ServerConfig::builder().command("cmd2".to_string()).build()?;
     ///
     /// introspector.discover_server(ServerId::new("s1"), &config1).await?;
     /// introspector.discover_server(ServerId::new("s2"), &config2).await?;
@@ -584,11 +598,11 @@ async fn discover_via_http(
     server_id: &ServerId,
     config: &ServerConfig,
 ) -> Result<(Vec<rmcp::model::Tool>, String, String, bool, bool)> {
-    // `validate_server_config` (called by the caller) already guarantees `url`
-    // is `Some` for Http/Sse transports.
+    // `ServerConfigBuilder::build` already guarantees `url` is `Some` for
+    // Http/Sse transports — no `ServerConfig` can exist otherwise.
     let url = config
         .url()
-        .expect("url validated as present by validate_server_config");
+        .expect("url validated as present by ServerConfigBuilder::build");
 
     let mut custom_headers = HashMap::new();
     for (name, value) in config.headers() {
@@ -944,7 +958,10 @@ mod tests {
     }
 
     fn test_config(command: &str) -> ServerConfig {
-        ServerConfig::builder().command(command.to_string()).build()
+        ServerConfig::builder()
+            .command(command.to_string())
+            .build()
+            .unwrap()
     }
 
     /// #84 — name must come from the handshake, not `config.command`
@@ -1031,7 +1048,8 @@ mod tests {
     fn test_extract_peer_meta_fallback_name_is_url_for_http_transport() {
         let config = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build();
+            .build()
+            .unwrap();
 
         let (name, _, _, _) = extract_peer_meta(&config, None);
 
