@@ -180,21 +180,110 @@ enum DecodedFrame {
 /// buffer would silently reopen the #273 gap `Skipped` closes here — re-verify this
 /// assumption against `JsonRpcMessageCodec::decode`'s implementation on any `rmcp`
 /// upgrade.
-struct RecoveringCodec(JsonRpcMessageCodec<RxJsonRpcMessage<RoleServer>>);
+///
+/// A blank or whitespace-only line makes the inner codec report
+/// [`JsonRpcMessageCodecError::Serde`] (it is not valid JSON), which `fold` would
+/// otherwise turn into `Malformed` and thus a `tracing::warn!` per line — the same
+/// log-volume amplification fixed for the introspector's symmetric decoder in #275/#282.
+/// `blank_scan_from`/`assume_mid_discard` and [`Self::peek_blank_line`] port that same
+/// read-only peek so such a `Serde` error is instead folded to the already-silent
+/// `DecodedFrame::Skipped` path.
+struct RecoveringCodec {
+    inner: JsonRpcMessageCodec<RxJsonRpcMessage<RoleServer>>,
+    /// Resumable cursor for [`Self::peek_blank_line`]: leading byte count already known
+    /// to contain no newline, so a long non-blank line built up over many small reads is
+    /// peeked once in total instead of re-scanned from the front on every call.
+    blank_scan_from: usize,
+    /// Set once the inner codec reports `MaxLineLengthExceeded` and cleared once it
+    /// reports a message or a `Serde` error. While set, the bytes at the front of `buf`
+    /// may still be the tail of an oversized line the inner codec is discarding rather
+    /// than a genuine next line, so the blank-line peek is not trusted — treating that
+    /// tail as blank could misattribute the following line's own parse error to
+    /// blank-line suppression instead of logging it.
+    assume_mid_discard: bool,
+}
 
 impl RecoveringCodec {
+    fn new(max_length: usize) -> Self {
+        Self {
+            inner: JsonRpcMessageCodec::new_with_max_length(max_length),
+            blank_scan_from: 0,
+            assume_mid_discard: false,
+        }
+    }
+
+    /// Read-only check for whether the *next* line the inner codec is about to consume
+    /// is empty or whitespace-only. Returns `Some(true/false)` once a full line (a `\n`
+    /// within `max_length + 1` bytes of the front of `buf`) is buffered; `None` if no
+    /// newline is in reach yet, in which case `scan_from` is advanced to the bound
+    /// already checked so the next call resumes instead of re-scanning. Never mutates
+    /// `buf`: all buffer consumption stays inside the inner codec, so this peek cannot
+    /// desynchronize its own line-scan state across split reads.
+    fn peek_blank_line(scan_from: &mut usize, max_length: usize, buf: &BytesMut) -> Option<bool> {
+        let bound = std::cmp::min(max_length.saturating_add(1), buf.len());
+        if *scan_from >= bound {
+            return None;
+        }
+        if let Some(offset) = buf[*scan_from..bound]
+            .iter()
+            .position(|&byte| byte == b'\n')
+        {
+            let newline_at = *scan_from + offset;
+            Some(buf[..newline_at].iter().all(u8::is_ascii_whitespace))
+        } else {
+            *scan_from = bound;
+            None
+        }
+    }
+
     fn fold(
         result: Result<Option<RxJsonRpcMessage<RoleServer>>, JsonRpcMessageCodecError>,
         len_before: usize,
         len_after: usize,
+        is_blank: bool,
     ) -> std::io::Result<Option<DecodedFrame>> {
         match result {
             Ok(Some(message)) => Ok(Some(DecodedFrame::Message(Box::new(message)))),
             Ok(None) if len_after < len_before => Ok(Some(DecodedFrame::Skipped)),
             Ok(None) => Ok(None),
             Err(JsonRpcMessageCodecError::Io(error)) => Err(error),
+            Err(JsonRpcMessageCodecError::Serde(_)) if is_blank => Ok(Some(DecodedFrame::Skipped)),
             Err(other) => Ok(Some(DecodedFrame::Malformed(other))),
         }
+    }
+
+    fn drive(
+        &mut self,
+        buf: &mut BytesMut,
+        decode_step: impl FnOnce(
+            &mut JsonRpcMessageCodec<RxJsonRpcMessage<RoleServer>>,
+            &mut BytesMut,
+        ) -> Result<
+            Option<RxJsonRpcMessage<RoleServer>>,
+            JsonRpcMessageCodecError,
+        >,
+    ) -> std::io::Result<Option<DecodedFrame>> {
+        let max_length = self.inner.max_length();
+        let is_blank = !self.assume_mid_discard
+            && Self::peek_blank_line(&mut self.blank_scan_from, max_length, buf).unwrap_or(false);
+
+        let len_before = buf.len();
+        let result = decode_step(&mut self.inner, buf);
+        let len_after = buf.len();
+        if len_after < len_before {
+            self.blank_scan_from = 0;
+        }
+        match &result {
+            Ok(Some(_)) | Err(JsonRpcMessageCodecError::Serde(_)) => {
+                self.assume_mid_discard = false;
+            }
+            Err(JsonRpcMessageCodecError::MaxLineLengthExceeded) => {
+                self.assume_mid_discard = true;
+            }
+            Ok(None) | Err(_) => {}
+        }
+
+        Self::fold(result, len_before, len_after, is_blank)
     }
 }
 
@@ -203,15 +292,11 @@ impl Decoder for RecoveringCodec {
     type Error = std::io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<DecodedFrame>> {
-        let len_before = buf.len();
-        let result = self.0.decode(buf);
-        Self::fold(result, len_before, buf.len())
+        self.drive(buf, JsonRpcMessageCodec::decode)
     }
 
     fn decode_eof(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<DecodedFrame>> {
-        let len_before = buf.len();
-        let result = self.0.decode_eof(buf);
-        Self::fold(result, len_before, buf.len())
+        self.drive(buf, JsonRpcMessageCodec::decode_eof)
     }
 }
 
@@ -273,10 +358,7 @@ fn bounded_request_stream<R>(
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
-    let mut framed = FramedRead::new(
-        reader,
-        RecoveringCodec(JsonRpcMessageCodec::new_with_max_length(max_length)),
-    );
+    let mut framed = FramedRead::new(reader, RecoveringCodec::new(max_length));
     let mut semaphore = PollSemaphore::new(concurrency_limit);
     let mut pending_admission: VecDeque<RxJsonRpcMessage<RoleServer>> = VecDeque::new();
     stream::poll_fn(move |cx| {
@@ -687,6 +769,152 @@ mod tests {
                 item.is_some()
             ),
         }
+    }
+
+    /// Minimal `tracing::Subscriber` that counts WARN-level events on the calling
+    /// thread, so a test can assert how many warnings `bounded_request_stream` logged
+    /// without pulling in a tracing-capture crate for one assertion. Install via
+    /// `tracing::subscriber::set_default`, which is thread-local; `#[tokio::test]` uses
+    /// a current-thread runtime by default, so the whole test body — including every
+    /// `.await` — runs on the thread the guard was set on.
+    struct WarnCounter(Arc<AtomicUsize>);
+
+    impl tracing::Subscriber for WarnCounter {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::WARN
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn blank_lines_are_skipped_without_a_warn_log() {
+        // Bare newlines, a whitespace-only line, and a CRLF blank line must all be
+        // dropped without a `tracing::warn!` (issue #284, same amplification class as
+        // #275/#282) — unlike a malformed line, they must not surface a warning at all.
+        let warn_count = Arc::new(AtomicUsize::new(0));
+        let _tracing_guard = tracing::subscriber::set_default(WarnCounter(Arc::clone(&warn_count)));
+
+        let script = Script {
+            chunks: vec![
+                b"\n".to_vec(),
+                b"   \n".to_vec(),
+                b"\r\n".to_vec(),
+                valid_notification_line(),
+            ],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        assert!(
+            stream.next().await.is_some(),
+            "the valid line must decode with no item emitted for the blank lines before it"
+        );
+        assert!(stream.next().await.is_none());
+        assert_eq!(
+            warn_count.load(Ordering::SeqCst),
+            0,
+            "blank lines must not produce a warn!-level log record"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_non_blank_line_still_warns() {
+        // Contrast case for `blank_lines_are_skipped_without_a_warn_log`: a genuinely
+        // malformed (non-blank) line must still warn, so the blank-line fix doesn't
+        // silently swallow real diagnostics too.
+        let warn_count = Arc::new(AtomicUsize::new(0));
+        let _tracing_guard = tracing::subscriber::set_default(WarnCounter(Arc::clone(&warn_count)));
+
+        let mut one_chunk = b"not valid json\n".to_vec();
+        one_chunk.extend(valid_notification_line());
+        let script = Script {
+            chunks: vec![one_chunk],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        assert!(stream.next().await.is_some());
+        assert!(stream.next().await.is_none());
+        assert_eq!(
+            warn_count.load(Ordering::SeqCst),
+            1,
+            "a genuinely malformed line must still be warned about"
+        );
+    }
+
+    #[tokio::test]
+    async fn splits_whitespace_only_line_across_reads_without_panicking() {
+        // Regression for the read-only-peek design itself: `peek_blank_line` must only ever
+        // read `buf`, never mutate it, so a whitespace-only line split across two separate
+        // `poll_read` calls cannot desync the resumable `blank_scan_from` cursor from the
+        // inner codec's own line-scan state (the introspector's symmetric fix, #282, had a
+        // panic regression here from an earlier version that advanced the buffer directly).
+        let script = Script {
+            chunks: vec![
+                b"          ".to_vec(), // 10 spaces, no newline yet
+                b"\n".to_vec(),
+                valid_notification_line(),
+            ],
+            idx: 0,
+        };
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        assert!(
+            stream.next().await.is_some(),
+            "the valid line must still decode after a blank line split across two reads"
+        );
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn warns_for_malformed_line_immediately_after_oversized_discard() {
+        // Regression for `assume_mid_discard`: right after the inner codec finishes
+        // discarding an oversized line, the bytes now at the front of `buf` are the *next*
+        // line, not a genuine blank one — but a blank-line peek computed and trusted in the
+        // same call (ignoring `assume_mid_discard`) could see the discard's own terminating
+        // `\n` at offset 0 and misattribute the next line's own parse error to blank-line
+        // suppression, silently swallowing its warning even though no message was lost.
+        // Both the oversized-run warning and the malformed-line warning must be reported.
+        let oversized_whitespace_run = vec![b' '; TEST_MAX * 3]; // no trailing newline
+        let mut rest = b"\nnot json at all\n".to_vec();
+        rest.extend(valid_notification_line());
+        let script = Script {
+            chunks: vec![oversized_whitespace_run, rest],
+            idx: 0,
+        };
+
+        let warn_count = Arc::new(AtomicUsize::new(0));
+        let _tracing_guard = tracing::subscriber::set_default(WarnCounter(Arc::clone(&warn_count)));
+        let mut stream = bounded_request_stream(script, TEST_MAX, semaphore(TEST_CONCURRENCY));
+
+        assert!(
+            stream.next().await.is_some(),
+            "the valid notification after the malformed line must still decode"
+        );
+        assert!(stream.next().await.is_none());
+        assert_eq!(
+            warn_count.load(Ordering::SeqCst),
+            2,
+            "one warning for the oversized run and one for the malformed line that follows \
+             it -- neither is blank, so neither may be suppressed"
+        );
     }
 
     #[tokio::test]

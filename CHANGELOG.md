@@ -354,6 +354,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-server`**: `save_categorized_tools` collapsed its four copy-pasted per-field
+  byte-length checks (`name`, `category`, `keywords`, `short_description`) into a single private
+  `check_categorized_field_length` helper, called once per field. No behavior change: the exact
+  error message wording, the `INVALID_PARAMS` boundary (`>`, not `>=`), and check ordering are
+  unchanged (#285).
 - **`mcp-execution-codegen`**: `ProgressiveGenerator::generate` now delegates to
   `generate_with_categories` with an empty categorization map instead of duplicating the same
   eight-step file-generation pipeline (#279). Fixed a regression this introduced along the way:
@@ -987,6 +992,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codec's own line-scan state — an earlier version of this fix that advanced the buffer
   directly could panic or silently drop a valid response when a whitespace-only line was split
   across two reads.
+
+- **`mcp-execution-server`**: `bounded_request_stream`'s `RecoveringCodec` had the same
+  blank-line log-amplification issue fixed for the introspector's symmetric decoder above
+  (#284, same class as #275/#282): a blank or whitespace-only stdin line produced a `Serde`
+  decode error that was folded into `DecodedFrame::Malformed` and logged via
+  `tracing::warn!("dropping oversized or malformed request line")` on every occurrence. Ported
+  the same read-only, resumable peek approach, so a blank line is now folded to the existing
+  log-free `DecodedFrame::Skipped` path instead; genuinely malformed non-empty lines still warn,
+  unchanged.
 
 ### Added
 
