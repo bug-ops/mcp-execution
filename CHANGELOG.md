@@ -355,7 +355,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NodeJS` namespace), none of which resolve without Node's own type declarations, so
   `package.json` now additionally declares `@types/node` (pinned to the major version this
   project's own CI targets) as a `devDependency` — without it, `tsc --noEmit` still failed
-  (`TS2307`/`TS2580`/`TS2503`) even with the corrected `tsconfig.json`.
+  (`TS2307`/`TS2580`/`TS2503`) even with the corrected `tsconfig.json`. The generated
+  `tsconfig.json` also lists `"types": ["node"]` explicitly rather than relying on automatic
+  `@types/*` acquisition: TypeScript 5.x auto-includes every installed `@types` package when
+  `types` is unset, but TypeScript 7 (the native/Go-based compiler) does not extend that same
+  implicit inclusion to `@types/node`'s ambient globals (`process`, the `NodeJS` namespace) —
+  `tsc --noEmit` failed with `TS2591`/`TS2503` under TS 7 even with `@types/node` correctly
+  installed, until `types` named it explicitly.
 - **`mcp-execution-codegen`**: the generated runtime bridge (`_runtime/mcp-bridge.ts`) attached a
   fresh `stdout` listener per `callMCPTool` call and resolved on the first complete JSON-RPC
   message with an `id`, without checking that the `id` matched the request it sent. Two

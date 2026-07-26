@@ -96,6 +96,14 @@ const PACKAGE_JSON: &str = "{\"type\":\"module\",\"devDependencies\":{\"@types/n
 /// `tool.ts.hbs`), which requires `allowImportingTsExtensions`. TypeScript requires `noEmit`
 /// (or a declaration/emit setting) whenever `allowImportingTsExtensions` is set, since that
 /// option only changes how imports are type-checked, not how output is emitted.
+///
+/// `"types": ["node"]` is explicit rather than relying on automatic `@types/*` acquisition:
+/// TypeScript 5.x auto-includes every package under `node_modules/@types` when `types` is
+/// unset, but TypeScript 7 (the native/Go-based compiler) does not extend that same implicit
+/// behavior to `@types/node`'s ambient globals (`process`, the `NodeJS` namespace) — `tsc
+/// --noEmit` fails with `TS2591`/`TS2503` under TS 7 even with `@types/node` correctly
+/// installed, unless `types` names it explicitly. Listing it explicitly works identically
+/// under both major versions.
 const TSCONFIG_JSON: &str = r#"{
   "compilerOptions": {
     "target": "ES2022",
@@ -104,7 +112,8 @@ const TSCONFIG_JSON: &str = r#"{
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node"]
   },
   "include": ["**/*.ts"]
 }
@@ -1103,6 +1112,9 @@ mod tests {
     /// Regression guard for #183: tool files import the runtime bridge with an explicit `.ts`
     /// extension, which `tsc` only accepts under `allowImportingTsExtensions`; that option in
     /// turn requires `noEmit` (or a declaration/emit setting) to be internally consistent.
+    /// `types` must explicitly name `node` — TypeScript 7's automatic `@types/*` acquisition
+    /// does not extend `@types/node`'s ambient globals the way TypeScript 5.x's does, so
+    /// `tsc --noEmit` fails under TS 7 without this even with `@types/node` installed.
     #[test]
     fn test_generate_tsconfig_json_allows_ts_extension_imports() {
         let generator = ProgressiveGenerator::new().unwrap();
@@ -1122,6 +1134,7 @@ mod tests {
 
         assert_eq!(compiler_options["allowImportingTsExtensions"], true);
         assert_eq!(compiler_options["noEmit"], true);
+        assert_eq!(compiler_options["types"], serde_json::json!(["node"]));
     }
 
     /// Regression guard for #183: `tsconfig.json` alone does not make the generated package
