@@ -77,10 +77,19 @@ pub fn to_pascal_case(snake_case: &str) -> String {
 /// Sanitizes a string for safe use as a TypeScript identifier (e.g. a function, export,
 /// or object property name).
 ///
-/// Replaces any character outside `[A-Za-z0-9_$]` with `_`, and prefixes the result with
-/// `_` if it would otherwise start with a digit or be empty. This prevents identifier-position
-/// injection of arbitrary TypeScript syntax from untrusted schema data (property keys, tool
-/// names, etc. sourced from an MCP server are not guaranteed to be valid identifiers).
+/// Characters in `[A-Za-z0-9$]` pass through unchanged; every other character — including a
+/// literal `_` already in the input — is treated as a separator and replaces its whole
+/// consecutive run with a single `_`, and the result is prefixed with `_` if it would
+/// otherwise start with a digit or be empty. This prevents identifier-position injection of
+/// arbitrary TypeScript syntax from untrusted schema data (property keys, tool names, etc.
+/// sourced from an MCP server are not guaranteed to be valid identifiers).
+///
+/// Collapsing an entire separator run — rather than emitting one `_` per invalid character —
+/// means e.g. a multi-byte non-ASCII run doesn't balloon into a wall of underscores that
+/// discards more information than a single separator already would. It also means a literal
+/// run like `"a__b"` collapses to `"a_b"`: once a separator has been emitted, further
+/// separator-producing characters are redundant regardless of why each one would have
+/// produced a `_`.
 ///
 /// # Examples
 ///
@@ -90,19 +99,21 @@ pub fn to_pascal_case(snake_case: &str) -> String {
 /// assert_eq!(sanitize_ts_identifier("valid_name"), "valid_name");
 /// assert_eq!(sanitize_ts_identifier("123abc"), "_123abc");
 /// assert_eq!(sanitize_ts_identifier("a-b c"), "a_b_c");
+/// assert_eq!(sanitize_ts_identifier("café_menu_日本語"), "caf_menu_");
 /// ```
 #[must_use]
 pub fn sanitize_ts_identifier(s: &str) -> String {
-    let mut result: String = s
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let mut result = String::new();
+    let mut prev_was_underscore = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '$' {
+            result.push(c);
+            prev_was_underscore = false;
+        } else if !prev_was_underscore {
+            result.push('_');
+            prev_was_underscore = true;
+        }
+    }
 
     if result.is_empty() || result.starts_with(|c: char| c.is_ascii_digit()) {
         result.insert(0, '_');
@@ -468,6 +479,49 @@ mod tests {
     #[test]
     fn test_sanitize_ts_identifier_prefixes_empty_string() {
         assert_eq!(sanitize_ts_identifier(""), "_");
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_collapses_consecutive_non_ascii_run() {
+        // Issue #192: each invalid char used to become its own `_`, so one accented
+        // letter plus a run of CJK characters produced four separate underscores. The
+        // literal `_`s between words must also collapse into the run rather than
+        // surviving as a second, adjacent separator (otherwise `sanitize_ts_identifier`
+        // alone — as used for property names, without `to_camel_case` first — still
+        // produces `caf__menu__`, the exact artifact the issue was filed about).
+        assert_eq!(sanitize_ts_identifier("café_menu_日本語"), "caf_menu_");
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_collapses_mixed_invalid_run() {
+        assert_eq!(sanitize_ts_identifier("a---b"), "a_b");
+        assert_eq!(sanitize_ts_identifier("a- .b"), "a_b");
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_collapses_literal_underscore_runs() {
+        // A run of literal `_`s in the input collapses too: once a separator has been
+        // emitted, further separator-producing characters (whether literal `_` or a
+        // substituted invalid character) are redundant regardless of which kind they are.
+        assert_eq!(sanitize_ts_identifier("a__b"), "a_b");
+        assert_eq!(sanitize_ts_identifier("日_本"), "_");
+        assert_eq!(sanitize_ts_identifier("_日_"), "_");
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_preserves_isolated_invalid_chars() {
+        // A single invalid character separated from the next by a valid character must still
+        // become its own `_` — only *consecutive* separator-producing runs collapse.
+        assert_eq!(sanitize_ts_identifier("a-b-c"), "a_b_c");
+    }
+
+    #[test]
+    fn test_sanitize_ts_identifier_all_invalid_chars_collapses_to_bare_underscore() {
+        // The most extreme case of issue #192: an identifier made entirely of invalid
+        // characters must collapse to a single `_`, not one `_` per character. Distinct
+        // from the empty-string case (`""` never enters the loop at all).
+        assert_eq!(sanitize_ts_identifier("日本語"), "_");
+        assert_eq!(sanitize_ts_identifier("---"), "_");
     }
 
     #[test]

@@ -616,16 +616,29 @@ impl GeneratorService {
 
         // Generate code with categorization
         let generator = ProgressiveGenerator::new().map_err(|e| {
-            McpError::internal_error(format!("Failed to create generator: {e}"), None)
+            McpError::internal_error(
+                format!("Failed to create generator: {}", describe_with_causes(&e)),
+                None,
+            )
         })?;
 
         let code = generate_with_categorization(&generator, &pending.server_info, &categorization)
-            .map_err(|e| McpError::internal_error(format!("Failed to generate code: {e}"), None))?;
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to generate code: {}", describe_with_causes(&e)),
+                    None,
+                )
+            })?;
 
         // Build virtual filesystem
         let vfs = FilesBuilder::from_generated_code(code, "/")
             .build()
-            .map_err(|e| McpError::internal_error(format!("Failed to build VFS: {e}"), None))?;
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to build VFS: {}", describe_with_causes(&e)),
+                    None,
+                )
+            })?;
 
         // Capture file count before moving vfs
         let files_generated = vfs.file_count();
@@ -1198,6 +1211,25 @@ fn capacity_error(message: String) -> McpError {
     McpError::new(rmcp::model::ErrorCode(-32000), message, None)
 }
 
+/// Formats `err`'s `Display` text followed by every cause in its `source()` chain, joined by
+/// `": "`.
+///
+/// A bare `{err}` interpolation only shows the top-level `Display`, which for a wrapping
+/// variant like `Error::ScriptGenerationError` never repeats its `#[source]` (see
+/// `ProgressiveGenerator::wrap_tool_generation_error`) — so building an `McpError` message with
+/// `{err}` alone silently drops the underlying cause from what the MCP client sees. Walking the
+/// chain here keeps that diagnostic detail on the primary interface most callers hit first.
+fn describe_with_causes(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = err.to_string();
+    let mut cause = err.source();
+    while let Some(source) = cause {
+        message.push_str(": ");
+        message.push_str(&source.to_string());
+        cause = source.source();
+    }
+    message
+}
+
 /// Generates code with categorization metadata.
 ///
 /// Converts the categorization map to the format expected by the generator
@@ -1254,6 +1286,42 @@ mod tests {
         assert_eq!(params.len(), 2);
         assert!(params.contains(&"name".to_string()));
         assert!(params.contains(&"age".to_string()));
+    }
+
+    #[test]
+    fn test_describe_with_causes_walks_full_source_chain() {
+        // `Error::ScriptGenerationError`'s `Display` never repeats its `#[source]` text, so a
+        // bare `{err}` would silently drop the wrapped `ResourceLimitExceeded` cause from the
+        // message an MCP client sees.
+        let err = mcp_execution_core::Error::ScriptGenerationError {
+            tool: "send_message".to_string(),
+            message: "failed to track generated tool file".to_string(),
+            source: Some(Box::new(mcp_execution_core::Error::ResourceLimitExceeded {
+                resource: "generated output size".to_string(),
+                actual: 10,
+                limit: 5,
+            })),
+        };
+
+        let described = describe_with_causes(&err);
+
+        assert!(described.contains("failed to track generated tool file"));
+        assert!(described.contains("resource limit exceeded for generated output size"));
+    }
+
+    #[test]
+    fn test_describe_with_causes_no_source_returns_bare_display() {
+        let err = mcp_execution_core::Error::ScriptGenerationError {
+            tool: "send_message".to_string(),
+            message: "failed to render tool template".to_string(),
+            source: None,
+        };
+
+        assert_eq!(
+            describe_with_causes(&err),
+            err.to_string(),
+            "no source chain to append, so the description must equal the bare Display"
+        );
     }
 
     /// #198 S3 — `SaveSkillParams::content`'s declared schema length must track the real

@@ -259,7 +259,12 @@ impl<'a> ProgressiveGenerator<'a> {
             let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
             let tool_context =
                 self.create_tool_context(server_id, tool, None, typescript_name.clone())?;
-            let tool_code = self.engine.render("progressive/tool", &tool_context)?;
+            let tool_code = self
+                .engine
+                .render("progressive/tool", &tool_context)
+                .map_err(|source| {
+                    Self::wrap_tool_generation_error(tool, "render tool template", source)
+                })?;
 
             add_tracked(
                 &mut code,
@@ -268,7 +273,10 @@ impl<'a> ProgressiveGenerator<'a> {
                     path: format!("{}.ts", tool_context.typescript_name),
                     content: tool_code,
                 },
-            )?;
+            )
+            .map_err(|source| {
+                Self::wrap_tool_generation_error(tool, "track generated tool file", source)
+            })?;
 
             tracing::debug!("Generated tool file: {}.ts", tool_context.typescript_name);
 
@@ -433,7 +441,12 @@ impl<'a> ProgressiveGenerator<'a> {
             let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
             let tool_context =
                 self.create_tool_context(server_id, tool, categorization, typescript_name.clone())?;
-            let tool_code = self.engine.render("progressive/tool", &tool_context)?;
+            let tool_code = self
+                .engine
+                .render("progressive/tool", &tool_context)
+                .map_err(|source| {
+                    Self::wrap_tool_generation_error(tool, "render tool template", source)
+                })?;
 
             add_tracked(
                 &mut code,
@@ -442,7 +455,10 @@ impl<'a> ProgressiveGenerator<'a> {
                     path: format!("{}.ts", tool_context.typescript_name),
                     content: tool_code,
                 },
-            )?;
+            )
+            .map_err(|source| {
+                Self::wrap_tool_generation_error(tool, "track generated tool file", source)
+            })?;
 
             tracing::debug!(
                 "Generated tool file: {}.ts (category: {:?})",
@@ -552,7 +568,11 @@ impl<'a> ProgressiveGenerator<'a> {
         typescript_name: String,
     ) -> Result<ToolContext> {
         // Extract properties from input schema
-        let properties = self.extract_property_infos(&tool.input_schema)?;
+        let properties = self
+            .extract_property_infos(&tool.input_schema)
+            .map_err(|source| {
+                Self::wrap_tool_generation_error(tool, "extract property schema", source)
+            })?;
 
         let description = sanitize_jsdoc(&tool.description, 256);
         // Falls back to the tool's own description when no LLM categorization is
@@ -643,6 +663,26 @@ impl<'a> ProgressiveGenerator<'a> {
             tools,
             categories: category_groups,
         })
+    }
+
+    /// Wraps a per-tool codegen failure — property-schema extraction, template rendering, or
+    /// output tracking — in [`Error::ScriptGenerationError`] so the failing tool's name
+    /// survives past the point where `tool` goes out of scope, instead of the generic
+    /// [`Error::ValidationError`]/[`Error::SerializationError`]/[`Error::ResourceLimitExceeded`]
+    /// each stage raises on its own. `stage` is a short, lower-case description of the failed
+    /// step (e.g. `"extract property schema"`) used to build `message`.
+    ///
+    /// Unlike [`TemplateEngine`]'s convention of embedding the source's `Display` text into
+    /// `message` and setting `source: None`, this
+    /// keeps `source` populated: `classify_exit_code` in `mcp-execution-cli` downcasts into it
+    /// so a wrapped [`Error::ResourceLimitExceeded`] still maps to `SERVER_ERROR` rather than
+    /// collapsing to the generic exit code for every wrapped cause.
+    fn wrap_tool_generation_error(tool: &ToolInfo, stage: &str, source: Error) -> Error {
+        Error::ScriptGenerationError {
+            tool: tool.name.as_str().to_string(),
+            message: format!("failed to {stage}"),
+            source: Some(Box::new(source)),
+        }
     }
 
     /// Extracts property information from JSON Schema.
@@ -757,7 +797,11 @@ impl<'a> ProgressiveGenerator<'a> {
         categorization: Option<&ToolCategorization>,
         typescript_name: String,
     ) -> Result<ToolMetadata> {
-        let properties = self.extract_property_data(&tool.input_schema)?;
+        let properties = self
+            .extract_property_data(&tool.input_schema)
+            .map_err(|source| {
+                Self::wrap_tool_generation_error(tool, "extract property schema", source)
+            })?;
 
         let description = (!tool.description.is_empty()).then(|| tool.description.clone());
         let category = categorization.map(|c| c.category.clone());
@@ -1382,6 +1426,97 @@ mod tests {
     }
 
     #[test]
+    fn test_wrap_tool_generation_error_preserves_tool_name_and_source() {
+        // The property-extraction error raised deep in `extract_property_data` is generic
+        // (`Error::ValidationError`) and has no `tool` field; this wrapper attributes the
+        // failure back to the specific tool being generated.
+        let tool = ToolInfo {
+            name: ToolName::new("send_message"),
+            description: String::new(),
+            input_schema: json!({}),
+            output_schema: None,
+        };
+        let source = Error::ValidationError {
+            field: "type".to_string(),
+            reason: "Property type is not a string".to_string(),
+        };
+
+        let wrapped = ProgressiveGenerator::wrap_tool_generation_error(
+            &tool,
+            "extract property schema",
+            source,
+        );
+
+        match wrapped {
+            Error::ScriptGenerationError {
+                tool: tool_name,
+                message,
+                source,
+            } => {
+                assert_eq!(tool_name, "send_message");
+                // `message` must not duplicate the source's Display text (only one of the two
+                // should carry it, per this crate's error-chain-printing convention).
+                assert_eq!(message, "failed to extract property schema");
+                let source = source.expect("source must be preserved for exit-code classification");
+                assert!(source.to_string().contains("Property type is not a string"));
+            }
+            other => panic!("expected ScriptGenerationError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_wrap_tool_generation_error_covers_render_and_tracking_stages() {
+        // #185's real (reachable) attribution gap: a template-render failure or an
+        // output-tracking failure that happens while processing one tool out of many must
+        // still name that tool, not just the (structurally unreachable) schema-extraction path.
+        let tool = ToolInfo {
+            name: ToolName::new("send_message"),
+            description: String::new(),
+            input_schema: json!({}),
+            output_schema: None,
+        };
+
+        let render_failure = ProgressiveGenerator::wrap_tool_generation_error(
+            &tool,
+            "render tool template",
+            Error::SerializationError {
+                message: "Template rendering failed: boom".to_string(),
+                source: None,
+            },
+        );
+        assert!(render_failure.is_script_generation_error());
+
+        let tracking_failure = ProgressiveGenerator::wrap_tool_generation_error(
+            &tool,
+            "track generated tool file",
+            Error::ResourceLimitExceeded {
+                resource: "generated output size".to_string(),
+                actual: 10,
+                limit: 5,
+            },
+        );
+        match tracking_failure {
+            Error::ScriptGenerationError {
+                tool: tool_name,
+                source,
+                ..
+            } => {
+                assert_eq!(tool_name, "send_message");
+                let source = source.expect("source must be preserved for exit-code classification");
+                // The nested `ResourceLimitExceeded` must survive intact so
+                // `classify_exit_code` (mcp-cli) can still recurse into it.
+                assert!(
+                    source
+                        .downcast_ref::<Error>()
+                        .unwrap()
+                        .is_resource_limit_exceeded()
+                );
+            }
+            other => panic!("expected ScriptGenerationError, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_create_tool_context_without_categorization_falls_back_to_description() {
         let generator = ProgressiveGenerator::new().unwrap();
         let tool = ToolInfo {
@@ -1528,6 +1663,29 @@ mod tests {
             "properties": {
                 "a-b": {"type": "string"},
                 "a.b": {"type": "number"}
+            },
+            "required": []
+        });
+
+        let props = generator.extract_property_infos(&schema).unwrap();
+        let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
+        names.sort_unstable();
+
+        assert_eq!(names, vec!["a_b", "a_b_2"]);
+    }
+
+    #[test]
+    fn test_extract_property_infos_disambiguates_collision_introduced_by_collapsing() {
+        // Before issue #192's collapsing fix, "a-b" -> "a_b" and "a--b" -> "a__b" were
+        // distinct identifiers; collapsing consecutive invalid runs now sanitizes both to
+        // "a_b", introducing a *new* collision that must still be disambiguated rather than
+        // producing a duplicate, non-compiling field.
+        let generator = ProgressiveGenerator::new().unwrap();
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a-b": {"type": "string"},
+                "a--b": {"type": "number"}
             },
             "required": []
         });
@@ -1927,6 +2085,48 @@ mod tests {
             "a reserved-word tool's fallback name must not collide with an unrelated tool that already claims it"
         );
         assert!(!RESERVED_WORDS.contains(&resolved[0].as_str()));
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_collapses_non_ascii_run() {
+        // Issue #192: a non-ASCII tool name used to produce one `_` per invalid character
+        // (`café_menu_日本語` -> `caf_Menu___`), losing more information than necessary.
+        let tools = vec![ToolInfo {
+            name: ToolName::new("café_menu_日本語"),
+            description: String::new(),
+            input_schema: json!({}),
+            output_schema: None,
+        }];
+
+        let resolved = resolve_typescript_names(&tools);
+
+        assert_eq!(resolved[0], "caf_Menu_");
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_disambiguates_collision_introduced_by_collapsing() {
+        // Same collapsing-introduced collision as
+        // `test_extract_property_infos_disambiguates_collision_introduced_by_collapsing`, but
+        // for tool names rather than property names: "a-b" and "a--b" used to sanitize to
+        // distinct identifiers and now both sanitize to "a_b".
+        let tools = vec![
+            ToolInfo {
+                name: ToolName::new("a-b"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+            ToolInfo {
+                name: ToolName::new("a--b"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            },
+        ];
+
+        let resolved = resolve_typescript_names(&tools);
+
+        assert_eq!(resolved, vec!["a_b", "a_b_2"]);
     }
 
     #[test]
