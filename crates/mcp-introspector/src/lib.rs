@@ -1283,10 +1283,12 @@ mod tests {
 
         let result = build_server_info(
             &ServerId::new("test"),
-            "Test".to_string(),
-            "1.0.0".to_string(),
-            false,
-            false,
+            PeerMeta {
+                server_name: "Test".to_string(),
+                server_version: "1.0.0".to_string(),
+                has_resources: false,
+                has_prompts: false,
+            },
             tool_list,
         );
 
@@ -1302,10 +1304,12 @@ mod tests {
 
         let result = build_server_info(
             &ServerId::new("test"),
-            "Test".to_string(),
-            "1.0.0".to_string(),
-            false,
-            false,
+            PeerMeta {
+                server_name: "Test".to_string(),
+                server_version: "1.0.0".to_string(),
+                has_resources: false,
+                has_prompts: false,
+            },
             tool_list,
         );
 
