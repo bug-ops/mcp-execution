@@ -1,13 +1,4 @@
-//! MCP Code Execution CLI.
-#![allow(clippy::format_push_string)]
-// NOTE(mvp): Many async functions are stubs prepared for future expansion.
-// These will be implemented as features are added beyond Phase 8.
-#![allow(clippy::unused_async)]
-#![allow(clippy::cast_possible_truncation)]
-// u128->u64 for millis is safe in practice
-#![allow(clippy::needless_collect)]
-#![allow(clippy::unnecessary_wraps)] // API design requires Result for consistency across commands
-#![allow(clippy::unnecessary_literal_unwrap)]
+//! MCP Code Execution CLI binary entry point.
 //!
 //! Command-line interface for executing code in MCP sandbox,
 //! inspecting servers, and generating virtual filesystems.
@@ -32,15 +23,9 @@
 
 use anyhow::Result;
 use clap::Parser;
+use mcp_execution_cli::cli::Cli;
+use mcp_execution_cli::runner;
 use mcp_execution_core::cli::OutputFormat;
-
-mod actions;
-mod cli;
-mod commands;
-pub mod formatters;
-mod runner;
-
-use cli::Cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {
