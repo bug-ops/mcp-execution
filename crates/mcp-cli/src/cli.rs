@@ -4,17 +4,22 @@
 //! - `Cli` - Main CLI entry point
 //! - `Commands` - Available subcommands
 
+use clap::builder::{PossibleValuesParser, TypedValueParser as _};
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
+use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use crate::actions::ServerAction;
+use mcp_execution_core::RedactedItems;
+use mcp_execution_core::cli::OutputFormat;
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
 /// This CLI provides secure execution of MCP tools in a WebAssembly sandbox,
 /// achieving 90-98% token savings through progressive tool loading.
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(version, about, long_about = None)]
 #[command(author = "MCP Execution Team")]
 pub struct Cli {
@@ -26,13 +31,45 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    /// Output format (json, text, pretty)
-    #[arg(long = "format", global = true, default_value = "pretty")]
-    pub format: String,
+    /// Output format
+    #[arg(
+        long = "format",
+        global = true,
+        default_value = "pretty",
+        ignore_case = true,
+        value_parser = PossibleValuesParser::new(["json", "text", "pretty"])
+            .map(|s| OutputFormat::from_str(&s).expect("possible values are OutputFormat variants"))
+    )]
+    pub format: OutputFormat,
+}
+
+// Hand-written to redact `Commands::Introspect`'s `env`/`headers` and
+// `Commands::Generate`'s `server_env`/`server_headers` — these carry raw,
+// unparsed `KEY=VALUE` secrets (tokens, API keys) straight from argv, before
+// `TransportArgs`/`McpTransport` ever get a chance to redact them. Mirrors
+// `commands::common::TransportArgs`'s `Debug` impl and reuses
+// `mcp_execution_core::RedactedItems` rather than duplicating the redaction
+// logic.
+impl fmt::Debug for Cli {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Destructuring (rather than `&self.field`) turns a field added to
+        // `Cli` without a matching arm here into a compile error instead of
+        // relying solely on `clippy::missing_fields_in_debug` to catch it.
+        let Self {
+            command,
+            verbose,
+            format,
+        } = self;
+        f.debug_struct("Cli")
+            .field("command", command)
+            .field("verbose", verbose)
+            .field("format", format)
+            .finish()
+    }
 }
 
 /// Available CLI subcommands.
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 pub enum Commands {
     /// Introspect an MCP server and display its capabilities.
     ///
@@ -388,6 +425,90 @@ pub enum Commands {
     },
 }
 
+impl fmt::Debug for Commands {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Introspect {
+                from_config,
+                server,
+                args,
+                env,
+                cwd,
+                http,
+                sse,
+                headers,
+                detailed,
+                connect_timeout_secs,
+                discover_timeout_secs,
+            } => f
+                .debug_struct("Introspect")
+                .field("from_config", from_config)
+                .field("server", server)
+                .field("args", args)
+                .field("env", &RedactedItems(env))
+                .field("cwd", cwd)
+                .field("http", http)
+                .field("sse", sse)
+                .field("headers", &RedactedItems(headers))
+                .field("detailed", detailed)
+                .field("connect_timeout_secs", connect_timeout_secs)
+                .field("discover_timeout_secs", discover_timeout_secs)
+                .finish(),
+            Self::Skill {
+                server,
+                servers_dir,
+                output,
+                skill_name,
+                hints,
+                overwrite,
+            } => f
+                .debug_struct("Skill")
+                .field("server", server)
+                .field("servers_dir", servers_dir)
+                .field("output", output)
+                .field("skill_name", skill_name)
+                .field("hints", hints)
+                .field("overwrite", overwrite)
+                .finish(),
+            Self::Generate {
+                from_config,
+                server,
+                server_args,
+                server_env,
+                server_cwd,
+                http_url,
+                sse_url,
+                server_headers,
+                name,
+                progressive_output,
+                dry_run,
+                connect_timeout_secs,
+                discover_timeout_secs,
+            } => f
+                .debug_struct("Generate")
+                .field("from_config", from_config)
+                .field("server", server)
+                .field("server_args", server_args)
+                .field("server_env", &RedactedItems(server_env))
+                .field("server_cwd", server_cwd)
+                .field("http_url", http_url)
+                .field("sse_url", sse_url)
+                .field("server_headers", &RedactedItems(server_headers))
+                .field("name", name)
+                .field("progressive_output", progressive_output)
+                .field("dry_run", dry_run)
+                .field("connect_timeout_secs", connect_timeout_secs)
+                .field("discover_timeout_secs", discover_timeout_secs)
+                .finish(),
+            Self::Server { action } => f.debug_struct("Server").field("action", action).finish(),
+            Self::Setup => write!(f, "Setup"),
+            Self::Completions { shell } => {
+                f.debug_struct("Completions").field("shell", shell).finish()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,13 +725,52 @@ mod tests {
     #[test]
     fn test_cli_output_format_default() {
         let cli = Cli::parse_from(["mcp-cli", "introspect", "github"]);
-        assert_eq!(cli.format, "pretty");
+        assert_eq!(cli.format, OutputFormat::Pretty);
     }
 
     #[test]
     fn test_cli_output_format_custom() {
         let cli = Cli::parse_from(["mcp-cli", "--format", "json", "introspect", "github"]);
-        assert_eq!(cli.format, "json");
+        assert_eq!(cli.format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn test_cli_output_format_invalid_rejected_by_clap() {
+        let result = Cli::try_parse_from(["mcp-cli", "--format", "xml", "introspect", "github"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_output_format_possible_values_parse_via_from_str() {
+        // Guards the `--format` value parser's `expect()` against the
+        // `PossibleValuesParser` list drifting from `OutputFormat`'s actual
+        // variants: reads the possible values off the real `clap::Command`
+        // rather than hardcoding a third independent copy of the list, so an
+        // entry added to one side without the other fails here instead of
+        // panicking inside clap's argument parsing.
+        let cmd = Cli::command();
+        let arg = cmd
+            .get_arguments()
+            .find(|a| a.get_id() == "format")
+            .expect("--format argument must exist");
+        let values = arg.get_possible_values();
+        assert!(!values.is_empty(), "--format must declare possible values");
+        for possible_value in values {
+            let name = possible_value.get_name();
+            assert!(
+                OutputFormat::from_str(name).is_ok(),
+                "{name} must parse via OutputFormat::from_str to match the --format value parser"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cli_output_format_case_insensitive() {
+        let cli = Cli::parse_from(["mcp-cli", "--format", "JSON", "introspect", "github"]);
+        assert_eq!(cli.format, OutputFormat::Json);
+
+        let cli = Cli::parse_from(["mcp-cli", "--format", "PRETTY", "introspect", "github"]);
+        assert_eq!(cli.format, OutputFormat::Pretty);
     }
 
     #[test]
@@ -757,5 +917,50 @@ mod tests {
         } else {
             panic!("Expected Skill command");
         }
+    }
+
+    #[test]
+    fn test_commands_debug_redacts_introspect_env_and_headers() {
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "docker",
+            "--env",
+            &format!("GITHUB_TOKEN={secret_body}"),
+            "--header",
+            &format!("Authorization=Bearer {secret_body}"),
+        ]);
+
+        let debug_output = format!("{:?}", cli.command);
+        assert!(debug_output.contains("<redacted>"));
+        assert!(!debug_output.contains(secret_body));
+    }
+
+    #[test]
+    fn test_commands_debug_redacts_generate_env_and_headers() {
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "generate",
+            "docker",
+            "--env",
+            &format!("GITHUB_TOKEN={secret_body}"),
+            "--header",
+            &format!("Authorization=Bearer {secret_body}"),
+        ]);
+
+        let debug_output = format!("{:?}", cli.command);
+        assert!(debug_output.contains("<redacted>"));
+        assert!(!debug_output.contains(secret_body));
+    }
+
+    #[test]
+    fn test_commands_debug_does_not_redact_args() {
+        // `args`/`server_args` are positional, not secret-shaped, and must
+        // remain visible in Debug output.
+        let cli = Cli::parse_from(["mcp-cli", "introspect", "docker", "--arg=stdio"]);
+        let debug_output = format!("{:?}", cli.command);
+        assert!(debug_output.contains("stdio"));
     }
 }

@@ -25,7 +25,6 @@ use anyhow::Result;
 use clap::Parser;
 use mcp_execution_cli::cli::Cli;
 use mcp_execution_cli::runner;
-use mcp_execution_core::cli::OutputFormat;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,14 +32,10 @@ async fn main() -> Result<()> {
 
     runner::init_logging(cli.verbose)?;
 
-    // `OutputFormat::from_str`'s `Err` is a `mcp_execution_core::Error`
-    // (e.g. `--format xml`) — routed through the same
-    // `report_and_classify` used for command-handler failures so an invalid
-    // CLI argument here also exits `ExitCode::INVALID_INPUT`, not a bare 1.
-    let exit_code = match cli.format.parse::<OutputFormat>() {
-        Ok(output_format) => runner::execute_command(cli.command, output_format).await?,
-        Err(err) => runner::report_and_classify(&anyhow::Error::from(err)),
-    };
+    // `--format` is typed as `OutputFormat` directly (clap's `FromStr`-based
+    // auto value parser), so an invalid value (e.g. `--format xml`) is
+    // already rejected by clap itself before this point.
+    let exit_code = runner::execute_command(cli.command, cli.format).await?;
 
     std::process::exit(exit_code.as_i32());
 }
