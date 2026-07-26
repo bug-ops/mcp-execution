@@ -21,8 +21,7 @@ use thiserror::Error;
 
 /// Errors that can occur during VFS operations.
 ///
-/// All error variants include contextual information and implement
-/// `is_xxx()` methods for easy error classification.
+/// All error variants include contextual information for diagnostics.
 ///
 /// # Examples
 ///
@@ -33,7 +32,7 @@ use thiserror::Error;
 ///     path: "/missing.txt".to_string(),
 /// };
 ///
-/// assert!(error.is_not_found());
+/// assert!(matches!(error, FilesError::FileNotFound { .. }));
 /// ```
 #[derive(Error, Debug)]
 pub enum FilesError {
@@ -95,85 +94,6 @@ pub enum FilesError {
 }
 
 impl FilesError {
-    /// Returns `true` if this is a file not found error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_files::FilesError;
-    ///
-    /// let error = FilesError::FileNotFound {
-    ///     path: "/test.txt".to_string(),
-    /// };
-    ///
-    /// assert!(error.is_not_found());
-    /// ```
-    #[must_use]
-    pub const fn is_not_found(&self) -> bool {
-        matches!(self, Self::FileNotFound { .. })
-    }
-
-    /// Returns `true` if this is a not-a-directory error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_files::FilesError;
-    ///
-    /// let error = FilesError::NotADirectory {
-    ///     path: "/file.txt".to_string(),
-    /// };
-    ///
-    /// assert!(error.is_not_directory());
-    /// ```
-    #[must_use]
-    pub const fn is_not_directory(&self) -> bool {
-        matches!(self, Self::NotADirectory { .. })
-    }
-
-    /// Returns `true` if this is an invalid path error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_files::FilesError;
-    ///
-    /// let error = FilesError::InvalidPath {
-    ///     path: "".to_string(),
-    /// };
-    ///
-    /// assert!(error.is_invalid_path());
-    /// ```
-    #[must_use]
-    pub const fn is_invalid_path(&self) -> bool {
-        matches!(
-            self,
-            Self::InvalidPath { .. }
-                | Self::PathNotAbsolute { .. }
-                | Self::InvalidPathComponent { .. }
-        )
-    }
-
-    /// Returns `true` if this is an I/O error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_files::FilesError;
-    /// use std::io;
-    ///
-    /// let error = FilesError::IoError {
-    ///     path: "/test.ts".to_string(),
-    ///     source: io::Error::from(io::ErrorKind::PermissionDenied),
-    /// };
-    ///
-    /// assert!(error.is_io_error());
-    /// ```
-    #[must_use]
-    pub const fn is_io_error(&self) -> bool {
-        matches!(self, Self::IoError { .. })
-    }
-
     /// Returns `true` if this is a resource-limit-exceeded error.
     ///
     /// # Examples
@@ -221,6 +141,9 @@ impl FilesError {
 /// // Invalid paths are rejected
 /// assert!(FilePath::new("relative/path").is_err());
 /// assert!(FilePath::new("/parent/../escape").is_err());
+/// assert!(FilePath::new("//doubled-slash.ts").is_err());
+/// assert!(FilePath::new("/./dot-component.ts").is_err());
+/// assert!(FilePath::new("/trailing-slash/").is_err());
 /// ```
 ///
 /// On Windows, Unix-style paths like "/mcp-tools/servers/test" are accepted
@@ -231,8 +154,11 @@ pub struct FilePath(String);
 impl FilePath {
     /// Creates a new `FilePath` from a path-like type.
     ///
-    /// The path must be absolute (start with '/') and must not contain parent
-    /// directory references ('..').
+    /// The path must be absolute (start with '/'), must not contain parent
+    /// directory references ('..'), and must not contain empty or '.'
+    /// components (e.g. a doubled or trailing '/', or a literal `/./`
+    /// segment) — the root path `/` itself has no components and remains
+    /// valid.
     ///
     /// `FilePath` uses Unix-style path conventions on all platforms, ensuring
     /// consistent behavior on Linux, macOS, and Windows. Paths are validated
@@ -242,7 +168,8 @@ impl FilePath {
     /// # Errors
     ///
     /// Returns `FilesError::PathNotAbsolute` if the path does not start with '/'.
-    /// Returns `FilesError::InvalidPathComponent` if the path contains '..'.
+    /// Returns `FilesError::InvalidPathComponent` if the path contains '..', or an
+    /// empty or '.' component (e.g. `//`, a trailing `/`, or `/./`).
     /// Returns `FilesError::InvalidPath` if the path is empty or not UTF-8 valid.
     ///
     /// # Examples
@@ -291,6 +218,28 @@ impl FilePath {
 
         // Check for '..' components in the path string
         if normalized_str.contains("..") {
+            return Err(FilesError::InvalidPathComponent {
+                path: normalized_str,
+            });
+        }
+
+        // Reject empty or '.' path components (e.g. "//x.ts", "/./x.ts", "/github/"):
+        // an empty component from a doubled or trailing separator would make
+        // `Path::join`/`PathBuf::join` treat a later absolute-looking remainder
+        // as escaping its base, and both would let a single-file group name
+        // collide with (and in `FilesBuilder::build_and_export`'s per-group
+        // export, swap) an unintended target — including, for an empty root
+        // component, the shared `base_path` itself. `normalized_str[1..]` is a
+        // valid string slice because `normalized_str` is guaranteed to start
+        // with the single ASCII byte `/` by the check above; it is only
+        // inspected when non-empty; the root path `/` itself has no
+        // components to check and remains valid.
+        let remainder = &normalized_str[1..];
+        if !remainder.is_empty()
+            && remainder
+                .split('/')
+                .any(|component| component.is_empty() || component == ".")
+        {
             return Err(FilesError::InvalidPathComponent {
                 path: normalized_str,
             });
@@ -359,30 +308,6 @@ impl FilePath {
                 Self(self.0[..pos].to_string())
             }
         })
-    }
-
-    /// Checks if this path is a directory path.
-    ///
-    /// A path is considered a directory if it does not have a file extension.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_files::FilePath;
-    ///
-    /// let dir = FilePath::new("/mcp-tools/servers")?;
-    /// assert!(dir.is_dir_path());
-    ///
-    /// let file = FilePath::new("/mcp-tools/manifest.json")?;
-    /// assert!(!file.is_dir_path());
-    /// # Ok::<(), mcp_execution_files::FilesError>(())
-    /// ```
-    #[must_use]
-    pub fn is_dir_path(&self) -> bool {
-        // A path is a directory if it doesn't contain a '.' after the last '/'
-        self.0
-            .rfind('/')
-            .is_some_and(|last_slash| !self.0[last_slash..].contains('.'))
     }
 }
 
@@ -491,15 +416,56 @@ mod tests {
     #[test]
     fn test_vfs_path_new_relative_fails() {
         let result = FilePath::new("relative/path");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_invalid_path());
+        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
     }
 
     #[test]
     fn test_vfs_path_new_parent_dir_fails() {
         let result = FilePath::new("/parent/../escape");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_invalid_path());
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn test_vfs_path_new_doubled_slash_fails() {
+        // Regression test: an empty top-level component (from a doubled
+        // leading slash) previously slipped through validation and made
+        // `base.join("")` resolve to `base` itself downstream, letting a
+        // single-file "group" swap the shared base directory.
+        let result = FilePath::new("//x.ts");
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn test_vfs_path_new_dot_component_fails() {
+        let result = FilePath::new("/./x.ts");
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn test_vfs_path_new_trailing_slash_fails() {
+        let result = FilePath::new("/github/");
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn test_vfs_path_new_root_is_valid() {
+        // The root path itself has no components to check and must remain valid
+        // even after rejecting empty/'.' components elsewhere in the path.
+        let result = FilePath::new("/");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_str(), "/");
     }
 
     #[test]
@@ -523,15 +489,6 @@ mod tests {
     }
 
     #[test]
-    fn test_vfs_path_is_dir_path() {
-        let dir = FilePath::new("/mcp-tools/servers").unwrap();
-        assert!(dir.is_dir_path());
-
-        let file = FilePath::new("/mcp-tools/test.ts").unwrap();
-        assert!(!file.is_dir_path());
-    }
-
-    #[test]
     fn test_vfs_path_display() {
         let path = FilePath::new("/test.ts").unwrap();
         assert_eq!(format!("{path}"), "/test.ts");
@@ -549,44 +506,6 @@ mod tests {
         let file = FileEntry::new("");
         assert_eq!(file.content(), "");
         assert_eq!(file.size(), 0);
-    }
-
-    #[test]
-    fn test_vfs_error_is_not_found() {
-        let error = FilesError::FileNotFound {
-            path: "/test".to_string(),
-        };
-        assert!(error.is_not_found());
-        assert!(!error.is_not_directory());
-        assert!(!error.is_invalid_path());
-    }
-
-    #[test]
-    fn test_vfs_error_is_not_directory() {
-        let error = FilesError::NotADirectory {
-            path: "/file.txt".to_string(),
-        };
-        assert!(!error.is_not_found());
-        assert!(error.is_not_directory());
-        assert!(!error.is_invalid_path());
-    }
-
-    #[test]
-    fn test_vfs_error_is_invalid_path() {
-        let error = FilesError::InvalidPath {
-            path: String::new(),
-        };
-        assert!(error.is_invalid_path());
-
-        let error = FilesError::PathNotAbsolute {
-            path: "relative".to_string(),
-        };
-        assert!(error.is_invalid_path());
-
-        let error = FilesError::InvalidPathComponent {
-            path: "../escape".to_string(),
-        };
-        assert!(error.is_invalid_path());
     }
 
     #[test]
