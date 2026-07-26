@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Backfilled `# Examples` doc-test sections for ~50 public types and functions across the workspace that previously lacked runnable examples, including `ServerConfig` getters, CLI formatters, command structs, and resource limit constants (#189).
 - Added justification comments to 3 undocumented `#[allow(...)]` clippy attributes explaining the tradeoff for each (#186).
 - Documented that `ServerConfig`'s `Serialize` output is a separate code path from its redacting `Debug` impl and is not covered by that guarantee — serialized output must never be logged or printed directly (#247).
+- Documented `tsconfig.json` leaf-configuration behavior in `mcp-codegen` crate docs and README: generated `tsconfig.json` is not intended to be `extends`-ed (silent `noEmit` inheritance), is regenerated on every `generate` run, and the generated package should be executed or type-checked as a separate process rather than merged into the consumer's own TypeScript compilation (#258).
 
 ### Breaking
 

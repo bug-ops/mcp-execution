@@ -55,6 +55,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 > [!TIP]
 > Generated files include: one `.ts` file per tool, `index.ts` re-exports, and `_runtime/mcp-bridge.ts` helper.
 
+### Generated Files: `tsconfig.json` is a Leaf Configuration
+
+The generator produces `package.json`, `tsconfig.json`, and one `.ts` file per tool. Both JSON files are regenerated on every `generate` call — **manual edits will be lost.**
+
+**Important:** The generated `tsconfig.json` is a **leaf configuration** not intended to be `extends`-ed by other TypeScript configs. If your own `tsconfig.json` extends the generated one, `"noEmit": true` will be inherited, which silently prevents your TypeScript build from emitting output.
+
+**Do not extend the generated `tsconfig.json`.** The generated TypeScript files are a standalone package meant to be executed or type-checked separately from your own build:
+
+- Execute directly via a TS-aware runtime: `tsx`, `deno`, or Node.js's native type-stripping.
+- Or type-check independently: run `tsc -p <generated-dir>` as a separate build step.
+- If using a bundler (esbuild, swc, Vite, etc.) that doesn't enforce TypeScript's `noEmit` constraint, consult your bundler's documentation for mixing `noEmit` and emitting configurations.
+
 ### Token Savings
 
 | Approach | Tokens | Savings |
