@@ -228,10 +228,9 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
             CoreError::ValidationError { .. }
             | CoreError::SecurityViolation { .. }
             | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
-            CoreError::ResourceNotFound { .. }
-            | CoreError::ConfigError { .. }
-            | CoreError::SerializationError { .. }
-            | CoreError::ScriptGenerationError { .. } => ExitCode::ERROR,
+            CoreError::SerializationError { .. } | CoreError::ScriptGenerationError { .. } => {
+                ExitCode::ERROR
+            }
         })
 }
 
@@ -286,13 +285,16 @@ mod tests {
 
     #[test]
     fn test_classify_exit_code_other_core_errors_fall_back_to_error() {
-        let err = wrap(CoreError::ResourceNotFound {
-            resource: "server:missing".to_string(),
+        let err = wrap(CoreError::SerializationError {
+            message: "bad json".to_string(),
+            source: None,
         });
         assert_eq!(classify_exit_code(&err), ExitCode::ERROR);
 
-        let err = wrap(CoreError::ConfigError {
-            message: "bad config".to_string(),
+        let err = wrap(CoreError::ScriptGenerationError {
+            tool: "example_tool".to_string(),
+            message: "template rendering failed".to_string(),
+            source: None,
         });
         assert_eq!(classify_exit_code(&err), ExitCode::ERROR);
     }

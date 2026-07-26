@@ -13,17 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Result<ServerConfig, Error>` instead of an infallible `ServerConfig` (#177). Security
   validation (shell metacharacters, forbidden environment variables, URL scheme, header
   safety, timeout bounds — everything `validate_server_config` checks) now runs inside
-  `build()`/`try_build()` itself, so a `ServerConfig` built through the builder can no longer
+  `build()` itself, so a `ServerConfig` built through the builder can no longer
   be constructed without having already passed it; previously `build()` only checked
   structural completeness (command/url presence), leaving `validate_server_config` as a
   separate call callers had to remember to invoke before spawning a process. This is a
   builder-level guarantee, not a type-level one — every `ServerConfig` field is `pub` and the
   type derives `Deserialize`, so a config assembled by other means (a struct literal, or
-  deserializing untrusted JSON directly) is not covered by it. `try_build()` is now an alias
-  for `build()` (both run the same validation) and its error type changed from `String` to
-  `Error`. Every in-tree caller (`mcp-cli`, `mcp-server`, `mcp-introspector`) has been updated;
-  `Introspector::discover_server` still re-validates its `config` argument as defense in
-  depth, since it cannot assume every caller went through the builder.
+  deserializing untrusted JSON directly) is not covered by it. Every in-tree caller
+  (`mcp-cli`, `mcp-server`, `mcp-introspector`) has been updated; `Introspector::discover_server`
+  still re-validates its `config` argument as defense in depth, since it cannot assume every
+  caller went through the builder.
 
 - **`mcp-execution-cli`**: `McpServerEntry` no longer has `command`/`args`/`env` fields
   directly; they now live under a new `transport: McpTransport` field (`Stdio { command, args,
@@ -38,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an absolute target directory (any path the caller supplied was used verbatim) to a directory
   *relative to* `~/.claude/servers/{server_id}/`, as part of the path-confinement fix below
   (#216). A caller previously passing an absolute `output_dir` now gets `INVALID_PARAMS`.
+
+- **`mcp-execution-core`**: `ServerConfigBuilder::try_build()` removed — use `build()`, which
+  has returned `Result<ServerConfig, Error>` since #177 and runs identical validation; the
+  alias left the workspace's two builders with divergent surfaces where `FilesBuilder` exposes
+  only `build()` (#187).
+
+- **`mcp-execution-core`**: `Error::ResourceNotFound` and `Error::ConfigError` variants plus
+  their `is_not_found()`/`is_config_error()` predicates removed — never constructed by
+  production code; each crate owns its own error type for these conditions
+  (`mcp_files::FilesError::FileNotFound`, rmcp's `McpError` in `mcp-server`, `anyhow` in
+  `mcp-cli`), and `ServerConfigBuilder` uses the more precise `ValidationError` (#199). Note
+  `mcp_files::FilesError::is_not_found()` is a different type and is unchanged.
 
 ### Security
 
@@ -91,7 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now has a hand-written `Debug` impl that keeps `headers`/`env` keys visible but replaces every
   value with `<redacted>`; `Serialize`/`Deserialize` are unchanged and still round-trip real
   values for config persistence (#208). `ServerConfigBuilder`, which accumulates the same two
-  maps before `build()`/`try_build()` is called, derived `Debug` over them too and gets the same
+  maps before `build()` is called, derived `Debug` over them too and gets the same
   treatment, reusing the private `RedactedValues` helper introduced for `ServerConfig`.
 
 - **`mcp-execution-cli`**: `McpTransport`'s `Http`/`Sse` variants derived a plain `Debug`, so
