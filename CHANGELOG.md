@@ -44,6 +44,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: `generate` gains the `-a`/`-e` short aliases for `--arg`/`--env` that
   `introspect` already had — a side effect of both commands now flattening the same
   `ServerFlags`, not a deliberate new feature in its own right (#314).
+- **`mcp-execution-core`**: `Error::ResourceLimitExceeded.resource` changed from a free-form
+  `String` to the new closed `pub enum error::ResourceKind` (`ToolCount { server_id: ServerId }`,
+  `ToolNameLength`, `DescriptionLength { tool_name }`, `InputSchemaSize { tool_name }`,
+  `OutputSchemaSize { tool_name }`, `GeneratedOutputSize`, `GeneratedFileCount`), so a call site
+  can no longer report a resource category via an arbitrary, typo-prone string (see the
+  `### Breaking` entry below for the compatibility impact). `ResourceKind`'s `Display` reproduces
+  the same rendered wording the old ad hoc strings produced (one message, `"tool count for server
+  '{id}'"`, is now shared by both call sites that used to render it as "from server"/"for server"
+  inconsistently) — no test asserts on that exact wording, and every `Error::ResourceLimitExceeded`
+  message existing tests do check remains byte-identical. `ResourceKind` covers `mcp-core` only;
+  `mcp-files::FilesError::ResourceLimitExceeded` still uses a free-form `resource: String` and is
+  intentionally out of scope for #317 (tracked as #343). All in-tree construction sites
+  (`mcp-introspector`, `mcp-codegen`) updated (#317).
+- **`mcp-execution-core`**: `metadata::ServerMetadata.server_id` changed from `String` to
+  `ServerId`, and `metadata::ToolMetadata.name` changed from `String` to `ToolName` (see the
+  `### Breaking` entry below for the compatibility impact). Both newtypes' derived
+  `Serialize`/`Deserialize` round-trip through a plain JSON string exactly like the `String`
+  fields they replace, so the `_meta.json` sidecar's on-the-wire shape is unchanged; `typescript_name`
+  is left as `String` since it is a generated TypeScript identifier, not itself an MCP tool name.
+  One observable behavior change: a `_meta.json` that is syntactically valid JSON but carries a
+  semantically-invalid `server_id`/`name` (e.g. containing `..` or a path separator) now fails to
+  deserialize at all (`ScanError::MetadataParse` in `mcp-execution-skill`), where previously it
+  would have deserialized as an unvalidated plain string. All in-tree construction/read sites
+  (`mcp-execution-codegen`, `mcp-execution-skill`, `mcp-execution-cli`, `mcp-execution-server`)
+  updated (#317).
+- **`mcp-execution-introspector`**: `Introspector::discover_server` now inserts into its internal
+  server map keyed by `info.id.clone()` (the just-built `ServerInfo`'s own id) rather than the
+  separately-threaded `server_id` parameter, so the map key can no longer drift from the value's
+  `id` field even though both were already sourced from the same identifier in practice. No
+  public API change (#317).
 
 ### Removed
 
@@ -262,6 +292,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwriting the earlier entry, so a future gap in reserved-name handling (like #312) fails
   loudly instead of losing a generated file with no signal to the caller. All in-tree call sites
   (`mcp-codegen`'s own generator, `mcp-files`'s `FilesBuilder`) have been updated.
+
+- **`mcp-execution-core`**: `Error::ResourceLimitExceeded.resource` changed from `String` to the
+  new closed `pub enum error::ResourceKind` (see the `### Changed` entry above for the full
+  variant list and rationale). Source-breaking for any downstream consumer that constructs
+  `Error::ResourceLimitExceeded { resource: ... }` with a string literal, or pattern-matches/reads
+  `.resource` expecting a `String` (#317).
+- **`mcp-execution-core`**: `metadata::ServerMetadata.server_id` changed from `String` to
+  `ServerId`, and `metadata::ToolMetadata.name` changed from `String` to `ToolName` (see the
+  `### Changed` entry above for the wire-format-compatibility note). Source-breaking for any
+  downstream consumer that constructs `ServerMetadata`/`ToolMetadata` struct literals with string
+  fields, or compares `.server_id`/`.name` against a `String`/`&str` (#317).
+- **`mcp-execution-core`**: `cli::ExitCode::from_i32` now returns `Option<ExitCode>` instead of
+  an infallible `ExitCode`, rejecting values outside `0..=255` — this crate's own chosen range for
+  a valid exit code (matching every named const `ExitCode` already defines), not a universal
+  OS-level ceiling (`std::process::exit` truncates to 8 bits on Unix, but delivers the full `i32`
+  on Windows via `ExitProcess`) — instead of silently accepting a value that could be misleading
+  once actually reported. No in-tree caller existed outside this module's own tests/doctests
+  (#317).
+- **`mcp-execution-core`**: `ServerConfig::command()` now returns `Option<&str>` instead of `&str`
+  with an empty string standing in for "not applicable" on `Http`/`Sse` transports, mirroring
+  `ServerConfig::url()` (already `Option<&str>`, `None` for `Stdio`). All in-tree callers
+  (`mcp-introspector`'s `spawn_introspection_child`/`fallback_server_name`, `mcp-cli`'s tests)
+  updated (#317).
 
 - **`mcp-execution-files`**: `FilesError::is_not_found()`, `is_not_directory()`,
   `is_invalid_path()`, and `is_io_error()`, and `FilePath::is_dir_path()` removed — none had any

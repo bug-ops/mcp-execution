@@ -14,7 +14,7 @@
 #![cfg(feature = "test-fixtures")]
 
 use axum::Router;
-use mcp_execution_core::{Error, ServerConfig, ServerId};
+use mcp_execution_core::{Error, ResourceKind, ServerConfig, ServerId};
 use mcp_execution_introspector::{Introspector, MAX_TOOL_COUNT};
 use rmcp::model::{
     Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
@@ -249,7 +249,7 @@ async fn test_discover_server_stdio_bails_early_once_accumulated_tool_count_exce
             limit,
         } => {
             assert!(
-                resource.contains("tool count"),
+                matches!(resource, ResourceKind::ToolCount { .. }),
                 "expected a tool-count resource limit, got resource={resource:?}"
             );
             assert_eq!(

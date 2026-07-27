@@ -1704,7 +1704,7 @@ mod tests {
 
         // An Http config has no `command` field to populate, so the oversized value was never
         // stored anywhere and is not a resource-exhaustion vector.
-        assert!(config.command().is_empty());
+        assert!(config.command().is_none());
         assert!(validate_server_config(&config).is_ok());
     }
 

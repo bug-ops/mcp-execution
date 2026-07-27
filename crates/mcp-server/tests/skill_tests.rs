@@ -3,6 +3,7 @@
 use mcp_execution_core::metadata::{
     METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
 };
+use mcp_execution_core::{ServerId, ToolName};
 use mcp_execution_skill::{ParsedToolFile, ScanError, build_skill_context, scan_tools_directory};
 use tempfile::TempDir;
 use tokio::fs;
@@ -15,13 +16,13 @@ use tokio::fs;
 async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
     let meta = ServerMetadata {
         schema_version: METADATA_SCHEMA_VERSION,
-        server_id: "test".to_string(),
+        server_id: ServerId::new("test").unwrap(),
         server_name: "Test Server".to_string(),
         server_version: "1.0.0".to_string(),
         tools: tool_names
             .iter()
             .map(|name| ToolMetadata {
-                name: (*name).to_string(),
+                name: ToolName::new(*name).unwrap(),
                 typescript_name: to_camel_case(name),
                 category: Some("test-category".to_string()),
                 keywords: vec!["test".to_string(), (*name).to_string()],
@@ -409,11 +410,11 @@ async fn test_scan_directory_file_too_large() {
 
     let mut meta = ServerMetadata {
         schema_version: METADATA_SCHEMA_VERSION,
-        server_id: "test".to_string(),
+        server_id: ServerId::new("test").unwrap(),
         server_name: "Test Server".to_string(),
         server_version: "1.0.0".to_string(),
         tools: vec![ToolMetadata {
-            name: "large_tool".to_string(),
+            name: ToolName::new("large_tool").unwrap(),
             typescript_name: "largeTool".to_string(),
             category: None,
             keywords: vec!["large".to_string()],

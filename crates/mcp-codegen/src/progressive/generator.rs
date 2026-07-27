@@ -40,6 +40,7 @@ use crate::progressive::types::{
     ToolSummary,
 };
 use crate::template_engine::TemplateEngine;
+use mcp_execution_core::ResourceKind;
 use mcp_execution_core::metadata::{
     METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
 };
@@ -763,7 +764,7 @@ impl ProgressiveGenerator<'_> {
         let keywords = categorization.map_or_else(Vec::new, |c| c.keywords.clone());
 
         ToolMetadata {
-            name: tool.name.as_str().to_string(),
+            name: tool.name.clone(),
             typescript_name,
             category,
             keywords,
@@ -793,7 +794,7 @@ impl ProgressiveGenerator<'_> {
     ) -> Result<GeneratedFile> {
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
-            server_id: server_info.id.as_str().to_string(),
+            server_id: server_info.id.clone(),
             server_name: server_info.name.clone(),
             server_version: server_info.version.clone(),
             tools,
@@ -831,7 +832,9 @@ fn enforce_tool_count_bound(server_info: &ServerInfo) -> Result<()> {
     let projected_file_count = server_info.tools.len() + FIXED_FILE_COUNT;
     if projected_file_count > MAX_GENERATED_FILES {
         return Err(Error::ResourceLimitExceeded {
-            resource: format!("tool count for server '{}'", server_info.id),
+            resource: ResourceKind::ToolCount {
+                server_id: server_info.id.clone(),
+            },
             actual: server_info.tools.len(),
             limit: MAX_GENERATED_FILES - FIXED_FILE_COUNT,
         });
@@ -865,7 +868,7 @@ fn add_tracked(
     *total_bytes += file.content.len();
     if *total_bytes > MAX_GENERATED_BYTES {
         return Err(Error::ResourceLimitExceeded {
-            resource: "generated output size".to_string(),
+            resource: ResourceKind::GeneratedOutputSize,
             actual: *total_bytes,
             limit: MAX_GENERATED_BYTES,
         });
@@ -875,7 +878,7 @@ fn add_tracked(
 
     if code.file_count() > MAX_GENERATED_FILES {
         return Err(Error::ResourceLimitExceeded {
-            resource: "generated file count".to_string(),
+            resource: ResourceKind::GeneratedFileCount,
             actual: code.file_count(),
             limit: MAX_GENERATED_FILES,
         });
@@ -1300,7 +1303,7 @@ mod tests {
         let meta: ServerMetadata = serde_json::from_str(&meta_file.content).unwrap();
 
         assert_eq!(meta.schema_version, METADATA_SCHEMA_VERSION);
-        assert_eq!(meta.server_id, "test-server");
+        assert_eq!(meta.server_id.as_str(), "test-server");
         assert_eq!(meta.server_name, "Test Server");
         assert_eq!(meta.server_version, "1.0.0");
         assert_eq!(meta.tools.len(), 2);
@@ -1308,7 +1311,7 @@ mod tests {
         let create_issue = meta
             .tools
             .iter()
-            .find(|t| t.name == "create_issue")
+            .find(|t| t.name.as_str() == "create_issue")
             .unwrap();
         assert_eq!(create_issue.typescript_name, "createIssue");
         let title = create_issue
@@ -1344,7 +1347,7 @@ mod tests {
         let create_issue = meta
             .tools
             .iter()
-            .find(|t| t.name == "create_issue")
+            .find(|t| t.name.as_str() == "create_issue")
             .unwrap();
         assert_eq!(create_issue.category, Some("issues".to_string()));
         assert_eq!(
@@ -1355,7 +1358,7 @@ mod tests {
         let update_issue = meta
             .tools
             .iter()
-            .find(|t| t.name == "update_issue")
+            .find(|t| t.name.as_str() == "update_issue")
             .unwrap();
         assert!(update_issue.category.is_none());
         assert!(update_issue.keywords.is_empty());
@@ -1410,7 +1413,7 @@ mod tests {
         let send_message = meta
             .tools
             .iter()
-            .find(|t| t.name == "send_message")
+            .find(|t| t.name.as_str() == "send_message")
             .unwrap();
         let notes = send_message
             .parameters
@@ -1553,7 +1556,7 @@ mod tests {
             &tool,
             "track generated tool file",
             Error::ResourceLimitExceeded {
-                resource: "generated output size".to_string(),
+                resource: ResourceKind::GeneratedOutputSize,
                 actual: 10,
                 limit: 5,
             },

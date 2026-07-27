@@ -48,7 +48,8 @@ use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
 use http::{HeaderName, HeaderValue};
 use mcp_execution_core::{
-    Error, Result, ServerConfig, ServerId, ToolName, Transport, validate_server_config,
+    Error, ResourceKind, Result, ServerConfig, ServerId, ToolName, Transport,
+    validate_server_config,
 };
 use rmcp::RoleClient;
 use rmcp::ServiceExt;
@@ -413,7 +414,9 @@ impl Introspector {
         validate_server_config(config)?;
 
         let discovery = match config.transport() {
-            Transport::Stdio { .. } => discover_via_stdio_process(&server_id, config).await?,
+            Transport::Stdio { command, .. } => {
+                discover_via_stdio_process(&server_id, command, config).await?
+            }
             Transport::Http { .. } | Transport::Sse { .. } => {
                 discover_via_http(&server_id, config).await?
             }
@@ -421,7 +424,11 @@ impl Introspector {
 
         let info = build_server_info(&server_id, discovery.peer_meta, discovery.tools)?;
 
-        self.servers.insert(server_id, info.clone());
+        // Keyed by `info.id` (not the `server_id` parameter above) so the map key is
+        // structurally derived from the value's own identity — the two cannot drift apart,
+        // rather than merely happening to agree because both were built from the same
+        // `server_id` local.
+        self.servers.insert(info.id.clone(), info.clone());
 
         tracing::info!("Successfully discovered {} tools", info.tools.len());
 
@@ -614,8 +621,15 @@ struct DiscoveryResult {
 ///
 /// Returns [`Error::ConnectionFailed`] if the process cannot be spawned
 /// (e.g. the command does not exist or is not executable).
-fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Result<Child> {
-    let mut command = tokio::process::Command::new(config.command());
+fn spawn_introspection_child(
+    server_id: &ServerId,
+    command: &str,
+    config: &ServerConfig,
+) -> Result<Child> {
+    // `command` comes from the caller's `Transport::Stdio { command, .. }` destructure, so a
+    // missing command is unrepresentable here — no `config.command().unwrap_or_default()`
+    // fallback (and its empty-string sentinel) needed.
+    let mut command = tokio::process::Command::new(command);
     command.args(config.args());
     command.envs(config.env());
     if let Some(cwd) = config.cwd() {
@@ -640,9 +654,10 @@ fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Res
 /// stdio pipes are unavailable, or propagates errors from [`discover_via_stdio`].
 async fn discover_via_stdio_process(
     server_id: &ServerId,
+    command: &str,
     config: &ServerConfig,
 ) -> Result<DiscoveryResult> {
-    let mut child = spawn_introspection_child(server_id, config)?;
+    let mut child = spawn_introspection_child(server_id, command, config)?;
     let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
         server: server_id.to_string(),
         source: Box::new(std::io::Error::other("child stdout was not captured")),
@@ -727,7 +742,9 @@ fn map_list_tools_bounded_error(server_id: &ServerId, error: ListToolsBoundedErr
             source: Box::new(e),
         },
         ListToolsBoundedError::TooMany(actual) => Error::ResourceLimitExceeded {
-            resource: format!("tool count from server '{server_id}'"),
+            resource: ResourceKind::ToolCount {
+                server_id: server_id.clone(),
+            },
             actual,
             limit: MAX_TOOL_COUNT,
         },
@@ -1127,7 +1144,9 @@ fn build_server_info(
 
     if tool_list.len() > MAX_TOOL_COUNT {
         return Err(Error::ResourceLimitExceeded {
-            resource: format!("tool count from server '{server_id}'"),
+            resource: ResourceKind::ToolCount {
+                server_id: server_id.clone(),
+            },
             actual: tool_list.len(),
             limit: MAX_TOOL_COUNT,
         });
@@ -1191,7 +1210,7 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
 
     if name.len() > MAX_TOOL_NAME_LEN {
         return Err(Error::ResourceLimitExceeded {
-            resource: "tool name length".to_string(),
+            resource: ResourceKind::ToolNameLength,
             actual: name.len(),
             limit: MAX_TOOL_NAME_LEN,
         });
@@ -1214,7 +1233,7 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
     let description = tool.description.unwrap_or_default().to_string();
     if description.len() > MAX_TOOL_DESCRIPTION_LEN {
         return Err(Error::ResourceLimitExceeded {
-            resource: format!("description length for tool '{name}'"),
+            resource: ResourceKind::DescriptionLength { tool_name: name },
             actual: description.len(),
             limit: MAX_TOOL_DESCRIPTION_LEN,
         });
@@ -1227,7 +1246,7 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
     let schema_size = serde_json::to_vec(&input_schema).map_or(usize::MAX, |bytes| bytes.len());
     if schema_size > MAX_SCHEMA_SIZE_BYTES {
         return Err(Error::ResourceLimitExceeded {
-            resource: format!("input_schema size for tool '{name}'"),
+            resource: ResourceKind::InputSchemaSize { tool_name: name },
             actual: schema_size,
             limit: MAX_SCHEMA_SIZE_BYTES,
         });
@@ -1241,7 +1260,7 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
         let schema_size = serde_json::to_vec(schema).map_or(usize::MAX, |bytes| bytes.len());
         if schema_size > MAX_SCHEMA_SIZE_BYTES {
             return Err(Error::ResourceLimitExceeded {
-                resource: format!("output_schema size for tool '{name}'"),
+                resource: ResourceKind::OutputSchemaSize { tool_name: name },
                 actual: schema_size,
                 limit: MAX_SCHEMA_SIZE_BYTES,
             });
@@ -1289,14 +1308,14 @@ fn extract_peer_meta(
 
 /// Picks a display name for a server that sent no `peer_info` on handshake.
 ///
-/// Prefers `config.command` (stdio transport); falls back to `config.url()`
-/// since Http/Sse transports always leave `command` empty.
+/// Prefers `config.command()` (stdio transport); falls back to `config.url()`
+/// since Http/Sse transports never have a `command`.
 fn fallback_server_name(config: &ServerConfig) -> String {
-    if config.command().is_empty() {
-        config.url().unwrap_or_default().to_string()
-    } else {
-        config.command().to_string()
-    }
+    config
+        .command()
+        .or_else(|| config.url())
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[cfg(test)]

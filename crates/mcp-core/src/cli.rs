@@ -116,8 +116,12 @@ impl FromStr for OutputFormat {
 /// assert_eq!(code.as_i32(), 0);
 /// assert!(code.is_success());
 ///
-/// let code = ExitCode::from_i32(1);
+/// let code = ExitCode::from_i32(1).unwrap();
 /// assert!(!code.is_success());
+///
+/// // Outside the valid process exit code range (0..=255) is rejected.
+/// assert!(ExitCode::from_i32(-1).is_none());
+/// assert!(ExitCode::from_i32(256).is_none());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExitCode(i32);
@@ -180,17 +184,33 @@ impl ExitCode {
 
     /// Creates an exit code from an integer value.
     ///
+    /// Returns `None` if `code` falls outside `0..=255`. This is not a universal OS-level
+    /// ceiling — on Unix, `std::process::exit` truncates its argument to the low 8 bits, but
+    /// on Windows it delivers the full `i32` to the parent process via `ExitProcess` — so
+    /// `0..=255` is this API's own deliberate choice (matching every named const this type
+    /// already defines, and the conventional Unix exit-code range this CLI targets), not
+    /// something every platform enforces for it. Rejecting an out-of-range value here surfaces
+    /// a construction mistake immediately rather than silently producing an [`ExitCode`] whose
+    /// reported value could be misleading once actually reported to the OS.
+    ///
     /// # Examples
     ///
     /// ```
     /// use mcp_execution_core::cli::ExitCode;
     ///
-    /// let code = ExitCode::from_i32(0);
+    /// let code = ExitCode::from_i32(0).unwrap();
     /// assert_eq!(code, ExitCode::SUCCESS);
+    ///
+    /// assert!(ExitCode::from_i32(-1).is_none());
+    /// assert!(ExitCode::from_i32(256).is_none());
     /// ```
     #[must_use]
-    pub const fn from_i32(code: i32) -> Self {
-        Self(code)
+    pub const fn from_i32(code: i32) -> Option<Self> {
+        if matches!(code, 0..=255) {
+            Some(Self(code))
+        } else {
+            None
+        }
     }
 
     /// Returns the exit code as an integer.
@@ -433,9 +453,23 @@ mod tests {
 
     #[test]
     fn test_exit_code_from_i32() {
-        assert_eq!(ExitCode::from_i32(0), ExitCode::SUCCESS);
-        assert_eq!(ExitCode::from_i32(1), ExitCode::ERROR);
-        assert_eq!(ExitCode::from_i32(42).as_i32(), 42);
+        assert_eq!(ExitCode::from_i32(0), Some(ExitCode::SUCCESS));
+        assert_eq!(ExitCode::from_i32(1), Some(ExitCode::ERROR));
+        assert_eq!(ExitCode::from_i32(42).unwrap().as_i32(), 42);
+    }
+
+    #[test]
+    fn test_exit_code_from_i32_rejects_out_of_range() {
+        assert_eq!(ExitCode::from_i32(-1), None);
+        assert_eq!(ExitCode::from_i32(256), None);
+        assert_eq!(ExitCode::from_i32(i32::MIN), None);
+        assert_eq!(ExitCode::from_i32(i32::MAX), None);
+    }
+
+    #[test]
+    fn test_exit_code_from_i32_accepts_boundaries() {
+        assert_eq!(ExitCode::from_i32(0).unwrap().as_i32(), 0);
+        assert_eq!(ExitCode::from_i32(255).unwrap().as_i32(), 255);
     }
 
     #[test]
@@ -443,7 +477,7 @@ mod tests {
         assert!(ExitCode::SUCCESS.is_success());
         assert!(!ExitCode::ERROR.is_success());
         assert!(!ExitCode::INVALID_INPUT.is_success());
-        assert!(!ExitCode::from_i32(42).is_success());
+        assert!(!ExitCode::from_i32(42).unwrap().is_success());
     }
 
     #[test]

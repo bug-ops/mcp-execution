@@ -43,7 +43,7 @@ pub mod metadata;
 pub mod untrusted;
 
 // Re-export error types
-pub use error::{Error, Result};
+pub use error::{Error, ResourceKind, Result};
 
 // Re-export domain types
 pub use types::{ServerId, ServerIdError, ToolName, ToolNameError};

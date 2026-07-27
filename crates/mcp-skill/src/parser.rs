@@ -199,7 +199,7 @@ impl From<mcp_execution_core::metadata::ParameterMetadata> for ParsedParameter {
 impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
     fn from(meta: mcp_execution_core::metadata::ToolMetadata) -> Self {
         Self {
-            name: meta.name,
+            name: meta.name.into_inner(),
             typescript_name: meta.typescript_name,
             server_id: String::new(),
             category: meta.category,
@@ -315,7 +315,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
 
     let warnings = verify_tool_files_on_disk(&canonical_base, &meta.tools, &meta_path).await?;
 
-    let server_id = meta.server_id.clone();
+    let server_id = meta.server_id.into_inner();
     let mut tools: Vec<ParsedToolFile> = meta
         .tools
         .into_iter()
@@ -363,7 +363,7 @@ async fn verify_tool_files_on_disk(
         let file_name = format!("{}.ts", tool.typescript_name);
         if !dir.join(&file_name).is_file() {
             return Err(ScanError::StaleMetadata {
-                tool: tool.name.clone(),
+                tool: tool.name.to_string(),
                 expected_file: file_name,
                 sidecar_path: sanitize_path_for_error(meta_path),
             });
@@ -565,17 +565,18 @@ pub fn extract_skill_metadata(
 mod tests {
     use super::*;
     use mcp_execution_core::metadata::{ParameterMetadata, ToolMetadata};
+    use mcp_execution_core::{ServerId, ToolName};
     use tempfile::TempDir;
 
     fn sample_metadata(tool_count: usize) -> ServerMetadata {
         ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
-            server_id: "github".to_string(),
+            server_id: ServerId::new("github").unwrap(),
             server_name: "GitHub".to_string(),
             server_version: "1.0.0".to_string(),
             tools: (0..tool_count)
                 .map(|i| ToolMetadata {
-                    name: format!("tool_{i}"),
+                    name: ToolName::new(format!("tool_{i}")).unwrap(),
                     typescript_name: format!("tool{i}"),
                     category: Some("test".to_string()),
                     keywords: vec!["test".to_string()],
@@ -638,7 +639,7 @@ mod tests {
         let mut meta = sample_metadata(0);
         meta.tools = vec![
             ToolMetadata {
-                name: "zebra".to_string(),
+                name: ToolName::new("zebra").unwrap(),
                 typescript_name: "zebra".to_string(),
                 category: None,
                 keywords: vec![],
@@ -646,7 +647,7 @@ mod tests {
                 parameters: vec![],
             },
             ToolMetadata {
-                name: "alpha".to_string(),
+                name: ToolName::new("alpha").unwrap(),
                 typescript_name: "alpha".to_string(),
                 category: None,
                 keywords: vec![],
@@ -818,6 +819,58 @@ mod tests {
     async fn test_scan_tools_directory_corrupt_json() {
         let temp_dir = TempDir::new().unwrap();
         tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), "{not valid json")
+            .await
+            .unwrap();
+
+        let result = scan_tools_directory(temp_dir.path()).await;
+
+        assert!(matches!(result, Err(ScanError::MetadataParse { .. })));
+    }
+
+    /// Regression test for issue #317: `ServerMetadata.server_id`/`ToolMetadata.name` now go
+    /// through `ServerId`/`ToolName`'s `#[serde(try_from = "String")]`, so a sidecar that is
+    /// syntactically valid JSON but carries a semantically-invalid `server_id` (here, one
+    /// containing a path separator) now fails to deserialize at all — surfacing as
+    /// `ScanError::MetadataParse` — where before this change it would have deserialized as a
+    /// plain, unvalidated `String`.
+    #[tokio::test]
+    async fn test_scan_tools_directory_rejects_invalid_server_id_in_valid_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let json = r#"{
+            "schema_version": 1,
+            "server_id": "not/a/valid/id",
+            "server_name": "GitHub",
+            "server_version": "1.0.0",
+            "tools": []
+        }"#;
+        tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), json)
+            .await
+            .unwrap();
+
+        let result = scan_tools_directory(temp_dir.path()).await;
+
+        assert!(matches!(result, Err(ScanError::MetadataParse { .. })));
+    }
+
+    /// Same regression as above, for `ToolMetadata.name`.
+    #[tokio::test]
+    async fn test_scan_tools_directory_rejects_invalid_tool_name_in_valid_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let json = r#"{
+            "schema_version": 1,
+            "server_id": "github",
+            "server_name": "GitHub",
+            "server_version": "1.0.0",
+            "tools": [{
+                "name": "../escape",
+                "typescript_name": "escape",
+                "category": null,
+                "keywords": [],
+                "description": null,
+                "parameters": []
+            }]
+        }"#;
+        tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), json)
             .await
             .unwrap();
 

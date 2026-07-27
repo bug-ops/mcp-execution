@@ -145,8 +145,8 @@ part of `rmcp`'s HTTP transport client-side; `rmcp` 3.0.0-beta.2 adds a
 | Process spawn fails (stdio) | `ConnectionFailed { server, source }` |
 | Connect handshake exceeds `connect_timeout` | `Timeout { operation: "connect to {id}", duration_secs }` |
 | `tools/list` exceeds `discover_timeout` | `Timeout { operation: "list_all_tools for {id}", duration_secs }` |
-| Accumulated tool count > `MAX_TOOL_COUNT` during paging | `ResourceLimitExceeded { resource: "tool count from server '{id}'", .. }` |
-| Single tool's name/description/schema exceeds its bound | `ResourceLimitExceeded { resource: "<field> for tool '{name}'", .. }` |
+| Accumulated tool count > `MAX_TOOL_COUNT` during paging | `ResourceLimitExceeded { resource: ResourceKind::ToolCount { server_id }, .. }` |
+| Single tool's name/description/schema exceeds its bound | `ResourceLimitExceeded { resource: ResourceKind::ToolNameLength \| DescriptionLength { tool_name } \| InputSchemaSize { tool_name } \| OutputSchemaSize { tool_name }, .. }` |
 | HTTP header name/value invalid (introspection-time) | `ConnectionFailed` (header construction failure) |
 
 ## 7. Edge Cases & Notable Behaviors

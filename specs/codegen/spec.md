@@ -207,8 +207,8 @@ Responsibilities:
 
 | Condition | `Error` variant |
 |---|---|
-| Tool count would exceed `MAX_GENERATED_FILES` | `ResourceLimitExceeded { resource: "tool count for server '{id}'", .. }` |
-| Running byte total exceeds `MAX_GENERATED_BYTES` | `ResourceLimitExceeded { resource: "generated output size", .. }` |
+| Tool count would exceed `MAX_GENERATED_FILES` | `ResourceLimitExceeded { resource: ResourceKind::ToolCount { server_id }, .. }` |
+| Running byte total exceeds `MAX_GENERATED_BYTES` | `ResourceLimitExceeded { resource: ResourceKind::GeneratedOutputSize, .. }` |
 | Malformed property schema (`name`/`type` not a string) | `ValidationError` |
 | Handlebars render failure | `SerializationError` (message embeds Handlebars' own error text) |
 | `_meta.json` serialization failure | `SerializationError` |
