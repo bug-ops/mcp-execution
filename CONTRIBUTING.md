@@ -32,7 +32,7 @@ This project adheres to a code of conduct that we expect all contributors to fol
 ### Prerequisites
 
 **Required:**
-- Rust 1.89 or higher (Edition 2024)
+- Rust 1.91 or higher (Edition 2024)
 - Cargo (comes with Rust)
 - Node.js 18+ (for testing generated TypeScript code)
 - Git
@@ -429,7 +429,7 @@ All PRs must pass:
 - Tests on Linux, macOS, Windows
 - Tests on stable and beta Rust
 - Code coverage upload to codecov
-- MSRV check (Rust 1.89)
+- MSRV check (Rust 1.91)
 - Security audit (cargo-deny)
 - Documentation build
 - Benchmark build
