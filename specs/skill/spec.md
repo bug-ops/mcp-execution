@@ -164,6 +164,13 @@ document-size limit (see [[../constitution#V. Security]]).
 line number is corrected to be file-relative (the block starts one line
 after the file's opening `---`).
 
+> [!note]
+> `serde_norway` remains this project's mandated YAML parser. A pure-Rust
+> replacement (`serde-saphyr`) was evaluated and **not adopted** — see
+> [[../decisions/ADR-341-serde-saphyr-vs-serde-norway]] for the full
+> evidence ledger, the reasons the swap is deferred rather than rejected,
+> and the measurable gate/review date (2026-10-27) for revisiting it.
+
 ## 8. `resolve_skill_output_path` — Path Confinement
 
 Confines `save_skill`'s optional `output_path` to `base_dir/server_id`
