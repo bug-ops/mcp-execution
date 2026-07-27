@@ -125,7 +125,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-    if: always() && needs.changes.outputs.run-checks == 'true'
+    if: needs.changes.outputs.run-checks == 'true' && needs.check.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -185,7 +185,7 @@ jobs:
     permissions:
       contents: read
       actions: write  # For uploading artifacts
-    if: always() && needs.changes.outputs.run-checks == 'true'
+    if: needs.changes.outputs.run-checks == 'true' && needs.check.result == 'success'
     steps:
       - uses: actions/checkout@v7
 
@@ -248,7 +248,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    if: always() && needs.changes.outputs.run-checks == 'true'
+    if: needs.changes.outputs.run-checks == 'true' && needs.check.result == 'success'
     steps:
       - uses: actions/checkout@v7
 
@@ -273,7 +273,7 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
-    if: always() && needs.changes.outputs.run-checks == 'true'
+    if: needs.changes.outputs.run-checks == 'true' && needs.check.result == 'success'
     steps:
       - uses: actions/checkout@v7
 
@@ -296,7 +296,7 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
-    if: always() && needs.changes.outputs.run-checks == 'true'
+    if: needs.changes.outputs.run-checks == 'true' && needs.test.result == 'success'
     steps:
       - uses: actions/checkout@v7
 
