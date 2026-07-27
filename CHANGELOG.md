@@ -62,6 +62,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string, since a single raw tool can legitimately be named by either of its two display forms —
   deduping on the submitted string alone missed a caller submitting both forms for the same tool,
   letting the second entry silently overwrite the first's categorization (#307).
+- **`mcp-execution-cli`**: `runner::report_and_classify` printed a failing command's error chain
+  to stderr via `eprintln!("Error: {err:?}")` with no escaping, and `commands::server`'s `warn!`
+  log lines for a failed config build or introspection attempt did the same. When the error/log
+  content embeds text from an untrusted MCP server (e.g. a JSON-RPC error `message`), both
+  `anyhow::Error`'s `Debug` rendering and the `thiserror`-derived `Display` impls it walks
+  interpolate that content verbatim, so a malicious/compromised server could inject raw
+  ANSI/control escape sequences into the user's terminal — or, if given a free pass on newlines
+  alone, forge fake `Caused by:`/`Error:` lines indistinguishable from the real chain structure.
+  Fixed via a new `formatters::escape_error_text` helper — which delegates the actual character-level
+  escaping to `mcp_execution_core::untrusted::sanitize_untrusted_text` (the project's existing,
+  already-tested sanitizer for untrusted MCP metadata, also used by
+  `mcp-execution-skill`/`mcp-execution-server`) rather than a parallel implementation — applied at
+  both `warn!` sites directly, and, for `report_and_classify`, via a new `runner::sanitized_error_report`
+  that walks `err.chain()` and sanitizes each cause's own rendered text individually before
+  rejoining them with `"Caused by:"`/numbering separators the function itself controls. An earlier
+  version of this fix sanitized anyhow's fully-rendered `{err:?}` report as a single blob, which
+  neutralized escape sequences and newline-forgery alike but also flattened a legitimate
+  multi-cause chain's own trusted structure onto one line, since nothing at that point could tell
+  anyhow's structural newlines apart from a hostile cause's embedded ones; rendering per-cause
+  instead keeps a trusted chain's real "Caused by:" structure intact while still ensuring a
+  hostile cause's own text cannot forge that structure or inject escape sequences — including
+  keeping a `RUST_BACKTRACE=1` backtrace fully intact and unsanitized, since it is captured from
+  the local call stack and carries nothing an external MCP server could have influenced (#308).
+- **`mcp-execution-cli`**: `server info`/`server validate` resolved a named `mcp.json` entry via
+  `get_mcp_server`, which eagerly ran full security validation (URL scheme, header safety, timeout
+  bounds, ...) as part of the lookup — making an entry that is present but fails that validation
+  indistinguishable from an entry that does not exist at all, since both surfaced through the same
+  "not found" error. `server info` on such an entry bypassed `--format`/`ExitCode` entirely,
+  propagating a raw, unformatted error (#305); `server validate` reported the factually wrong
+  "Server not found in configuration" message for an entry that is, in fact, present (#304). Both
+  commands now look up the raw entry via a new `get_mcp_server_entry` before running validation
+  separately, so a present-but-invalid entry is reported through each command's normal structured
+  output — `server info` as `"status": "unavailable"`, `server validate` with a message describing
+  the actual validation failure — while a genuinely absent entry still surfaces the original "not
+  found" error. Known gap not addressed by this fix: `server info`'s `"status": "unavailable"`
+  `ServerInfo` has no field carrying *why* a server is unavailable (invalid configuration vs.
+  unreachable); a caller must currently re-run `server validate` for that detail.
 
 - **`mcp-execution-cli`**: `generate`'s stdio transport derived its output directory name
   directly from an unvalidated `ServerId` built from the raw stdio `command`, unlike its

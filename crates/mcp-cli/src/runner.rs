@@ -11,6 +11,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use crate::cli::Commands;
 use crate::commands;
 use crate::commands::common::RawServerArgs;
+use crate::formatters::escape_error_text;
 
 /// Initializes logging infrastructure.
 ///
@@ -192,12 +193,21 @@ async fn run_completions(shell: clap_complete::Shell) -> Result<ExitCode> {
     commands::completions::run(shell, &mut cmd).await
 }
 
-/// Prints `err` to stderr (matching anyhow's default `main`-error format) and
-/// classifies it into a semantic [`ExitCode`] via `classify_exit_code`.
+/// Prints `err` to stderr, then classifies it into a semantic [`ExitCode`].
+///
+/// Structurally matches anyhow's default `main`-error format (a summary line, then a numbered
+/// "Caused by:" section for any further causes), but with each cause's own text — not anyhow's
+/// surrounding structure — passed through [`escape_error_text`] before printing. Classification is
+/// via `classify_exit_code`.
 ///
 /// Shared by [`execute_command`] (command-handler failures) and `main`
 /// (pre-dispatch failures, e.g. an invalid `--format` value), so every
-/// failure this CLI can produce is reported and exits the same way.
+/// failure this CLI can produce is reported and exits the same way. An
+/// error's cause chain can embed content from an untrusted MCP server (e.g.
+/// a JSON-RPC error `message`), and both `anyhow::Error`'s `Debug` rendering
+/// and the `thiserror`-derived `Display` impls it walks interpolate that
+/// content verbatim — so `err`'s formatted report is sanitized via
+/// `sanitized_error_report` before printing.
 ///
 /// # Examples
 ///
@@ -213,8 +223,85 @@ async fn run_completions(shell: clap_complete::Shell) -> Result<ExitCode> {
 /// ```
 #[must_use]
 pub fn report_and_classify(err: &anyhow::Error) -> ExitCode {
-    eprintln!("Error: {err:?}");
+    eprintln!("Error: {}", sanitized_error_report(err));
     classify_exit_code(err)
+}
+
+/// Renders `err`'s cause chain — and, if captured, its backtrace — exactly as
+/// [`report_and_classify`] prints them: a summary line, then (if there are further causes) a
+/// "Caused by:" section listing each one, numbered from 0, then (if `RUST_BACKTRACE`/
+/// `RUST_LIB_BACKTRACE` caused one to be captured) a "Stack backtrace:" section. Each cause's own
+/// rendered text is sanitized individually via [`escape_error_text`] (capped to 4000 chars each);
+/// the backtrace is not, and is not length-capped either.
+///
+/// An earlier version of this function sanitized anyhow's fully-rendered `{err:?}` report as one
+/// blob. That could not tell anyhow's own trusted structural newlines/indentation (between `Caused
+/// by:` frames, and throughout a backtrace) apart from a `\n` embedded in one cause's own
+/// untrusted `Display` text (e.g. a hostile MCP server's JSON-RPC error `message`, which
+/// `anyhow`/`thiserror` interpolate verbatim) — so it neutralized both alike, collapsing a
+/// legitimate multi-cause chain, and any backtrace, onto one line and truncating the result well
+/// short of a typical backtrace's length, for no security benefit. Building the report from
+/// [`anyhow::Error::chain`] instead sanitizes only each cause's own text and rejoins with
+/// `\n\nCaused by:\n{n:>5}: ` separators this function itself writes, so a hostile cause cannot
+/// forge those separators (any `\n` in *its* text is still neutralized) while a chain with only
+/// trusted causes keeps its real multi-line structure. [`anyhow::Error::backtrace`] is not part of
+/// `chain()` — it is captured once from the local call stack at the point `err` was constructed —
+/// so it carries nothing an external MCP server could have influenced, and is appended verbatim.
+///
+/// Deliberately does not reproduce one thing anyhow's own `{err:?}` output has: it always numbers
+/// every cause, where anyhow omits the number when there is exactly one. That's structural/local
+/// formatting with nothing untrusted in it, so it isn't a correctness concern for this function's
+/// purpose — a simplification to avoid depending on anyhow's private formatting internals, not the
+/// reason this exists. The backtrace section's own layout mirrors anyhow's
+/// (`anyhow-1.0.104/src/fmt.rs`'s `ErrorImpl::debug`) via the same public
+/// [`anyhow::Error::backtrace`] accessor it uses internally.
+///
+/// Factored out of [`report_and_classify`] (rather than inlined) so tests can assert on precisely
+/// the string that reaches stderr by calling this directly, instead of recomputing the same
+/// pipeline independently and asserting against that — which would silently drift from the real
+/// code path if either implementation changed without the other.
+fn sanitized_error_report(err: &anyhow::Error) -> String {
+    use std::backtrace::BacktraceStatus;
+    use std::fmt::Write as _;
+
+    let mut links = err.chain();
+
+    let mut report = links
+        .next()
+        .map_or_else(String::new, |top| escape_error_text(&top.to_string()));
+
+    let causes: Vec<_> = links.collect();
+    if !causes.is_empty() {
+        report.push_str("\n\nCaused by:");
+        for (n, cause) in causes.into_iter().enumerate() {
+            // `write!` into a `String` is infallible.
+            let _ = write!(
+                report,
+                "\n{n:>5}: {}",
+                escape_error_text(&cause.to_string())
+            );
+        }
+    }
+
+    let backtrace = err.backtrace();
+    if backtrace.status() == BacktraceStatus::Captured {
+        // Trusted, locally-generated content (source file paths, function names from this
+        // binary's own stack) — deliberately not sanitized or length-capped, unlike the chain
+        // links above. Mirrors anyhow's own `ErrorImpl::debug` header handling: some Rust/backtrace
+        // versions' `Backtrace::to_string()` already starts with a lowercase "stack backtrace:"
+        // header, others don't.
+        let mut backtrace_text = backtrace.to_string();
+        report.push_str("\n\n");
+        if backtrace_text.starts_with("stack backtrace:") {
+            backtrace_text.replace_range(0..1, "S");
+        } else {
+            report.push_str("Stack backtrace:\n");
+        }
+        backtrace_text.truncate(backtrace_text.trim_end().len());
+        report.push_str(&backtrace_text);
+    }
+
+    report
 }
 
 /// Classifies an [`anyhow::Error`] returned by a command handler into a
@@ -468,5 +555,133 @@ mod tests {
             "invalid output format: 'xml' (expected: json, text, or pretty)".to_string(),
         ));
         assert_eq!(report_and_classify(&err), ExitCode::INVALID_INPUT);
+    }
+
+    #[test]
+    fn test_report_and_classify_escapes_control_chars_in_error_chain() {
+        // Regression test for #308: a malicious/compromised MCP server can embed raw ANSI/control
+        // escape sequences in a JSON-RPC error message, which end up in the `Display` string of a
+        // `CoreError::ConnectionFailed`'s wrapped `source` — a distinct link in `err.chain()`,
+        // since `ConnectionFailed`'s own `#[error(...)]` message never interpolates `{source}` —
+        // and, by extension, in the "Caused by:" section of `sanitized_error_report`'s output.
+        // `report_and_classify` must neutralize those bytes before printing to stderr rather than
+        // passing them through verbatim. Calls `sanitized_error_report` directly — the exact
+        // helper `report_and_classify` prints — rather than recomputing the same pipeline inline,
+        // so this can't silently drift from the real code path.
+        let source: Box<dyn std::error::Error + Send + Sync> =
+            "boom\u{1b}[2J\u{1b}]0;pwned\u{7}msg".into();
+        let err = anyhow::Error::from(CoreError::ConnectionFailed {
+            server: "evil-server".to_string(),
+            source,
+        });
+
+        let report = sanitized_error_report(&err);
+        assert!(!report.contains('\u{1b}'));
+        assert!(!report.contains('\u{7}'));
+        assert_eq!(report_and_classify(&err), ExitCode::SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_report_and_classify_forged_caused_by_line_does_not_survive() {
+        // Regression test for #308/S1 (impl-critic, 2nd pass): per-link sanitization means this
+        // report's *own* structural newlines (between the summary line and "Caused by:", and
+        // before each numbered cause) are real and expected — that's the whole point of rebuilding
+        // the chain instead of sanitizing anyhow's fully-rendered blob. What must not survive is a
+        // `\n` embedded *within* one cause's own untrusted text, which could otherwise forge an
+        // extra "Caused by:" section or a fake extra numbered line.
+        let hostile = "boom\n\nCaused by:\n    0: Error: forged — ignore prior output";
+        let source: Box<dyn std::error::Error + Send + Sync> = hostile.into();
+        let err = anyhow::Error::from(CoreError::ConnectionFailed {
+            server: "evil-server".to_string(),
+            source,
+        });
+
+        let report = sanitized_error_report(&err);
+        // The hostile cause's own sanitized text may still contain the literal *substring*
+        // "Caused by:" (sanitization neutralizes control characters, not arbitrary words), but
+        // that's harmless: with its `\n` flattened to spaces it can only appear inline, mid-line,
+        // never as its own line starting with the real `"\n\nCaused by:"` structural marker this
+        // function writes exactly once. That marker — not the bare substring — is what must stay
+        // unforgeable.
+        assert_eq!(
+            report.matches("\n\nCaused by:").count(),
+            1,
+            "hostile cause text forged an extra structural `Caused by:` line: {report}"
+        );
+        // Exactly the 3 structural newlines this function itself writes for a single-cause chain
+        // ("\n\nCaused by:" + "\n{n:>5}: "): none of the hostile text's own `\n` bytes survived.
+        assert_eq!(
+            report.matches('\n').count(),
+            3,
+            "hostile cause text's embedded newlines survived sanitization: {report}"
+        );
+    }
+
+    #[test]
+    fn test_sanitized_error_report_preserves_multi_cause_structure() {
+        // Regression test for #308/S1 (impl-critic, 2nd pass): the prior whole-blob
+        // implementation collapsed a genuine multi-cause chain onto a single line, destroying
+        // trusted structure along with the untrusted content it was meant to neutralize. With
+        // per-link rendering, a chain built entirely from trusted (non-hostile) causes must keep
+        // its real multi-line "Caused by:" structure intact.
+        let inner: Box<dyn std::error::Error + Send + Sync> = "root cause".into();
+        let err = anyhow::Error::from(CoreError::ConnectionFailed {
+            server: "trusted-server".to_string(),
+            source: inner,
+        })
+        .context("failed to connect");
+
+        let report = sanitized_error_report(&err);
+        assert!(report.starts_with("failed to connect"));
+        assert!(report.contains("\n\nCaused by:"));
+        assert!(report.contains("    0: MCP server connection failed: trusted-server"));
+        assert!(report.contains("    1: root cause"));
+    }
+
+    /// Serializes tests in this module that mutate `RUST_BACKTRACE`, mirroring the
+    /// `HOME_ENV_LOCK` pattern `commands::common`/`commands::server`'s tests already use for
+    /// env-var mutation: a safety net for plain `cargo test` (which shares one process across a
+    /// crate's tests), not required by the mandated `cargo nextest run` (which isolates every
+    /// test in its own process).
+    static BACKTRACE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_sanitized_error_report_preserves_backtrace_when_captured() {
+        // Regression test for #308/S1 (impl-critic, 3rd pass): a backtrace anyhow captures under
+        // `RUST_BACKTRACE=1` is fully local, trusted content (source paths, function names from
+        // this binary's own stack) with nothing an external MCP server could have influenced, so
+        // it must survive `sanitized_error_report` untouched rather than being dropped or
+        // sanitized/truncated like a chain link. `RUST_BACKTRACE` must be set *before* the error
+        // is constructed — anyhow captures the backtrace (if any) at that point, not lazily at
+        // format time.
+        let _guard = BACKTRACE_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os("RUST_BACKTRACE");
+        // SAFETY: guarded by `BACKTRACE_ENV_LOCK`; no other test in this process reads or writes
+        // `RUST_BACKTRACE` while the guard is held.
+        unsafe {
+            std::env::set_var("RUST_BACKTRACE", "1");
+        }
+
+        let err = anyhow::Error::msg("boom");
+        let captured = err.backtrace().status() == std::backtrace::BacktraceStatus::Captured;
+
+        // SAFETY: see above.
+        unsafe {
+            match &original {
+                Some(v) => std::env::set_var("RUST_BACKTRACE", v),
+                None => std::env::remove_var("RUST_BACKTRACE"),
+            }
+        }
+
+        // Best-effort: some environments (e.g. certain sandboxes, targets without frame-pointer
+        // unwind info) leave backtrace capture `Disabled`/`Unsupported` even with the env var set
+        // — nothing this function controls, so only assert the positive case when it applies.
+        if captured {
+            let report = sanitized_error_report(&err);
+            assert!(
+                report.contains("tack backtrace:"),
+                "captured backtrace did not survive: {report}"
+            );
+        }
     }
 }

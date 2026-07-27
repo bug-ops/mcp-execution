@@ -77,6 +77,72 @@ pub fn escape_display(s: &str) -> String {
     serde_json::Value::String(s.to_owned()).to_string()
 }
 
+/// Cap, in `char`s, on a single value sanitized by [`escape_error_text`] — e.g. one
+/// `err.chain()` link's rendered text, or one `warn!` log argument, never a whole assembled
+/// multi-part report.
+///
+/// 4000 is generous for any one link/argument this crate actually passes through
+/// [`escape_error_text`] (`runner::sanitized_error_report`'s own chain-link text runs well under
+/// this in practice), while still bounding how much a single hostile MCP server response can
+/// force onto the terminal or into a log line. Does not bound a report's total length when it has
+/// several causes (each is capped independently) or a backtrace (never passed through
+/// [`escape_error_text`] at all — see `runner::sanitized_error_report`'s doc comment).
+const MAX_ERROR_TEXT_LEN: usize = 4000;
+
+/// Neutralizes control characters — including line breaks — and bounds the length of `s` to 4000
+/// `char`s before it reaches a terminal or log sink that does not itself escape untrusted content.
+///
+/// Delegates to [`mcp_execution_core::untrusted::sanitize_untrusted_text`], the project's one
+/// implementation of this defense, rather than maintaining a second, weaker sanitizer in this
+/// crate: every character `char::is_control` reports (the full C0 and C1 ranges, covering `\r`,
+/// `\n`, ESC, BEL, and friends) plus the Markdown/ECMAScript line separators U+2028/U+2029 is
+/// replaced with a space, and the result is capped to 4000 `char`s (`MAX_ERROR_TEXT_LEN`, not
+/// itself public — its value is documented here since a reader of this function's public docs
+/// cannot otherwise resolve it). Used to sanitize command errors and log messages that may embed
+/// content from an untrusted MCP server before they reach the terminal.
+///
+/// `s` is treated as a single unit of untrusted text with no internal structure worth preserving
+/// — including any newline it contains, which this collapses like every other control character.
+/// This is why the name is `escape_error_text`, not e.g. `escape_report`: this function must
+/// never be called on an already-assembled multi-cause report (that would flatten anyhow's own
+/// trusted `Caused by:` structure along with the untrusted content it carries — see
+/// `runner::sanitized_error_report`'s doc comment for how that structure is instead rebuilt by
+/// calling this function once per cause and rejoining with separators the caller controls, rather
+/// than sanitizing the whole rendered report as one blob). Only ever call this on one piece of
+/// untrusted text at a time.
+///
+/// Sanitized here, at each `mcp-execution-cli` print/log call site — `runner::report_and_classify`
+/// (indirectly, via `sanitized_error_report`) and the `warn!` logging in `commands::server` —
+/// rather than where a server-supplied message first enters a [`mcp_execution_core::Error`] (e.g.
+/// `ConnectionFailed`'s boxed `source`) in
+/// `mcp-execution-core`/`mcp-execution-introspector`. `source` there is a generic `Box<dyn
+/// std::error::Error + Send + Sync>`, not specifically MCP-server text, and `mcp_execution_core::Error`
+/// is consumed by every crate in this workspace (this one, `mcp-execution-server`, and any future
+/// one), not just terminal/log output; sanitizing at that shared boundary would force one
+/// escaping policy — lossy, space-collapsing, terminal-oriented — onto every consumer, including
+/// ones that legitimately want the raw text (e.g. `mcp-execution-server`'s own untrusted-metadata
+/// handling in `mcp_execution_core::untrusted`, which has different escaping needs for an
+/// LLM-facing prompt than this crate has for a terminal). Scoping the fix to where untrusted text
+/// actually reaches a terminal/log sink — while still delegating the escaping logic itself to the
+/// one authoritative sanitizer — keeps the policy decision local to the output boundary that
+/// needs it, without widening this bug-fix change beyond `mcp-execution-cli`.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::formatters::escape_error_text;
+///
+/// let cause = "boom\u{1b}[2Jname\nfake extra line";
+/// let escaped = escape_error_text(cause);
+/// assert!(!escaped.contains('\u{1b}'));
+/// assert!(!escaped.contains('\n'));
+/// assert!(escaped.contains("boom"));
+/// ```
+#[must_use]
+pub fn escape_error_text(s: &str) -> String {
+    mcp_execution_core::untrusted::sanitize_untrusted_text(s, MAX_ERROR_TEXT_LEN)
+}
+
 /// JSON output formatting.
 pub mod json {
     use super::{Result, Serialize};
@@ -422,6 +488,57 @@ mod tests {
     #[test]
     fn test_escape_display_plain_string() {
         assert_eq!(escape_display("hello"), "\"hello\"");
+    }
+
+    #[test]
+    fn test_escape_error_text_neutralizes_control_chars() {
+        let cause = "boom\u{1b}[2Jname, connection refused";
+        let escaped = escape_error_text(cause);
+        assert!(!escaped.contains('\u{1b}'));
+        assert!(escaped.contains("connection refused"));
+    }
+
+    #[test]
+    fn test_escape_error_text_plain_text_unaffected() {
+        let cause = "plain error, no control characters at all";
+        assert_eq!(escape_error_text(cause), cause);
+    }
+
+    /// Regression test for #308/S1 (impl-critic): a single cause's own text embedding a raw
+    /// newline must not survive as a real line break — the reason callers must never call this on
+    /// an already-assembled multi-cause report (see this function's doc comment), only on one
+    /// cause's text at a time, then rejoin with separators the caller controls (see
+    /// `runner::sanitized_error_report`).
+    #[test]
+    fn test_escape_error_text_newlines_do_not_survive() {
+        let hostile_cause = "boom\n\nCaused by:\n    0: Error: forged System component compromised";
+        let escaped = escape_error_text(hostile_cause);
+        assert!(!escaped.contains('\n'), "raw newline survived: {escaped}");
+    }
+
+    /// Regression test for #308/M3 (impl-critic): a lone `\r` (not part of a `\r\n` pair) must
+    /// also be neutralized — `str::lines()`-based splitting handled this inconsistently, which
+    /// is exactly why this delegates to `sanitize_untrusted_text`'s uniform char-by-char pass
+    /// instead.
+    #[test]
+    fn test_escape_error_text_lone_carriage_return_neutralized() {
+        let hostile = "before\rafter";
+        let escaped = escape_error_text(hostile);
+        assert!(!escaped.contains('\r'));
+    }
+
+    #[test]
+    fn test_escape_error_text_caps_length() {
+        let long = "a".repeat(MAX_ERROR_TEXT_LEN + 500);
+        assert_eq!(escape_error_text(&long).chars().count(), MAX_ERROR_TEXT_LEN);
+    }
+
+    /// Pins the "4000" literal `escape_error_text`'s (necessarily public-facing, since the
+    /// constant itself is private) doc comment states inline — a drift-detector, not a design
+    /// constraint.
+    #[test]
+    fn test_max_error_text_len_matches_documented_value() {
+        assert_eq!(MAX_ERROR_TEXT_LEN, 4000);
     }
 
     #[test]

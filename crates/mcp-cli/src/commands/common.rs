@@ -443,8 +443,12 @@ pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 ///
 /// # Errors
 ///
-/// Returns an error if the config file is missing, malformed, or the named
-/// server is not present.
+/// Returns an error if the config file is missing, malformed, the named
+/// server is not present, or the entry fails [`build_core_config`]'s
+/// security validation. Callers that must distinguish "entry absent" from
+/// "entry present but invalid" (e.g. to route the latter through a
+/// format-aware error path instead of a raw `Err`) should call
+/// [`get_mcp_server_entry`] and [`build_core_config`] separately instead.
 ///
 /// Deliberately does *not* validate `name` against
 /// [`validate_server_id`](mcp_execution_skill::validate_server_id): this
@@ -455,6 +459,26 @@ pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 /// `introspect --from-config` for entirely legitimate `mcp.json` keys that
 /// aren't already `[a-z0-9-]` (e.g. `claude_ai_Gmail`).
 pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
+    let (server_id, entry) = get_mcp_server_entry(name)?;
+    let server_config = build_core_config(&entry)?;
+    Ok((server_id, server_config, entry))
+}
+
+/// Looks up a named server's raw [`McpServerEntry`] in `~/.claude/mcp.json`, without running
+/// `build_core_config`'s security validation.
+///
+/// Split out from `get_mcp_server` so callers whose own error handling depends on knowing
+/// whether the entry is present at all — regardless of whether it would later pass validation —
+/// can perform that check first. `server info`/`server validate` need this: previously, calling
+/// `get_mcp_server` made an entry present but failing URL-scheme (or other) validation
+/// indistinguishable from an entry that does not exist at all, since both surfaced through the
+/// same `with_context` "not found" wrapping.
+///
+/// # Errors
+///
+/// Returns an error if the config file is missing or malformed, or the named server is not
+/// present.
+pub(crate) fn get_mcp_server_entry(name: &str) -> Result<(ServerId, McpServerEntry)> {
     let config = load_mcp_config()?;
 
     let entry = config
@@ -468,8 +492,7 @@ pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpS
         })?
         .clone();
 
-    let server_config = build_core_config(&entry)?;
-    Ok((ServerId::new(name), server_config, entry))
+    Ok((ServerId::new(name), entry))
 }
 
 /// Loads server configuration from `~/.claude/mcp.json` by server name.
@@ -2507,5 +2530,58 @@ mod tests {
         let (id, _config, _entry) =
             get_result.expect("get_mcp_server must not reject a non-slug-shaped mcp.json key");
         assert_eq!(id.as_str(), "claude_ai_Gmail");
+    }
+
+    /// Regression test for #305/#304: an entry present in `mcp.json` but whose `url` fails
+    /// `build_core_config`'s scheme validation must still be found by `get_mcp_server_entry` —
+    /// distinct from `get_mcp_server`, which eagerly runs that validation and previously made
+    /// this case indistinguishable from a genuinely absent entry to its callers.
+    #[cfg(unix)]
+    #[test]
+    fn test_get_mcp_server_entry_finds_entry_that_fails_config_validation() {
+        let _guard = HOME_ENV_LOCK.lock().unwrap();
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("mcp.json"),
+            r#"{"mcpServers": {"badscheme": {"type": "http", "url": "not-a-url"}}}"#,
+        )
+        .unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
+        // reads or writes `HOME` while the guard is held.
+        unsafe {
+            std::env::set_var("HOME", temp.path());
+        }
+
+        let entry_result = get_mcp_server_entry("badscheme");
+
+        // SAFETY: see above.
+        unsafe {
+            match &original_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let (id, entry) = entry_result.expect(
+            "get_mcp_server_entry must find the entry even though its url fails validation",
+        );
+        assert_eq!(id.as_str(), "badscheme");
+        let config_err = build_core_config(&entry).expect_err(
+            "the entry's url is expected to fail build_core_config's scheme validation",
+        );
+        // Regression coverage for #304: `validate_command` interpolates this error's `Display`
+        // into its "invalid configuration" message. It must describe the actual validation
+        // failure, not read like the unrelated "not found" message reserved for a genuinely
+        // absent entry.
+        let message = config_err.to_string();
+        assert!(
+            !message.to_lowercase().contains("not found"),
+            "build_core_config's error must not read like a not-found message, got: {message}"
+        );
     }
 }
