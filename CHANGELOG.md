@@ -204,6 +204,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `build_server_config`'s example scenario remains covered by the existing
   `test_build_server_config_stdio` unit test (#266).
 
+- **`mcp-execution-codegen`**: `ToolContext::short_description` changed from `Option<String>` to
+  `String`. The only constructor (`ProgressiveGenerator::create_tool_context`) always populated
+  it — falling back to the tool's own description when no categorization short description was
+  available — so `None` was a state the type could represent but the pipeline could never
+  actually produce; the field now reflects that guarantee structurally instead of leaving every
+  consumer to re-check an `Option` that was never `None` in practice. `ToolCategorization::keywords`
+  changed from a comma-joined `String` to `Vec<String>`, removing the ad hoc
+  `split(',').map(str::trim)` re-parsing this forced on its one real consumer
+  (`create_tool_metadata`'s `_meta.json` sidecar keywords); JSDoc rendering (the `.ts` header
+  comment, `index.ts`'s tool listing) now joins the vector with `", "` at the point it needs a
+  display string, via a new `render_keywords_for_jsdoc` helper. `mcp-execution-server`'s
+  `generate_with_categorization`, which converts the wire-format `CategorizedTool::keywords`
+  (still a comma-separated `String` — that shape is part of the tool's MCP-facing JSON schema)
+  into a `ToolCategorization`, now does the comma-splitting exactly once, at that boundary,
+  instead of the old duplicated re-parse further downstream (#316).
+
+- **`mcp-execution-codegen`**: `BridgeContext`'s `forbidden_chars`/`forbidden_env_names`/
+  `forbidden_env_prefix` fields are now private, with read-only `forbidden_chars()`/
+  `forbidden_env_names()`/`forbidden_env_prefix()` accessors. Previously being `pub` let
+  `BridgeContext { forbidden_chars: vec![], .. }` compile and silently bypass the hand-written
+  `Default` impl's invariant that these lists are never empty — an empty `forbidden_chars` would
+  render a bridge whose `validateCommandString` accepts every shell metacharacter, fail-open on
+  exactly the check it exists to enforce. `BridgeContext::default()` is now the only way to
+  construct a valid instance. `Deserialize` is no longer derived: nothing in this codebase
+  deserializes a `BridgeContext` from external input, and templates only ever render it via
+  `Serialize` (#315).
+
 ### Security
 
 - **`mcp-cli`**: `generate`'s `Text`/`Pretty` output (both the success summary and the dry-run
@@ -446,6 +473,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   impls, closing the last unredacted path by which a raw, unparsed URL argument — which can
   embed credentials, e.g. `https://user:token@host/mcp` — reached CLI debug/log output before
   `TransportArgs`/`McpTransport` ever get a chance to redact it (#251).
+
+- **`mcp-execution-codegen`**: `sanitize_jsdoc` replaced `*/` and normalized `\r`/`\n`/U+2028/
+  U+2029 but let every other C0 control character (in particular ESC `\x1b`) through unmodified.
+  This project's documented workflow for reading a generated tool is `cat
+  ~/.claude/servers/<id>/<tool>.ts`, so a malicious MCP server could embed an ANSI escape
+  sequence in a tool description or categorization field and have it replayed verbatim to a
+  user's terminal. `sanitize_jsdoc` now neutralizes control characters (C0, DEL, and C1 —
+  everything `char::is_control` reports — plus U+2028/U+2029) by delegating to the shared
+  `mcp_execution_core::untrusted::sanitize_untrusted_text`, which *replaces* each with a space
+  rather than deleting it, and does so *before* escaping `*/` rather than after: an initial
+  version of this fix escaped `*/` first and only then stripped control characters, which meant
+  a control character sitting directly between `*` and `/` survived the escape untouched and
+  then collapsed into a live, unescaped `*/` once removed — reopening the JSDoc comment and
+  making the remaining tool description live TypeScript. Neutralizing first (and replacing with
+  a space instead of deleting) closes that gap and also stops adjacent words from being glued
+  together (e.g. `"tab\tseparated"` no longer becomes `"tabseparated"`) (#300).
+- **`mcp-execution-introspector`**: `build_tool_info`'s `tracing::trace!("Found tool: {name}")`
+  interpolated an MCP server's raw, unvalidated tool name directly into the log message text
+  before any of this function's own length validation ran. The trace call now runs after the
+  tool-name length check and sanitizes the name through the same shared
+  `mcp_execution_core::untrusted::sanitize_untrusted_text` used above before logging it as a
+  structured field, so a malicious tool name's control characters (e.g. an ANSI escape
+  sequence) cannot reach an operator's terminal via `RUST_LOG=trace` regardless of how the
+  installed `tracing` subscriber renders structured fields (#300).
 
 ### Testing
 

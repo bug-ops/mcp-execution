@@ -314,7 +314,7 @@ impl<'a> ProgressiveGenerator<'a> {
     /// let mut categorizations = HashMap::new();
     /// categorizations.insert("create_issue".to_string(), ToolCategorization {
     ///     category: "issues".to_string(),
-    ///     keywords: "create,issue,new,bug".to_string(),
+    ///     keywords: vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()],
     ///     short_description: "Create a new issue".to_string(),
     /// });
     ///
@@ -502,10 +502,10 @@ impl<'a> ProgressiveGenerator<'a> {
         let description = sanitize_jsdoc(&tool.description, 256);
         // Falls back to the tool's own description when no LLM categorization is
         // available, so the header JSDoc always emits `@description` (issue #94).
-        let short_description = Some(categorization.map_or_else(
+        let short_description = categorization.map_or_else(
             || description.clone(),
             |c| sanitize_jsdoc(&c.short_description, 256),
-        ));
+        );
 
         Ok(ToolContext {
             server_id: sanitize_jsdoc(server_id, 256),
@@ -517,7 +517,7 @@ impl<'a> ProgressiveGenerator<'a> {
             input_schema: sanitize_schema_jsdoc_descriptions(tool.input_schema.clone()),
             properties,
             category: categorization.map(|c| sanitize_jsdoc(&c.category, 128)),
-            keywords: categorization.map(|c| sanitize_jsdoc(&c.keywords, 256)),
+            keywords: categorization.map(|c| render_keywords_for_jsdoc(&c.keywords)),
             short_description,
         })
     }
@@ -544,7 +544,7 @@ impl<'a> ProgressiveGenerator<'a> {
                     typescript_name: typescript_names.get(idx).cloned().unwrap_or_default(),
                     description: sanitize_jsdoc(&tool.description, 256),
                     category: cat.map(|c| sanitize_jsdoc(&c.category, 128)),
-                    keywords: cat.map(|c| sanitize_jsdoc(&c.keywords, 256)),
+                    keywords: cat.map(|c| render_keywords_for_jsdoc(&c.keywords)),
                     short_description: cat.map(|c| sanitize_jsdoc(&c.short_description, 256)),
                 }
             })
@@ -734,14 +734,7 @@ impl<'a> ProgressiveGenerator<'a> {
 
         let description = (!tool.description.is_empty()).then(|| tool.description.clone());
         let category = categorization.map(|c| c.category.clone());
-        let keywords = categorization.map_or_else(Vec::new, |c| {
-            c.keywords
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect()
-        });
+        let keywords = categorization.map_or_else(Vec::new, |c| c.keywords.clone());
 
         Ok(ToolMetadata {
             name: tool.name.as_str().to_string(),
@@ -867,20 +860,33 @@ fn add_tracked(
 
 /// Sanitizes a server-controlled string for safe interpolation into JSDoc block comments.
 ///
-/// Prevents JSDoc comment terminator injection by replacing `*/` sequences,
-/// stripping newlines (including U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR,
-/// which ECMAScript treats as line terminators and which therefore also terminate a `//`
-/// line comment even though they aren't ASCII `\r`/`\n`), and truncating to a safe maximum
-/// length.
+/// Neutralizes control characters (C0, DEL, C1 — everything `char::is_control` reports —
+/// plus U+2028 LINE SEPARATOR/U+2029 PARAGRAPH SEPARATOR, which ECMAScript treats as line
+/// terminators even though they aren't in the control-character category) by delegating to
+/// the shared [`mcp_execution_core::untrusted::sanitize_untrusted_text`], which *replaces*
+/// each with a space rather than deleting it — deleting would glue adjacent words together
+/// (`"tab\tseparated"` -> `"tabseparated"`) and, more importantly, would let a control
+/// character sitting between `*` and `/` collapse into a live JSDoc comment terminator once
+/// removed. This neutralization runs *before* the `*/` escape step for exactly that reason:
+/// escaping first would see no `*/` match (the control character still separates them), then
+/// deleting/collapsing that character afterward would reopen the comment. Truncation to
+/// `max_len` runs last, after escaping, so a `*/` straddling the truncation boundary is
+/// already widened to `*\/` and cannot be split back into a bare `*/` by the cut.
 fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
-    let sanitized = s
-        .replace("*/", "*\\/")
-        .replace(['\r', '\n', '\u{2028}', '\u{2029}'], " ");
+    let neutralized = mcp_execution_core::untrusted::sanitize_untrusted_text(s, usize::MAX);
+    let sanitized = neutralized.replace("*/", "*\\/");
     if sanitized.chars().count() > max_len {
         sanitized.chars().take(max_len).collect()
     } else {
         sanitized
     }
+}
+
+/// Joins `ToolCategorization::keywords` into the comma-separated form JSDoc rendering displays
+/// (`@keywords foo, bar, baz`), sanitizing the joined text the same way any other JSDoc-embedded
+/// value is sanitized.
+fn render_keywords_for_jsdoc(keywords: &[String]) -> String {
+    sanitize_jsdoc(&keywords.join(", "), 256)
 }
 
 /// Escapes a string for safe embedding inside a single-quoted TypeScript string literal.
@@ -1290,7 +1296,7 @@ mod tests {
             "create_issue".to_string(),
             ToolCategorization {
                 category: "issues".to_string(),
-                keywords: "create, issue , new".to_string(),
+                keywords: vec!["create".to_string(), "issue".to_string(), "new".to_string()],
                 short_description: "Create a new issue".to_string(),
             },
         );
@@ -1420,7 +1426,11 @@ mod tests {
 
         let categorization = ToolCategorization {
             category: "messaging".to_string(),
-            keywords: "send,message,chat".to_string(),
+            keywords: vec![
+                "send".to_string(),
+                "message".to_string(),
+                "chat".to_string(),
+            ],
             short_description: "Send a message".to_string(),
         };
         let context = generator
@@ -1441,11 +1451,8 @@ mod tests {
         assert_eq!(context.properties.len(), 1);
         assert_eq!(context.properties[0].name, "text");
         assert_eq!(context.category, Some("messaging".to_string()));
-        assert_eq!(context.keywords, Some("send,message,chat".to_string()));
-        assert_eq!(
-            context.short_description,
-            Some("Send a message".to_string())
-        );
+        assert_eq!(context.keywords, Some("send, message, chat".to_string()));
+        assert_eq!(context.short_description, "Send a message".to_string());
     }
 
     #[test]
@@ -1561,7 +1568,7 @@ mod tests {
 
         assert_eq!(
             context.short_description,
-            Some("Format document with language-specific rules".to_string())
+            "Format document with language-specific rules".to_string()
         );
 
         // The header JSDoc must emit @description even without LLM categorization.
@@ -2060,7 +2067,7 @@ mod tests {
             "create_issue".to_string(),
             ToolCategorization {
                 category: "issues\u{2028}export const pwned = 1;".to_string(),
-                keywords: String::new(),
+                keywords: vec![],
                 short_description: "Create a new issue".to_string(),
             },
         );
@@ -2098,6 +2105,45 @@ mod tests {
     #[test]
     fn test_sanitize_jsdoc_passthrough() {
         assert_eq!(sanitize_jsdoc("Normal string", 256), "Normal string");
+    }
+
+    #[test]
+    fn test_sanitize_jsdoc_strips_ansi_escape_sequence() {
+        // Issue #300: this project's documented workflow is `cat` on the generated `.ts`
+        // file, so a raw ESC (`\x1b`)-led ANSI escape sequence in a tool description must
+        // not survive into the JSDoc comment verbatim. The control character becomes a
+        // space (not deleted), so adjacent text is not glued together.
+        let payload = "Innocuous \x1b[31mred text\x1b[0m looking description";
+        let sanitized = sanitize_jsdoc(payload, 256);
+        assert!(!sanitized.contains('\x1b'));
+        assert_eq!(sanitized, "Innocuous  [31mred text [0m looking description");
+    }
+
+    #[test]
+    fn test_sanitize_jsdoc_replaces_other_c0_control_characters_with_space() {
+        assert_eq!(sanitize_jsdoc("a\u{0}b\u{7}c\u{7f}d", 256), "a b c d");
+    }
+
+    /// Critic C1 regression: a control character sitting directly between `*` and `/`
+    /// must not survive as a live JSDoc comment terminator. The old (buggy) order
+    /// escaped `*/` before neutralizing control characters, so `*\u{0}/` had no `*/`
+    /// substring at escape time, then the control character was deleted, reconstituting
+    /// a bare `*/` that closed the comment early and let the trailing text become live
+    /// top-level TypeScript.
+    #[test]
+    fn test_sanitize_jsdoc_control_char_between_star_slash_cannot_reopen_comment() {
+        for ctrl in ['\u{0}', '\u{7f}', '\u{1b}'] {
+            let payload = format!("safe *{ctrl}/ export const pwned = 1; //");
+            let sanitized = sanitize_jsdoc(&payload, 256);
+            assert!(
+                !sanitized.contains("*/"),
+                "control char {ctrl:?} must not let a bare `*/` reappear: {sanitized:?}"
+            );
+            assert!(
+                sanitized.contains("* /"),
+                "the control char should be neutralized to a space, not deleted: {sanitized:?}"
+            );
+        }
     }
 
     #[test]
@@ -2776,7 +2822,7 @@ mod tests {
             "create_issue".to_string(),
             ToolCategorization {
                 category: "issues */ injected\nnext".to_string(),
-                keywords: "create,*/ injected\nnext".to_string(),
+                keywords: vec!["create,*/ injected\nnext".to_string()],
                 short_description: "Create */ injected\nnext".to_string(),
             },
         );

@@ -1381,7 +1381,7 @@ fn generate_with_categorization(
                 tool_name.clone(),
                 ToolCategorization {
                     category: cat_tool.category.clone(),
-                    keywords: cat_tool.keywords.clone(),
+                    keywords: parse_keywords(&cat_tool.keywords),
                     short_description: cat_tool.short_description.clone(),
                 },
             )
@@ -1389,6 +1389,17 @@ fn generate_with_categorization(
         .collect();
 
     generator.generate_with_categories(server_info, &categorizations)
+}
+
+/// Splits `CategorizedTool::keywords`' comma-separated wire format into the individual
+/// keywords `ToolCategorization` expects, trimming whitespace and dropping empty entries
+/// (e.g. from a trailing comma or repeated separators).
+fn parse_keywords(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]
@@ -1696,6 +1707,24 @@ mod tests {
 
         let result = generate_with_categorization(&generator, &server_info, &categorization);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_keywords_trims_whitespace_and_drops_empty_entries() {
+        assert_eq!(
+            parse_keywords("create, issue , new,,important"),
+            vec![
+                "create".to_string(),
+                "issue".to_string(),
+                "new".to_string(),
+                "important".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_keywords_empty_string_yields_empty_vec() {
+        assert!(parse_keywords("").is_empty());
     }
 
     // ========================================================================

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 ///     properties: vec![],
 ///     category: Some("issues".to_string()),
 ///     keywords: Some("create,issue,new,bug".to_string()),
-///     short_description: Some("Create a new issue".to_string()),
+///     short_description: "Create a new issue".to_string(),
 /// };
 ///
 /// assert_eq!(context.server_id, "github");
@@ -55,8 +55,10 @@ pub struct ToolContext {
     pub category: Option<String>,
     /// Optional keywords for discovery via grep/search
     pub keywords: Option<String>,
-    /// Optional short description for header comment
-    pub short_description: Option<String>,
+    /// Short description for header comment. Always populated: `ProgressiveGenerator`'s only
+    /// constructor falls back to `description` when no categorization short description is
+    /// available, so `None` is not a state this type can represent.
+    pub short_description: String,
 }
 
 /// Information about a single parameter property.
@@ -169,7 +171,7 @@ pub struct ToolSummary {
 ///
 /// let cat = ToolCategorization {
 ///     category: "issues".to_string(),
-///     keywords: "create,issue,new,bug".to_string(),
+///     keywords: vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()],
 ///     short_description: "Create a new issue in a repository".to_string(),
 /// };
 ///
@@ -179,8 +181,8 @@ pub struct ToolSummary {
 pub struct ToolCategorization {
     /// Category for tool grouping
     pub category: String,
-    /// Comma-separated keywords for discovery
-    pub keywords: String,
+    /// Keywords for discovery via grep/search
+    pub keywords: Vec<String>,
     /// Concise description for header comment
     pub short_description: String,
 }
@@ -229,25 +231,82 @@ pub struct CategoryInfo {
 /// check this exists to enforce), so `Default` is hand-written to make "always populated" a
 /// property of the type rather than a convention callers must remember to uphold.
 ///
+/// The three fields are private with read-only accessors for the same reason: `pub` fields
+/// would let `BridgeContext { forbidden_chars: vec![], .. }` bypass the invariant entirely and
+/// still compile, silently reintroducing the fail-open state `Default` exists to prevent.
+/// `Deserialize` is intentionally not derived — nothing in this codebase deserializes a
+/// `BridgeContext` from external input, and doing so would need to re-validate non-emptiness
+/// rather than trust the wire data.
+///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_codegen::progressive::BridgeContext;
 ///
 /// let context = BridgeContext::default();
-/// assert!(!context.forbidden_chars.is_empty());
-/// assert!(context.forbidden_chars.contains(&";".to_string()));
-/// assert!(!context.forbidden_env_prefix.is_empty());
+/// assert!(!context.forbidden_chars().is_empty());
+/// assert!(context.forbidden_chars().contains(&";".to_string()));
+/// assert!(!context.forbidden_env_prefix().is_empty());
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// The shared `forbidden_` prefix mirrors the three distinct `mcp_execution_core` accessors
+// (`forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`) these fields are populated
+// from; dropping it would obscure that correspondence for no clarity gain.
+#[allow(clippy::struct_field_names)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BridgeContext {
     /// Shell metacharacters forbidden in a command or argument string, each pre-escaped for
     /// safe embedding inside a single-quoted TypeScript string literal.
-    pub forbidden_chars: Vec<String>,
+    forbidden_chars: Vec<String>,
     /// Forbidden environment variable names (exact match).
-    pub forbidden_env_names: Vec<String>,
+    forbidden_env_names: Vec<String>,
     /// Environment-variable-name prefix rejected regardless of exact match (e.g. `DYLD_`).
-    pub forbidden_env_prefix: String,
+    forbidden_env_prefix: String,
+}
+
+impl BridgeContext {
+    /// Shell metacharacters forbidden in a command or argument string, each pre-escaped for
+    /// safe embedding inside a single-quoted TypeScript string literal. Never empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::progressive::BridgeContext;
+    ///
+    /// assert!(!BridgeContext::default().forbidden_chars().is_empty());
+    /// ```
+    #[must_use]
+    pub fn forbidden_chars(&self) -> &[String] {
+        &self.forbidden_chars
+    }
+
+    /// Forbidden environment variable names (exact match). Never empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::progressive::BridgeContext;
+    ///
+    /// assert!(!BridgeContext::default().forbidden_env_names().is_empty());
+    /// ```
+    #[must_use]
+    pub fn forbidden_env_names(&self) -> &[String] {
+        &self.forbidden_env_names
+    }
+
+    /// Environment-variable-name prefix rejected regardless of exact match (e.g. `DYLD_`).
+    /// Never empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::progressive::BridgeContext;
+    ///
+    /// assert!(!BridgeContext::default().forbidden_env_prefix().is_empty());
+    /// ```
+    #[must_use]
+    pub fn forbidden_env_prefix(&self) -> &str {
+        &self.forbidden_env_prefix
+    }
 }
 
 impl Default for BridgeContext {
@@ -290,7 +349,7 @@ mod tests {
             properties: vec![],
             category: Some("issues".to_string()),
             keywords: Some("create,issue,new".to_string()),
-            short_description: Some("Create a new issue".to_string()),
+            short_description: "Create a new issue".to_string(),
         };
 
         assert_eq!(context.server_id, "github");
@@ -352,8 +411,8 @@ mod tests {
         // #221 critique S2: `Default` must never render a fail-open (empty) forbidden-char
         // list, since an empty `FORBIDDEN_CHARS` in the rendered bridge would make
         // `validateCommandString` accept every shell metacharacter.
-        assert!(!context.forbidden_chars.is_empty());
-        assert!(!context.forbidden_env_names.is_empty());
-        assert!(!context.forbidden_env_prefix.is_empty());
+        assert!(!context.forbidden_chars().is_empty());
+        assert!(!context.forbidden_env_names().is_empty());
+        assert!(!context.forbidden_env_prefix().is_empty());
     }
 }
