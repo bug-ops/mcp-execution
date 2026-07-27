@@ -434,6 +434,13 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| EnvFilter::new("info,mcp_execution_server=debug")),
         )
         .with(
+            // Not wrapped in `mcp-execution-cli::runner`'s URL-redacting writer (see #353):
+            // this process only ever builds a stdio server config from `IntrospectServerParams`
+            // (see `service::build_stdio_server_config`), which has no `url` field, and no other
+            // path here constructs an http/sse config -- so there is no `reqwest`/`rmcp` transport
+            // error whose `Display` could embed a secret-bearing URL for this writer to reach. The
+            // #209 regression test (`service.rs`) guards that invariant; if a future change adds
+            // an http/sse client path to this crate, wire the same writer in at that point.
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stderr)
                 .with_target(true),

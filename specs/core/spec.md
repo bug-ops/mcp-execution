@@ -280,12 +280,59 @@ pub const REDACTED_PLACEHOLDER: &str = "<redacted>";
 pub struct RedactedMapValues<'a>(pub &'a HashMap<String,String>); // Debug: keys visible, values redacted
 pub struct RedactedItems<'a>(pub &'a [String]);                  // Debug: every entry redacted wholesale
 pub struct RedactedUrl<'a>(pub &'a str);                         // Debug: userinfo + query redacted, host/path kept
+pub fn redact_urls_in_text(text: &str) -> String;                // scans free text, redacts every URL-shaped token found
 ```
 `RedactedUrl` is deliberately parse-free (no `url` crate dependency) and
 redacts the **whole** input if it cannot unambiguously identify the
 authority boundary (e.g. an unencoded `/` or `?` inside userinfo) or if the
 scheme contains an invalid character — fails closed toward over-redaction
 rather than partial leakage.
+
+`redact_urls_in_text` (issue #353) handles the case `RedactedUrl` doesn't: a
+URL buried inside already-assembled prose rather than isolated behind its
+own field — the shape a `reqwest`/`rmcp` transport error's `Display` takes,
+embedding the full request URL (query string included) inline in a
+sentence. It locates each `scheme://…` token by walking left over
+scheme-legal characters from `://`, walking right to the first whitespace,
+control character, or wrapping-punctuation character (quote, backtick,
+paren — or text's end), and trimming trailing sentence punctuation (`,` `.`
+`;` `:`); the resulting token is redacted by handing it to `RedactedUrl`'s
+own `Debug` impl, so the *masking* decision — what counts as
+authority/query, what gets hidden — can never drift between the two.
+
+The token-*boundary* rules are deliberately looser than `RedactedUrl`'s own
+"fails closed" stance, not the same: `RedactedUrl` redacts a whole field in
+full whenever it's ambiguous, but this function only ever sees a substring
+of prose it must first isolate, so it fails toward capturing more text into
+a token rather than less — RFC 3986 IP-literal delimiters (`[`/`]`, needed
+verbatim for an IPv6 authority) and every other RFC 3986 "unsafe" character
+are deliberately *not* terminators, since ending the token on one of them
+would cut it short before a query string embedded raw (unescaped) right
+after — the exact shape a dependency's `Display` impl produces. The
+remaining terminator set (whitespace, control characters, quote/backtick/
+paren wrappers) is a heuristic, not a parser: a raw instance of *any* of
+those characters — not just the quote/backtick/paren wrappers, though
+whitespace/control chars surviving raw inside a secret is the less likely
+case, since a real `reqwest`-sent URL would already have percent-encoded
+them — appearing *inside* the secret itself (rather than used by the
+surrounding log line to wrap the URL) still ends the token early — the same
+class of unencoded-delimiter ambiguity `RedactedUrl` documents for an
+unencoded `/` or `?` inside userinfo, inherited here rather than newly
+introduced, since resolving it needs a real URL parser this module
+deliberately does not depend on.
+
+One widening step keeps parity with `RedactedUrl`'s malformed-scheme rule:
+if a non-scheme, non-terminator character glues more text onto the scheme
+run's left (e.g. `ghp_leakedtoken://host.com/`, where `_` breaks the
+scheme-char walk without being a terminator either), the token is widened
+left to the nearest terminator — bounded to text not yet emitted by a prior
+token, so it can never rewind past output already committed — before
+redaction, so the widened "scheme" fails `RedactedUrl`'s validity check and
+the whole run is redacted, not just its scheme-shaped tail. Known accepted
+limitation, inherited unchanged from `RedactedUrl`: a secret glued to a URL
+by scheme-*legal* characters (e.g. `Bearer sk-abc.https://h/p?t=1`) is
+absorbed into the token's "scheme" and survives, exact parity with what
+`RedactedUrl` itself does on that same string.
 
 ### `untrusted` module (`src/untrusted.rs`)
 

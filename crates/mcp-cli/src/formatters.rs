@@ -89,17 +89,27 @@ pub fn escape_display(s: &str) -> String {
 /// [`escape_error_text`] at all — see `runner::sanitized_error_report`'s doc comment).
 const MAX_ERROR_TEXT_LEN: usize = 4000;
 
-/// Neutralizes control characters — including line breaks — and bounds the length of `s` to 4000
-/// `char`s before it reaches a terminal or log sink that does not itself escape untrusted content.
+/// Makes `s` safe to print to a terminal or log sink that does not itself escape untrusted content.
 ///
-/// Delegates to [`mcp_execution_core::untrusted::sanitize_untrusted_text`], the project's one
-/// implementation of this defense, rather than maintaining a second, weaker sanitizer in this
-/// crate: every character `char::is_control` reports (the full C0 and C1 ranges, covering `\r`,
-/// `\n`, ESC, BEL, and friends) plus the Markdown/ECMAScript line separators U+2028/U+2029 is
-/// replaced with a space, and the result is capped to 4000 `char`s (`MAX_ERROR_TEXT_LEN`, not
-/// itself public — its value is documented here since a reader of this function's public docs
-/// cannot otherwise resolve it). Used to sanitize command errors and log messages that may embed
-/// content from an untrusted MCP server before they reach the terminal.
+/// Neutralizes control characters (including line breaks), redacts any embedded URL's
+/// credentials/query string, and bounds the result to 4000 `char`s.
+///
+/// Redaction runs *before* truncation deliberately — truncating first could cut a redacted URL's
+/// marker off and leave a bare secret prefix as the last thing printed.
+///
+/// Delegates to two single-source-of-truth helpers rather than maintaining parallel logic here:
+/// [`mcp_execution_core::redact_urls_in_text`] finds and redacts every `scheme://…` token in `s`
+/// (a `reqwest`/`rmcp` transport error's `Display` routinely embeds the full request URL,
+/// including a `?token=…`-style query string, inline in prose — see `runner::sanitized_error_report`,
+/// whose whole reason for calling this function per-cause is to catch exactly that), and
+/// [`mcp_execution_core::untrusted::sanitize_untrusted_text`] then neutralizes every character
+/// `char::is_control` reports (the full C0 and C1 ranges, covering `\r`, `\n`, ESC, BEL, and
+/// friends) plus the Markdown/ECMAScript line separators U+2028/U+2029, replacing each with a
+/// space, and caps the result to 4000 `char`s (`MAX_ERROR_TEXT_LEN`, not itself public — its value
+/// is documented here since a reader of this function's public docs cannot otherwise resolve it).
+/// Used to sanitize command errors and log messages that may embed content from an untrusted MCP
+/// server, or a URL the user themselves supplied with a secret in its query string, before they
+/// reach the terminal.
 ///
 /// `s` is treated as a single unit of untrusted text with no internal structure worth preserving
 /// — including any newline it contains, which this collapses like every other control character.
@@ -138,9 +148,21 @@ const MAX_ERROR_TEXT_LEN: usize = 4000;
 /// assert!(!escaped.contains('\n'));
 /// assert!(escaped.contains("boom"));
 /// ```
+///
+/// A URL embedded in the text has its credentials/query string redacted too:
+///
+/// ```
+/// use mcp_execution_cli::formatters::escape_error_text;
+///
+/// let cause = "error sending request for url (https://api.example.com/mcp?token=hunter2secret)";
+/// let escaped = escape_error_text(cause);
+/// assert!(!escaped.contains("hunter2secret"));
+/// assert!(escaped.contains("https://api.example.com/mcp?<redacted>"));
+/// ```
 #[must_use]
 pub fn escape_error_text(s: &str) -> String {
-    mcp_execution_core::untrusted::sanitize_untrusted_text(s, MAX_ERROR_TEXT_LEN)
+    let redacted = mcp_execution_core::redact_urls_in_text(s);
+    mcp_execution_core::untrusted::sanitize_untrusted_text(&redacted, MAX_ERROR_TEXT_LEN)
 }
 
 /// JSON output formatting.
@@ -525,6 +547,42 @@ mod tests {
         let hostile = "before\rafter";
         let escaped = escape_error_text(hostile);
         assert!(!escaped.contains('\r'));
+    }
+
+    /// Leak B regression (see the security audit behind this fix): a
+    /// `reqwest`/`rmcp` transport error's `Display` text embeds the full
+    /// request URL, query string included, inline in prose. This must be
+    /// redacted, not merely control-char-escaped.
+    #[test]
+    fn test_escape_error_text_redacts_embedded_url_secret() {
+        let cause = "Client error: error sending request for url (http://127.0.0.1:1/mcp?token=REFUSEDSECRET), when send initialize request";
+        let escaped = escape_error_text(cause);
+        assert!(!escaped.contains("REFUSEDSECRET"));
+        assert!(escaped.contains("http://127.0.0.1:1/mcp?<redacted>"));
+        assert!(escaped.contains("when send initialize request"));
+    }
+
+    /// Redaction must run on the full text before the length cap is applied, so a secret
+    /// straddling the truncation boundary is still fully redacted rather than surviving as a
+    /// chopped-off prefix. `secret` is positioned so the `MAX_ERROR_TEXT_LEN`-char cut lands 5
+    /// characters into it: a truncate-first implementation would keep exactly `secret[..5]` (a
+    /// real prefix of the secret, not an unrelated substring) in its output.
+    #[test]
+    fn test_escape_error_text_redacts_secret_straddling_truncation_boundary() {
+        let secret = "verysecretvalue";
+        let url_prefix = "https://host.example.com/p?token=";
+        let chars_before_secret = MAX_ERROR_TEXT_LEN - 5;
+        let padding_len = chars_before_secret - 1 - url_prefix.chars().count();
+        let padding = "x".repeat(padding_len);
+        let cause = format!("{padding} {url_prefix}{secret}");
+        assert_eq!(
+            cause.chars().count(),
+            MAX_ERROR_TEXT_LEN - 5 + secret.chars().count()
+        );
+
+        let escaped = escape_error_text(&cause);
+        assert!(!escaped.contains(secret));
+        assert!(!escaped.contains(&secret[..5]));
     }
 
     #[test]

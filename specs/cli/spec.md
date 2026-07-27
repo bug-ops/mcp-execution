@@ -153,6 +153,32 @@ fixed for (#336; tracked for a structural fix, redacting `Debug` on
 must format the `ServerConfig`/`TransportArgs`/`McpTransport` wrapper, never
 `Transport` directly.
 
+Neither of the above covers a *dependency's own* log lines (issue #353):
+`rmcp::transport::worker` logs an `ERROR` line on connection failure that
+formats a `reqwest::Error` whose `Display` embeds the full request URL,
+query string included — this project's `Debug` impls never see that text,
+since `rmcp` builds it internally. `runner::init_logging` closes this by
+wrapping the fmt layer's writer: `fmt::layer().with_writer(|| RedactingWriter(io::stderr()))`,
+where `RedactingWriter<W: io::Write>` runs every buffer through
+`mcp_execution_core::redact_urls_in_text` before forwarding it to `W`. This
+is viable because `tracing-subscriber`'s fmt layer formats each event into a
+buffer and issues exactly one `write_all` per event, so `write` always
+receives one whole formatted line to scan. This makes the writer
+target-agnostic — it covers every dependency's `tracing` output, not just
+`rmcp`'s, and survives `rmcp` renaming or relocating the log line that
+leaked in the first place.
+
+The same issue's second leak was in this crate's own error path:
+`escape_error_text`'s contract has broadened from "neutralize control
+characters" to "make error text safe for stderr" — it now redacts embedded
+URLs (via `mcp_execution_core::redact_urls_in_text`) *before* truncating,
+then sanitizes control characters as before. This one chokepoint covers
+`sanitized_error_report`'s whole chain (where `CoreError::ConnectionFailed`'s
+boxed `source` — `rmcp`'s error, for an http/sse transport — otherwise
+leaked the same URL into the visible `Error:` report) and every `warn!`
+call site in `commands::server` that already routed through it, present and
+future.
+
 ## 5. `runner.rs` — Dispatch and Exit-Code Classification
 
 ```rust

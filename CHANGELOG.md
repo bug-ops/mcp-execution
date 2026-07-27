@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`mcp-execution-core`**: added `redact_urls_in_text`, which scans arbitrary already-assembled
+  text for `scheme://…` tokens and hands each one to `RedactedUrl` for the actual redaction, so
+  the masking decision itself can't drift between the two — though the heuristic used to find a
+  token's boundaries in free-form prose is necessarily looser than `RedactedUrl`'s own "fails
+  closed on a whole field" guarantee (see the doc comment for the documented residual gap). Closes
+  two secret-leak paths (#353) rooted in `reqwest`/`rmcp` transport errors
+  whose `Display` embeds the full request URL, query string included, in prose that never passes
+  through this project's field-level `Debug` redaction: `mcp-execution-cli`'s `runner::init_logging`
+  now wraps the tracing fmt layer's writer so every dependency's formatted log line (not just
+  `rmcp::transport::worker`'s `ERROR` line, which triggers on every http/sse command's connection
+  failure) is redacted before reaching stderr; and `formatters::escape_error_text`'s contract has
+  broadened from "neutralize control characters" to "make error text safe for stderr" — it now
+  redacts embedded URLs before truncating, closing a second leak where `CoreError::ConnectionFailed`'s
+  boxed `rmcp` source printed the same secret query string into `introspect`/`generate`'s visible
+  `Error:` report.
 - **`mcp-execution-core`**: `Transport` now has its own hand-written `Debug` impl, redacting
   `args`/`env`/`headers`/`url` the same way as `ServerConfig`'s existing impl, instead of
   deriving a plain `Debug` that echoed every secret verbatim. This closes the gap noted below

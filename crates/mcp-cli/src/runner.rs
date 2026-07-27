@@ -2,6 +2,8 @@
 //!
 //! Contains the main command execution loop and logging initialization.
 
+use std::io::{self, Write};
+
 use anyhow::Result;
 use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
@@ -13,10 +15,46 @@ use crate::commands;
 use crate::commands::common::ServerSource;
 use crate::formatters::escape_error_text;
 
+/// [`Write`] wrapper that redacts embedded secrets out of each buffer before forwarding it to the
+/// inner sink.
+///
+/// Exists because `rmcp`'s own `tracing` targets (e.g. `rmcp::transport::worker`'s `ERROR` line on
+/// a connection failure) format a `reqwest::Error` whose `Display` embeds the full request URL,
+/// query string included, and log it directly — bypassing every redacting `Debug` impl this
+/// project applies to its own types, since this project never constructs that line's text.
+/// `tracing-subscriber`'s fmt layer formats each event into a buffer and issues exactly one
+/// [`write_all`](Write::write_all) call per event (verified against `tracing-subscriber` 0.3.23's
+/// `fmt_layer` internals), so `write` here always receives one whole formatted event line, which
+/// [`mcp_execution_core::redact_urls_in_text`] can scan and redact as a unit.
+///
+/// Generic over the inner writer so tests can redirect to an in-memory buffer instead of the real
+/// `stderr` [`init_logging`] wraps it around.
+struct RedactingWriter<W>(W);
+
+impl<W: Write> Write for RedactingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        self.0
+            .write_all(mcp_execution_core::redact_urls_in_text(&text).as_bytes())?;
+        // The whole input was consumed and forwarded (redaction only ever
+        // changes the byte count written *downstream*, not how much of
+        // `buf` this call accounts for), so report all of it as written.
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
 /// Initializes logging infrastructure.
 ///
 /// Sets up tracing with appropriate log levels based on verbosity flag.
-/// Writes log messages to stderr.
+/// Writes log messages to stderr, with any embedded URL's credentials/query string redacted (via
+/// a wrapping [`Write`] adapter around the fmt layer's writer) — this covers `rmcp` and any other
+/// dependency's log lines, not just this
+/// project's own, since a dependency's `tracing` output cannot go through this crate's
+/// `Debug`/[`escape_error_text`] redaction paths.
 ///
 /// # Arguments
 ///
@@ -48,7 +86,7 @@ pub fn init_logging(verbose: bool) -> Result<()> {
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(tracing_subscriber::fmt::layer().with_writer(|| RedactingWriter(io::stderr())))
         .init();
 
     Ok(())
@@ -661,5 +699,124 @@ mod tests {
                 "captured backtrace did not survive: {report}"
             );
         }
+    }
+
+    /// Leak B regression: `CoreError::ConnectionFailed`'s boxed `source` is an opaque
+    /// `Box<dyn Error + Send + Sync>` that, for an http/sse transport, is really `rmcp`'s wrapped
+    /// `reqwest::Error` — whose `Display` embeds the full request URL, query string included. This
+    /// simulates that exact shape (the security audit's captured `rmcp` output) without a live
+    /// network connection, and asserts the secret never reaches the printed report.
+    #[test]
+    fn test_sanitized_error_report_redacts_connection_failed_source_url_secret() {
+        let source: Box<dyn std::error::Error + Send + Sync> = concat!(
+            "Client error: error sending request for url ",
+            "(http://127.0.0.1:1/mcp?token=REFUSEDSECRET), when send initialize request"
+        )
+        .into();
+        let err = wrap(CoreError::ConnectionFailed {
+            server: "test".to_string(),
+            source,
+        });
+
+        let report = sanitized_error_report(&err);
+        assert!(!report.contains("REFUSEDSECRET"), "secret leaked: {report}");
+        assert!(report.contains("http://127.0.0.1:1/mcp?<redacted>"));
+        assert!(report.contains("MCP server connection failed: test"));
+    }
+
+    /// C2 regression at this leak's real entry point: an IPv6-literal authority must not defeat
+    /// redaction here either. Mirrors the critic's live repro
+    /// (`introspect --http "http://[::1]:1/mcp?token=..."`), which printed the secret in this
+    /// exact report on the unfixed version.
+    #[test]
+    fn test_sanitized_error_report_redacts_connection_failed_source_ipv6_url_secret() {
+        let source: Box<dyn std::error::Error + Send + Sync> = concat!(
+            "Client error: error sending request for url ",
+            "(http://[::1]:1/mcp?token=IPV6LEAKTEST), when send initialize request"
+        )
+        .into();
+        let err = wrap(CoreError::ConnectionFailed {
+            server: "test".to_string(),
+            source,
+        });
+
+        let report = sanitized_error_report(&err);
+        assert!(!report.contains("IPV6LEAKTEST"), "secret leaked: {report}");
+        assert!(report.contains("http://[::1]:1/mcp?<redacted>"));
+    }
+
+    #[test]
+    fn test_redacting_writer_redacts_url_secret_before_forwarding() {
+        let mut sink = Vec::new();
+        {
+            let mut writer = RedactingWriter(&mut sink);
+            let line = "ERROR rmcp::transport::worker: worker quit with fatal: Client error: error sending request for url (https://api.example.invalid/mcp?token=hunter2secret), when send initialize request\n";
+            let n = writer.write(line.as_bytes()).unwrap();
+            assert_eq!(n, line.len());
+        }
+        let written = String::from_utf8(sink).unwrap();
+        assert!(!written.contains("hunter2secret"));
+        assert!(written.contains("https://api.example.invalid/mcp?<redacted>"));
+        assert!(written.contains("worker quit with fatal"));
+    }
+
+    #[test]
+    fn test_redacting_writer_passes_through_text_without_urls() {
+        let mut sink = Vec::new();
+        RedactingWriter(&mut sink)
+            .write_all(b"INFO some ordinary log line\n")
+            .unwrap();
+        assert_eq!(sink, b"INFO some ordinary log line\n");
+    }
+
+    /// Pins the assumption `RedactingWriter`'s doc comment relies on but the two tests above
+    /// don't exercise: that `tracing-subscriber`'s fmt layer issues exactly one `write_all` per
+    /// event, so `RedactingWriter::write` always sees a whole formatted line. Wires the real
+    /// `fmt::layer()` (not a direct `RedactingWriter::write` call) through a scoped subscriber
+    /// into a shared buffer, so a future `tracing-subscriber` upgrade that splits an event across
+    /// multiple writes -- which would let a URL straddling the split leak unredacted -- fails this
+    /// test instead of failing silently in production.
+    #[test]
+    fn test_redacting_writer_wired_into_real_fmt_layer_redacts_full_event() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.0.lock().unwrap().flush()
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let make_writer = {
+            let buf = buf.clone();
+            move || RedactingWriter(SharedBuf(buf.clone()))
+        };
+
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(make_writer)
+                .with_ansi(false),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!(
+                "error sending request for url (https://api.example.invalid/mcp?token=hunter2secret), when send initialize request"
+            );
+        });
+
+        let written = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(
+            !written.contains("hunter2secret"),
+            "secret leaked: {written}"
+        );
+        assert!(written.contains("https://api.example.invalid/mcp?<redacted>"));
+        assert!(written.contains("when send initialize request"));
     }
 }
