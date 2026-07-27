@@ -62,4 +62,6 @@ pub use command::{
 pub use path::{contains_parent_dir, sanitize_path_for_error, validate_path_segment};
 
 // Re-export Debug-redaction helpers shared by secret-shaped fields
-pub use redact::{REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl};
+pub use redact::{
+    REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl, redact_urls_in_text,
+};
