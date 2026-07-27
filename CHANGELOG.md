@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-27
+
 ### Security
 
 - **`mcp-execution-core`**: added `redact_urls_in_text`, which scans arbitrary already-assembled
@@ -3106,7 +3108,8 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/bug-ops/mcp-execution/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/bug-ops/mcp-execution/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/bug-ops/mcp-execution/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/bug-ops/mcp-execution/compare/v0.7.0...v0.7.1

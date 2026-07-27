@@ -67,6 +67,13 @@ derived budgets proportionally without touching their own formulas.
 
 ## 3. Discovery Flow (`discover_server`)
 
+The whole method carries a `#[tracing::instrument(skip_all, fields(server_id =
+%server_id))]` span (issue #211): every `tracing` call made during the steps
+below runs inside that span, so under the default `fmt` subscriber each log
+line gets a `discover_server{server_id=...}:` prefix. No existing log
+message's text changed — only this added span context, which lets
+concurrently-discovered servers' log output be correlated.
+
 1. `validate_server_config(config)` — defense in depth, even though a
    builder-constructed `ServerConfig` is already validated (see
    [[../core/spec#Defense in depth]]).
@@ -83,6 +90,14 @@ derived budgets proportionally without touching their own formulas.
      with caller headers converted to `http::HeaderValue`/`HeaderName`. **No
      response-size bound exists on this path** — see
      [[#Known gap HTTP response size]].
+
+   Both branches converge on a single private `connect_and_list_tools`
+   helper, generic over the connect future each transport builds (issue
+   #294): `discover_via_stdio` and `discover_via_http` used to copy-paste the
+   same connect/list-tools/timeout/error-mapping pipeline for their shared
+   `RunningService<RoleClient, ()>` client, and now both delegate to it.
+   Steps 3–5 below are that shared pipeline — timeout durations, error
+   types/messages, and success output are unchanged from before the dedup.
 3. `client.serve(transport)` bounded by `config.connect_timeout()` →
    `Error::Timeout { operation: "connect to {id}", .. }` on expiry.
 4. `list_tools_bounded(&client)` — pages via `list_tools`, bailing out as
@@ -92,14 +107,28 @@ derived budgets proportionally without touching their own formulas.
    Bounded overall by `config.discover_timeout()` →
    `Error::Timeout { operation: "list_all_tools for {id}", .. }`.
 5. `extract_peer_meta` — pulls server name/version/capability flags from the
-   handshake `InitializeResult`; falls back to
-   `config.command`/`config.url()` and `"unknown"` version if the server
-   sent no peer info.
+   handshake `InitializeResult` into a private `PeerMeta` struct
+   (`server_name`, `server_version`, `has_resources`, `has_prompts`),
+   replacing a positional `(String, String, bool, bool)` tuple whose two
+   trailing `bool`s could previously be transposed without a type error
+   (issue #207); falls back to `config.command`/`config.url()` and
+   `"unknown"` version if the server sent no peer info. The tool list and
+   `PeerMeta` are combined into a private `DiscoveryResult { tools, peer_meta
+   }`, also replacing a positional tuple, and threaded from
+   `discover_via_stdio_process`/`discover_via_stdio`/`discover_via_http` up
+   through `discover_server`.
 6. `build_server_info` → per-tool `build_tool_info`, enforcing
    `MAX_TOOL_NAME_LEN`/`MAX_TOOL_DESCRIPTION_LEN`/`MAX_SCHEMA_SIZE_BYTES` and
    the overall `MAX_TOOL_COUNT` — returns `Error::ResourceLimitExceeded` on
-   any violation, naming the specific tool.
-7. Cache result in `self.servers`, return `ServerInfo`.
+   any violation, naming the specific tool. Also enforces
+   [`ToolName::new`]'s invariant on every tool's `name` — see the error table
+   below.
+7. Cache result in `self.servers`, keyed by the just-built `ServerInfo`'s own
+   `info.id.clone()` — **not** the `server_id` parameter threaded through
+   steps 1–6 — so the map key is structurally derived from the value's own
+   identity and cannot drift from it, even though both are sourced from the
+   same identifier in every call today (issue #317, no public API change).
+   Return `ServerInfo`.
 
 ## 4. Response-Line Bounding (stdio)
 
@@ -147,6 +176,7 @@ part of `rmcp`'s HTTP transport client-side; `rmcp` 3.0.0-beta.2 adds a
 | `tools/list` exceeds `discover_timeout` | `Timeout { operation: "list_all_tools for {id}", duration_secs }` |
 | Accumulated tool count > `MAX_TOOL_COUNT` during paging | `ResourceLimitExceeded { resource: ResourceKind::ToolCount { server_id }, .. }` |
 | Single tool's name/description/schema exceeds its bound | `ResourceLimitExceeded { resource: ResourceKind::ToolNameLength \| DescriptionLength { tool_name } \| InputSchemaSize { tool_name } \| OutputSchemaSize { tool_name }, .. }` |
+| Tool name fails `ToolName::new`'s invariant (e.g. contains `/`, empty) | `ValidationError { field: "tool name", reason }` — hard-fails the *entire* `discover_server` call via `?`-propagation, exactly like an oversized name/description/schema above: a single malformed tool name is not skipped-with-a-warning while the rest of the server's tools are returned (#287) |
 | HTTP header name/value invalid (introspection-time) | `ConnectionFailed` (header construction failure) |
 
 ## 7. Edge Cases & Notable Behaviors
@@ -166,6 +196,14 @@ part of `rmcp`'s HTTP transport client-side; `rmcp` 3.0.0-beta.2 adds a
   the running total over `MAX_TOOL_COUNT` is fetched — at most one page's
   worth of tools beyond the limit is ever held in memory at once, not the
   server's entire (potentially huge) full response.
+- `ServerInfo`/`ToolInfo` derive `Deserialize` and hold `ServerId`/`ToolName`
+  fields directly. Both newtypes are constructible only through their
+  fallible `new`, enforced even through their `#[serde(try_from = "String")]`-
+  backed `Deserialize` impl (see [[../core/spec]]) — so deserializing a
+  `ServerInfo`/`ToolInfo` from untrusted JSON with a hostile `id`/tool `name`
+  (e.g. containing `..` or a path separator) now fails outright instead of
+  silently producing an unvalidated value, closing a gap that predates this
+  invariant.
 
 ## 8. Cross-Crate Contracts
 

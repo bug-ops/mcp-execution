@@ -12,7 +12,7 @@ Foundation types, traits, and error handling for MCP Code Execution.
 
 ```toml
 [dependencies]
-mcp-execution-core = "0.8"
+mcp-execution-core = "0.9"
 ```
 
 Or with cargo-add:

@@ -18,7 +18,7 @@ Or add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mcp-execution-skill = "0.8"
+mcp-execution-skill = "0.9"
 ```
 
 > [!IMPORTANT]
