@@ -59,7 +59,7 @@ impl GeneratedCode {
     /// ```
     #[inline]
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { files: Vec::new() }
     }
 
@@ -115,7 +115,7 @@ impl GeneratedCode {
     /// ```
     #[inline]
     #[must_use]
-    pub fn file_count(&self) -> usize {
+    pub const fn file_count(&self) -> usize {
         self.files.len()
     }
 
@@ -270,7 +270,7 @@ pub struct TemplateContext {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
-    /// Original tool name (snake_case from MCP)
+    /// Original tool name (`snake_case` from MCP)
     pub name: String,
     /// Human-readable description
     pub description: String,

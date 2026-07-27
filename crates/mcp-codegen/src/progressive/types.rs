@@ -34,9 +34,9 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolContext {
-    /// MCP server identifier, sanitized for safe embedding in a JSDoc comment
+    /// MCP server identifier, sanitized for safe embedding in a `JSDoc` comment
     pub server_id: String,
-    /// Original tool name (snake_case), sanitized for safe embedding in a JSDoc comment
+    /// Original tool name (`snake_case`), sanitized for safe embedding in a `JSDoc` comment
     pub name: String,
     /// Original tool name escaped for safe embedding in a single-quoted TS string literal
     pub name_literal: String,
@@ -47,7 +47,7 @@ pub struct ToolContext {
     /// Human-readable description
     pub description: String,
     /// JSON Schema for input parameters, with `description` fields sanitized
-    /// for safe interpolation into JSDoc block comments (see issue #102).
+    /// for safe interpolation into `JSDoc` block comments (see issue #102).
     pub input_schema: serde_json::Value,
     /// Extracted properties for template rendering
     pub properties: Vec<PropertyInfo>,

@@ -179,7 +179,7 @@ impl<'a> TemplateEngine<'a> {
     }
 }
 
-impl<'a> Default for TemplateEngine<'a> {
+impl Default for TemplateEngine<'_> {
     fn default() -> Self {
         Self::new().expect("Failed to create default TemplateEngine")
     }
@@ -215,7 +215,7 @@ mod tests {
 
         let result = engine.render("progressive/tool", &tool_context);
         if let Err(e) = &result {
-            eprintln!("Error rendering template: {}", e);
+            eprintln!("Error rendering template: {e}");
         }
         assert!(result.is_ok(), "Failed to render: {:?}", result.err());
         assert!(result.unwrap().contains("testTool"));
