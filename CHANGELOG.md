@@ -164,6 +164,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field reopened the amplification path, the same fixture would flip to `Err` on
   `serde_norway`'s own repetition-limit guard. A wall-clock assertion is kept only as a
   1-second hang guard, not as the detection mechanism (#350).
+- **`mcp-execution-skill`**: added three further regression tests pinning the declared-field
+  counterpart of the alias-bomb short-circuit above (ADR-341 §10 addendum): retyping an
+  already-declared field (e.g. `description`) to a buffering type — `serde_norway::Value`, an
+  untagged enum, or a buffering `#[serde(deserialize_with)]` that keeps the declared Rust type
+  as `Option<String>` — reopens amplification for a bomb placed directly under that key.
+  Neither sub-case has an `Ok` baseline (a sequence into `Option<String>` always errs), so
+  unlike the sibling test above, what these tests pin is *which* error is raised — a cheap
+  immediate type-mismatch today versus serde_norway's own "repetition limit exceeded" once
+  buffered — not an `Ok`/`Err` flip. `RawFrontmatter` is not vulnerable to either sub-case
+  today, so two of the three tests deserialize a local test-only struct shaped like the
+  hypothetical regressed type directly via `serde_norway::from_str` to pin each sub-case's
+  error in isolation; the third asserts directly against production `extract_skill_metadata`
+  that today's error does not contain that guard's text, closing the gap against real code. The
+  `Value`/untagged sub-case is already compile-blocked at `extract_skill_metadata`'s
+  `require_field` call site; the `deserialize_with` sub-case is not, and is the one this trio
+  primarily guards (#359).
 
 ### Added
 
