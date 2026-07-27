@@ -35,6 +35,17 @@ do, without going through the MCP-server layer at all: read
 server, generate progressive-loading TypeScript, render SKILL.md, and
 manage/validate server configuration and the local runtime environment.
 
+The crate is a library (`src/lib.rs`) with a thin binary entry point
+(`src/main.rs`: parse `Cli`, call `runner::init_logging`, call
+`runner::execute_command`, then `std::process::exit` on the returned
+`ExitCode`). `lib.rs` exposes `pub mod cli`, `pub mod runner`, `pub mod
+actions`, `pub mod commands`, and `pub mod formatters` (plus a re-exported
+`ServerAction`) — `cli::{Cli, Commands}` and `runner`'s
+command-execution/exit-code-classification entry points are genuine public
+library API, not merely an implementation detail of the compiled binary, so
+an external crate or integration test can drive command parsing/execution
+in-process (issue #188).
+
 ## 2. Subcommands (`Commands` enum, `src/cli.rs`)
 
 | Subcommand | Purpose | Key flags |
@@ -48,6 +59,15 @@ manage/validate server configuration and the local runtime environment.
 
 Global flags on `Cli` (apply to every subcommand): `-v/--verbose` (DEBUG log
 level), `--format {json,text,pretty}` (default `pretty`, case-insensitive).
+`--format` is typed as `mcp_execution_core::cli::OutputFormat` directly via
+clap's `PossibleValuesParser` (mapped through `OutputFormat::from_str`),
+not a raw `String` parsed post-hoc: `--help` lists the three possible
+values, an invalid value (e.g. `--format xml`) is rejected by clap itself
+before any command handler runs (routed through the same
+`runner::report_and_classify`/`ExitCode::INVALID_INPUT` path as a
+handler-level failure — see [[#5. runner.rs]]), and
+`completions`-generated shell scripts complete `--format` from the same
+three values (issue #206).
 
 `introspect`/`generate` flatten a shared `ServerFlags` (`#[derive(Args)]`,
 private fields, `cli.rs`) holding `from_config`/`server`/`args`/`env`/`cwd`/
@@ -226,28 +246,64 @@ command.
 
 `run(source: ServerSource, name: Option<String>, output_dir: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
 
-1. `resolve_server_config` → `discover_server_info` (introspects; applies
-   `--name` override to `ServerInfo.id` if given, so generated
-   directory/literals use the custom name rather than the raw command).
+1. `resolve_server_config` → `discover_server_info`: if `--name` is given,
+   it is validated via `mcp_execution_skill::validate_server_id` **before**
+   the connection attempt and only overrides `ServerInfo.id` once valid —
+   an invalid `--name` (traversal shape, absolute path, or simply outside
+   `validate_server_id`'s `[a-z0-9-]` charset, e.g. `My Server!`) is now a
+   hard `INVALID_INPUT` error instead of being silently slugified into a
+   different id. **Breaking behavior change** from the pre-#311 CLI, which
+   constructed `ServerId::new(custom_name)` directly with no validation.
 2. If the server has zero tools: logs a warning and returns
    `ExitCode::SUCCESS` (not an error) without generating anything.
-3. `ProgressiveGenerator::generate` (uncategorized — no LLM step in this
+3. `resolve_server_dir_name` turns `server_info.id` into the directory
+   name, re-validating it via `validate_server_id` regardless of which arm
+   produced the id: `derive_server_id_from_path_or_name` (stdio command),
+   `derive_server_id_from_url` (http/sse — see [[#3. common.rs]]), or the
+   already-validated `--name` override. This check is a redundant backstop
+   for those three arms, but the **sole** enforcement point when the id
+   came straight from an unvalidated `--from-config` `mcp.json` key with
+   no `--name` override —
+   the error message differs accordingly (names `mcp.json` and suggests a
+   ready-to-use `--name` slug vs. framing the failure as an internal error
+   for the other arms, since reaching it there would mean one of their own
+   checks has a bug) (issue #311).
+4. `ProgressiveGenerator::generate` (uncategorized — no LLM step in this
    path, unlike `mcp-server`'s `save_categorized_tools`).
-4. `resolve_base_dir(output_dir)` — defaults to `~/.claude/servers`.
-5. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
+5. `resolve_base_dir(output_dir)` — defaults to `~/.claude/servers`.
+6. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
    size, human-readable `format_size`) **without writing anything to
    disk** — the only place in this workspace that previews generated
    output without ever touching the filesystem.
-6. Otherwise: `FilesBuilder::from_generated_code(code, "/").build_and_export(&base_dir)`
-   — see [[../files/spec#FilesBuilder::build_and_export]] for the
-   per-top-level-group atomicity this implies (a re-run with fewer tools
-   deletes stale tool files in that server's own directory, but never
-   touches sibling servers under the same `base_dir`).
-7. Success output names the required post-export step
+7. Otherwise: `FilesBuilder::from_generated_code(code, "/").build()`, then
+   `FileSystem::export_to_filesystem_with_options(output_path,
+   &ExportOptions::new().with_confine_to(base_dir))` — **not**
+   `FilesBuilder::build_and_export`, which treats its target as a
+   shared multi-server root; `generate` instead publishes one server's
+   whole directory (`output_path = base_dir.join(server_dir_name)`) per
+   call, getting `export_to_filesystem_with_options`'s own per-call atomic
+   staging/swap (a re-run with fewer tools deletes stale tool files in that
+   server's own directory, but never touches sibling servers under the
+   same `base_dir`). `with_confine_to(base_dir)` is a second,
+   defense-in-depth layer behind the id-sanitization in step 3: a future
+   caller that skipped that sanitization fails loudly instead of writing
+   outside `base_dir`. See [[../files/spec#5. Atomic Export
+   (`export_to_filesystem_with_options`)]] and
+   [[../files/spec#8. Cross-Crate Contracts]].
+8. Success output names the required post-export step
    (`NPM_INSTALL_HINT`: run `npm install` before type-checking the
    generated package — issue #257's fix, since the generated `package.json`
    declares `@types/node` as a `devDependency` that isn't installed by
    `generate` itself).
+
+`Text`/`Pretty` output (both the success report and the `--dry-run`
+preview) escapes the MCP server's handshake-supplied `server_name` via
+`formatters::escape_display` before interpolating it into a freeform
+`"Server: {name} ({id})"` line — always JSON-quoting the value, even when
+it contains no control characters, so a benign name like `Test Server`
+renders as `Server: "Test Server" (id)`, not just a malicious one (issue
+#299). `Json` output is unaffected, since `serde_json` already escapes
+string values.
 
 ## 8. `skill` Command (`commands/skill.rs`)
 
@@ -286,6 +342,53 @@ single source of truth:
 - `info <server>` / `validate <command>` — perform a **full** introspection
   handshake (the entry's own full configured timeout applies), the
   authoritative single-target check.
+
+`ServerEntry.status`/`ServerInfo.status` are typed as a closed
+`ServerStatus` enum (`Available`/`Unavailable`,
+`#[serde(rename_all = "lowercase")]`), not a bare `String` — a **breaking**
+type change from the pre-#318 CLI, though it serializes identically
+(`"available"`/`"unavailable"`) so `--format json` consumers are
+unaffected.
+
+`info`/`validate` distinguish "entry absent from `mcp.json`" from "entry
+present but invalid" via `get_mcp_server_entry` (looks up the raw
+`McpServerEntry` only) rather than `get_mcp_server` (which also eagerly ran
+`build_core_config`'s security validation — see [[#3. common.rs]] —
+making the two cases indistinguishable through one `with_context` "not
+found" wrapping):
+
+- `server info` on an entry that is present but fails `build_core_config`
+  (e.g. an invalid URL scheme) or fails introspection now reports a
+  structured `ServerInfo` with `"status": "unavailable"` through the
+  normal `output_format` path — not a raw, unformatted `anyhow` error —
+  while still returning `ExitCode::ERROR` (issue #305). Only a genuinely
+  absent entry propagates as `Err` (and thus a raw error report). A known
+  gap: `ServerInfo` has no field naming *why* the server is unavailable
+  (invalid config vs. failed handshake).
+- `server validate` on a present-but-invalid entry reports the actual
+  `build_core_config`/precheck failure message in `ValidationResult` (e.g.
+  `"Server '{name}' has an invalid configuration: {e}"`), not the generic
+  `"Server not found"` message reserved for a genuinely absent entry (issue
+  #304).
+
+`build_command_string` (feeds `list`/`info`/`validate` output, printed
+unconditionally, never gated behind `--verbose`) redacts the same way
+`ServerConfig`'s own `Debug` impl does (issue #346): stdio `command` is
+routed through `sanitize_path_for_error` (home directory/username scrub);
+stdio `args` are replaced **wholesale** with
+`mcp_execution_core::REDACTED_PLACEHOLDER` per entry, rendered as a
+space-joined shell-shaped string (`"docker <redacted> <redacted>"`), since
+a single argument routinely holds an entire secret with no key/value half
+worth preserving — unlike `mcp_execution_core::RedactedItems`'s
+Rust-`Debug`-list rendering, which would be awkward to embed in
+`--format json` output; http/sse `url` is redacted via `RedactedUrl`
+(strips userinfo credentials and any query string, keeps scheme/host/path
+readable), falling back to redacting the whole string if it fails to
+parse. `validate_command`'s own "URL is not well-formed" precheck message
+(`url_precheck_message`, built *before* `build_command_string` runs) is
+redacted the same way, closing a gap where a malformed-but-credentialed
+URL could leak via the precheck message even though `build_command_string`
+itself was already safe (issue #346, S1).
 
 ## 10. `setup` Command (`commands/setup.rs`)
 
