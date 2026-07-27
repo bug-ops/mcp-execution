@@ -36,7 +36,7 @@ use mcp_execution_core::{ServerId, ServerConfig};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut introspector = Introspector::new();
 
-    let server_id = ServerId::new("github");
+    let server_id = ServerId::new("github").unwrap();
     let config = ServerConfig::builder()
         .command("npx".to_string())
         .arg("-y".to_string())

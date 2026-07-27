@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs, later re-serialization/Handlebars rendering, and eventual `Drop`) that this constant
   does not cover (#303).
 
+- **`mcp-execution-core`**: new `pub fn path::contains_parent_dir(path: &Path) -> bool`,
+  returning `true` if any path component is `..`. Replaces three byte-for-byte-identical
+  copies of the same check previously duplicated in `mcp-execution-skill::output_path`,
+  `mcp-execution-server::output_dir`, and `mcp-execution-cli::commands::skill::has_path_traversal`
+  (#289).
+
 ### Fixed
 
 - **`mcp-execution-codegen`**: `json_schema_to_typescript` and the JSDoc description sanitizer
@@ -267,6 +273,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   construct a valid instance. `Deserialize` is no longer derived: nothing in this codebase
   deserializes a `BridgeContext` from external input, and templates only ever render it via
   `Serialize` (#315).
+
+- **`mcp-execution-core`**: `ServerId::new`/`ToolName::new` changed from
+  `pub fn new(id: impl Into<String>) -> Self` /
+  `pub fn new(name: impl Into<String>) -> Self`
+  to `pub fn new(id: impl Into<String>) -> Result<Self, ServerIdError>` /
+  `pub fn new(name: impl Into<String>) -> Result<Self, ToolNameError>`,
+  enforcing at construction that the value is a single non-empty path segment (no `..`, no
+  path separator, no root/prefix component) via the same `path::validate_path_segment` check
+  `mcp-skill`/`mcp-server` already used on raw `server_id: &str` values. Previously neither
+  type enforced any invariant despite the module doc's newtype-pattern claim, and callers
+  re-implemented ad hoc checks before construction (`mcp-introspector`'s length check ahead of
+  `ToolName::new`, `mcp-skill`'s own `validate_server_id`, `path::validate_path_segment` called
+  independently on a raw `server_id: &str` never on a `ServerId`). The `From<String>`/`From<&str>`
+  impls for both types are removed, and `Deserialize` is now routed through `new` via
+  `#[serde(try_from = "String")]` (an `impl TryFrom<String>` delegating to `new` backs it) —
+  `new` is the only construction path left, including through `Deserialize`, so the invariant
+  cannot be bypassed by an infallible conversion or a direct-derive deserialize. This closes a
+  concrete gap found in review: `mcp_execution_introspector::ServerInfo`/`ToolInfo` both derive
+  `Deserialize` and hold a `ServerId`/`ToolName` field directly, so before this fix,
+  `serde_json::from_str::<ServerInfo>(...)` with a hostile `id`/tool `name` (e.g. containing
+  `..` or a path separator) produced a `ServerId`/`ToolName` that had never been validated —
+  the exact class of bypass `#[serde(try_from = ...)]` closes here and the one #313 (below)
+  closes for `ServerConfig`. `mcp-skill::validate_server_id`'s stricter `[a-z0-9-]`-charset +
+  length rule is unchanged and still layers on top of this baseline for its own contract.
+  Every call site across the workspace has been updated to handle the new `Result`, including
+  `mcp-introspector::build_tool_info`, which now hard-fails the entire `discover_server` call
+  (via `Error::ValidationError`) if any tool's name isn't a valid path segment (e.g. contains
+  `/`) — consistent with, and using the same `?`-propagation mechanism as, that function's
+  pre-existing hard-fail-on-first-violation handling of oversized tool names/descriptions/
+  schemas; a single malformed tool name is not skipped-with-a-warning while the rest of the
+  server's tools are still returned (#287).
+
+- **`mcp-execution-core`**: `ServerConfig`'s per-transport fields (`command`/`args`/`env`/`cwd`
+  for stdio; `url`/`headers` for http/sse) are no longer flat, always-present fields alongside
+  a separate `transport: TransportType` discriminant — they now live inside a new `transport:
+  Transport` enum (`Transport::Stdio { command, args, env, cwd }` /
+  `Transport::Http { url, headers }` / `Transport::Sse { url, headers }`), replacing
+  `TransportType`. The illegal combination (e.g. `args` populated on an `Http` config, or a
+  `Stdio` config with no `command`) is now unrepresentable rather than merely unvalidated.
+  `ServerConfig`'s fields are also now private, and its `Deserialize` impl is hand-written to
+  run `validate_server_config` before returning — closing the gap noted in #177 where a struct
+  literal or `serde_json::from_str::<ServerConfig>` could skip validation entirely, since
+  `build()`'s validation was previously only a builder-level guarantee. `command()`/`args()`/
+  `env()`/`cwd()`/`url()`/`headers()` accessor methods keep their pre-#313 signatures (an empty
+  default for the transport that doesn't carry that field), so most call sites are unaffected;
+  code matching directly on the old `TransportType` (`mcp-core::command`,
+  `mcp-introspector::discover_server`, `mcp-server`) now matches on `Transport`'s
+  data-carrying variants instead. `validate_size_bounds` is split into
+  `validate_stdio_size_bounds`/`validate_network_size_bounds`, each checking only the fields
+  its own variant has, since the cross-transport bypass they used to guard against (issue #198
+  S2/N1) is now structurally impossible. The builder's `http_transport`/`sse_transport`
+  setters no longer write a dummy sentinel command to avoid a panic on an unused field, since
+  that field no longer exists on a non-stdio config. Every construction/pattern-match site
+  across the workspace has been updated (#313).
+
+  **Wire-format note:** the `transport` JSON key is now a mandatory discriminant when
+  deserializing a `ServerConfig` directly (`serde_json::from_str::<ServerConfig>`). Previously
+  `transport` was `#[serde(default)]` on the old flat field (defaulting to `Stdio`), so
+  `serde_json::from_str::<ServerConfig>("{}")` deserialized successfully (and only failed
+  later, at `validate_server_config` time, over the resulting empty `command`). With
+  `transport` driving which `Transport` variant to deserialize into, omitting it is now a
+  deserialization error (`missing field` from serde's internally-tagged-enum handling) rather
+  than a validation error surfaced afterward. This only affects direct `ServerConfig`
+  deserialization; `mcp-cli`'s `mcp.json` format is a distinct schema
+  (`McpServerEntry`/`McpTransport`, with its own hand-written `Deserialize` and an optional
+  `"type"` key inferred from `command`/`url` when absent) and is unaffected by this change.
 
 ### Security
 

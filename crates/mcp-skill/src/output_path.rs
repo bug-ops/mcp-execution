@@ -133,7 +133,7 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
             path: sanitize_path_for_error(path),
         });
     }
-    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+    if mcp_execution_core::contains_parent_dir(path) {
         return Err(OutputPathError::ParentTraversal {
             path: sanitize_path_for_error(path),
         });

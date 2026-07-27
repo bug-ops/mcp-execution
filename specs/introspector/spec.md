@@ -170,7 +170,7 @@ part of `rmcp`'s HTTP transport client-side; `rmcp` 3.0.0-beta.2 adds a
 ## 8. Cross-Crate Contracts
 
 - **Consumes** `mcp-core`: `ServerConfig`, `ServerId`, `ToolName`,
-  `TransportType`, `validate_server_config`, `Error`/`Result`.
+  `Transport`, `validate_server_config`, `Error`/`Result`.
 - **Produced for** `mcp-codegen`: `ServerInfo`/`ToolInfo` are the direct
   input to `ProgressiveGenerator::generate`/`generate_with_categories` — see
   [[../codegen/spec#Input contract]]. `MAX_TOOL_COUNT`,

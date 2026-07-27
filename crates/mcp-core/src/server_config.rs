@@ -50,10 +50,12 @@
 
 use crate::path::sanitize_path_for_error;
 use crate::redact::{RedactedItems, RedactedMapValues, RedactedUrl};
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 /// Default timeout for establishing an MCP server connection (handshake).
@@ -70,29 +72,102 @@ const fn default_discover_timeout() -> Duration {
     DEFAULT_DISCOVER_TIMEOUT
 }
 
-/// Transport type for MCP server communication.
+/// Shared empty map returned by [`ServerConfig::env`]/[`ServerConfig::headers`] for the
+/// transport that doesn't carry that field (e.g. `headers()` for a `Stdio` config), so those
+/// accessors can keep returning a plain `&HashMap` instead of an `Option`.
+static EMPTY_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(HashMap::new);
+
+/// Transport-specific configuration for connecting to an MCP server.
 ///
-/// Defines how the client communicates with the MCP server.
+/// Each variant carries exactly the fields meaningful for that transport, so a config with
+/// stdio's `command`/`args`/`env`/`cwd` set alongside http/sse's `url`/`headers` — or a
+/// `Stdio` variant missing `command`, or an `Http`/`Sse` variant missing `url` — cannot be
+/// constructed at all; the combination is unrepresentable rather than merely unvalidated
+/// (issue #313). [`ServerConfig::builder`] is the normal way to construct one; a bare
+/// `Transport` value is mostly useful for matching on [`ServerConfig::transport`].
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_core::TransportType;
+/// use mcp_execution_core::{ServerConfig, Transport};
 ///
-/// // Default is stdio
-/// let transport = TransportType::default();
-/// assert_eq!(transport, TransportType::Stdio);
+/// let config = ServerConfig::builder()
+///     .command("docker".to_string())
+///     .build()
+///     .unwrap();
+///
+/// assert!(matches!(config.transport(), Transport::Stdio { .. }));
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum TransportType {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "transport", rename_all = "lowercase")]
+pub enum Transport {
     /// Stdio transport: subprocess communication via stdin/stdout.
-    #[default]
-    Stdio,
+    Stdio {
+        /// Command to execute (binary name or absolute path).
+        ///
+        /// Can be either:
+        /// - Binary name (e.g., "docker", "python") - resolved via PATH
+        /// - Absolute path (e.g., "/usr/local/bin/mcp-server")
+        command: String,
+
+        /// Arguments to pass to command.
+        ///
+        /// Each argument is passed separately to avoid shell interpretation.
+        /// Do not include the command itself in arguments.
+        #[serde(default)]
+        args: Vec<String>,
+
+        /// Environment variables to set for the subprocess.
+        ///
+        /// These are added to (or override) the parent process environment.
+        /// Security validation blocks dangerous variables like `LD_PRELOAD`.
+        /// Values routinely hold secrets (e.g. `GITHUB_PERSONAL_ACCESS_TOKEN`); see
+        /// the redaction note on [`ServerConfig`]'s own doc comment.
+        #[serde(default)]
+        env: HashMap<String, String>,
+
+        /// Working directory for the subprocess (optional).
+        ///
+        /// If `None`, inherits the parent process working directory.
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+    },
     /// HTTP transport: communication via HTTP/HTTPS API.
-    Http,
+    Http {
+        /// URL for HTTP transport.
+        ///
+        /// Example: `https://api.example.com/mcp`
+        ///
+        /// This crate does not apply SSRF allowlisting to this URL — it is
+        /// treated like a `curl` target, appropriate for a local CLI tool.
+        /// Embedders that expose this config in a multi-tenant or server context
+        /// should apply their own URL allowlisting before connecting.
+        url: String,
+
+        /// HTTP headers for HTTP transport.
+        ///
+        /// Common headers include:
+        /// - `Authorization`: Authentication token
+        /// - `Content-Type`: Request content type
+        ///
+        /// Values routinely hold secrets (e.g. a bearer token); see the redaction
+        /// note on [`ServerConfig`]'s own doc comment.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
     /// SSE transport: Server-Sent Events for streaming communication.
-    Sse,
+    Sse {
+        /// URL for SSE transport.
+        ///
+        /// Same shape and SSRF caveat as [`Transport::Http`]'s `url`.
+        url: String,
+
+        /// HTTP headers for SSE transport.
+        ///
+        /// Same shape and redaction guarantee as [`Transport::Http`]'s `headers`.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
 }
 
 /// MCP server configuration with command, arguments, and environment.
@@ -107,17 +182,12 @@ pub enum TransportType {
 ///
 /// # Security
 ///
-/// [`ServerConfigBuilder::build`] runs
-/// [`validate_server_config`] internally, so a `ServerConfig` built through the builder
-/// cannot be constructed without having already passed security validation. This is *not*
-/// a type-level guarantee, though: every field is `pub` and the type derives `Deserialize`,
-/// so a caller can still assemble an unvalidated `ServerConfig` directly (a struct literal,
-/// or deserializing a hand-edited `mcp.json`) — see the `deserialize_http_config_missing_url`
-/// pattern in `command.rs`'s tests for exactly that construction. Callers that obtain a
-/// `ServerConfig` from anywhere other than the builder should still call
-/// [`validate_server_config`] themselves before using it to spawn a process or open a
-/// connection; `mcp_execution_introspector::Introspector::discover_server` does this as
-/// defense-in-depth even though its own callers always go through the builder.
+/// Both fields are private and the type's [`Deserialize`] impl is hand-written (see below), so
+/// a `ServerConfig` cannot be obtained — via [`ServerConfigBuilder::build`], a struct literal,
+/// or `serde_json::from_str` — without having passed [`validate_server_config`]. This closes
+/// the gap that existed when every field was `pub` and `Deserialize` was derived: a
+/// hand-edited `mcp.json` or a directly-constructed struct literal could previously skip
+/// validation entirely.
 ///
 /// `headers`, `env`, `args`, and `url` routinely carry secrets (e.g. an
 /// `Authorization: Bearer <token>` header, a `GITHUB_PERSONAL_ACCESS_TOKEN`
@@ -207,8 +277,8 @@ pub enum TransportType {
 ///     .arg("mcp-server".to_string())
 ///     .build().unwrap();
 ///
-/// assert_eq!(config.command, "docker");
-/// assert_eq!(config.args.len(), 2);
+/// assert_eq!(config.command(), "docker");
+/// assert_eq!(config.args().len(), 2);
 ///
 /// // HTTP transport
 /// let config = ServerConfig::builder()
@@ -258,107 +328,85 @@ pub enum TransportType {
 /// ```
 ///
 /// [`validate_server_config`]: fn.validate_server_config.html
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, PartialEq, Eq)]
 pub struct ServerConfig {
-    /// Transport type (stdio or http).
-    ///
-    /// Determines how the client communicates with the MCP server.
-    #[serde(default)]
-    pub transport: TransportType,
-
-    /// Command to execute (binary name or absolute path).
-    ///
-    /// **Only used for stdio transport.**
-    ///
-    /// Can be either:
-    /// - Binary name (e.g., "docker", "python") - resolved via PATH
-    /// - Absolute path (e.g., "/usr/local/bin/mcp-server")
-    #[serde(default)]
-    pub command: String,
-
-    /// Arguments to pass to command.
-    ///
-    /// **Only used for stdio transport.**
-    ///
-    /// Each argument is passed separately to avoid shell interpretation.
-    /// Do not include the command itself in arguments.
-    #[serde(default)]
-    pub args: Vec<String>,
-
-    /// Environment variables to set for the subprocess.
-    ///
-    /// **Only used for stdio transport.**
-    ///
-    /// These are added to (or override) the parent process environment.
-    /// Security validation blocks dangerous variables like `LD_PRELOAD`.
-    /// Values routinely hold secrets (e.g. `GITHUB_PERSONAL_ACCESS_TOKEN`); see
-    /// the redaction note on [`ServerConfig`]'s own doc comment.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-
-    /// Working directory for the subprocess (optional).
-    ///
-    /// **Only used for stdio transport.**
-    ///
-    /// If None, inherits the parent process working directory.
-    #[serde(default)]
-    pub cwd: Option<PathBuf>,
-
-    /// URL for HTTP transport.
-    ///
-    /// **Only used for HTTP transport.**
-    ///
-    /// Example: `https://api.example.com/mcp`
-    ///
-    /// This crate does not apply SSRF allowlisting to this URL — it is
-    /// treated like a `curl` target, appropriate for a local CLI tool.
-    /// Embedders that expose this config in a multi-tenant or server context
-    /// should apply their own URL allowlisting before connecting.
-    #[serde(default)]
-    pub url: Option<String>,
-
-    /// HTTP headers for HTTP transport.
-    ///
-    /// **Only used for HTTP transport.**
-    ///
-    /// Common headers include:
-    /// - `Authorization`: Authentication token
-    /// - `Content-Type`: Request content type
-    ///
-    /// Values routinely hold secrets (e.g. a bearer token); see the redaction
-    /// note on [`ServerConfig`]'s own doc comment.
-    #[serde(default)]
-    pub headers: HashMap<String, String>,
+    /// Transport-specific fields (command/args/env/cwd, or url/headers).
+    #[serde(flatten)]
+    transport: Transport,
 
     /// Timeout for establishing a connection to the server (handshake).
     ///
     /// Bounds how long `Introspector::discover_server` waits for the initial
     /// rmcp `serve` handshake before giving up. Defaults to 30 seconds.
     #[serde(default = "default_connect_timeout")]
-    pub connect_timeout: Duration,
+    connect_timeout: Duration,
 
     /// Timeout for the tool discovery call after a connection is established.
     ///
     /// Bounds how long `Introspector::discover_server` waits for
     /// `list_all_tools` to respond. Defaults to 30 seconds.
     #[serde(default = "default_discover_timeout")]
-    pub discover_timeout: Duration,
+    discover_timeout: Duration,
+}
+
+impl<'de> Deserialize<'de> for ServerConfig {
+    /// Deserializes into a private shadow shape and then runs
+    /// `validate_server_config` before returning, so a hand-edited `mcp.json` (or any other
+    /// JSON source) can never produce an unvalidated `ServerConfig` — see the "Security"
+    /// section on [`ServerConfig`]'s own doc comment.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(flatten)]
+            transport: Transport,
+            #[serde(default = "default_connect_timeout")]
+            connect_timeout: Duration,
+            #[serde(default = "default_discover_timeout")]
+            discover_timeout: Duration,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let config = Self {
+            transport: raw.transport,
+            connect_timeout: raw.connect_timeout,
+            discover_timeout: raw.discover_timeout,
+        };
+        crate::validate_server_config(&config).map_err(D::Error::custom)?;
+        Ok(config)
+    }
 }
 
 impl fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ServerConfig")
-            .field("transport", &self.transport)
-            .field(
-                "command",
-                &sanitize_path_for_error(Path::new(&self.command)),
-            )
-            .field("args", &RedactedItems(&self.args))
-            .field("env", &RedactedMapValues(&self.env))
-            .field("cwd", &self.cwd.as_deref().map(sanitize_path_for_error))
-            .field("url", &self.url.as_deref().map(RedactedUrl))
-            .field("headers", &RedactedMapValues(&self.headers))
-            .field("connect_timeout", &self.connect_timeout)
+        let mut s = f.debug_struct("ServerConfig");
+        match &self.transport {
+            Transport::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => {
+                s.field("transport", &"stdio")
+                    .field("command", &sanitize_path_for_error(Path::new(command)))
+                    .field("args", &RedactedItems(args))
+                    .field("env", &RedactedMapValues(env))
+                    .field("cwd", &cwd.as_deref().map(sanitize_path_for_error));
+            }
+            Transport::Http { url, headers } => {
+                s.field("transport", &"http")
+                    .field("url", &RedactedUrl(url))
+                    .field("headers", &RedactedMapValues(headers));
+            }
+            Transport::Sse { url, headers } => {
+                s.field("transport", &"sse")
+                    .field("url", &RedactedUrl(url))
+                    .field("headers", &RedactedMapValues(headers));
+            }
+        }
+        s.field("connect_timeout", &self.connect_timeout)
             .field("discover_timeout", &self.discover_timeout)
             .finish()
     }
@@ -381,25 +429,26 @@ impl ServerConfig {
         ServerConfigBuilder::default()
     }
 
-    /// Returns the transport type.
+    /// Returns the transport-specific configuration.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mcp_execution_core::{ServerConfig, TransportType};
+    /// use mcp_execution_core::{ServerConfig, Transport};
     ///
     /// let config = ServerConfig::builder()
     ///     .command("test".to_string())
     ///     .build().unwrap();
     ///
-    /// assert!(matches!(config.transport(), TransportType::Stdio));
+    /// assert!(matches!(config.transport(), Transport::Stdio { .. }));
     /// ```
     #[must_use]
-    pub const fn transport(&self) -> &TransportType {
+    pub const fn transport(&self) -> &Transport {
         &self.transport
     }
 
-    /// Returns the command as a string slice.
+    /// Returns the command as a string slice, or an empty string for a config that isn't
+    /// [`Transport::Stdio`].
     ///
     /// # Examples
     ///
@@ -414,10 +463,14 @@ impl ServerConfig {
     /// ```
     #[must_use]
     pub fn command(&self) -> &str {
-        &self.command
+        match &self.transport {
+            Transport::Stdio { command, .. } => command,
+            Transport::Http { .. } | Transport::Sse { .. } => "",
+        }
     }
 
-    /// Returns a slice of arguments.
+    /// Returns a slice of arguments, or an empty slice for a config that isn't
+    /// [`Transport::Stdio`].
     ///
     /// # Examples
     ///
@@ -433,10 +486,14 @@ impl ServerConfig {
     /// ```
     #[must_use]
     pub fn args(&self) -> &[String] {
-        &self.args
+        match &self.transport {
+            Transport::Stdio { args, .. } => args,
+            Transport::Http { .. } | Transport::Sse { .. } => &[],
+        }
     }
 
-    /// Returns a reference to the environment variables map.
+    /// Returns a reference to the environment variables map, or an empty map for a config
+    /// that isn't [`Transport::Stdio`].
     ///
     /// # Examples
     ///
@@ -451,11 +508,15 @@ impl ServerConfig {
     /// assert_eq!(config.env().get("VAR_NAME"), Some(&"var_value".to_string()));
     /// ```
     #[must_use]
-    pub const fn env(&self) -> &HashMap<String, String> {
-        &self.env
+    pub fn env(&self) -> &HashMap<String, String> {
+        match &self.transport {
+            Transport::Stdio { env, .. } => env,
+            Transport::Http { .. } | Transport::Sse { .. } => &EMPTY_MAP,
+        }
     }
 
-    /// Returns the working directory, if set.
+    /// Returns the working directory, if set. Always `None` for a config that isn't
+    /// [`Transport::Stdio`].
     ///
     /// # Examples
     ///
@@ -470,10 +531,14 @@ impl ServerConfig {
     /// ```
     #[must_use]
     pub const fn cwd(&self) -> Option<&PathBuf> {
-        self.cwd.as_ref()
+        match &self.transport {
+            Transport::Stdio { cwd, .. } => cwd.as_ref(),
+            Transport::Http { .. } | Transport::Sse { .. } => None,
+        }
     }
 
-    /// Returns the URL for HTTP transport, if set.
+    /// Returns the URL for HTTP/SSE transport, if set. Always `None` for
+    /// [`Transport::Stdio`].
     ///
     /// # Examples
     ///
@@ -488,10 +553,14 @@ impl ServerConfig {
     /// ```
     #[must_use]
     pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
+        match &self.transport {
+            Transport::Stdio { .. } => None,
+            Transport::Http { url, .. } | Transport::Sse { url, .. } => Some(url),
+        }
     }
 
-    /// Returns a reference to the HTTP headers map.
+    /// Returns a reference to the HTTP headers map, or an empty map for
+    /// [`Transport::Stdio`].
     ///
     /// # Examples
     ///
@@ -510,8 +579,11 @@ impl ServerConfig {
     /// assert_eq!(config.headers().get("Authorization"), Some(&"Bearer token".to_string()));
     /// ```
     #[must_use]
-    pub const fn headers(&self) -> &HashMap<String, String> {
-        &self.headers
+    pub fn headers(&self) -> &HashMap<String, String> {
+        match &self.transport {
+            Transport::Stdio { .. } => &EMPTY_MAP,
+            Transport::Http { headers, .. } | Transport::Sse { headers, .. } => headers,
+        }
     }
 
     /// Returns the connection (handshake) timeout.
@@ -553,6 +625,24 @@ impl ServerConfig {
     }
 }
 
+/// Which transport [`ServerConfigBuilder::build`] should assemble.
+///
+/// Internal to the builder only: unlike the public [`Transport`] enum (the assembled config's
+/// actual representation), this carries no data — the builder still accumulates
+/// `command`/`args`/`env`/`cwd`/`url`/`headers` as flat, independently-settable fields before
+/// `build()` decides, based on this discriminant, which of them become the final
+/// [`Transport`] variant's payload.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum TransportKind {
+    /// Stdio transport: subprocess communication via stdin/stdout.
+    #[default]
+    Stdio,
+    /// HTTP transport: communication via HTTP/HTTPS API.
+    Http,
+    /// SSE transport: Server-Sent Events for streaming communication.
+    Sse,
+}
+
 /// Builder for constructing `ServerConfig` instances.
 ///
 /// Provides a fluent API for building server configurations with
@@ -583,7 +673,7 @@ impl ServerConfig {
 /// [`ServerConfig`]'s doc comment.
 #[derive(Clone)]
 pub struct ServerConfigBuilder {
-    transport: TransportType,
+    transport: TransportKind,
     command: Option<String>,
     args: Vec<String>,
     env: HashMap<String, String>,
@@ -619,7 +709,7 @@ impl fmt::Debug for ServerConfigBuilder {
 impl Default for ServerConfigBuilder {
     fn default() -> Self {
         Self {
-            transport: TransportType::default(),
+            transport: TransportKind::default(),
             command: None,
             args: Vec::new(),
             env: HashMap::new(),
@@ -761,12 +851,8 @@ impl ServerConfigBuilder {
     /// ```
     #[must_use]
     pub fn http_transport(mut self, url: String) -> Self {
-        self.transport = TransportType::Http;
+        self.transport = TransportKind::Http;
         self.url = Some(url);
-        // Set a dummy command for HTTP transport so build() doesn't panic
-        if self.command.is_none() {
-            self.command = Some(String::new());
-        }
         self
     }
 
@@ -785,12 +871,8 @@ impl ServerConfigBuilder {
     /// ```
     #[must_use]
     pub fn sse_transport(mut self, url: String) -> Self {
-        self.transport = TransportType::Sse;
+        self.transport = TransportKind::Sse;
         self.url = Some(url);
-        // Set a dummy command for SSE transport so build() doesn't panic
-        if self.command.is_none() {
-            self.command = Some(String::new());
-        }
         self
     }
 
@@ -901,11 +983,9 @@ impl ServerConfigBuilder {
     /// performed by [`validate_server_config`] — shell metacharacters, forbidden environment
     /// variables, URL scheme, and header safety — before returning. A `ServerConfig` built
     /// through this method therefore cannot exist without having passed security
-    /// validation, closing the gap where a caller could construct a config via the builder
-    /// and forget to validate it before spawning a process. This is a builder-level
-    /// guarantee, not a type-level one: every field is `pub` and the type derives
-    /// `Deserialize`, so a `ServerConfig` obtained by other means (a struct literal,
-    /// `serde_json::from_str`) is not covered — see [`ServerConfig`]'s own "Security" section.
+    /// validation. Unlike before #313, this is now also a type-level guarantee: every other
+    /// way to obtain a `ServerConfig` (a struct literal, `serde_json::from_str`) is closed —
+    /// see [`ServerConfig`]'s own "Security" section.
     ///
     /// # Errors
     ///
@@ -952,8 +1032,8 @@ impl ServerConfigBuilder {
     /// spawn" — stay independently testable, while the public API only ever
     /// hands out a fully validated [`ServerConfig`].
     fn build_structural(self) -> crate::Result<ServerConfig> {
-        match self.transport {
-            TransportType::Stdio => {
+        let transport = match self.transport {
+            TransportKind::Stdio => {
                 let command = self.command.ok_or_else(|| crate::Error::ValidationError {
                     field: "command".to_string(),
                     reason: "command is required for stdio transport".to_string(),
@@ -966,55 +1046,42 @@ impl ServerConfigBuilder {
                     });
                 }
 
-                Ok(ServerConfig {
-                    transport: TransportType::Stdio,
+                Transport::Stdio {
                     command,
                     args: self.args,
                     env: self.env,
                     cwd: self.cwd,
-                    url: None,
-                    headers: HashMap::new(),
-                    connect_timeout: self.connect_timeout,
-                    discover_timeout: self.discover_timeout,
-                })
+                }
             }
-            TransportType::Http => {
+            TransportKind::Http => {
                 let url = self.url.ok_or_else(|| crate::Error::ValidationError {
                     field: "url".to_string(),
                     reason: "url is required for HTTP transport".to_string(),
                 })?;
 
-                Ok(ServerConfig {
-                    transport: TransportType::Http,
-                    command: String::new(),
-                    args: Vec::new(),
-                    env: HashMap::new(),
-                    cwd: None,
-                    url: Some(url),
+                Transport::Http {
+                    url,
                     headers: self.headers,
-                    connect_timeout: self.connect_timeout,
-                    discover_timeout: self.discover_timeout,
-                })
+                }
             }
-            TransportType::Sse => {
+            TransportKind::Sse => {
                 let url = self.url.ok_or_else(|| crate::Error::ValidationError {
                     field: "url".to_string(),
                     reason: "url is required for SSE transport".to_string(),
                 })?;
 
-                Ok(ServerConfig {
-                    transport: TransportType::Sse,
-                    command: String::new(),
-                    args: Vec::new(),
-                    env: HashMap::new(),
-                    cwd: None,
-                    url: Some(url),
+                Transport::Sse {
+                    url,
                     headers: self.headers,
-                    connect_timeout: self.connect_timeout,
-                    discover_timeout: self.discover_timeout,
-                })
+                }
             }
-        }
+        };
+
+        Ok(ServerConfig {
+            transport,
+            connect_timeout: self.connect_timeout,
+            discover_timeout: self.discover_timeout,
+        })
     }
 }
 
@@ -1029,10 +1096,10 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.command, "docker");
-        assert!(config.args.is_empty());
-        assert!(config.env.is_empty());
-        assert!(config.cwd.is_none());
+        assert_eq!(config.command(), "docker");
+        assert!(config.args().is_empty());
+        assert!(config.env().is_empty());
+        assert!(config.cwd().is_none());
     }
 
     #[test]
@@ -1045,8 +1112,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.command, "docker");
-        assert_eq!(config.args, vec!["run", "--rm", "mcp-server"]);
+        assert_eq!(config.command(), "docker");
+        assert_eq!(config.args(), vec!["run", "--rm", "mcp-server"]);
     }
 
     #[test]
@@ -1057,7 +1124,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.args, vec!["run", "--rm"]);
+        assert_eq!(config.args(), vec!["run", "--rm"]);
     }
 
     #[test]
@@ -1069,9 +1136,9 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.env.len(), 2);
-        assert_eq!(config.env.get("LOG_LEVEL"), Some(&"debug".to_string()));
-        assert_eq!(config.env.get("DEBUG"), Some(&"1".to_string()));
+        assert_eq!(config.env().len(), 2);
+        assert_eq!(config.env().get("LOG_LEVEL"), Some(&"debug".to_string()));
+        assert_eq!(config.env().get("DEBUG"), Some(&"1".to_string()));
     }
 
     #[test]
@@ -1086,7 +1153,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.env.len(), 2);
+        assert_eq!(config.env().len(), 2);
     }
 
     #[test]
@@ -1097,7 +1164,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.cwd, Some(PathBuf::from("/tmp")));
+        assert_eq!(config.cwd(), Some(&PathBuf::from("/tmp")));
     }
 
     #[test]
@@ -1113,10 +1180,10 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.command, "mcp-server");
-        assert_eq!(config.args.len(), 2);
-        assert_eq!(config.env.len(), 1);
-        assert_eq!(config.cwd, Some(PathBuf::from("/var/run")));
+        assert_eq!(config.command(), "mcp-server");
+        assert_eq!(config.args().len(), 2);
+        assert_eq!(config.env().len(), 1);
+        assert_eq!(config.cwd(), Some(&PathBuf::from("/var/run")));
     }
 
     #[test]
@@ -1372,9 +1439,8 @@ mod tests {
     }
 
     #[test]
-    fn test_transport_type_default() {
-        let transport = TransportType::default();
-        assert_eq!(transport, TransportType::Stdio);
+    fn test_transport_kind_default() {
+        assert_eq!(TransportKind::default(), TransportKind::Stdio);
     }
 
     #[test]
@@ -1384,10 +1450,13 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.transport, TransportType::Http);
+        assert!(matches!(config.transport(), Transport::Http { .. }));
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
-        assert!(config.headers.is_empty());
-        assert!(config.command.is_empty());
+        assert!(config.headers().is_empty());
+        assert!(config.command().is_empty());
+        assert!(config.args().is_empty());
+        assert!(config.env().is_empty());
+        assert_eq!(config.cwd(), None);
     }
 
     #[test]
@@ -1399,14 +1468,14 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.transport, TransportType::Http);
-        assert_eq!(config.headers.len(), 2);
+        assert!(matches!(config.transport(), Transport::Http { .. }));
+        assert_eq!(config.headers().len(), 2);
         assert_eq!(
-            config.headers.get("Authorization"),
+            config.headers().get("Authorization"),
             Some(&"Bearer token".to_string())
         );
         assert_eq!(
-            config.headers.get("Content-Type"),
+            config.headers().get("Content-Type"),
             Some(&"application/json".to_string())
         );
     }
@@ -1422,14 +1491,33 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.headers.len(), 1);
+        assert_eq!(config.headers().len(), 1);
     }
 
+    /// This does not call `.http_transport(...)`, so the builder's transport kind stays at its
+    /// `Stdio` default — it exercises `build_structural`'s "command is required" branch, not an
+    /// HTTP-specific one. See `test_server_config_http_build_missing_url` below for the actual
+    /// HTTP-missing-url branch.
     #[test]
-    fn test_server_config_http_build_missing_url() {
+    fn test_server_config_default_builder_build_missing_command() {
         let result = ServerConfig::builder().build();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("required"));
+    }
+
+    /// `TransportKind::Http` is only reachable through the public builder API via
+    /// `.http_transport(url)`, which always sets `url` in the same call — so this branch of
+    /// `build_structural` (url missing while the transport kind is `Http`) can't be reached
+    /// through any public builder method. Poke the private `transport` field directly, mirroring
+    /// `test_server_config_sse_build_missing_url` below, so the branch has coverage at all.
+    #[test]
+    fn test_server_config_http_build_missing_url() {
+        let mut builder = ServerConfig::builder();
+        builder.transport = TransportKind::Http;
+
+        let result = builder.build();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("url is required"));
     }
 
     #[test]
@@ -1440,7 +1528,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.transport(), &TransportType::Http);
+        assert!(matches!(config.transport(), Transport::Http { .. }));
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
         assert_eq!(config.headers().len(), 1);
     }
@@ -1452,7 +1540,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.transport, TransportType::Stdio);
+        assert!(matches!(config.transport(), Transport::Stdio { .. }));
     }
 
     #[test]
@@ -1462,10 +1550,47 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.transport, TransportType::Sse);
+        assert!(matches!(config.transport(), Transport::Sse { .. }));
         assert_eq!(config.url(), Some("https://api.example.com/sse"));
-        assert!(config.headers.is_empty());
-        assert!(config.command.is_empty());
+        assert!(config.headers().is_empty());
+        assert!(config.command().is_empty());
+        assert!(config.args().is_empty());
+        assert!(config.env().is_empty());
+        assert_eq!(config.cwd(), None);
+    }
+
+    /// The `Debug` impl's `Transport::Sse` arm (see `impl fmt::Debug for ServerConfig` above)
+    /// is otherwise never exercised — every other `Debug`-redaction test builds an `Http` or
+    /// `Stdio` config.
+    #[test]
+    fn test_server_config_debug_sse() {
+        let secret = "sk-secret-sse-header-value";
+        let config = ServerConfig::builder()
+            .sse_transport("https://api.example.com/sse".to_string())
+            .header("Authorization".to_string(), secret.to_string())
+            .build()
+            .unwrap();
+
+        let debug_str = format!("{config:?}");
+        assert!(debug_str.contains("api.example.com/sse"));
+        assert!(debug_str.contains("Authorization"));
+        assert!(!debug_str.contains(secret));
+    }
+
+    /// Companion to `test_server_config_serialize_still_contains_real_secret_values`, which
+    /// only exercises `Stdio`/`Http` round-tripping — `Sse` shares their `url`/`headers` shape
+    /// but had no round-trip test of its own.
+    #[test]
+    fn test_server_config_sse_serialize_deserialize_round_trip() {
+        let config = ServerConfig::builder()
+            .sse_transport("https://api.example.com/sse".to_string())
+            .header("Authorization".to_string(), "Bearer token".to_string())
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: ServerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, deserialized);
     }
 
     #[test]
@@ -1477,19 +1602,19 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.transport, TransportType::Sse);
-        assert_eq!(config.headers.len(), 2);
+        assert!(matches!(config.transport(), Transport::Sse { .. }));
+        assert_eq!(config.headers().len(), 2);
         assert_eq!(
-            config.headers.get("Authorization"),
+            config.headers().get("Authorization"),
             Some(&"Bearer token".to_string())
         );
-        assert_eq!(config.headers.get("X-Custom"), Some(&"value".to_string()));
+        assert_eq!(config.headers().get("X-Custom"), Some(&"value".to_string()));
     }
 
     #[test]
     fn test_server_config_sse_build_missing_url() {
         let mut builder = ServerConfig::builder();
-        builder.transport = TransportType::Sse;
+        builder.transport = TransportKind::Sse;
 
         let result = builder.build();
         assert!(result.is_err());
@@ -1497,24 +1622,72 @@ mod tests {
     }
 
     #[test]
-    fn test_transport_type_serialization() {
-        let stdio = TransportType::Stdio;
-        let http = TransportType::Http;
-        let sse = TransportType::Sse;
+    fn test_transport_serialization_tags_variant() {
+        let stdio = ServerConfig::builder()
+            .command("docker".to_string())
+            .build()
+            .unwrap();
+        let http = ServerConfig::builder()
+            .http_transport("https://api.example.com/mcp".to_string())
+            .build()
+            .unwrap();
+        let sse = ServerConfig::builder()
+            .sse_transport("https://api.example.com/sse".to_string())
+            .build()
+            .unwrap();
 
-        assert_eq!(serde_json::to_string(&stdio).unwrap(), "\"stdio\"");
-        assert_eq!(serde_json::to_string(&http).unwrap(), "\"http\"");
-        assert_eq!(serde_json::to_string(&sse).unwrap(), "\"sse\"");
+        assert!(
+            serde_json::to_string(&stdio)
+                .unwrap()
+                .contains(r#""transport":"stdio""#)
+        );
+        assert!(
+            serde_json::to_string(&http)
+                .unwrap()
+                .contains(r#""transport":"http""#)
+        );
+        assert!(
+            serde_json::to_string(&sse)
+                .unwrap()
+                .contains(r#""transport":"sse""#)
+        );
     }
 
     #[test]
-    fn test_transport_type_deserialization() {
-        let stdio: TransportType = serde_json::from_str("\"stdio\"").unwrap();
-        let http: TransportType = serde_json::from_str("\"http\"").unwrap();
-        let sse: TransportType = serde_json::from_str("\"sse\"").unwrap();
+    fn test_transport_deserialization_from_tag() {
+        let stdio: ServerConfig =
+            serde_json::from_str(r#"{"transport":"stdio","command":"docker"}"#).unwrap();
+        let http: ServerConfig =
+            serde_json::from_str(r#"{"transport":"http","url":"https://api.example.com/mcp"}"#)
+                .unwrap();
+        let sse: ServerConfig =
+            serde_json::from_str(r#"{"transport":"sse","url":"https://api.example.com/sse"}"#)
+                .unwrap();
 
-        assert_eq!(stdio, TransportType::Stdio);
-        assert_eq!(http, TransportType::Http);
-        assert_eq!(sse, TransportType::Sse);
+        assert!(matches!(stdio.transport(), Transport::Stdio { .. }));
+        assert!(matches!(http.transport(), Transport::Http { .. }));
+        assert!(matches!(sse.transport(), Transport::Sse { .. }));
+    }
+
+    /// #313 — the enum shape makes an incomplete Http config impossible to deserialize at
+    /// all: `url` is a required (non-`#[serde(default)]`) field of `Transport::Http`, so a
+    /// hand-edited `mcp.json` with `"transport": "http"` and no `url` key now fails at
+    /// deserialization time rather than silently producing an incomplete `ServerConfig` that
+    /// only `validate_server_config` would have caught downstream.
+    #[test]
+    fn test_deserialize_http_config_missing_url_is_rejected() {
+        let result: std::result::Result<ServerConfig, _> =
+            serde_json::from_str(r#"{"transport": "http"}"#);
+        assert!(result.is_err());
+    }
+
+    /// #313 — `Deserialize` itself now runs the same security validation `build()` does, so
+    /// a hand-edited `mcp.json` carrying a shell metacharacter fails to deserialize at all.
+    #[test]
+    fn test_deserialize_rejects_shell_metacharacters() {
+        let result: std::result::Result<ServerConfig, _> = serde_json::from_str(
+            r#"{"transport":"stdio","command":"docker","args":["run; rm -rf /"]}"#,
+        );
+        assert!(result.is_err());
     }
 }

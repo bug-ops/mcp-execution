@@ -40,7 +40,7 @@ let config = ServerConfig::builder()
     .env("LOG_LEVEL".to_string(), "debug".to_string())
     .build();
 
-let server_id = ServerId::new("github");
+let server_id = ServerId::new("github").unwrap();
 ```
 
 ### Domain Types
@@ -49,8 +49,8 @@ let server_id = ServerId::new("github");
 use mcp_execution_core::{ServerId, ToolName};
 
 // Type-safe identifiers prevent mixing up strings
-let server = ServerId::new("github");
-let tool = ToolName::new("create_issue");
+let server = ServerId::new("github").unwrap();
+let tool = ToolName::new("create_issue").unwrap();
 
 assert_eq!(server.as_str(), "github");
 assert_eq!(tool.as_str(), "create_issue");
@@ -109,7 +109,7 @@ validate_server_config(&config)?;
 | `ServerId` | Unique server identifier (newtype over String) |
 | `ToolName` | MCP tool name (newtype over String) |
 | `ServerConfig` | Server configuration with command, args, env |
-| `TransportType` | Transport type enum (Stdio, Http, Sse) |
+| `Transport` | Transport-specific config enum (Stdio, Http, Sse) |
 | `Error` | Error type with contextual information |
 | `Result<T>` | Alias for `std::result::Result<T, Error>` |
 

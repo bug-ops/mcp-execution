@@ -355,7 +355,7 @@ impl PendingGeneration {
     /// use std::path::PathBuf;
     ///
     /// # fn example(server_info: ServerInfo) {
-    /// let server_id = ServerId::new("github");
+    /// let server_id = ServerId::new("github").unwrap();
     /// let config = ServerConfig::builder()
     ///     .command("npx".to_string())
     ///     .arg("-y".to_string())
@@ -402,7 +402,7 @@ impl PendingGeneration {
     ///
     /// # fn example(server_info: ServerInfo) {
     /// let pending = PendingGeneration::new(
-    ///     ServerId::new("test"),
+    ///     ServerId::new("test").unwrap(),
     ///     server_info,
     ///     ServerConfig::builder().command("echo".to_string()).build().unwrap(),
     ///     None,
@@ -570,7 +570,7 @@ mod tests {
         use mcp_execution_core::ToolName;
         use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
-        let server_id = ServerId::new("test");
+        let server_id = ServerId::new("test").unwrap();
         let server_info = ServerInfo {
             id: server_id.clone(),
             name: "Test Server".to_string(),
@@ -581,7 +581,7 @@ mod tests {
                 supports_prompts: false,
             },
             tools: vec![ToolInfo {
-                name: ToolName::new("test_tool"),
+                name: ToolName::new("test_tool").unwrap(),
                 description: "Test tool description".to_string(),
                 input_schema: serde_json::json!({}),
                 output_schema: None,

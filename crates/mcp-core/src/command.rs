@@ -35,7 +35,7 @@
 //! assert!(err.is_security_error());
 //! ```
 
-use crate::{Error, Result, ServerConfig, TransportType};
+use crate::{Error, Result, ServerConfig, Transport};
 use std::path::Path;
 use std::time::Duration;
 
@@ -274,11 +274,8 @@ pub const fn forbidden_env_prefix() -> &'static str {
 /// - **Header names/values**: Must not contain control characters
 /// - **Timeout bounds**: `connect_timeout`/`discover_timeout` must be greater than zero and at
 ///   most `MAX_TIMEOUT` (600s)
-/// - **Element counts/lengths** (denial-of-service protection, CWE-400), checked
-///   unconditionally regardless of transport — see this module's `validate_size_bounds` — since
-///   `ServerConfig`'s `command`/`args`/`env` fields are all `#[serde(default)]` and can be
-///   populated for any transport by a hand-edited or hostile `mcp.json`/JSON payload even
-///   though the builder itself only ever populates them for stdio: at most `MAX_ARG_COUNT`
+/// - **Element counts/lengths** (denial-of-service protection, CWE-400) — see this module's
+///   `validate_stdio_size_bounds`/`validate_network_size_bounds`: at most `MAX_ARG_COUNT`
 ///   args, `MAX_ENV_COUNT` env vars, and `MAX_HEADER_COUNT` headers; at most `MAX_ARG_LEN`
 ///   bytes per command/argument/env-name/header-name, `MAX_ENV_VALUE_LEN` bytes per env
 ///   value, `MAX_HEADER_VALUE_LEN` bytes per header value, and `MAX_URL_LEN` bytes for the
@@ -344,16 +341,19 @@ pub const fn forbidden_env_prefix() -> &'static str {
 ///   unbounded wait would let a hung server block this non-interactive tool
 ///   forever (see the `validate_timeout` design note in this module)
 pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
-    // Bound `command`/`args`/`env` element counts/lengths unconditionally, before dispatching
-    // on transport: every field involved is `#[serde(default)]`, so a hand-edited or hostile
-    // `mcp.json`/JSON payload can populate them for an Http/Sse config even though the builder
-    // itself only ever does so for stdio (issue #198 S2) — see this function's own doc comment
-    // for the full rationale.
-    validate_size_bounds(config)?;
-
     match config.transport() {
-        TransportType::Stdio => validate_stdio_config(config)?,
-        TransportType::Http | TransportType::Sse => validate_network_config(config)?,
+        Transport::Stdio {
+            command, args, env, ..
+        } => {
+            // Element counts/lengths (denial-of-service protection, CWE-400) are bounded
+            // before the command-injection-specific checks below.
+            validate_stdio_size_bounds(command, args, env)?;
+            validate_stdio_config(command, args, env)?;
+        }
+        Transport::Http { url, headers } | Transport::Sse { url, headers } => {
+            validate_network_size_bounds(url, headers)?;
+            validate_network_config(url, headers)?;
+        }
     }
 
     // Validate timeout bounds. Zero fires immediately and breaks all
@@ -367,55 +367,40 @@ pub fn validate_server_config(config: &ServerConfig) -> Result<()> {
     Ok(())
 }
 
-/// Bounds `command`'s length, `args`' count/lengths, `env`'s count/lengths, and `headers`'
-/// count/lengths (denial-of-service protection, CWE-400), regardless of transport.
+/// Bounds `command`'s length and `args`'/`env`'s counts/lengths (denial-of-service
+/// protection, CWE-400) for a [`Transport::Stdio`] config.
 ///
-/// `ServerConfig`'s `command`/`args`/`env`/`headers` fields are all `#[serde(default)]` and
-/// carried unconditionally at the type level — only [`ServerConfigBuilder`](crate::ServerConfigBuilder)
-/// itself zeroes out the fields that don't match a config's transport, so a `ServerConfig`
-/// obtained by other means (a struct literal, or deserializing a hand-edited `mcp.json`) can
-/// still carry an unbounded `args`/`env` for `Http`/`Sse`, or an unbounded `headers` for
-/// `Stdio` (issue #198 S2, and the `headers` mirror of it caught in review as N1 — a hostile
-/// `mcp.json` with `"transport": "stdio"` and a giant `headers` map was otherwise still
-/// completely unbounded, since the header checks lived only in
-/// [`validate_network_config`], which never runs for `Stdio`). Called unconditionally from
-/// [`validate_server_config`], before the transport-specific dispatch, so none of these bounds
-/// can be bypassed by transport choice.
+/// Since #313, `Transport::Http`/`Transport::Sse` have no `command`/`args`/`env` fields at
+/// all — the cross-transport bypass this once guarded against (issue #198 S2: a hostile
+/// `mcp.json` populating `args`/`env` for a non-stdio transport) is unrepresentable rather
+/// than merely unchecked, so this only needs to run for the `Stdio` variant.
 ///
-/// Deliberately does not check for shell metacharacters, forbidden environment variable names,
-/// or the HTTP header-name token charset — those remain [`validate_stdio_config`]'s/
-/// [`validate_network_config`]'s responsibility, since they are only meaningful for a config
-/// that is actually used to spawn a subprocess or send an HTTP request, respectively.
-fn validate_size_bounds(config: &ServerConfig) -> Result<()> {
-    if config.command.len() > MAX_ARG_LEN {
+/// Deliberately does not check for shell metacharacters or forbidden environment variable
+/// names — that remains [`validate_stdio_config`]'s responsibility, since it is only
+/// meaningful for a config that is actually used to spawn a subprocess.
+fn validate_stdio_size_bounds(
+    command: &str,
+    args: &[String],
+    env: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    if command.len() > MAX_ARG_LEN {
         return Err(Error::SecurityViolation {
             reason: format!(
                 "command too long: {} bytes exceeds the {MAX_ARG_LEN} limit",
-                config.command.len()
+                command.len()
             ),
         });
     }
 
-    if let Some(url) = config.url()
-        && url.len() > MAX_URL_LEN
-    {
-        return Err(Error::SecurityViolation {
-            reason: format!(
-                "url too long: {} bytes exceeds the {MAX_URL_LEN} limit",
-                url.len()
-            ),
-        });
-    }
-
-    if config.args.len() > MAX_ARG_COUNT {
+    if args.len() > MAX_ARG_COUNT {
         return Err(Error::SecurityViolation {
             reason: format!(
                 "too many arguments: {} exceeds the {MAX_ARG_COUNT} limit",
-                config.args.len()
+                args.len()
             ),
         });
     }
-    for (idx, arg) in config.args.iter().enumerate() {
+    for (idx, arg) in args.iter().enumerate() {
         if arg.len() > MAX_ARG_LEN {
             return Err(Error::SecurityViolation {
                 reason: format!(
@@ -426,15 +411,15 @@ fn validate_size_bounds(config: &ServerConfig) -> Result<()> {
         }
     }
 
-    if config.env.len() > MAX_ENV_COUNT {
+    if env.len() > MAX_ENV_COUNT {
         return Err(Error::SecurityViolation {
             reason: format!(
                 "too many environment variables: {} exceeds the {MAX_ENV_COUNT} limit",
-                config.env.len()
+                env.len()
             ),
         });
     }
-    for (env_name, env_value) in &config.env {
+    for (env_name, env_value) in env {
         if env_name.len() > MAX_ARG_LEN {
             return Err(Error::SecurityViolation {
                 reason: format!(
@@ -455,15 +440,36 @@ fn validate_size_bounds(config: &ServerConfig) -> Result<()> {
         }
     }
 
-    if config.headers().len() > MAX_HEADER_COUNT {
+    Ok(())
+}
+
+/// Bounds `url`'s length and `headers`' count/lengths (denial-of-service protection,
+/// CWE-400) for a [`Transport::Http`]/[`Transport::Sse`] config.
+///
+/// See [`validate_stdio_size_bounds`]'s doc comment for why this only needs to run for its
+/// own variant family since #313.
+fn validate_network_size_bounds(
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    if url.len() > MAX_URL_LEN {
         return Err(Error::SecurityViolation {
             reason: format!(
-                "too many headers: {} exceeds the {MAX_HEADER_COUNT} limit",
-                config.headers().len()
+                "url too long: {} bytes exceeds the {MAX_URL_LEN} limit",
+                url.len()
             ),
         });
     }
-    for (name, value) in config.headers() {
+
+    if headers.len() > MAX_HEADER_COUNT {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "too many headers: {} exceeds the {MAX_HEADER_COUNT} limit",
+                headers.len()
+            ),
+        });
+    }
+    for (name, value) in headers {
         if name.len() > MAX_ARG_LEN {
             return Err(Error::SecurityViolation {
                 reason: format!(
@@ -489,26 +495,30 @@ fn validate_size_bounds(config: &ServerConfig) -> Result<()> {
 ///
 /// Checks the command (absolute path or binary name), arguments, and environment variables
 /// for command-injection risks. Element counts/lengths are already bounded unconditionally by
-/// [`validate_size_bounds`] before this runs; this function only adds the checks that are
-/// meaningful specifically because this config will be used to spawn a subprocess.
-fn validate_stdio_config(config: &ServerConfig) -> Result<()> {
+/// [`validate_stdio_size_bounds`] before this runs; this function only adds the checks that
+/// are meaningful specifically because this config will be used to spawn a subprocess.
+fn validate_stdio_config(
+    command: &str,
+    args: &[String],
+    env: &std::collections::HashMap<String, String>,
+) -> Result<()> {
     // Validate command
-    validate_command_string(&config.command, "command")?;
+    validate_command_string(command, "command")?;
 
     // If command is absolute path, perform additional checks
-    let command_path = Path::new(&config.command);
+    let command_path = Path::new(command);
     if command_path.is_absolute() {
-        validate_absolute_path(&config.command)?;
+        validate_absolute_path(command)?;
     }
     // If not absolute, it's a binary name (to be resolved via PATH) - this is OK
 
     // Validate each argument separately
-    for (idx, arg) in config.args.iter().enumerate() {
+    for (idx, arg) in args.iter().enumerate() {
         validate_command_string(arg, &format!("argument {idx}"))?;
     }
 
     // Validate environment variable names
-    for env_name in config.env.keys() {
+    for env_name in env.keys() {
         validate_env_name(env_name)?;
     }
 
@@ -517,21 +527,18 @@ fn validate_stdio_config(config: &ServerConfig) -> Result<()> {
 
 /// Validates the Http/Sse-transport-specific fields of a `ServerConfig`.
 ///
-/// `url` is `Option` at the type level and `#[serde(default)]`, so a
-/// hand-edited `mcp.json` with `"transport": "http"` and no `url` key
-/// deserializes successfully, bypassing `ServerConfigBuilder::build`'s
-/// "url required" check. This function is the actual enforcement point.
+/// `url` is a required field of [`Transport::Http`]/[`Transport::Sse`] (see #313), so unlike
+/// before, a config missing it cannot reach this function at all — that gap is now closed at
+/// deserialization/construction time rather than here.
 ///
 /// `headers`'/`url`'s element counts/lengths are already bounded unconditionally by
-/// [`validate_size_bounds`] before this runs; this function only adds the checks that are
-/// meaningful specifically because this config will be used to send an HTTP request (header
-/// name charset, control characters, scheme, duplicate names).
-fn validate_network_config(config: &ServerConfig) -> Result<()> {
-    let url = config.url().ok_or_else(|| Error::ValidationError {
-        field: "url".to_string(),
-        reason: "url is required for http/sse transport".to_string(),
-    })?;
-
+/// [`validate_network_size_bounds`] before this runs; this function only adds the checks that
+/// are meaningful specifically because this config will be used to send an HTTP request
+/// (header name charset, control characters, scheme, duplicate names).
+fn validate_network_config(
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
+) -> Result<()> {
     validate_url_scheme(url)?;
 
     // `http::HeaderName` lowercases on parse, so two headers that differ only
@@ -539,7 +546,7 @@ fn validate_network_config(config: &ServerConfig) -> Result<()> {
     // single entry with a nondeterministic winner once converted — reject
     // that here rather than letting it silently drop a header downstream.
     let mut seen_header_names = std::collections::HashSet::new();
-    for (name, value) in config.headers() {
+    for (name, value) in headers {
         validate_header_name_string(name)?;
         validate_header_value_string(value)?;
         if !seen_header_names.insert(name.to_ascii_lowercase()) {
@@ -707,7 +714,7 @@ fn validate_timeout(timeout: Duration, field: &str) -> Result<()> {
 ///
 /// This is an internal helper that checks a string (command or argument)
 /// for dangerous shell metacharacters. Length is already bounded unconditionally by
-/// [`validate_size_bounds`] before this runs.
+/// [`validate_stdio_size_bounds`] before this runs.
 ///
 /// # Security
 ///
@@ -785,7 +792,7 @@ fn validate_absolute_path(command: &str) -> Result<()> {
 /// Validates an environment variable name.
 ///
 /// This is an internal helper that checks if an environment variable name is in the
-/// forbidden list. Length is already bounded unconditionally by [`validate_size_bounds`]
+/// forbidden list. Length is already bounded unconditionally by [`validate_stdio_size_bounds`]
 /// before this runs.
 fn validate_env_name(name: &str) -> Result<()> {
     // Check for forbidden env names (exact match)
@@ -1277,39 +1284,23 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    /// Constructs an Http-transport config missing `url` via deserialization
-    /// rather than the builder, since `build()` already refuses this and
-    /// would mask the bug this test guards against: a hand-edited `mcp.json`
-    /// with `"transport": "http"` and no `url` key deserializes fine because
-    /// every field is `#[serde(default)]`.
-    fn deserialize_http_config_missing_url() -> ServerConfig {
-        serde_json::from_str(r#"{"transport": "http"}"#).expect("valid ServerConfig JSON")
-    }
-
+    /// #313 — `url` is a required (non-`#[serde(default)]`) field of `Transport::Http`, so a
+    /// hand-edited `mcp.json` with `"transport": "http"` and no `url` key now fails to
+    /// deserialize at all, rather than producing an incomplete `ServerConfig` that only
+    /// `validate_server_config` would have caught downstream (see also
+    /// `server_config::tests::test_deserialize_http_config_missing_url_is_rejected`).
     #[test]
     fn test_validate_server_config_http_missing_url_rejected() {
-        let config = deserialize_http_config_missing_url();
-        let result = validate_server_config(&config);
+        let result: std::result::Result<ServerConfig, _> =
+            serde_json::from_str(r#"{"transport": "http"}"#);
         assert!(result.is_err());
-        if let Err(Error::ValidationError { field, reason }) = result {
-            assert_eq!(field, "url");
-            assert!(reason.contains("required"));
-        } else {
-            panic!("expected ValidationError for missing url");
-        }
     }
 
     #[test]
     fn test_validate_server_config_sse_missing_url_rejected() {
-        let config: ServerConfig =
-            serde_json::from_str(r#"{"transport": "sse"}"#).expect("valid ServerConfig JSON");
-        let result = validate_server_config(&config);
+        let result: std::result::Result<ServerConfig, _> =
+            serde_json::from_str(r#"{"transport": "sse"}"#);
         assert!(result.is_err());
-        if let Err(Error::ValidationError { field, .. }) = result {
-            assert_eq!(field, "url");
-        } else {
-            panic!("expected ValidationError for missing url");
-        }
     }
 
     #[test]
@@ -1355,18 +1346,12 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_http_rejects_duplicate_header_case_insensitive() {
-        let mut config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build()
-            .unwrap();
-        config
-            .headers
-            .insert("Authorization".to_string(), "Bearer one".to_string());
-        config
-            .headers
-            .insert("authorization".to_string(), "Bearer two".to_string());
+            .header("Authorization".to_string(), "Bearer one".to_string())
+            .header("authorization".to_string(), "Bearer two".to_string())
+            .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("duplicate header"));
@@ -1385,18 +1370,12 @@ mod tests {
         // only `A-Za-z0-9-_.`. Such a name passes `validate_header_name_string`
         // and must not be echoed if it collides case-insensitively.
         let secret_name = "eyJhbGciOiJIUzI1NiJ9.super-secret-token-material";
-        let mut config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build()
-            .unwrap();
-        config
-            .headers
-            .insert(secret_name.to_string(), "value one".to_string());
-        config
-            .headers
-            .insert(secret_name.to_ascii_uppercase(), "value two".to_string());
+            .header(secret_name.to_string(), "value one".to_string())
+            .header(secret_name.to_ascii_uppercase(), "value two".to_string())
+            .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("duplicate header"));
@@ -1416,15 +1395,11 @@ mod tests {
         // Space, ':', and '@' are not control characters but are still
         // invalid HTTP header-name characters (outside RFC 7230's `token`).
         for bad_name in ["X Bad Header", "X:Bad", "X@Bad"] {
-            let mut config = ServerConfig::builder()
+            let result = ServerConfig::builder()
                 .http_transport("https://api.example.com/mcp".to_string())
-                .build()
-                .unwrap();
-            config
-                .headers
-                .insert(bad_name.to_string(), "value".to_string());
+                .header(bad_name.to_string(), "value".to_string())
+                .build();
 
-            let result = validate_server_config(&config);
             assert!(result.is_err(), "should reject header name: {bad_name}");
             if let Err(Error::SecurityViolation { reason }) = result {
                 assert!(reason.contains("header name"));
@@ -1443,15 +1418,11 @@ mod tests {
         // reach `validate_header_name_string`'s tchar-violation branch,
         // which must not echo it back.
         let secret_name = "aGVsbG8/d29ybGQK=supersecretpayload";
-        let mut config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build()
-            .unwrap();
-        config
-            .headers
-            .insert(secret_name.to_string(), "value".to_string());
+            .header(secret_name.to_string(), "value".to_string())
+            .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("header name"));
@@ -1464,15 +1435,11 @@ mod tests {
 
     #[test]
     fn test_validate_server_config_http_rejects_control_char_in_header_name() {
-        let mut config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build()
-            .unwrap();
-        config
-            .headers
-            .insert("X-Bad\r\nHeader".to_string(), "value".to_string());
+            .header("X-Bad\r\nHeader".to_string(), "value".to_string())
+            .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("header name"));
@@ -1514,15 +1481,11 @@ mod tests {
         // paired with a control character in the *value*. Both the name and
         // the control-char-bearing value must be absent from the error.
         let secret_name = "eyJhbGciOiJIUzI1NiJ9.abc-secret_material";
-        let mut config = ServerConfig::builder()
+        let result = ServerConfig::builder()
             .http_transport("https://api.example.com/mcp".to_string())
-            .build()
-            .unwrap();
-        config
-            .headers
-            .insert(secret_name.to_string(), "x\ry".to_string());
+            .header(secret_name.to_string(), "x\ry".to_string())
+            .build();
 
-        let result = validate_server_config(&config);
         assert!(result.is_err());
         if let Err(Error::SecurityViolation { reason }) = result {
             assert!(reason.contains("header value"));
@@ -1720,56 +1683,18 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ── S2: Http/Sse configs must not bypass args/env/command/url bounds ────────
+    // ── #313: cross-transport fields are now unrepresentable ────────────────────
     //
-    // `ServerConfigBuilder::try_build` always zeroes `args`/`env` for Http/Sse transport (and
-    // `headers` for Stdio), so these bounds can only be exercised on such a config via direct
-    // deserialization — mirroring `deserialize_http_config_missing_url` above — the same
-    // "hand-edited or hostile mcp.json" scenario that motivates `validate_network_config`'s own
-    // doc comment.
+    // The S2/N1 bypass this section used to guard against (a hand-edited `mcp.json`
+    // populating `args`/`env`/`headers`/`url`/`command` for the "wrong" transport, since every
+    // field used to exist unconditionally at the type level) is closed by construction as of
+    // #313: `Transport::Http`/`Transport::Sse` have no `command`/`args`/`env`/`cwd` fields, and
+    // `Transport::Stdio` has no `url`/`headers` fields. A JSON key that doesn't belong to the
+    // deserialized variant has no field to populate, so `serde` simply ignores it — the same as
+    // any other unrecognized key — rather than it being a bypass.
 
     #[test]
-    fn test_validate_server_config_http_rejects_oversized_args_via_deserialization() {
-        let args: Vec<String> = (0..=MAX_ARG_COUNT).map(|i| format!("a{i}")).collect();
-        let json = serde_json::json!({
-            "transport": "http",
-            "url": "https://api.example.com/mcp",
-            "args": args,
-        });
-        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
-
-        let result = validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("too many arguments"));
-        } else {
-            panic!("expected SecurityViolation for too many arguments on http transport");
-        }
-    }
-
-    #[test]
-    fn test_validate_server_config_http_rejects_oversized_env_via_deserialization() {
-        let env: HashMap<String, String> = (0..=MAX_ENV_COUNT)
-            .map(|i| (format!("VAR_{i}"), "value".to_string()))
-            .collect();
-        let json = serde_json::json!({
-            "transport": "http",
-            "url": "https://api.example.com/mcp",
-            "env": env,
-        });
-        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
-
-        let result = validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("too many environment variables"));
-        } else {
-            panic!("expected SecurityViolation for too many env vars on http transport");
-        }
-    }
-
-    #[test]
-    fn test_validate_server_config_http_rejects_oversized_command_via_deserialization() {
+    fn test_deserialize_ignores_cross_transport_command_field() {
         let json = serde_json::json!({
             "transport": "http",
             "url": "https://api.example.com/mcp",
@@ -1777,20 +1702,14 @@ mod tests {
         });
         let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
 
-        let result = validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("command too long"));
-        } else {
-            panic!("expected SecurityViolation for oversized command on http transport");
-        }
+        // An Http config has no `command` field to populate, so the oversized value was never
+        // stored anywhere and is not a resource-exhaustion vector.
+        assert!(config.command().is_empty());
+        assert!(validate_server_config(&config).is_ok());
     }
 
     #[test]
-    fn test_validate_server_config_stdio_rejects_oversized_headers_via_deserialization() {
-        // N1 (review follow-up to S2): `headers` is normally only populated for Http/Sse, but
-        // the field exists unconditionally at the type level too, and a hand-edited/hostile
-        // `mcp.json` with `"transport": "stdio"` can still populate it.
+    fn test_deserialize_ignores_cross_transport_headers_field() {
         let headers: HashMap<String, String> = (0..=MAX_HEADER_COUNT)
             .map(|i| (format!("X-Header-{i}"), "value".to_string()))
             .collect();
@@ -1801,73 +1720,8 @@ mod tests {
         });
         let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
 
-        let result = validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("too many headers"));
-        } else {
-            panic!("expected SecurityViolation for too many headers on stdio transport");
-        }
-    }
-
-    #[test]
-    fn test_validate_server_config_stdio_rejects_oversized_header_value_via_deserialization() {
-        let mut headers = HashMap::new();
-        headers.insert("X-Custom".to_string(), "v".repeat(MAX_HEADER_VALUE_LEN + 1));
-        let json = serde_json::json!({
-            "transport": "stdio",
-            "command": "docker",
-            "headers": headers,
-        });
-        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
-
-        let result = validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("header value too long"));
-        } else {
-            panic!("expected SecurityViolation for oversized header value on stdio transport");
-        }
-    }
-
-    #[test]
-    fn test_validate_server_config_stdio_rejects_oversized_header_name_via_deserialization() {
-        let mut headers = HashMap::new();
-        headers.insert("a".repeat(MAX_ARG_LEN + 1), "value".to_string());
-        let json = serde_json::json!({
-            "transport": "stdio",
-            "command": "docker",
-            "headers": headers,
-        });
-        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
-
-        let result = validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("header name too long"));
-        } else {
-            panic!("expected SecurityViolation for oversized header name on stdio transport");
-        }
-    }
-
-    #[test]
-    fn test_validate_server_config_stdio_rejects_oversized_url_via_deserialization() {
-        // Symmetric to the headers bypass above: `url` exists unconditionally at the type
-        // level too, and `validate_stdio_config` never inspects it.
-        let json = serde_json::json!({
-            "transport": "stdio",
-            "command": "docker",
-            "url": format!("https://example.com/{}", "a".repeat(MAX_URL_LEN)),
-        });
-        let config: ServerConfig = serde_json::from_value(json).expect("valid ServerConfig JSON");
-
-        let result = validate_server_config(&config);
-        assert!(result.is_err());
-        if let Err(Error::SecurityViolation { reason }) = result {
-            assert!(reason.contains("url too long"));
-        } else {
-            panic!("expected SecurityViolation for oversized url on stdio transport");
-        }
+        assert!(config.headers().is_empty());
+        assert!(validate_server_config(&config).is_ok());
     }
 
     #[test]

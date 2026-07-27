@@ -65,7 +65,7 @@ async fn test_state_manager_workflow() {
     let state = StateManager::new();
 
     // Create test server info
-    let server_id = ServerId::new("test-server");
+    let server_id = ServerId::new("test-server").unwrap();
     let server_info = create_test_server_info(server_id.clone());
 
     let config = ServerConfig::builder()
@@ -100,7 +100,7 @@ async fn test_multiple_concurrent_sessions() {
     // Create multiple pending generations
     let mut sessions = Vec::new();
     for i in 0..5 {
-        let server_id = ServerId::new(&format!("server-{i}"));
+        let server_id = ServerId::new(&format!("server-{i}")).unwrap();
         let server_info = ServerInfo {
             id: server_id.clone(),
             name: format!("Server {i}"),
@@ -140,7 +140,7 @@ async fn test_multiple_concurrent_sessions() {
 async fn test_state_manager_handles_expiration() {
     let state = StateManager::new();
 
-    let server_id = ServerId::new("test");
+    let server_id = ServerId::new("test").unwrap();
     let server_info = create_test_server_info(server_id.clone());
     let config = ServerConfig::builder()
         .command("echo".to_string())
@@ -336,7 +336,7 @@ fn create_test_server_info(server_id: ServerId) -> ServerInfo {
             supports_prompts: false,
         },
         tools: vec![ToolInfo {
-            name: ToolName::new("test_tool"),
+            name: ToolName::new("test_tool").unwrap(),
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -351,7 +351,7 @@ fn create_test_server_info(server_id: ServerId) -> ServerInfo {
 }
 
 fn create_test_pending(server_id_str: &str) -> PendingGeneration {
-    let server_id = ServerId::new(server_id_str);
+    let server_id = ServerId::new(server_id_str).unwrap();
     let server_info = create_test_server_info(server_id.clone());
     let config = ServerConfig::builder()
         .command("echo".to_string())

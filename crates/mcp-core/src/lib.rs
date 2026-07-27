@@ -25,7 +25,7 @@
 //!     .unwrap();
 //!
 //! // Server ID
-//! let server_id = ServerId::new("github");
+//! let server_id = ServerId::new("github").unwrap();
 //! ```
 
 #![deny(unsafe_code)]
@@ -46,10 +46,10 @@ pub mod untrusted;
 pub use error::{Error, Result};
 
 // Re-export domain types
-pub use types::{ServerId, ToolName};
+pub use types::{ServerId, ServerIdError, ToolName, ToolNameError};
 
 // Re-export server configuration types
-pub use server_config::{ServerConfig, ServerConfigBuilder, TransportType};
+pub use server_config::{ServerConfig, ServerConfigBuilder, Transport};
 
 // Re-export command validation
 pub use command::{
@@ -59,7 +59,7 @@ pub use command::{
 };
 
 // Re-export path helpers shared by confinement checks
-pub use path::{sanitize_path_for_error, validate_path_segment};
+pub use path::{contains_parent_dir, sanitize_path_for_error, validate_path_segment};
 
 // Re-export Debug-redaction helpers shared by secret-shaped fields
 pub use redact::{REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl};

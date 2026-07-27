@@ -25,7 +25,7 @@ fn test_introspector_default() {
 #[test]
 fn test_server_info_creation() {
     let info = ServerInfo {
-        id: ServerId::new("test-server"),
+        id: ServerId::new("test-server").unwrap(),
         name: "Test Server".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![],
@@ -47,7 +47,7 @@ fn test_server_info_creation() {
 #[test]
 fn test_tool_info_creation() {
     let tool = ToolInfo {
-        name: ToolName::new("send_message"),
+        name: ToolName::new("send_message").unwrap(),
         description: "Sends a message to a chat".to_string(),
         input_schema: json!({
             "type": "object",
@@ -74,7 +74,7 @@ fn test_tool_info_creation() {
 #[test]
 fn test_get_nonexistent_server() {
     let introspector = Introspector::new();
-    let server_id = ServerId::new("nonexistent");
+    let server_id = ServerId::new("nonexistent").unwrap();
 
     assert!(introspector.get_server(&server_id).is_none());
 }
@@ -83,7 +83,7 @@ fn test_get_nonexistent_server() {
 #[test]
 fn test_server_removal() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test");
+    let server_id = ServerId::new("test").unwrap();
 
     // Remove nonexistent server
     assert!(!introspector.remove_server(&server_id));
@@ -136,7 +136,7 @@ fn test_server_count() {
 #[test]
 fn test_server_info_serialization() {
     let info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test Server".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![],
@@ -162,7 +162,7 @@ fn test_server_info_serialization() {
 #[test]
 fn test_tool_info_serialization() {
     let tool = ToolInfo {
-        name: ToolName::new("test_tool"),
+        name: ToolName::new("test_tool").unwrap(),
         description: "Test tool description".to_string(),
         input_schema: json!({"type": "object"}),
         output_schema: None,
@@ -244,7 +244,7 @@ async fn test_concurrent_introspector_access() {
 #[test]
 fn test_server_info_debug() {
     let info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test Server".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![],
@@ -264,7 +264,7 @@ fn test_server_info_debug() {
 #[test]
 fn test_tool_info_debug() {
     let tool = ToolInfo {
-        name: ToolName::new("test"),
+        name: ToolName::new("test").unwrap(),
         description: "Description".to_string(),
         input_schema: json!({}),
         output_schema: None,
@@ -291,7 +291,7 @@ fn test_invalid_command_rejection() {
 #[test]
 fn test_empty_tool_list() {
     let info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![],
@@ -334,7 +334,7 @@ fn test_complex_tool_schema() {
     });
 
     let tool = ToolInfo {
-        name: ToolName::new("complex_tool"),
+        name: ToolName::new("complex_tool").unwrap(),
         description: "A tool with complex schema".to_string(),
         input_schema: complex_schema,
         output_schema: Some(json!({"type": "boolean"})),
@@ -399,7 +399,7 @@ fn test_discover_server_shell_operators() {
 #[tokio::test]
 async fn test_discover_server_nonexistent_command() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test");
+    let server_id = ServerId::new("test").unwrap();
 
     // A bare (non-absolute) binary name passes construction-time validation
     // (it's resolved via PATH at spawn time), so the failure below comes
@@ -418,7 +418,7 @@ async fn test_discover_server_nonexistent_command() {
 #[test]
 fn test_tool_info_empty_description() {
     let tool = ToolInfo {
-        name: ToolName::new("test"),
+        name: ToolName::new("test").unwrap(),
         description: String::new(),
         input_schema: json!({"type": "null"}),
         output_schema: None,
@@ -460,7 +460,7 @@ fn test_server_capabilities_all_disabled() {
 #[test]
 fn test_server_info_clone() {
     let info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![],
@@ -481,7 +481,7 @@ fn test_server_info_clone() {
 #[test]
 fn test_tool_info_clone() {
     let tool = ToolInfo {
-        name: ToolName::new("test"),
+        name: ToolName::new("test").unwrap(),
         description: "Test".to_string(),
         input_schema: json!({}),
         output_schema: None,
@@ -521,7 +521,7 @@ fn test_list_servers_references() {
 #[test]
 fn test_get_server_reference() {
     let introspector = Introspector::new();
-    let server_id = ServerId::new("test");
+    let server_id = ServerId::new("test").unwrap();
 
     let server = introspector.get_server(&server_id);
     assert!(server.is_none());
@@ -531,7 +531,7 @@ fn test_get_server_reference() {
 #[test]
 fn test_remove_server_return_value() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test");
+    let server_id = ServerId::new("test").unwrap();
 
     // Remove non-existent - should return false
     assert!(!introspector.remove_server(&server_id));
@@ -543,7 +543,7 @@ fn test_remove_server_return_value() {
 fn test_server_info_with_many_tools() {
     let tools: Vec<ToolInfo> = (0..100)
         .map(|i| ToolInfo {
-            name: ToolName::new(&format!("tool_{i}")),
+            name: ToolName::new(&format!("tool_{i}")).unwrap(),
             description: format!("Tool number {i}"),
             input_schema: json!({"type": "object"}),
             output_schema: None,
@@ -551,7 +551,7 @@ fn test_server_info_with_many_tools() {
         .collect();
 
     let info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test".to_string(),
         version: "1.0.0".to_string(),
         tools,
@@ -570,7 +570,7 @@ fn test_server_info_with_many_tools() {
 #[test]
 fn test_tool_info_null_schema() {
     let tool = ToolInfo {
-        name: ToolName::new("test"),
+        name: ToolName::new("test").unwrap(),
         description: "Test".to_string(),
         input_schema: json!(null),
         output_schema: Some(json!(null)),
@@ -584,7 +584,7 @@ fn test_tool_info_null_schema() {
 #[test]
 fn test_server_info_special_chars() {
     let info = ServerInfo {
-        id: ServerId::new("test-server-123"),
+        id: ServerId::new("test-server-123").unwrap(),
         name: "Test Server (v1.0) [beta]".to_string(),
         version: "1.0.0-alpha.1+build.123".to_string(),
         tools: vec![],
@@ -605,7 +605,7 @@ fn test_tool_info_long_description() {
     let long_desc = "a".repeat(10000);
 
     let tool = ToolInfo {
-        name: ToolName::new("test"),
+        name: ToolName::new("test").unwrap(),
         description: long_desc.clone(),
         input_schema: json!({}),
         output_schema: None,
@@ -672,7 +672,7 @@ fn test_tool_info_nested_schema() {
     });
 
     let tool = ToolInfo {
-        name: ToolName::new("nested"),
+        name: ToolName::new("nested").unwrap(),
         description: "Nested schema test".to_string(),
         input_schema: nested_schema.clone(),
         output_schema: Some(nested_schema),
@@ -686,14 +686,14 @@ fn test_tool_info_nested_schema() {
 #[test]
 fn test_server_info_serialization_with_tools() {
     let tool = ToolInfo {
-        name: ToolName::new("test_tool"),
+        name: ToolName::new("test_tool").unwrap(),
         description: "Test".to_string(),
         input_schema: json!({"type": "object"}),
         output_schema: None,
     };
 
     let info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test Server".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![tool],

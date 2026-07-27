@@ -161,6 +161,28 @@ pub fn validate_path_segment(segment: &str) -> Option<Component<'_>> {
     }
 }
 
+/// Returns `true` if `path` contains a `..` (parent-directory) component.
+///
+/// Shared by every crate that confines a caller-supplied path to a base directory
+/// (`mcp-execution-skill`'s `output_path`, `mcp-execution-server`'s `output_dir`,
+/// `mcp-execution-cli`'s skill commands), so the traversal check itself has one
+/// implementation rather than three copies that could silently drift apart.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::contains_parent_dir;
+/// use std::path::Path;
+///
+/// assert!(contains_parent_dir(Path::new("../secret")));
+/// assert!(contains_parent_dir(Path::new("a/../b")));
+/// assert!(!contains_parent_dir(Path::new("a/b")));
+/// ```
+#[must_use]
+pub fn contains_parent_dir(path: &Path) -> bool {
+    path.components().any(|c| matches!(c, Component::ParentDir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +206,19 @@ mod tests {
     #[test]
     fn validate_path_segment_rejects_path_separator() {
         assert!(validate_path_segment("a/b").is_none());
+    }
+
+    #[test]
+    fn contains_parent_dir_detects_traversal() {
+        // Bare `..`.
+        assert!(contains_parent_dir(Path::new("..")));
+        // Leading position.
+        assert!(contains_parent_dir(Path::new("../b")));
+        // Middle position.
+        assert!(contains_parent_dir(Path::new("a/../b")));
+        // Trailing position.
+        assert!(contains_parent_dir(Path::new("a/..")));
+        assert!(!contains_parent_dir(Path::new("a/b")));
     }
 
     #[test]

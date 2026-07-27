@@ -417,8 +417,7 @@ fn validate_output_path(path: &Path) -> Result<()> {
 ///
 /// Uses path component analysis instead of string matching for robustness.
 fn has_path_traversal(path: &Path) -> bool {
-    use std::path::Component;
-    path.components().any(|c| matches!(c, Component::ParentDir))
+    mcp_execution_core::contains_parent_dir(path)
 }
 
 #[cfg(test)]
