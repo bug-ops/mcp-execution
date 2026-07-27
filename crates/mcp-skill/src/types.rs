@@ -239,7 +239,7 @@ pub struct SkillMetadata {
 
 /// Errors returned by [`validate_server_id`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum ServerIdError {
+pub enum SkillServerIdError {
     /// `server_id` was empty.
     ///
     /// An empty `server_id` would collapse a per-server confinement
@@ -277,7 +277,7 @@ pub enum ServerIdError {
 ///
 /// # Errors
 ///
-/// Returns [`ServerIdError`] if:
+/// Returns [`SkillServerIdError`] if:
 /// - Empty
 /// - Length exceeds 64 characters
 /// - Contains characters other than lowercase letters, digits, and hyphens
@@ -299,17 +299,17 @@ pub enum ServerIdError {
 /// assert!(validate_server_id("GitHub").is_err()); // uppercase
 /// assert!(validate_server_id("my_server").is_err()); // underscore
 /// ```
-pub fn validate_server_id(server_id: &str) -> Result<(), ServerIdError> {
+pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError> {
     // Check emptiness (the character-class check below is vacuously true for
     // an empty string, and an empty server_id would collapse a per-server
     // confinement directory back to its shared parent)
     if server_id.is_empty() {
-        return Err(ServerIdError::Empty);
+        return Err(SkillServerIdError::Empty);
     }
 
     // Check length
     if server_id.len() > MAX_SERVER_ID_LENGTH {
-        return Err(ServerIdError::TooLong {
+        return Err(SkillServerIdError::TooLong {
             len: server_id.len(),
             limit: MAX_SERVER_ID_LENGTH,
         });
@@ -320,7 +320,7 @@ pub fn validate_server_id(server_id: &str) -> Result<(), ServerIdError> {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(ServerIdError::InvalidCharacters);
+        return Err(SkillServerIdError::InvalidCharacters);
     }
 
     Ok(())
@@ -370,25 +370,25 @@ mod tests {
     #[test]
     fn test_validate_server_id_empty() {
         let result = validate_server_id("");
-        assert_eq!(result, Err(ServerIdError::Empty));
+        assert_eq!(result, Err(SkillServerIdError::Empty));
     }
 
     #[test]
     fn test_validate_server_id_uppercase() {
         let result = validate_server_id("GitHub");
-        assert_eq!(result, Err(ServerIdError::InvalidCharacters));
+        assert_eq!(result, Err(SkillServerIdError::InvalidCharacters));
     }
 
     #[test]
     fn test_validate_server_id_underscore() {
         let result = validate_server_id("my_server");
-        assert_eq!(result, Err(ServerIdError::InvalidCharacters));
+        assert_eq!(result, Err(SkillServerIdError::InvalidCharacters));
     }
 
     #[test]
     fn test_validate_server_id_special_chars() {
         let result = validate_server_id("my@server");
-        assert_eq!(result, Err(ServerIdError::InvalidCharacters));
+        assert_eq!(result, Err(SkillServerIdError::InvalidCharacters));
     }
 
     #[test]
@@ -397,7 +397,7 @@ mod tests {
         let result = validate_server_id(&long_id);
         assert_eq!(
             result,
-            Err(ServerIdError::TooLong {
+            Err(SkillServerIdError::TooLong {
                 len: 65,
                 limit: MAX_SERVER_ID_LENGTH
             })

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-skill`**: renamed the `pub enum ServerIdError` (returned by
+  `validate_server_id`) to `SkillServerIdError` to remove a name collision with the unrelated
+  `mcp_execution_core::ServerIdError` enum in the same workspace, which was a rename hazard for
+  glob imports and auto-import. Pure rename — variants (`Empty`, `TooLong`, `InvalidCharacters`)
+  and validation behavior are unchanged (#329).
 - **`mcp-execution-cli`**: `introspect` and `generate` now flatten a shared `ServerFlags`
   (private fields, `cli.rs`) instead of each declaring its own copy of the transport/timeout
   flags. A single clap `ArgGroup` (`server_source`, over `from_config`/`server`/`http`/`sse`)
