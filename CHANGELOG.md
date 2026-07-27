@@ -9,13 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`mcp-execution-core`**: `Transport` now has its own hand-written `Debug` impl, redacting
+  `args`/`env`/`headers`/`url` the same way as `ServerConfig`'s existing impl, instead of
+  deriving a plain `Debug` that echoed every secret verbatim. This closes the gap noted below
+  (#336, #345): `Transport` was the only secret-bearing type in the workspace without its own
+  redacting `Debug` impl, so formatting a bare `&Transport` (e.g. from `ServerConfig::transport()`)
+  still leaked header/env values, args, and URL userinfo/query even after `introspect --verbose`
+  was fixed to format `ServerConfig` instead.
+- **`mcp-execution-cli`**: `server list`/`server info`/`server validate` no longer print a stdio
+  entry's raw `args` or an http/sse entry's raw `url` verbatim in their unconditional (non-verbose)
+  output. `build_command_string` now redacts both: an argument is replaced wholesale with the
+  `REDACTED_PLACEHOLDER` constant, rendered as a space-joined shell-shaped string rather than
+  `RedactedItems`'s `Debug`-list syntax (which would otherwise land as literal `Debug` output
+  inside `--format json`'s `command` field); a URL has its userinfo/query stripped via
+  `RedactedUrl` while keeping scheme/host/path readable. `command` itself is routed through
+  `sanitize_path_for_error`, the same home-directory/username scrub `ServerConfig`/`McpTransport`/
+  `Transport` already apply to it — not a secret, but an absolute path leaks the OS username.
+  `validate_command`'s "URL is not well-formed" precheck message (reached before
+  `build_command_string` even runs) is also redacted via the same `RedactedUrl` helper, closing a
+  gap where a malformed-but-still-credentialed URL leaked through that message even though the
+  `command` field next to it was already redacted (#346).
 - **`mcp-execution-cli`**: `introspect --verbose` no longer logs the raw HTTP/SSE header values or
   stdio environment variable values from the resolved `ServerConfig` at INFO level. The log line
   previously formatted `config.transport()` (`&Transport`, plain derived `Debug`) directly; it now
   formats `config` (`ServerConfig`), whose existing hand-written `Debug` impl already redacts
-  header/env values, args, and URL userinfo/query. `mcp_execution_core::Transport` itself still
-  derives a plain `Debug` and remains unredacted if formatted directly elsewhere — tracked
-  separately (#336, #345).
+  header/env values, args, and URL userinfo/query (#336).
 - **`deny.toml`**: `[advisories]` now sets `unsound = "all"`, closing the gap where cargo-deny's
   default (`"workspace"`) silently drops RUSTSEC "unsound" advisories against transitive
   dependencies such as `unsafe-libyaml-norway` (reached via `mcp-skill -> serde_norway ->

@@ -98,7 +98,7 @@ static EMPTY_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(HashMap::new
 ///
 /// assert!(matches!(config.transport(), Transport::Stdio { .. }));
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "transport", rename_all = "lowercase")]
 pub enum Transport {
     /// Stdio transport: subprocess communication via stdin/stdout.
@@ -168,6 +168,56 @@ pub enum Transport {
         #[serde(default)]
         headers: HashMap<String, String>,
     },
+}
+
+impl fmt::Debug for Transport {
+    /// Redacts the same fields, the same way, as [`ServerConfig`]'s own hand-written impl —
+    /// see the "Security" section on that type's doc comment for the full rationale. Kept as a
+    /// standalone impl (rather than `ServerConfig` delegating to it) so each type's `Debug`
+    /// output stays exactly what it was already documented and tested to be.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::Transport;
+    /// use std::collections::HashMap;
+    ///
+    /// let transport = Transport::Http {
+    ///     url: "https://user:sk-secret@api.example.com/mcp?token=sk-secret".to_string(),
+    ///     headers: HashMap::from([("Authorization".to_string(), "Bearer sk-secret".to_string())]),
+    /// };
+    ///
+    /// let debug_output = format!("{transport:?}");
+    /// assert!(debug_output.contains("Authorization"));
+    /// assert!(debug_output.contains("api.example.com/mcp"));
+    /// assert!(!debug_output.contains("sk-secret"));
+    /// ```
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => f
+                .debug_struct("Stdio")
+                .field("command", &sanitize_path_for_error(Path::new(command)))
+                .field("args", &RedactedItems(args))
+                .field("env", &RedactedMapValues(env))
+                .field("cwd", &cwd.as_deref().map(sanitize_path_for_error))
+                .finish(),
+            Self::Http { url, headers } => f
+                .debug_struct("Http")
+                .field("url", &RedactedUrl(url))
+                .field("headers", &RedactedMapValues(headers))
+                .finish(),
+            Self::Sse { url, headers } => f
+                .debug_struct("Sse")
+                .field("url", &RedactedUrl(url))
+                .field("headers", &RedactedMapValues(headers))
+                .finish(),
+        }
+    }
 }
 
 /// MCP server configuration with command, arguments, and environment.
@@ -1700,5 +1750,59 @@ mod tests {
             r#"{"transport":"stdio","command":"docker","args":["run; rm -rf /"]}"#,
         );
         assert!(result.is_err());
+    }
+
+    /// #345 — `Transport` used to derive plain `Debug`, so `format!("{:?}", transport)` on a
+    /// bare value (e.g. matched out of `ServerConfig::transport()`) leaked secrets even though
+    /// `ServerConfig`'s own `Debug` impl already redacted the same fields.
+    #[test]
+    fn test_transport_debug_redacts_stdio_args_and_env() {
+        let secret_arg = "sk-live-secret-arg-value";
+        let secret_env = "ghp_supersecretvalue";
+        let transport = Transport::Stdio {
+            command: "docker".to_string(),
+            args: vec!["--api-key".to_string(), secret_arg.to_string()],
+            env: HashMap::from([(
+                "GITHUB_PERSONAL_ACCESS_TOKEN".to_string(),
+                secret_env.to_string(),
+            )]),
+            cwd: None,
+        };
+
+        let debug_str = format!("{transport:?}");
+        assert!(debug_str.contains("docker"));
+        assert!(debug_str.contains("GITHUB_PERSONAL_ACCESS_TOKEN"));
+        assert!(!debug_str.contains(secret_arg));
+        assert!(!debug_str.contains(secret_env));
+    }
+
+    #[test]
+    fn test_transport_debug_redacts_http_url_and_headers() {
+        let secret = "hunter2";
+        let transport = Transport::Http {
+            url: format!("https://user:{secret}@api.example.com/mcp?token={secret}"),
+            headers: HashMap::from([("Authorization".to_string(), secret.to_string())]),
+        };
+
+        let debug_str = format!("{transport:?}");
+        assert!(debug_str.contains("api.example.com/mcp"));
+        assert!(debug_str.contains("Authorization"));
+        assert!(!debug_str.contains(secret));
+    }
+
+    /// Companion to the `Http` case above — `Transport::Sse` shares the same `url`/`headers`
+    /// shape but is a distinct match arm in the `Debug` impl, so it needs its own coverage.
+    #[test]
+    fn test_transport_debug_redacts_sse_url_and_headers() {
+        let secret = "sk-secret-sse-header-value";
+        let transport = Transport::Sse {
+            url: "https://api.example.com/sse".to_string(),
+            headers: HashMap::from([("Authorization".to_string(), secret.to_string())]),
+        };
+
+        let debug_str = format!("{transport:?}");
+        assert!(debug_str.contains("api.example.com/sse"));
+        assert!(debug_str.contains("Authorization"));
+        assert!(!debug_str.contains(secret));
     }
 }

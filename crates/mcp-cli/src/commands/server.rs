@@ -12,8 +12,10 @@ use anyhow::{Context, Result};
 use mcp_execution_core::ServerConfig;
 use mcp_execution_core::ServerId;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_core::{REDACTED_PLACEHOLDER, RedactedUrl, sanitize_path_for_error};
 use mcp_execution_introspector::Introspector;
 use serde::Serialize;
+use std::path::Path;
 use std::time::Duration;
 use tracing::{info, warn};
 use url::Url;
@@ -459,10 +461,9 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
             ..
         } => (!check_command_exists(bin_command))
             .then(|| format!("Command '{bin_command}' not found in PATH")),
-        McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => (!url_well_formed(url))
-            .then(|| {
-                format!("URL '{url}' is not well-formed (expected http:// or https:// with a host)")
-            }),
+        McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => {
+            (!url_well_formed(url)).then(|| url_precheck_message(url))
+        }
     };
 
     if let Some(message) = precheck_failure {
@@ -541,18 +542,54 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
 /// Builds a displayable command string from a server entry.
 ///
 /// Stdio entries render as `command args…`; http/sse entries render as the
-/// endpoint URL.
+/// endpoint URL. This feeds `server list`/`server info`/`server validate`
+/// output, which is printed unconditionally (not gated behind `--verbose`),
+/// so every field is redacted the same way `ServerConfig`'s own `Debug` impl
+/// redacts them (#346): `command` is routed through
+/// [`sanitize_path_for_error`] (home directory/username scrub — not a
+/// secret, but an absolute path leaks the OS username); `args` are replaced
+/// wholesale with [`REDACTED_PLACEHOLDER`] since an argument routinely holds
+/// an entire secret (e.g. `--api-key sk-...`) with no key/value half worth
+/// preserving; `url` is redacted via [`RedactedUrl`], which strips userinfo
+/// credentials and any query string while keeping scheme/host/path
+/// readable. Unlike `ServerConfig`'s `Debug` impl, `args` render as a
+/// space-joined, shell-shaped string (`REDACTED_PLACEHOLDER` per entry)
+/// rather than [`mcp_execution_core::RedactedItems`]'s `Debug`-list syntax
+/// (`["<redacted>", ...]`) — this string lands verbatim in `--format json`
+/// output, where embedding Rust `Debug` syntax inside a JSON string would be
+/// needlessly awkward for machine consumers.
 fn build_command_string(entry: &McpServerEntry) -> String {
     match &entry.transport {
         McpTransport::Stdio { command, args, .. } => {
+            let command = sanitize_path_for_error(Path::new(command));
             if args.is_empty() {
-                command.clone()
+                command
             } else {
-                format!("{} {}", command, args.join(" "))
+                let redacted_args = vec![REDACTED_PLACEHOLDER; args.len()].join(" ");
+                format!("{command} {redacted_args}")
             }
         }
-        McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => url.clone(),
+        McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => {
+            format!("{:?}", RedactedUrl(url))
+        }
     }
+}
+
+/// Builds the "URL is not well-formed" precheck failure message used by
+/// [`validate_command`], redacting `url` via [`RedactedUrl`] so a malformed URL that still
+/// carries userinfo credentials (e.g. a mistyped port on an otherwise valid
+/// `https://user:pass@host` URL) never leaks them into `server validate`'s unconditional
+/// `ValidationResult::message` output (#346 S1: this precheck message was the one call site the
+/// original fix missed — it sits above `build_command_string`, not inside it).
+///
+/// Extracted into its own function so the redaction can be unit-tested directly, since this
+/// crate has no harness to capture the `println!`-only command output (see the `#[cfg(test)]`
+/// module's other notes on that limitation).
+fn url_precheck_message(url: &str) -> String {
+    format!(
+        "URL '{:?}' is not well-formed (expected http:// or https:// with a host)",
+        RedactedUrl(url)
+    )
 }
 
 /// Returns `true` if the given command binary is available in PATH.
@@ -663,6 +700,10 @@ mod tests {
         assert_eq!(build_command_string(&entry), "node");
     }
 
+    /// #346 — args are redacted wholesale (mirroring `ServerConfig`'s `Debug` impl), since an
+    /// argument can itself be an entire secret with no key/value split to preserve half of.
+    /// Asserts the exact rendering (not just secret absence, per critic M3: a `retain`-style
+    /// bug that silently dropped args instead of redacting them would otherwise still pass).
     #[test]
     fn test_build_command_string_with_args() {
         let entry = McpServerEntry {
@@ -675,9 +716,62 @@ mod tests {
             connect_timeout_secs: None,
             discover_timeout_secs: None,
         };
+        let command = build_command_string(&entry);
         assert_eq!(
-            build_command_string(&entry),
-            "node /path/to/server.js --verbose"
+            command,
+            format!("node {REDACTED_PLACEHOLDER} {REDACTED_PLACEHOLDER}")
+        );
+        assert!(!command.contains("/path/to/server.js"));
+        assert!(!command.contains("--verbose"));
+    }
+
+    /// #346 regression: a stdio arg carrying an entire secret (e.g. `--api-key sk-...`) must
+    /// never appear in `server list`/`server info`/`server validate` output, which is printed
+    /// unconditionally. Counts placeholders (critic M3) rather than only asserting the secret's
+    /// absence, so silently dropping args instead of redacting them would fail this test too.
+    #[test]
+    fn test_build_command_string_redacts_secret_arg() {
+        let secret = "sk-live-secret-arg-value";
+        let entry = McpServerEntry {
+            transport: McpTransport::Stdio {
+                command: "docker".to_string(),
+                args: vec!["--api-key".to_string(), secret.to_string()],
+                env: HashMap::default(),
+                cwd: None,
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+        let command = build_command_string(&entry);
+        assert!(command.starts_with("docker "));
+        assert!(!command.contains(secret));
+        assert_eq!(command.matches(REDACTED_PLACEHOLDER).count(), 2);
+    }
+
+    /// #346 M2: `command` routes through the same [`sanitize_path_for_error`] scrub
+    /// `ServerConfig`/`McpTransport`/`Transport` all apply, so an absolute stdio command path
+    /// under the home directory doesn't leak the OS username into unconditional output.
+    #[test]
+    fn test_build_command_string_sanitizes_command_home_path() {
+        let home = dirs::home_dir().expect("home dir available in this environment");
+        let entry = McpServerEntry {
+            transport: McpTransport::Stdio {
+                command: home.join("bin/mcp-server").to_string_lossy().into_owned(),
+                args: Vec::new(),
+                env: HashMap::default(),
+                cwd: None,
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+        let command = build_command_string(&entry);
+        assert_eq!(
+            command,
+            format!(
+                "~{}bin{}mcp-server",
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            )
         );
     }
 
@@ -692,6 +786,55 @@ mod tests {
             discover_timeout_secs: None,
         };
         assert_eq!(build_command_string(&entry), "https://api.example.com/mcp");
+    }
+
+    /// #346 regression: userinfo credentials and a `?token=`-style query string in a
+    /// http/sse `url` must never appear in `server list`/`server info`/`server validate`
+    /// output; host/path stay readable.
+    #[test]
+    fn test_build_command_string_redacts_secret_url() {
+        let secret = "hunter2";
+        let entry = McpServerEntry {
+            transport: McpTransport::Http {
+                url: format!("https://user:{secret}@api.example.com/mcp?token={secret}"),
+                headers: HashMap::default(),
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+        let command = build_command_string(&entry);
+        assert!(!command.contains(secret));
+        assert!(command.contains("api.example.com/mcp"));
+    }
+
+    /// #346 M3: a `url` that [`RedactedUrl`] cannot parse (e.g. malformed scheme) falls back to
+    /// redacting the whole string, so `server list`'s Command column shows only the placeholder
+    /// with no host at all — documented here so that fallback isn't silently un-exercised.
+    #[test]
+    fn test_build_command_string_unparseable_url_redacts_entirely() {
+        let entry = McpServerEntry {
+            transport: McpTransport::Http {
+                url: "not-a-url".to_string(),
+                headers: HashMap::default(),
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+        assert_eq!(build_command_string(&entry), REDACTED_PLACEHOLDER);
+    }
+
+    /// #346 S1 regression: `validate_command`'s precheck failure message used to interpolate
+    /// the raw `url`, so a malformed URL that still carried userinfo credentials (e.g. a
+    /// mistyped port) leaked them into `ValidationResult::message`, which is printed
+    /// unconditionally — even though `build_command_string`'s `command` field was already
+    /// redacted, producing the redacted and unredacted forms of the same secret side by side.
+    #[test]
+    fn test_url_precheck_message_redacts_credentials() {
+        let secret = "hunter2";
+        let message =
+            url_precheck_message(&format!("https://alice:{secret}@api.example.com:99999/mcp"));
+        assert!(!message.contains(secret));
+        assert!(message.contains("api.example.com"));
     }
 
     #[tokio::test]
