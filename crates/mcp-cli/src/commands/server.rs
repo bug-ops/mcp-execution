@@ -35,7 +35,7 @@ const LIST_AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(3);
 /// Status of a configured server.
 ///
 /// The precise check behind this depends on the call site: `server list`
-/// uses [`transport_available`] (PATH lookup for stdio; URL well-formedness
+/// uses `transport_available` (PATH lookup for stdio; URL well-formedness
 /// plus a bounded MCP introspection attempt for http/sse — see
 /// `LIST_AVAILABILITY_TIMEOUT`). `server info`/`server validate` instead
 /// reflect whether a full MCP introspection handshake succeeded, waiting out
@@ -57,8 +57,24 @@ const LIST_AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(3);
 /// a PATH lookup while `info`/`validate` perform a full handshake, so the
 /// two can disagree about more than timing (pre-existing behavior, unrelated
 /// to #280's http/sse scope).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServerStatus {
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::ServerStatus;
+///
+/// assert_eq!(
+///     serde_json::to_string(&ServerStatus::Available).unwrap(),
+///     "\"available\""
+/// );
+/// assert_eq!(
+///     serde_json::to_string(&ServerStatus::Unavailable).unwrap(),
+///     "\"unavailable\""
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerStatus {
     /// `list`: command in PATH / URL well-formed and reachable. `info`:
     /// introspection succeeded.
     Available,
@@ -67,26 +83,17 @@ enum ServerStatus {
     Unavailable,
 }
 
-impl ServerStatus {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Available => "available",
-            Self::Unavailable => "unavailable",
-        }
-    }
-}
-
 /// Represents a configured server entry for output.
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_cli::commands::server::ServerEntry;
+/// use mcp_execution_cli::commands::server::{ServerEntry, ServerStatus};
 ///
 /// let entry = ServerEntry {
 ///     id: "github".to_string(),
 ///     command: "github-mcp-server".to_string(),
-///     status: "available".to_string(),
+///     status: ServerStatus::Available,
 /// };
 ///
 /// assert_eq!(entry.id, "github");
@@ -97,14 +104,13 @@ pub struct ServerEntry {
     pub id: String,
     /// Command used to start the server.
     pub command: String,
-    /// Current server status (`"available"` or `"unavailable"`). For stdio,
-    /// a PATH lookup. For http/sse, a well-formedness pre-check followed by
-    /// the same MCP introspection handshake `server info`/`server validate`
-    /// use — but bounded to `LIST_AVAILABILITY_TIMEOUT` rather than the
-    /// entry's full configured timeout, so this is a time-bounded,
-    /// best-effort signal. Run `server validate <name>` for an authoritative
-    /// answer on one specific server.
-    pub status: String,
+    /// Current server status. For stdio, a PATH lookup. For http/sse, a
+    /// well-formedness pre-check followed by the same MCP introspection
+    /// handshake `server info`/`server validate` use — but bounded to
+    /// `LIST_AVAILABILITY_TIMEOUT` rather than the entry's full configured
+    /// timeout, so this is a time-bounded, best-effort signal. Run `server
+    /// validate <name>` for an authoritative answer on one specific server.
+    pub status: ServerStatus,
 }
 
 /// List of configured servers.
@@ -112,14 +118,14 @@ pub struct ServerEntry {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_cli::commands::server::{ServerEntry, ServerList};
+/// use mcp_execution_cli::commands::server::{ServerEntry, ServerList, ServerStatus};
 ///
 /// let list = ServerList {
 ///     servers: vec![
 ///         ServerEntry {
 ///             id: "github".to_string(),
 ///             command: "github-mcp-server".to_string(),
-///             status: "available".to_string(),
+///             status: ServerStatus::Available,
 ///         }
 ///     ],
 /// };
@@ -137,14 +143,14 @@ pub struct ServerList {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_cli::commands::server::{ServerInfo, ToolSummary};
+/// use mcp_execution_cli::commands::server::{ServerInfo, ServerStatus, ToolSummary};
 ///
 /// let info = ServerInfo {
 ///     id: "github".to_string(),
 ///     name: "GitHub MCP".to_string(),
 ///     version: "1.0.0".to_string(),
 ///     command: "github-mcp-server".to_string(),
-///     status: "available".to_string(),
+///     status: ServerStatus::Available,
 ///     tools: vec![],
 ///     capabilities: vec!["tools".to_string()],
 /// };
@@ -162,7 +168,7 @@ pub struct ServerInfo {
     /// Command used to start the server.
     pub command: String,
     /// Current server status.
-    pub status: String,
+    pub status: ServerStatus,
     /// Available tools.
     pub tools: Vec<ToolSummary>,
     /// Server capabilities.
@@ -302,7 +308,7 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
         ServerEntry {
             id: name,
             command,
-            status: status.as_str().to_string(),
+            status,
         }
     });
     let entries = futures_util::future::join_all(checks).await;
@@ -376,7 +382,7 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
                 name: introspected.name,
                 version: introspected.version,
                 command,
-                status: ServerStatus::Available.as_str().to_string(),
+                status: ServerStatus::Available,
                 tools,
                 capabilities,
             };
@@ -413,7 +419,7 @@ fn unavailable_server_info(server: String, command: String) -> ServerInfo {
         name: server,
         version: "unknown".to_string(),
         command,
-        status: ServerStatus::Unavailable.as_str().to_string(),
+        status: ServerStatus::Unavailable,
         tools: Vec::new(),
         capabilities: Vec::new(),
     }
@@ -631,9 +637,15 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn test_server_status_as_str() {
-        assert_eq!(ServerStatus::Available.as_str(), "available");
-        assert_eq!(ServerStatus::Unavailable.as_str(), "unavailable");
+    fn test_server_status_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&ServerStatus::Available).unwrap(),
+            "\"available\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerStatus::Unavailable).unwrap(),
+            "\"unavailable\""
+        );
     }
 
     #[test]
@@ -831,7 +843,7 @@ mod tests {
         let entry = ServerEntry {
             id: "test".to_string(),
             command: "test-cmd".to_string(),
-            status: "available".to_string(),
+            status: ServerStatus::Available,
         };
 
         let json = serde_json::to_string(&entry).unwrap();
@@ -846,7 +858,7 @@ mod tests {
             servers: vec![ServerEntry {
                 id: "test".to_string(),
                 command: "test-cmd".to_string(),
-                status: "available".to_string(),
+                status: ServerStatus::Available,
             }],
         };
 
@@ -862,7 +874,7 @@ mod tests {
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             command: "test-cmd".to_string(),
-            status: "available".to_string(),
+            status: ServerStatus::Available,
             tools: vec![ToolSummary {
                 name: "test_tool".to_string(),
                 description: "A test tool".to_string(),
@@ -1158,7 +1170,7 @@ mod tests {
         // this crate's `println!`-only output (see `with_home_pointed_at` test comments).
         let info = unavailable_server_info("http-malformed".to_string(), "curl".to_string());
 
-        assert_eq!(info.status, ServerStatus::Unavailable.as_str());
+        assert_eq!(info.status, ServerStatus::Unavailable);
         assert_eq!(info.id, "http-malformed");
         assert_eq!(info.name, "http-malformed");
         assert!(info.tools.is_empty());
