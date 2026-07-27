@@ -775,7 +775,7 @@ identifying keys, while leaving `Serialize` unredacted for that same type.
 - *Acceptance criteria*:
   1. `ServerConfig`, `ServerConfigBuilder`, and every CLI-facing type
      capable of carrying a secret (`Cli`/`Commands`, `McpTransport`,
-     `RawMcpServerEntry`, `TransportArgs`, `RawServerArgs`) hand-write
+     `RawMcpServerEntry`, `TransportArgs`, `ServerFlags`) hand-write
      `Debug` using `RedactedItems`/`RedactedMapValues`/`RedactedUrl`/
      `sanitize_path_for_error`.
   2. Regression tests assert a specific secret substring never appears in

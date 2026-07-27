@@ -40,7 +40,7 @@ manage/validate server configuration and the local runtime environment.
 | Subcommand | Purpose | Key flags |
 |---|---|---|
 | `introspect` | Connect + display server capabilities/tools | `--from-config`, `server` (positional), `--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header`, `--detailed`/`-d`, `--connect-timeout-secs`, `--discover-timeout-secs` |
-| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | same transport flags as `introspect` (long-form: `--arg`, `--env`, `--cwd`, `--http`, `--sse`, `--header`), plus `--name`, `--progressive-output`, `--dry-run` |
+| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | identical transport flags as `introspect` (`--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header` — both commands flatten the same `ServerFlags`, so the `-a`/`-e` short aliases apply here too), plus `--name`, `--progressive-output`, `--dry-run` |
 | `skill` | Render SKILL.md directly from a generated server's tools (no LLM) | `-s/--server`, `--servers-dir`, `-o/--output`, `--skill-name`, `--hint` (repeatable), `--overwrite` |
 | `server` | Manage `~/.claude/mcp.json` entries | subcommand: `list`, `info <server>`, `validate <command>` |
 | `setup` | Validate the local runtime (Node.js version, executable bits, config presence) | none |
@@ -49,11 +49,19 @@ manage/validate server configuration and the local runtime environment.
 Global flags on `Cli` (apply to every subcommand): `-v/--verbose` (DEBUG log
 level), `--format {json,text,pretty}` (default `pretty`, case-insensitive).
 
-`--from-config`/transport flags are **mutually exclusive** at the clap
-level (`conflicts_with_all`), and `server`/`http_url`/`sse_url` collectively
-satisfy `required_unless_present_any` — i.e. exactly one of "load from
-config" or "pick a transport" must be chosen, enforced before any command
-handler runs.
+`introspect`/`generate` flatten a shared `ServerFlags` (`#[derive(Args)]`,
+private fields, `cli.rs`) holding `from_config`/`server`/`args`/`env`/`cwd`/
+`http`/`sse`/`headers`/`connect_timeout_secs`/`discover_timeout_secs`.
+Exclusivity is a single clap `ArgGroup` named `server_source`
+(`required(true)`, default `multiple(false)`) over
+`[from_config, server, http, sse]` — i.e. exactly one of "load from config"
+or "pick a transport" must be chosen, enforced before any command handler
+runs. `from_config` additionally `conflicts_with_all` the non-selector args
+(`args`/`env`/`cwd`/`headers`/the two timeout overrides). `ServerFlags`
+converts into the closed `ServerSource` domain enum via `TryFrom` (see
+below) once parsing has run — its private fields make the "no selector" /
+"multiple selectors" states unconstructible from outside `cli.rs`, not just
+runtime-checked.
 
 ## 3. `common.rs` — Shared Server-Resolution Machinery
 
@@ -61,19 +69,28 @@ This module is the single place `introspect` and `generate` (which accept
 an identical flag surface) resolve "how do I reach this server":
 
 ```rust
-pub struct RawServerArgs { from_config, server, args, env, cwd, http, sse, headers, connect_timeout_secs, discover_timeout_secs }
-pub(crate) fn resolve_server_config(raw: RawServerArgs) -> Result<(ServerId, ServerConfig)>;
+pub enum ServerSource {
+    Config { name: String },
+    Flags { transport: TransportArgs, connect_timeout_secs: Option<u64>, discover_timeout_secs: Option<u64> },
+}
+pub(crate) fn resolve_server_config(source: ServerSource) -> Result<(ServerId, ServerConfig)>;
 ```
-`RawServerArgs` exists specifically to prevent transposing two
-same-typed fields (e.g. `http`/`sse`, both `Option<String>`) by positional
-argument order (issue #286's fix) — named fields instead.
+`ServerSource` is the output of `TryFrom<ServerFlags> for ServerSource`
+(`cli.rs`, needs `ServerFlags`'s private fields). Every value of this type
+is a legal state: `--from-config` and the timeout overrides are folded into
+the same enum because they share one exclusivity group, which also means a
+`Config` source can never carry a meaningless timeout override — unlike the
+former `RawServerArgs` landing zone (`pub` fields, all-`Option`/`Vec`
+shape), where that combination was constructible but silently ignored.
+Named fields (rather than positional parameters) still prevent transposing
+two same-typed fields (e.g. `http`/`sse`, both `Option<String>`) — issue
+#286's original fix, preserved here.
 
 ```rust
 pub struct McpConfig { pub mcp_servers: HashMap<String, McpServerEntry> }
 pub struct McpServerEntry { pub transport: McpTransport, pub connect_timeout_secs, pub discover_timeout_secs }
 pub enum McpTransport { Stdio{command,args,env,cwd}, Http{url,headers}, Sse{url,headers} }
-pub enum TransportArgs { Stdio{...}, Http{...}, Sse{...} } // raw, unparsed CLI-flag mirror of McpTransport
-impl TransportArgs { pub fn from_flags(...) -> Result<Self>; } // enforces "exactly one transport" as a safety net for direct callers
+pub enum TransportArgs { Stdio{...}, Http{...}, Sse{...} } // raw, unparsed CLI-flag mirror of McpTransport; every variant is a legal state by construction (no all-`None`/"both http and sse" shape exists). `pub` with `pub` fields, so directly constructible by any caller; the real CLI path only ever produces one via `TryFrom<ServerFlags>`, which enforces "exactly one transport" at the ServerFlags -> ServerSource boundary
 ```
 
 `McpServerEntry`'s `Deserialize` is **hand-written** (via a
@@ -113,7 +130,7 @@ whole string, or the "key" half, may itself be the secret.
 ## 4. Debug-Redaction Discipline
 
 Every CLI-facing type that can carry a secret (`Cli`/`Commands` themselves,
-`McpTransport`, `RawMcpServerEntry`, `TransportArgs`, `RawServerArgs`) hand-
+`ServerFlags`, `McpTransport`, `RawMcpServerEntry`, `TransportArgs`) hand-
 writes `Debug` rather than deriving it, applying `mcp-core`'s
 `RedactedItems`/`RedactedMapValues`/`RedactedUrl`/`sanitize_path_for_error`
 consistently — because `runner::report_and_classify` prints
@@ -159,7 +176,7 @@ classifies as `SERVER_ERROR`, not the generic fallback:
 
 ## 6. `introspect` Command (`commands/introspect.rs`)
 
-`run(raw: RawServerArgs, detailed: bool, output_format: OutputFormat) -> Result<ExitCode>`.
+`run(source: ServerSource, detailed: bool, output_format: OutputFormat) -> Result<ExitCode>`.
 Resolves config via `resolve_server_config`, runs
 `Introspector::discover_server` once, formats an `IntrospectionResult`
 (`ServerMetadata` + `Vec<ToolDisplay>`, schemas included only when
@@ -168,7 +185,7 @@ command.
 
 ## 7. `generate` Command (`commands/generate.rs`)
 
-`run(raw, name: Option<String>, output_dir: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
+`run(source: ServerSource, name: Option<String>, output_dir: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
 
 1. `resolve_server_config` → `discover_server_info` (introspects; applies
    `--name` override to `ServerInfo.id` if given, so generated
@@ -281,8 +298,8 @@ itself.
   `mcp-files::FilesBuilder`, `mcp-skill::{scan_tools_directory,
   build_skill_context, render_skill_md, validate_server_id,
   MAX_SERVER_ID_LENGTH}`.
-- Shares the exact `RawServerArgs`/`resolve_server_config` code path
-  between `introspect` and `generate` — any transport-resolution fix
+- Shares the exact `ServerFlags`/`ServerSource`/`resolve_server_config` code
+  path between `introspect` and `generate` — any transport-resolution fix
   applies to both simultaneously by construction.
 
 ## 15. Edge Cases & Notable Behaviors

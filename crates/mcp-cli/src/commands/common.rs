@@ -3,7 +3,7 @@
 //! Provides shared functionality for building server configurations from CLI arguments
 //! and loading MCP server definitions from `~/.claude/mcp.json`.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use mcp_execution_core::{
     Error as CoreError, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl,
     ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
@@ -634,9 +634,16 @@ fn parse_key_value(s: &str, kind: &str) -> Result<(String, String)> {
 /// CLI-flag mirror of [`McpTransport`], holding the raw, unvalidated
 /// `Option`/`Vec<String>` values clap hands back.
 ///
-/// [`TransportArgs::from_flags`] is the single place that enforces "exactly
-/// one transport selected". `TryFrom<TransportArgs> for McpTransport` does
-/// the `KEY=VALUE` parsing for environment variables and headers.
+/// Every variant is a legal state by construction — there is no all-`None`
+/// or "both http and sse" shape to represent, unlike the flat flag surface
+/// this type is built from. In the real CLI path, values come from
+/// [`TryFrom<ServerFlags> for ServerSource`](crate::cli::ServerFlags), the
+/// single place "exactly one transport selected" is enforced (backed by
+/// clap's `server_source` argument group at parse time); since this type and
+/// its fields are `pub`, a direct caller can also construct one by hand
+/// (e.g. as a library), which is exactly why every variant already being
+/// well-formed matters. `TryFrom<TransportArgs> for McpTransport` does the
+/// `KEY=VALUE` parsing for environment variables and headers.
 ///
 /// # Examples
 ///
@@ -732,67 +739,6 @@ impl fmt::Debug for TransportArgs {
     }
 }
 
-impl TransportArgs {
-    /// Builds a [`TransportArgs`] from the CLI's flat `--http`/`--sse`/positional
-    /// flag surface, enforcing that exactly one transport was selected.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if both `http` and `sse` are set, or if none of
-    /// `server`, `http`, or `sse` is set. Clap's `conflicts_with` /
-    /// `required_unless_present_any` already prevent both cases when parsing
-    /// real CLI input; this is the safety net for callers that build
-    /// `TransportArgs` directly (e.g. as a library).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_cli::commands::common::TransportArgs;
-    ///
-    /// let transport = TransportArgs::from_flags(
-    ///     Some("github-mcp-server".to_string()),
-    ///     vec!["stdio".to_string()],
-    ///     vec![],
-    ///     None,
-    ///     None,
-    ///     None,
-    ///     vec![],
-    /// )
-    /// .unwrap();
-    /// assert!(matches!(transport, TransportArgs::Stdio { .. }));
-    ///
-    /// let err = TransportArgs::from_flags(None, vec![], vec![], None, None, None, vec![]);
-    /// assert!(err.is_err());
-    /// ```
-    #[allow(clippy::too_many_arguments)] // mirrors the CLI's flat argument surface; grouping would add an abstraction for no behavioral benefit
-    pub fn from_flags(
-        server: Option<String>,
-        args: Vec<String>,
-        env: Vec<String>,
-        cwd: Option<String>,
-        http: Option<String>,
-        sse: Option<String>,
-        headers: Vec<String>,
-    ) -> Result<Self> {
-        match (http, sse) {
-            (Some(_), Some(_)) => bail!("cannot use both --http and --sse transports"),
-            (Some(url), None) => Ok(Self::Http { url, headers }),
-            (None, Some(url)) => Ok(Self::Sse { url, headers }),
-            (None, None) => {
-                let command = server.context(
-                    "server command is required for stdio transport (or use --http/--sse)",
-                )?;
-                Ok(Self::Stdio {
-                    command,
-                    args,
-                    env,
-                    cwd,
-                })
-            }
-        }
-    }
-}
-
 impl TryFrom<TransportArgs> for McpTransport {
     type Error = anyhow::Error;
 
@@ -837,8 +783,8 @@ impl TryFrom<TransportArgs> for McpTransport {
 ///
 /// # Arguments
 ///
-/// * `transport` - The selected transport and its raw CLI flags; build with
-///   [`TransportArgs::from_flags`].
+/// * `transport` - The selected transport and its raw CLI flags, from a
+///   [`ServerSource::Flags`] arm.
 /// * `connect_timeout_secs` - Connection (handshake) timeout override, in
 ///   seconds. Same semantics as `mcp.json`'s `connectTimeoutSecs`: must be
 ///   greater than zero and at most 600 seconds, enforced by
@@ -878,90 +824,77 @@ pub(crate) fn build_server_config(
     Ok((server_id, builder.build()?))
 }
 
-/// Raw, same-typed server transport/timeout arguments as accepted from the CLI.
+/// Fully-resolved "how do I reach this server" selection for `introspect` and
+/// `generate`.
 ///
-/// Bundles the fields shared by `introspect` and `generate` (config-file
-/// selector, transport flags, and timeout overrides) into a single named
-/// struct so callers can't accidentally transpose two `Option<String>` or
-/// `Vec<String>` fields (e.g. `http`/`sse`) by passing them in the wrong
-/// positional order — see issue #286.
+/// The output of [`TryFrom<ServerFlags> for
+/// ServerSource`](crate::cli::ServerFlags), converted from clap's parsed
+/// argv once the `server_source` argument group has already guaranteed
+/// exactly one selector was set. Unlike the former `RawServerArgs` landing
+/// zone, every value of this type is a legal state: `--from-config` and the
+/// timeout overrides are folded into the same enum because they belong to
+/// the same exclusivity group (a `from_config` selection can never carry a
+/// meaningless `connect_timeout_secs`/`discover_timeout_secs` override, since
+/// those live on the `Flags` arm only).
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_cli::commands::common::RawServerArgs;
+/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
 ///
-/// let raw = RawServerArgs {
-///     from_config: None,
-///     server: Some("github-mcp-server".to_string()),
-///     args: vec!["stdio".to_string()],
-///     env: vec![],
-///     cwd: None,
-///     http: None,
-///     sse: None,
-///     headers: vec![],
+/// let source = ServerSource::Flags {
+///     transport: TransportArgs::Stdio {
+///         command: "github-mcp-server".to_string(),
+///         args: vec!["stdio".to_string()],
+///         env: vec![],
+///         cwd: None,
+///     },
 ///     connect_timeout_secs: None,
 ///     discover_timeout_secs: None,
 /// };
 ///
-/// assert_eq!(raw.server.as_deref(), Some("github-mcp-server"));
+/// assert!(matches!(source, ServerSource::Flags { .. }));
 /// ```
-#[derive(Default)]
-pub struct RawServerArgs {
-    /// Load server config from `~/.claude/mcp.json` by name.
-    pub from_config: Option<String>,
-    /// Server command (binary name or path), `None` for HTTP/SSE.
-    pub server: Option<String>,
-    /// Arguments to pass to the server command.
-    pub args: Vec<String>,
-    /// Environment variables in `KEY=VALUE` format.
-    pub env: Vec<String>,
-    /// Working directory for the server process.
-    pub cwd: Option<String>,
-    /// HTTP transport URL.
-    pub http: Option<String>,
-    /// SSE transport URL.
-    pub sse: Option<String>,
-    /// HTTP headers in `KEY=VALUE` format.
-    pub headers: Vec<String>,
-    /// Connection (handshake) timeout override, in seconds.
-    pub connect_timeout_secs: Option<u64>,
-    /// Tool discovery timeout override, in seconds.
-    pub discover_timeout_secs: Option<u64>,
+///
+/// Debug output redacts via [`TransportArgs`]'s own redacting `Debug` impl:
+///
+/// ```
+/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
+///
+/// let source = ServerSource::Flags {
+///     transport: TransportArgs::Http {
+///         url: "https://api.example.com/mcp".to_string(),
+///         headers: vec!["Authorization=Bearer sk-secret".to_string()],
+///     },
+///     connect_timeout_secs: None,
+///     discover_timeout_secs: None,
+/// };
+///
+/// let debug_output = format!("{source:?}");
+/// assert!(!debug_output.contains("sk-secret"));
+/// ```
+#[derive(Debug, Clone)]
+pub enum ServerSource {
+    /// Load server configuration from `~/.claude/mcp.json` by name.
+    Config {
+        /// Server name as defined under `mcpServers` in `mcp.json`.
+        name: String,
+    },
+    /// Build server configuration directly from CLI transport flags.
+    Flags {
+        /// Selected transport and its raw CLI flags.
+        transport: TransportArgs,
+        /// Connection (handshake) timeout override, in seconds.
+        connect_timeout_secs: Option<u64>,
+        /// Tool discovery timeout override, in seconds.
+        discover_timeout_secs: Option<u64>,
+    },
 }
 
-impl fmt::Debug for RawServerArgs {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RawServerArgs")
-            .field("from_config", &self.from_config)
-            .field(
-                "server",
-                &self
-                    .server
-                    .as_deref()
-                    .map(|s| sanitize_path_for_error(Path::new(s))),
-            )
-            .field("args", &RedactedItems(&self.args))
-            .field("env", &RedactedItems(&self.env))
-            .field(
-                "cwd",
-                &self
-                    .cwd
-                    .as_deref()
-                    .map(|cwd| sanitize_path_for_error(Path::new(cwd))),
-            )
-            .field("http", &self.http.as_deref().map(RedactedUrl))
-            .field("sse", &self.sse.as_deref().map(RedactedUrl))
-            .field("headers", &RedactedItems(&self.headers))
-            .field("connect_timeout_secs", &self.connect_timeout_secs)
-            .field("discover_timeout_secs", &self.discover_timeout_secs)
-            .finish()
-    }
-}
-
-/// Resolves a server's [`ServerId`] and [`ServerConfig`], either from
-/// `~/.claude/mcp.json` (when `raw.from_config` is set) or from CLI transport
-/// flags.
+/// Resolves a server's [`ServerId`] and [`ServerConfig`] from an
+/// already-validated [`ServerSource`], either loading `~/.claude/mcp.json`
+/// (`ServerSource::Config`) or building directly from CLI transport flags
+/// (`ServerSource::Flags`).
 ///
 /// The single place `generate` and `introspect` share for this "config file
 /// vs. CLI flags" branch, since both commands accept the identical flag
@@ -969,32 +902,20 @@ impl fmt::Debug for RawServerArgs {
 ///
 /// # Errors
 ///
-/// Returns an error if `raw.from_config` is set and the named server is
-/// missing from the config file or the file is malformed, or if the CLI
-/// transport flags fail [`TransportArgs::from_flags`] validation or the
-/// resulting [`ServerConfig`] fails security validation.
-pub(crate) fn resolve_server_config(raw: RawServerArgs) -> Result<(ServerId, ServerConfig)> {
-    if let Some(config_name) = raw.from_config {
-        debug!(
-            "Loading server configuration from ~/.claude/mcp.json: {}",
-            config_name
-        );
-        load_server_from_config(&config_name)
-    } else {
-        let transport = TransportArgs::from_flags(
-            raw.server,
-            raw.args,
-            raw.env,
-            raw.cwd,
-            raw.http,
-            raw.sse,
-            raw.headers,
-        )?;
-        build_server_config(
+/// Returns an error if `source` is `Config` and the named server is missing
+/// from the config file or the file is malformed, or if `source` is `Flags`
+/// and the resulting [`ServerConfig`] fails security validation.
+pub(crate) fn resolve_server_config(source: ServerSource) -> Result<(ServerId, ServerConfig)> {
+    match source {
+        ServerSource::Config { name } => {
+            debug!("Loading server configuration from ~/.claude/mcp.json: {name}");
+            load_server_from_config(&name)
+        }
+        ServerSource::Flags {
             transport,
-            raw.connect_timeout_secs,
-            raw.discover_timeout_secs,
-        )
+            connect_timeout_secs,
+            discover_timeout_secs,
+        } => build_server_config(transport, connect_timeout_secs, discover_timeout_secs),
     }
 }
 
@@ -1510,6 +1431,28 @@ mod tests {
     }
 
     #[test]
+    fn test_server_source_debug_redacts_via_transport() {
+        // `ServerSource` derives `Debug`, so it must inherit the redaction
+        // through `TransportArgs`'s custom impl rather than needing its own —
+        // same pattern as `McpServerEntry` inheriting from `McpTransport`.
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let secret = format!("Bearer {secret_body}");
+        let source = ServerSource::Flags {
+            transport: TransportArgs::Http {
+                url: "https://api.example.com/mcp".to_string(),
+                headers: vec![format!("Authorization={secret}")],
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+
+        let debug_output = format!("{source:?}");
+        assert!(!debug_output.contains(&secret));
+        assert!(!debug_output.contains(secret_body));
+        assert!(debug_output.contains("<redacted>"));
+    }
+
+    #[test]
     fn test_transport_args_debug_redacts_headers_and_env() {
         // Regression test for #229/S1: `TransportArgs` is the CLI-flag
         // mirror of `McpTransport` and holds raw, unparsed `KEY=VALUE`
@@ -1633,37 +1576,6 @@ mod tests {
         assert!(debug_output.contains("GITHUB_TOKEN"));
         assert!(debug_output.contains("someUnknownSecret"));
         assert!(debug_output.contains("node"));
-    }
-
-    #[test]
-    fn test_raw_server_args_debug_redacts_secret_shaped_fields() {
-        let secret = "sk-live-secret";
-        let home = dirs::home_dir().expect("home directory must be resolvable in test environment");
-        let server_path = home.join("tools").join("mcp-server");
-
-        let raw = RawServerArgs {
-            from_config: None,
-            server: Some(server_path.display().to_string()),
-            args: vec!["--api-key".to_string(), secret.to_string()],
-            env: vec![format!("GITHUB_TOKEN={secret}")],
-            cwd: None,
-            http: Some(format!(
-                "https://user:{secret}@api.example.com/mcp?token={secret}"
-            )),
-            sse: None,
-            headers: vec![format!("Authorization=Bearer {secret}")],
-            connect_timeout_secs: Some(30),
-            discover_timeout_secs: None,
-        };
-
-        let debug_output = format!("{raw:?}");
-        assert!(!debug_output.contains(secret));
-        // The server path's username component must be scrubbed, same as
-        // McpTransport::Stdio.command and TransportArgs::Stdio.command.
-        assert!(!debug_output.contains(&home.display().to_string()));
-        assert!(debug_output.contains('~'));
-        assert!(debug_output.contains("api.example.com/mcp"));
-        assert!(debug_output.contains("connect_timeout_secs: Some(30)"));
     }
 
     #[test]
@@ -2121,75 +2033,6 @@ mod tests {
             config.mcp_servers.is_empty(),
             "missing mcpServers key must produce empty map, not error"
         );
-    }
-
-    // ── TransportArgs::from_flags ──
-
-    #[test]
-    fn test_transport_args_from_flags_stdio() {
-        let transport = TransportArgs::from_flags(
-            Some("server".to_string()),
-            vec![],
-            vec![],
-            None,
-            None,
-            None,
-            vec![],
-        )
-        .unwrap();
-        assert!(matches!(transport, TransportArgs::Stdio { .. }));
-    }
-
-    #[test]
-    fn test_transport_args_from_flags_http() {
-        let transport = TransportArgs::from_flags(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://example.com".to_string()),
-            None,
-            vec![],
-        )
-        .unwrap();
-        assert!(matches!(transport, TransportArgs::Http { .. }));
-    }
-
-    #[test]
-    fn test_transport_args_from_flags_sse() {
-        let transport = TransportArgs::from_flags(
-            None,
-            vec![],
-            vec![],
-            None,
-            None,
-            Some("https://example.com/sse".to_string()),
-            vec![],
-        )
-        .unwrap();
-        assert!(matches!(transport, TransportArgs::Sse { .. }));
-    }
-
-    #[test]
-    fn test_transport_args_from_flags_none_set_errors() {
-        // Regression test: this used to be an `.expect()` panic in
-        // `build_server_config`'s stdio branch.
-        let result = TransportArgs::from_flags(None, vec![], vec![], None, None, None, vec![]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_transport_args_from_flags_both_http_and_sse_errors() {
-        let result = TransportArgs::from_flags(
-            None,
-            vec![],
-            vec![],
-            None,
-            Some("https://example.com".to_string()),
-            Some("https://example.com/sse".to_string()),
-            vec![],
-        );
-        assert!(result.is_err());
     }
 
     // ── derive_server_id_from_url (review S1: raw-URL server ids are unsafe) ──

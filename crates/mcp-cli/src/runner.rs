@@ -10,7 +10,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::cli::Commands;
 use crate::commands;
-use crate::commands::common::RawServerArgs;
+use crate::commands::common::ServerSource;
 use crate::formatters::escape_error_text;
 
 /// Initializes logging infrastructure.
@@ -103,32 +103,9 @@ pub async fn execute_command(command: Commands, output_format: OutputFormat) -> 
 /// Returns whatever error the dispatched command handler produces.
 async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
     match command {
-        Commands::Introspect {
-            from_config,
-            server,
-            args,
-            env,
-            cwd,
-            http,
-            sse,
-            headers,
-            detailed,
-            connect_timeout_secs,
-            discover_timeout_secs,
-        } => {
-            let raw = RawServerArgs {
-                from_config,
-                server,
-                args,
-                env,
-                cwd,
-                http,
-                sse,
-                headers,
-                connect_timeout_secs,
-                discover_timeout_secs,
-            };
-            commands::introspect::run(raw, detailed, output_format).await
+        Commands::Introspect { flags, detailed } => {
+            let source = ServerSource::try_from(flags)?;
+            commands::introspect::run(source, detailed, output_format).await
         }
         Commands::Skill {
             server,
@@ -150,33 +127,13 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
             .await
         }
         Commands::Generate {
-            from_config,
-            server,
-            server_args,
-            server_env,
-            server_cwd,
-            http_url,
-            sse_url,
-            server_headers,
+            flags,
             name,
             progressive_output,
             dry_run,
-            connect_timeout_secs,
-            discover_timeout_secs,
         } => {
-            let raw = RawServerArgs {
-                from_config,
-                server,
-                args: server_args,
-                env: server_env,
-                cwd: server_cwd,
-                http: http_url,
-                sse: sse_url,
-                headers: server_headers,
-                connect_timeout_secs,
-                discover_timeout_secs,
-            };
-            commands::generate::run(raw, name, progressive_output, dry_run, output_format).await
+            let source = ServerSource::try_from(flags)?;
+            commands::generate::run(source, name, progressive_output, dry_run, output_format).await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
         Commands::Setup => commands::setup::run(output_format).await,
@@ -524,23 +481,17 @@ mod tests {
         // falling back to anyhow's default exit-code-1 handling. Asserting
         // the exact `SERVER_ERROR` value (not just `!is_success()`) so a
         // regression to the generic `ExitCode::ERROR` fallback is caught.
-        let result = execute_command(
-            Commands::Introspect {
-                from_config: None,
-                server: Some("nonexistent-server-for-exit-code-test".to_string()),
-                args: vec![],
-                env: vec![],
-                cwd: None,
-                http: None,
-                sse: None,
-                headers: vec![],
-                detailed: false,
-                connect_timeout_secs: None,
-                discover_timeout_secs: None,
-            },
-            OutputFormat::Json,
-        )
-        .await;
+        //
+        // Built via real clap parsing (rather than a `Commands::Introspect`
+        // literal): `ServerFlags`'s fields are private outside `cli.rs` by
+        // design, so this is the only way an external module can produce one.
+        use clap::Parser as _;
+        let cli = crate::cli::Cli::parse_from([
+            "mcp-execution-cli",
+            "introspect",
+            "nonexistent-server-for-exit-code-test",
+        ]);
+        let result = execute_command(cli.command, OutputFormat::Json).await;
 
         let exit_code = result.expect("execute_command must not propagate Err");
         assert_eq!(exit_code, ExitCode::SERVER_ERROR);
