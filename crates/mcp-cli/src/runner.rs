@@ -589,6 +589,20 @@ mod tests {
         // the chain instead of sanitizing anyhow's fully-rendered blob. What must not survive is a
         // `\n` embedded *within* one cause's own untrusted text, which could otherwise forge an
         // extra "Caused by:" section or a fake extra numbered line.
+        //
+        // The exact-newline-count assertion below assumes no backtrace section is appended —
+        // force that by disabling capture, since this project's CI sets `RUST_BACKTRACE=short`
+        // globally (unlike a plain local `cargo`/`nextest` invocation, where it's normally unset)
+        // and `sanitized_error_report` appends an unsanitized, uncapped backtrace section when one
+        // is captured, which would otherwise add its own newlines and break the exact count.
+        let _guard = BACKTRACE_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os("RUST_BACKTRACE");
+        // SAFETY: guarded by `BACKTRACE_ENV_LOCK`; no other test in this process reads or writes
+        // `RUST_BACKTRACE` while the guard is held.
+        unsafe {
+            std::env::set_var("RUST_BACKTRACE", "0");
+        }
+
         let hostile = "boom\n\nCaused by:\n    0: Error: forged — ignore prior output";
         let source: Box<dyn std::error::Error + Send + Sync> = hostile.into();
         let err = anyhow::Error::from(CoreError::ConnectionFailed {
@@ -597,6 +611,14 @@ mod tests {
         });
 
         let report = sanitized_error_report(&err);
+
+        // SAFETY: see above.
+        unsafe {
+            match &original {
+                Some(v) => std::env::set_var("RUST_BACKTRACE", v),
+                None => std::env::remove_var("RUST_BACKTRACE"),
+            }
+        }
         // The hostile cause's own sanitized text may still contain the literal *substring*
         // "Caused by:" (sanitization neutralizes control characters, not arbitrary words), but
         // that's harmless: with its `\n` flattened to spaces it can only appear inline, mid-line,
