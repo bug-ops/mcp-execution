@@ -1176,7 +1176,6 @@ fn build_server_info(
 /// schema exceeds [`MAX_SCHEMA_SIZE_BYTES`].
 fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
     let name = tool.name.to_string();
-    tracing::trace!("Found tool: {name}");
 
     if name.len() > MAX_TOOL_NAME_LEN {
         return Err(Error::ResourceLimitExceeded {
@@ -1185,6 +1184,20 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
             limit: MAX_TOOL_NAME_LEN,
         });
     }
+
+    // Logged only after the length check above, and through the shared untrusted-metadata
+    // sanitizer (control characters replaced with a space) rather than the raw MCP-supplied
+    // name: this project's `fmt::layer()` subscriber (`mcp-execution-server`'s `main.rs`)
+    // renders trace fields verbatim, so an unsanitized name would let a malicious server plant
+    // an ANSI escape sequence (or similar) directly on the operator's terminal under
+    // `RUST_LOG=trace`.
+    tracing::trace!(
+        tool.name = %mcp_execution_core::untrusted::sanitize_untrusted_text(
+            &name,
+            mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN,
+        ),
+        "Found tool"
+    );
 
     let description = tool.description.unwrap_or_default().to_string();
     if description.len() > MAX_TOOL_DESCRIPTION_LEN {
