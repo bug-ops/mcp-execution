@@ -419,6 +419,45 @@ eventually taken:
 2. Is freezing `num-traits` at `<=0.2.19` (§3.6) an acceptable tradeoff
    at the time the swap is made?
 
+## 10. Addendum (2026-07-27, issue #359): declared-field buffering retype is a distinct vector
+
+§3.3 is explicitly scoped to `RawFrontmatter` gaining a `#[serde(flatten)]`-style field, which
+only reopens amplification for an alias bomb placed under an *undeclared* YAML key. Issue #359
+raised a second, independent vector: retyping an already-*declared* field (e.g. `description`)
+to a buffering type — `serde_norway::Value`, an untagged enum, or a buffering
+`#[serde(deserialize_with)]` — which reopens amplification for a bomb placed directly under
+that declared key instead.
+
+Three properties distinguish this vector from §3.3's and are worth recording precisely:
+
+- Neither sub-case has an `Ok` baseline the way §3.3's flatten vector does: deserializing the
+  bomb's YAML sequence into `Option<String>` always errs today, buffering or not. The
+  regression this vector pins is not presence-vs-absence of an error but *which* error: a
+  cheap, immediate type-mismatch without buffering, versus `serde_norway`'s expensive
+  repetition-limit trip once the field is buffered.
+- A `serde_norway::Value`/untagged retype of `RawFrontmatter::description` cannot land
+  silently: it is compile-blocked today by `require_field`'s `Option<String>` parameter type at
+  its call site in `extract_skill_metadata`. A buffering `#[serde(deserialize_with)]` that keeps
+  the field's declared type as `Option<String>` is not compile-blocked and is the genuinely
+  silent sub-case.
+- The ~5.3 ms (release) / ~61.7 ms (debug) degradation figures cited when this vector was raised
+  are from issue #359's own measurement, not independently re-verified against vendored sources
+  the way §3.1-§3.6 were — treat them as illustrative, not as an Evidence Ledger entry.
+
+Regression coverage: `crates/mcp-skill/src/parser.rs`. Two canaries,
+`test_serde_norway_buffers_alias_bomb_when_declared_field_is_value_typed` and
+`test_serde_norway_buffers_alias_bomb_when_declared_field_uses_deserialize_with`, pin each
+sub-case's error in isolation against a local test-only struct shaped like the hypothetical
+regressed `RawFrontmatter`, since production `RawFrontmatter` is not vulnerable to either
+sub-case today. A third test,
+`test_extract_skill_metadata_alias_bomb_under_declared_field_short_circuits`, closes the gap
+against production code directly: it asserts `extract_skill_metadata`'s error for this fixture
+does not contain `serde_norway`'s "repetition limit exceeded" text today, and would fail loudly
+if `RawFrontmatter` were ever retyped to either buffering shape. §5's original deliverable
+covered only the flatten/undeclared-key vector, via
+`test_extract_skill_metadata_alias_bomb_under_unknown_key_stays_ok` — see `RawFrontmatter`'s doc
+comment for which future edits require re-checking all three tests above.
+
 ## See Also
 
 - [[../constitution#V. Security]] — YAML parse-time bound and

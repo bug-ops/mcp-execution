@@ -463,6 +463,28 @@ fn describe_yaml_error(err: &serde_norway::Error) -> String {
 /// missing `description` are reported as distinct
 /// [`SkillMetadataError::MissingField`] variants rather than being folded
 /// into one generic deserialization failure.
+///
+/// # Regression coverage (issue #359)
+///
+/// Both fields being plain `Option<String>` (no `#[serde(flatten)]`, no buffering
+/// `deserialize_with`, no untagged/`Value` retype) is why an alias bomb placed under an
+/// undeclared key or under `description` itself is discarded today without expanding nested
+/// aliases (`tests::test_extract_skill_metadata_alias_bomb_under_unknown_key_stays_ok`,
+/// `tests::test_extract_skill_metadata_alias_bomb_under_declared_field_short_circuits`). If
+/// `description` (or `name`) is ever changed to a buffering type — `serde_norway::Value`, an
+/// untagged enum, or a `#[serde(deserialize_with)]` that internally buffers through one of
+/// those while keeping the field declared as `Option<String>` — that change reopens the
+/// amplification path for a bomb placed directly under the affected key, and the
+/// declared-field test above flips loudly (its error stops being a plain type mismatch and
+/// becomes `serde_norway`'s "repetition limit exceeded"). A `Value`/untagged retype is also
+/// compile-blocked at `require_field`'s `Option<String>` parameter in the call below; a
+/// buffering `deserialize_with` is not, since the declared type is unchanged. Both underlying
+/// assumptions are additionally pinned in isolation, against local test-only structs shaped
+/// like each hypothetical retype, by
+/// `tests::test_serde_norway_buffers_alias_bomb_when_declared_field_is_value_typed` and
+/// `tests::test_serde_norway_buffers_alias_bomb_when_declared_field_uses_deserialize_with`. If
+/// this struct's field shape is ever changed in either direction, all three tests above need
+/// re-checking against the new shape.
 #[derive(Debug, Deserialize)]
 struct RawFrontmatter {
     name: Option<String>,
@@ -1180,6 +1202,30 @@ description: 'quoted text'
         assert_eq!(metadata.description, "quoted text");
     }
 
+    /// Builds the flow-sequence body of an 8-anchor alias bomb shared by every alias-bomb test
+    /// below: 8 anchors (`a0..a7`), each referencing the previous 8 times — 8^8 ~= 16.7M leaves
+    /// if ever fully expanded. `preamble` is prepended verbatim; it decides which YAML key
+    /// (declared or not) the bomb ends up under. At a few hundred bytes the result sits well
+    /// under `MAX_FRONTMATTER_SIZE` (8 KiB); shrinking the branching factor, the anchor count,
+    /// or the frontmatter cap changes that margin and must be re-checked against callers' size
+    /// assertions.
+    fn alias_bomb_fixture(preamble: &str) -> String {
+        use std::fmt::Write as _;
+
+        let mut frontmatter = String::from(preamble);
+        writeln!(frontmatter, "  - &a0 [x, x, x, x, x, x, x, x]").unwrap();
+        for level in 1..=7 {
+            let prev = level - 1;
+            let refs = (0..8)
+                .map(|_| format!("*a{prev}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(frontmatter, "  - &a{level} [{refs}]").unwrap();
+        }
+        writeln!(frontmatter, "  - *a7").unwrap();
+        frontmatter
+    }
+
     #[test]
     fn test_extract_skill_metadata_alias_bomb_under_unknown_key_stays_ok() {
         // ADR-341 §3.3/§5, corrected per review: `RawFrontmatter` has no
@@ -1197,30 +1243,18 @@ description: 'quoted text'
         // serde's derive reads it directly regardless of `flatten` — that fixture could
         // never detect the regression it claimed to guard, at any budget.
         //
-        // Fixture shape: 8 anchors (`a0..a7`), each referencing the previous 8 times — 8^8 ≈
-        // 16.7M leaves if ever fully expanded. At a few hundred bytes this sits well under
-        // `MAX_FRONTMATTER_SIZE` (8 KiB); shrinking the branching factor, the anchor count,
-        // or the frontmatter cap changes that margin and must be re-checked against the size
-        // assertion below.
+        // Fixture shape: see `alias_bomb_fixture`'s doc comment.
         //
-        // Deliberately out of scope: retyping `description` itself to a buffering type
+        // Deliberately out of scope here: retyping `description` itself to a buffering type
         // (`serde_norway::Value`, an untagged enum, a buffering `deserialize_with`) is a
-        // distinct regression vector this fixture does not cover — tracked separately.
-        use std::fmt::Write as _;
+        // distinct regression vector this fixture does not cover — see
+        // `test_serde_norway_buffers_alias_bomb_when_declared_field_is_value_typed` and
+        // `test_serde_norway_buffers_alias_bomb_when_declared_field_uses_deserialize_with`
+        // below (issue #359).
         use std::time::{Duration, Instant};
 
-        let mut frontmatter =
-            String::from("name: test-skill\ndescription: valid description\nunknown_key:\n");
-        writeln!(frontmatter, "  - &a0 [x, x, x, x, x, x, x, x]").unwrap();
-        for level in 1..=7 {
-            let prev = level - 1;
-            let refs = (0..8)
-                .map(|_| format!("*a{prev}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            writeln!(frontmatter, "  - &a{level} [{refs}]").unwrap();
-        }
-        writeln!(frontmatter, "  - *a7").unwrap();
+        let frontmatter =
+            alias_bomb_fixture("name: test-skill\ndescription: valid description\nunknown_key:\n");
 
         let content = format!("---\n{frontmatter}---\n# Test\n");
         assert!(
@@ -1246,6 +1280,184 @@ description: 'quoted text'
         assert!(
             elapsed < Duration::from_secs(1),
             "parse took {elapsed:?}, unexpectedly long even accounting for cold-process noise"
+        );
+    }
+
+    #[test]
+    fn test_serde_norway_buffers_alias_bomb_when_declared_field_is_value_typed() {
+        // Issue #359 ("vector 2", sub-case A). The vector-1 test above pins the *unknown-key*
+        // amplification path, which only opens up if `RawFrontmatter` grows a
+        // `#[serde(flatten)]`-style field; it cannot detect a second, distinct regression: a
+        // *declared* field (e.g. `description`) retyped from `Option<String>` to a buffering
+        // type such as `serde_norway::Value` or an untagged enum. Buffering a declared field
+        // forces serde to materialize its value before matching it against the target type,
+        // which expands nested aliases and trips serde_norway's own repetition-limit guard.
+        // Unlike vector 1, there is no `Ok` baseline here: deserializing a YAML sequence into
+        // `Option<String>` always errs, buffering or not. The regression this pins is not
+        // presence-vs-absence of an error but *which* error: a cheap, immediate type-mismatch
+        // without buffering, versus this expensive repetition-limit trip once buffered.
+        //
+        // This is a canary on `serde_norway`'s own buffering behavior, not a regression test
+        // against production `RawFrontmatter` (see its doc comment): that struct's
+        // `description` is `Option<String>` today, so this exact retype is compile-blocked at
+        // `require_field`'s `Option<String>` parameter, its `extract_skill_metadata` call site
+        // — if attempted, the build fails before this test could ever run. It is kept to pin
+        // the assumption the sibling `deserialize_with` test below relies on, since that one is
+        // NOT compile-blocked.
+        //
+        // As in vector 1, the primary assertion is the deterministic outcome flip, not
+        // wall-clock timing. The ~5.3ms release / ~61.7ms debug degradation figures quoted when
+        // this vector was raised are from issue #359's own reproduction, not independently
+        // re-verified against vendored sources the way ADR-341 §3.1-§3.6 were — illustrative
+        // only, not a re-confirmed Evidence Ledger figure.
+        use std::time::{Duration, Instant};
+
+        #[derive(Debug, Deserialize)]
+        #[allow(
+            dead_code,
+            reason = "fields exist only to mirror RawFrontmatter's shape"
+        )]
+        struct RawFrontmatterBufferedDescription {
+            name: Option<String>,
+            description: serde_norway::Value,
+        }
+
+        let frontmatter = alias_bomb_fixture("name: test-skill\ndescription:\n");
+        // Unlike vector 1, this path never reaches `extract_skill_metadata`, so
+        // `MAX_FRONTMATTER_SIZE` is not enforced here; this only records that the fixture has
+        // headroom under that constant, for comparability with vector 1's fixture.
+        assert!(
+            frontmatter.len() <= MAX_FRONTMATTER_SIZE,
+            "fixture unexpectedly exceeds MAX_FRONTMATTER_SIZE; re-check alias_bomb_fixture's margin"
+        );
+
+        let start = Instant::now();
+        let result = serde_norway::from_str::<RawFrontmatterBufferedDescription>(&frontmatter);
+        let elapsed = start.elapsed();
+
+        let err = result.expect_err(
+            "expected Err: buffering a declared field into serde_norway::Value forces alias \
+             expansion before per-field routing, which should trip serde_norway's own \
+             repetition-limit guard",
+        );
+        assert!(
+            err.to_string().contains("repetition limit exceeded"),
+            "expected serde_norway's own repetition-limit guard specifically, not some \
+             unrelated error a future serde_norway version might introduce instead; got: {err}"
+        );
+        // Sanity bound only: `from_str` has already returned by the time `elapsed` is measured,
+        // so this cannot catch a genuine hang (this workspace's nextest config sets no
+        // slow-timeout/terminate-after). It only flags a completed-but-pathologically-slow
+        // parse that the deterministic `Err` assertion above would not otherwise surface.
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "parse took {elapsed:?}, unexpectedly long even accounting for cold-process noise"
+        );
+    }
+
+    #[test]
+    fn test_serde_norway_buffers_alias_bomb_when_declared_field_uses_deserialize_with() {
+        // Issue #359 ("vector 2", sub-case B — the genuinely silent one, per review). The
+        // sibling test above pins the same amplification path for a field whose *type* changes
+        // to `serde_norway::Value`, which is compile-blocked at `extract_skill_metadata`'s
+        // `require_field` call site. This test pins the sub-case that is NOT compile-blocked: a
+        // `#[serde(deserialize_with = ...)]` that buffers through `serde_norway::Value`
+        // internally while keeping the field's declared Rust type as `Option<String>` — exactly
+        // the shape `require_field` expects, so this variant would compile and could land
+        // without any type-level signal.
+        //
+        // See `RawFrontmatter`'s doc comment for which future edits this canary (and its
+        // sibling above) are meant to catch, and why both must be extended or replaced if
+        // `RawFrontmatter` itself is ever changed in either direction.
+        use std::time::{Duration, Instant};
+
+        fn buffer_via_value<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = serde_norway::Value::deserialize(deserializer)?;
+            Ok(value.as_str().map(str::to_string))
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[allow(
+            dead_code,
+            reason = "fields exist only to mirror RawFrontmatter's shape"
+        )]
+        struct RawFrontmatterDeserializeWithDescription {
+            name: Option<String>,
+            #[serde(deserialize_with = "buffer_via_value")]
+            description: Option<String>,
+        }
+
+        let frontmatter = alias_bomb_fixture("name: test-skill\ndescription:\n");
+        // See the sibling test above: this path also bypasses `extract_skill_metadata`, so
+        // this only records headroom under `MAX_FRONTMATTER_SIZE`, not a production size guard.
+        assert!(
+            frontmatter.len() <= MAX_FRONTMATTER_SIZE,
+            "fixture unexpectedly exceeds MAX_FRONTMATTER_SIZE; re-check alias_bomb_fixture's margin"
+        );
+
+        let start = Instant::now();
+        let result =
+            serde_norway::from_str::<RawFrontmatterDeserializeWithDescription>(&frontmatter);
+        let elapsed = start.elapsed();
+
+        let err = result.expect_err(
+            "expected Err: a buffering deserialize_with should force alias expansion before \
+             per-field routing just like an outright Value-typed field, even though the \
+             declared Rust type here stays Option<String>",
+        );
+        assert!(
+            err.to_string().contains("repetition limit exceeded"),
+            "expected serde_norway's own repetition-limit guard specifically, not some \
+             unrelated error a future serde_norway version might introduce instead; got: {err}"
+        );
+        // Sanity bound only (see the sibling test above for why this cannot catch a hang).
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "parse took {elapsed:?}, unexpectedly long even accounting for cold-process noise"
+        );
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_alias_bomb_under_declared_field_short_circuits() {
+        // Issue #359 ("vector 2", production-coupled canary). The two tests above pin the
+        // buffering assumption against local, decoupled types; this one closes that gap for
+        // real against production `RawFrontmatter` + `extract_skill_metadata`, the same way
+        // vector 1 does for the unknown-key path. `describe_yaml_error` (used by
+        // `extract_skill_metadata`) passes the underlying `serde_norway` error's `Display`
+        // through into `SkillMetadataError::InvalidYaml(String)`, only rewriting its embedded
+        // line/column offset — see `test_extract_skill_metadata_invalid_yaml` for existing
+        // precedent asserting on that message — so the error text (including the
+        // "repetition limit exceeded" substring this test checks for, untouched by that
+        // rewrite) is directly inspectable here without a local test-only struct.
+        //
+        // Today `RawFrontmatter::description` is `Option<String>`, so deserializing the bomb
+        // sequence into it short-circuits on an immediate type mismatch before any buffering
+        // can happen — the error is NOT the repetition-limit guard. If `description` is ever
+        // retyped to a buffering shape (see `RawFrontmatter`'s doc comment), this assertion
+        // flips loudly: the error becomes "repetition limit exceeded", the same string the two
+        // sibling tests above pin directly.
+        let content = format!(
+            "---\n{}---\n# Test\n",
+            alias_bomb_fixture("name: test-skill\ndescription:\n")
+        );
+        assert!(
+            content.len() <= MAX_FRONTMATTER_SIZE,
+            "fixture must stay under the frontmatter cap to exercise the parser, not the size guard"
+        );
+
+        let result = extract_skill_metadata(&content);
+        let Err(SkillMetadataError::InvalidYaml(message)) = &result else {
+            panic!("expected InvalidYaml, got: {result:?}");
+        };
+        assert!(
+            !message.contains("repetition limit exceeded"),
+            "RawFrontmatter::description now trips serde_norway's repetition-limit guard on \
+             this fixture, meaning it was retyped to a buffering shape (serde_norway::Value, an \
+             untagged enum, or a buffering deserialize_with) without extending this test — see \
+             RawFrontmatter's doc comment. got: {message:?}"
         );
     }
 }
