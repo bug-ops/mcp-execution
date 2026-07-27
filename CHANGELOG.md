@@ -299,6 +299,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Added `specs/decisions/ADR-341-serde-saphyr-vs-serde-norway.md`, a decision record evaluating
+  whether `serde-saphyr` should replace `serde_norway` as this project's mandated YAML dependency
+  (follow-up to #293). Corrects issue #341's premise (the crate's actual backend since
+  `serde-saphyr` 0.0.27 is `granit-parser`, a ~12-week-old single-maintainer fork, not
+  `saphyr-parser`), and finds that swapping today would be a measured DoS regression on the
+  alias-bomb axis at the parser's default settings. Recommends monitoring `granit-parser` against
+  a measurable maturity gate (review date 2026-10-27) rather than swapping now, with a standalone
+  regression test pinning the current parser's incidental alias-bomb resistance as the near-term
+  deliverable. Cross-referenced from `specs/skill/spec.md` §7 (#341).
 - Backfilled `# Examples` doc-test sections for ~50 public types and functions across the workspace that previously lacked runnable examples, including `ServerConfig` getters, CLI formatters, command structs, and resource limit constants (#189).
 - Added justification comments to 3 undocumented `#[allow(...)]` clippy attributes explaining the tradeoff for each (#186).
 - Documented that `ServerConfig`'s `Serialize` output is a separate code path from its redacting `Debug` impl and is not covered by that guarantee — serialized output must never be logged or printed directly (#247).
