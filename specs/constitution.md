@@ -127,6 +127,15 @@ and issue-number references dedicated to it.
   reaches an LLM-facing prompt, wrapped in an explicit
   `<untrusted-data>...</untrusted-data>` boundary that cannot be forged from
   within.
+- **No untrusted source echo in error text**: error messages derived from
+  parsing or processing untrusted input (YAML, JSON, protocol-specific
+  formats) that reach an LLM or client must not verbatim reproduce source
+  excerpts — only the location of the error and the kind of failure are safe
+  to surface. This applies to every parsing dependency and entry point,
+  independent of which specific parser or format is in use — any future
+  parser swap or new parsing path must validate its error rendering against
+  this principle up front. See ADR-341 (section 3.5) for the concrete case
+  that motivated this rule.
 - **Debug-redaction of secrets**: any type carrying environment variables,
   HTTP headers, CLI args, or URLs implements `Debug` by hand (never
   `#[derive(Debug)]`) to redact values while keeping keys — because these

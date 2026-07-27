@@ -169,9 +169,10 @@ before expanding. Measured effect of changing that shape:
   to today. (An earlier pass of this evaluation claimed this would break
   the short-circuit; that claim was measured and found wrong.)
 - Adding a `#[serde(flatten)]`-style buffering field is what actually
-  breaks it: `serde_norway` then degrades to **4.2 / 5.1 / 6.0 / 7.0 ms**
-  at alias-nesting levels 8/10/12/14 — **scaling with input**, unlike its
-  current flat ~20-28 us.
+  breaks it (note: only when the alias bomb uses undeclared/unknown YAML
+  keys — `flatten` buffers these, not declared fields): `serde_norway`
+  then degrades to **4.2 / 5.1 / 6.0 / 7.0 ms** at alias-nesting levels
+  8/10/12/14 — **scaling with input**, unlike its current flat ~20-28 us.
 - `serde-saphyr` under the redesigned `Budget` (§6) stays **flat at
   1.78 ms** on the identical flattened shape.
 
@@ -396,7 +397,8 @@ issue's stated scope:
    for *any* future parser error text reaching an LLM, rather than
    documented as specific to this evaluation. Both review passes agreed
    this generalization is warranted; it was not applied here since no
-   parser swap is being made yet.
+   parser swap is being made yet. (Implemented as a constitution principle,
+   issue #351.)
 3. `granit-parser`'s inherited exposure (if any) to upstream `saphyr`
    issue #109 (a billion-laughs report open since 2026-03-28, fix PR
    #120 unmerged upstream) was not verified. `serde-saphyr`'s `Budget`

@@ -1179,4 +1179,73 @@ description: 'quoted text'
         assert_eq!(metadata.name, "quoted-name");
         assert_eq!(metadata.description, "quoted text");
     }
+
+    #[test]
+    fn test_extract_skill_metadata_alias_bomb_under_unknown_key_stays_ok() {
+        // ADR-341 §3.3/§5, corrected per review: `RawFrontmatter` has no
+        // `#[serde(deny_unknown_fields)]`, so a key it does not declare is discarded via a
+        // lazy visitor that never expands nested aliases — the bomb below sits under such a
+        // key (`unknown_key`), with `name`/`description` left valid, so parsing succeeds
+        // fast today. A `#[serde(flatten)]`-style buffering field would force every unknown
+        // key to be materialized into a `Content`-like structure before per-field routing,
+        // which *does* expand aliases and trips serde_norway's own repetition-limit guard —
+        // flipping this exact fixture's outcome from `Ok` to `Err`. That deterministic
+        // outcome flip, not wall-clock timing, is the primary thing this test pins: a single
+        // cold-process call's timing noise (measured up to ~1.6ms) is not a safe
+        // discriminator against the ADR's ~4-7ms regression floor. An earlier version of
+        // this test put the bomb on the *declared* `description` field instead, where
+        // serde's derive reads it directly regardless of `flatten` — that fixture could
+        // never detect the regression it claimed to guard, at any budget.
+        //
+        // Fixture shape: 8 anchors (`a0..a7`), each referencing the previous 8 times — 8^8 ≈
+        // 16.7M leaves if ever fully expanded. At a few hundred bytes this sits well under
+        // `MAX_FRONTMATTER_SIZE` (8 KiB); shrinking the branching factor, the anchor count,
+        // or the frontmatter cap changes that margin and must be re-checked against the size
+        // assertion below.
+        //
+        // Deliberately out of scope: retyping `description` itself to a buffering type
+        // (`serde_norway::Value`, an untagged enum, a buffering `deserialize_with`) is a
+        // distinct regression vector this fixture does not cover — tracked separately.
+        use std::fmt::Write as _;
+        use std::time::{Duration, Instant};
+
+        let mut frontmatter =
+            String::from("name: test-skill\ndescription: valid description\nunknown_key:\n");
+        writeln!(frontmatter, "  - &a0 [x, x, x, x, x, x, x, x]").unwrap();
+        for level in 1..=7 {
+            let prev = level - 1;
+            let refs = (0..8)
+                .map(|_| format!("*a{prev}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(frontmatter, "  - &a{level} [{refs}]").unwrap();
+        }
+        writeln!(frontmatter, "  - *a7").unwrap();
+
+        let content = format!("---\n{frontmatter}---\n# Test\n");
+        assert!(
+            content.len() <= MAX_FRONTMATTER_SIZE,
+            "fixture must stay under the frontmatter cap to exercise the parser, not the size guard"
+        );
+
+        let start = Instant::now();
+        let result = extract_skill_metadata(&content);
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_ok(),
+            "expected Ok: an alias bomb under a key RawFrontmatter does not declare must be \
+             ignored today without expansion; if this now errors, RawFrontmatter's field shape \
+             likely changed (e.g. a #[serde(flatten)] field) and reopened the amplification path \
+             serde_norway's own repetition-limit guard then catches at ms-scale cost instead of \
+             being ignored at us-scale cost. got: {result:?}"
+        );
+        // Sanity bound only, not the detection mechanism (see comment above): guards against an
+        // outright hang rather than the ms-scale regression, which the Ok/Err flip already
+        // catches deterministically regardless of timing noise.
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "parse took {elapsed:?}, unexpectedly long even accounting for cold-process noise"
+        );
+    }
 }
