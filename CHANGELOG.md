@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mcp-execution-server::output_dir`, and `mcp-execution-cli::commands::skill::has_path_traversal`
   (#289).
 
+### Changed
+
+- **`mcp-execution-introspector`**: `discover_via_stdio` and `discover_via_http` copy-pasted the
+  same connect/list-tools/timeout/error-mapping pipeline for their shared `RunningService<RoleClient,
+  ()>` client. Both now delegate to a single private `connect_and_list_tools` helper, generic over
+  the connect future each transport builds. No behavior change: timeout durations, error types and
+  messages, and success output are unchanged (#294).
+
 ### Fixed
 
 - **`mcp-execution-codegen`**: `json_schema_to_typescript` and the JSDoc description sanitizer
