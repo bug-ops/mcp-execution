@@ -196,17 +196,27 @@ impl From<mcp_execution_core::metadata::ParameterMetadata> for ParsedParameter {
     }
 }
 
-impl From<mcp_execution_core::metadata::ToolMetadata> for ParsedToolFile {
-    fn from(meta: mcp_execution_core::metadata::ToolMetadata) -> Self {
-        Self {
-            name: meta.name.into_inner(),
-            typescript_name: meta.typescript_name,
-            server_id: String::new(),
-            category: meta.category,
-            keywords: meta.keywords,
-            description: meta.description,
-            parameters: meta.parameters.into_iter().map(Into::into).collect(),
-        }
+/// Builds a [`ParsedToolFile`] from a sidecar tool entry and the server ID it belongs to.
+///
+/// A plain function rather than a `From<ToolMetadata>` impl: `ToolMetadata` carries no
+/// `server_id` of its own (it lives once on the enclosing [`ServerMetadata`]), so a `From` impl
+/// could only ever produce a `ParsedToolFile` with a placeholder `server_id` that every caller
+/// then had to patch in after construction — a representable-but-wrong intermediate state.
+/// Taking `server_id` as a parameter removes that sentinel from this construction path;
+/// `ParsedToolFile`'s fields remain public, so callers that build one directly (e.g. test
+/// fixtures) are unaffected and can still set an arbitrary `server_id` themselves.
+fn parsed_tool_file_from_metadata(
+    meta: mcp_execution_core::metadata::ToolMetadata,
+    server_id: &str,
+) -> ParsedToolFile {
+    ParsedToolFile {
+        name: meta.name.into_inner(),
+        typescript_name: meta.typescript_name,
+        server_id: server_id.to_string(),
+        category: meta.category,
+        keywords: meta.keywords,
+        description: meta.description,
+        parameters: meta.parameters.into_iter().map(Into::into).collect(),
     }
 }
 
@@ -319,11 +329,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
     let mut tools: Vec<ParsedToolFile> = meta
         .tools
         .into_iter()
-        .map(|tool| {
-            let mut parsed: ParsedToolFile = tool.into();
-            parsed.server_id.clone_from(&server_id);
-            parsed
-        })
+        .map(|tool| parsed_tool_file_from_metadata(tool, &server_id))
         .collect();
 
     // Sort by name for consistent ordering

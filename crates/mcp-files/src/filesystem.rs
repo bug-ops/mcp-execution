@@ -60,7 +60,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::types::{FileEntry, FilePath, FilesError, Result};
+use crate::types::{FileEntry, FilePath, FilesError, FilesResourceKind, Result};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
@@ -713,7 +713,7 @@ impl FileSystem {
     pub(crate) fn check_export_bounds(&self) -> Result<()> {
         if self.file_count() > MAX_EXPORT_FILES {
             return Err(FilesError::ResourceLimitExceeded {
-                resource: "export file count".to_string(),
+                resource: FilesResourceKind::ExportFileCount,
                 actual: self.file_count(),
                 limit: MAX_EXPORT_FILES,
             });
@@ -722,7 +722,7 @@ impl FileSystem {
         let total_bytes: usize = self.files().map(|(_, file)| file.size()).sum();
         if total_bytes > MAX_EXPORT_BYTES {
             return Err(FilesError::ResourceLimitExceeded {
-                resource: "export total size".to_string(),
+                resource: FilesResourceKind::ExportTotalSize,
                 actual: total_bytes,
                 limit: MAX_EXPORT_BYTES,
             });
@@ -1954,8 +1954,16 @@ mod tests {
 
         let result = vfs.export_to_filesystem(temp.path());
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_resource_limit_exceeded());
+        assert!(
+            matches!(
+                result,
+                Err(FilesError::ResourceLimitExceeded {
+                    resource: FilesResourceKind::ExportFileCount,
+                    ..
+                })
+            ),
+            "expected ResourceLimitExceeded{{resource: ExportFileCount}}, got: {result:?}"
+        );
     }
 
     #[test]
@@ -1980,8 +1988,16 @@ mod tests {
 
         let result = vfs.export_to_filesystem(temp.path());
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_resource_limit_exceeded());
+        assert!(
+            matches!(
+                result,
+                Err(FilesError::ResourceLimitExceeded {
+                    resource: FilesResourceKind::ExportTotalSize,
+                    ..
+                })
+            ),
+            "expected ResourceLimitExceeded{{resource: ExportTotalSize}}, got: {result:?}"
+        );
     }
 
     #[test]

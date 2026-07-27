@@ -86,4 +86,4 @@ pub mod types;
 // Re-export main types
 pub use builder::FilesBuilder;
 pub use filesystem::{ExportOptions, FileSystem};
-pub use types::{FileEntry, FilePath, FilesError, Result};
+pub use types::{FileEntry, FilePath, FilesError, FilesResourceKind, Result};

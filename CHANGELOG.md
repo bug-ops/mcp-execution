@@ -81,6 +81,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separately-threaded `server_id` parameter, so the map key can no longer drift from the value's
   `id` field even though both were already sourced from the same identifier in practice. No
   public API change (#317).
+- **`mcp-execution-skill`**: `parser::ParsedToolFile`'s `impl From<ToolMetadata>` (which set
+  `server_id: String::new()` as a placeholder, patched in afterward by `scan_tools_directory`)
+  replaced by a private `parsed_tool_file_from_metadata(meta, server_id)` function that takes
+  `server_id` directly, so a `ParsedToolFile` with the wrong (or empty-sentinel) server id can no
+  longer be constructed via that conversion path (see the `### Breaking` entry below for the
+  compatibility impact). `ParsedToolFile`'s own fields and `scan_tools_directory`'s output are
+  unchanged (#342).
+- **`mcp-execution-files`**: `FilesError::ResourceLimitExceeded.resource` changed from a
+  free-form `String` to the new closed `pub enum types::FilesResourceKind` (`ExportFileCount`,
+  `ExportTotalSize`), re-exported at the crate root, closing the gap `mcp-execution-core`'s
+  `ResourceKind` (#317) intentionally left open (see the `### Breaking` entry below for the
+  compatibility impact). Kept as a local enum rather than added as variants to
+  `mcp-core::ResourceKind`: that enum already has semantically adjacent variants
+  (`GeneratedOutputSize`/`GeneratedFileCount`, the closest neighbors to
+  `ExportTotalSize`/`ExportFileCount`), but `mcp-files` has no direct dependency on
+  `mcp-execution-core` (only a transitive one via `mcp-execution-codegen`), so sharing that enum
+  would mean adding a new direct dependency on `mcp-core` for a single error variant — a local
+  enum avoids that coupling. `FilesResourceKind`'s `Display` reproduces the same wording
+  `check_export_bounds` built by hand (`"export file count"` / `"export total size"`), so the
+  error message is unchanged in substance. The only in-tree construction sites
+  (`mcp-files::filesystem::check_export_bounds`) and match/test sites (`mcp-cli::runner`)
+  updated (#343).
 
 ### Removed
 
@@ -305,6 +327,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant list and rationale). Source-breaking for any downstream consumer that constructs
   `Error::ResourceLimitExceeded { resource: ... }` with a string literal, or pattern-matches/reads
   `.resource` expecting a `String` (#317).
+- **`mcp-execution-files`**: `FilesError::ResourceLimitExceeded.resource` changed from `String`
+  to the new closed `pub enum FilesResourceKind` (see the `### Changed` entry above for the full
+  variant list and rationale). Source-breaking for any downstream consumer that constructs
+  `FilesError::ResourceLimitExceeded { resource: ... }` with a string literal, or
+  pattern-matches/reads `.resource` expecting a `String` (#343).
+- **`mcp-execution-skill`**: `impl From<mcp_execution_core::metadata::ToolMetadata> for
+  ParsedToolFile` removed (see the `### Changed` entry above for the replacement). Both types are
+  publicly re-exported, so this is source-breaking for any downstream consumer that relied on
+  `ToolMetadata::into::<ParsedToolFile>()`/`ParsedToolFile::from(tool_metadata)`; `ParsedToolFile`
+  itself is unaffected and still constructible via its (unchanged) public fields (#342).
 - **`mcp-execution-core`**: `metadata::ServerMetadata.server_id` changed from `String` to
   `ServerId`, and `metadata::ToolMetadata.name` changed from `String` to `ToolName` (see the
   `### Changed` entry above for the wire-format-compatibility note). Source-breaking for any
