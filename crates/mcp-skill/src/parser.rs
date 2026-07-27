@@ -33,6 +33,9 @@ pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
 /// latency. A real `name`/`description` frontmatter is a few hundred bytes at
 /// most, so 8KB is already generous while keeping [`extract_skill_metadata`]
 /// cheap enough to run synchronously on `save_skill`'s request-handling task.
+///
+/// This cap is the project-wide contract for any YAML entry point, not a local
+/// detail of this one — see the project constitution's security section.
 pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024;
 
 // Locates the raw YAML block between a SKILL.md's `---` delimiters. The

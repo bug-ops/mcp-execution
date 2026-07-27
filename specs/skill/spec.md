@@ -153,10 +153,16 @@ regex capture that an earlier version used). The extracted block is
 size-capped at `MAX_FRONTMATTER_SIZE` (8 KiB) **before** parsing, since
 `serde_norway` (like other libyaml-based parsers) is not linear-time on
 pathologically nested input — bounding only the overall `SKILL.md` size
-would not bound parse latency. `name`/`description` are required and
-treated as invalid if absent, `null`/`~`, or blank-after-trim. A
-`serde_norway` deserialization error's line number is corrected to be
-file-relative (the block starts one line after the file's opening `---`).
+would not bound parse latency. This pre-parse cap is the project-wide
+contract for YAML input, not a local detail of this function: any future
+YAML parse entry point applies its own cap to the slice it passes to
+`serde_norway`, rather than inheriting a bound from an enclosing
+document-size limit (see [[../constitution#V. Security]]).
+
+`name`/`description` are required and treated as invalid if absent,
+`null`/`~`, or blank-after-trim. A `serde_norway` deserialization error's
+line number is corrected to be file-relative (the block starts one line
+after the file's opening `---`).
 
 ## 8. `resolve_skill_output_path` — Path Confinement
 
