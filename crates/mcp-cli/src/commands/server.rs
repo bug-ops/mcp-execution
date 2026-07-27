@@ -5,8 +5,9 @@
 
 use crate::actions::ServerAction;
 use crate::commands::common::{
-    McpServerEntry, McpTransport, build_core_config, get_mcp_server, list_mcp_servers,
+    McpServerEntry, McpTransport, build_core_config, get_mcp_server_entry, list_mcp_servers,
 };
+use crate::formatters::escape_error_text;
 use anyhow::{Context, Result};
 use mcp_execution_core::ServerConfig;
 use mcp_execution_core::ServerId;
@@ -235,7 +236,8 @@ pub struct ValidationResult {
 /// Note: For the `Validate` action, an unknown server name is reported via
 /// `ExitCode::ERROR` rather than returning `Err`. Server introspection failures
 /// (for both `Info` and `Validate`) are also caught internally and reported via
-/// `ExitCode::ERROR`.
+/// `ExitCode::ERROR`. So is an entry that is present but fails security validation (e.g. an
+/// invalid URL scheme, #305/#304) — only a genuinely absent entry propagates as `Err`.
 ///
 /// # Examples
 ///
@@ -315,10 +317,31 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
 /// Shows detailed information about a specific server.
 ///
 /// Connects to the server and introspects its capabilities, tools, and status.
+///
+/// An entry whose `url` (or other field) fails [`build_core_config`]'s security validation is
+/// reported the same way as an entry that is well-formed but unreachable — a structured
+/// `"status": "unavailable"` [`ServerInfo`] through `output_format`, not a raw, unformatted error
+/// (#305). Only a genuinely absent entry propagates as `Err` via [`get_mcp_server_entry`].
 async fn show_server_info(server: String, output_format: OutputFormat) -> Result<ExitCode> {
-    let (server_id, server_config, entry) = get_mcp_server(&server)?;
-
+    let (server_id, entry) = get_mcp_server_entry(&server)?;
     let command = build_command_string(&entry);
+
+    let server_config = match build_core_config(&entry) {
+        Ok(config) => config,
+        Err(e) => {
+            warn!(
+                "Server '{}' has an invalid configuration: {}",
+                server,
+                escape_error_text(&e.to_string())
+            );
+            let formatted = crate::formatters::format_output(
+                &unavailable_server_info(server, command),
+                output_format,
+            )?;
+            println!("{formatted}");
+            return Ok(ExitCode::ERROR);
+        }
+    };
 
     info!("Introspecting server '{}'...", server);
 
@@ -364,19 +387,16 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
-            warn!("Failed to introspect server '{}': {}", server, e);
+            warn!(
+                "Failed to introspect server '{}': {}",
+                server,
+                escape_error_text(&e.to_string())
+            );
 
-            let server_info = ServerInfo {
-                id: server.clone(),
-                name: server,
-                version: "unknown".to_string(),
-                command,
-                status: ServerStatus::Unavailable.as_str().to_string(),
-                tools: Vec::new(),
-                capabilities: Vec::new(),
-            };
-
-            let formatted = crate::formatters::format_output(&server_info, output_format)?;
+            let formatted = crate::formatters::format_output(
+                &unavailable_server_info(server, command),
+                output_format,
+            )?;
             println!("{formatted}");
 
             Ok(ExitCode::ERROR)
@@ -384,11 +404,29 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
     }
 }
 
+/// Builds the `"status": "unavailable"` [`ServerInfo`] shared by `show_server_info`'s two failure
+/// branches — invalid configuration and failed introspection — so both report through the same
+/// structured shape.
+fn unavailable_server_info(server: String, command: String) -> ServerInfo {
+    ServerInfo {
+        id: server.clone(),
+        name: server,
+        version: "unknown".to_string(),
+        command,
+        status: ServerStatus::Unavailable.as_str().to_string(),
+        tools: Vec::new(),
+        capabilities: Vec::new(),
+    }
+}
+
 /// Validates a server by checking its command and attempting introspection.
 ///
-/// The server must be configured in `~/.claude/mcp.json`.
+/// The server must be configured in `~/.claude/mcp.json`. An entry that is present but fails
+/// [`build_core_config`]'s security validation (e.g. an invalid URL scheme) is reported with a
+/// message describing that specific problem, not the "not found" message reserved for a
+/// genuinely absent entry (#304).
 async fn validate_command(server_name: String, output_format: OutputFormat) -> Result<ExitCode> {
-    let (server_id, server_config, entry) = match get_mcp_server(&server_name) {
+    let (server_id, entry) = match get_mcp_server_entry(&server_name) {
         Ok(result) => result,
         Err(e) => {
             let result = ValidationResult {
@@ -432,6 +470,25 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
         return Ok(ExitCode::ERROR);
     }
 
+    // The precheck above catches the common malformed-URL/missing-command cases, but
+    // `build_core_config` runs additional security validation (e.g. header safety, timeout
+    // bounds) the precheck does not duplicate. A failure here is still "entry present, invalid
+    // configuration" rather than "entry not found", so it gets its own message rather than
+    // falling through to `get_mcp_server_entry`'s not-found wrapping.
+    let server_config = match build_core_config(&entry) {
+        Ok(config) => config,
+        Err(e) => {
+            let result = ValidationResult {
+                command,
+                valid: false,
+                message: format!("Server '{server_name}' has an invalid configuration: {e}"),
+            };
+            let formatted = crate::formatters::format_output(&result, output_format)?;
+            println!("{formatted}");
+            return Ok(ExitCode::ERROR);
+        }
+    };
+
     let mut introspector = Introspector::new();
     match introspector
         .discover_server(server_id, &server_config)
@@ -452,7 +509,8 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
         Err(e) => {
             warn!(
                 "Failed to introspect server '{}' during validation: {}",
-                server_name, e
+                server_name,
+                escape_error_text(&e.to_string())
             );
             let message = match &entry.transport {
                 McpTransport::Stdio { .. } => format!(
@@ -1033,6 +1091,78 @@ mod tests {
         .await;
 
         assert_eq!(result.unwrap(), ExitCode::ERROR);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_validate_command_scheme_failure_does_not_reach_precheck_bypass() {
+        // Regression test for #304: an entry that passes the `url_well_formed` precheck (a
+        // syntactically fine https URL with a host) but fails `build_core_config`'s deeper
+        // security validation (here: a zero connect timeout) must still resolve as
+        // "entry present, invalid configuration" — not silently skip validation and proceed to
+        // introspection, and not report a "not found" message either.
+        let temp = write_test_mcp_config(
+            r#"{"mcpServers": {"badtimeout": {"type": "http", "url": "https://example.com/mcp", "connectTimeoutSecs": 0}}}"#,
+        );
+
+        let result = with_home_pointed_at(temp.path(), || {
+            run(
+                ServerAction::Validate {
+                    command: "badtimeout".to_string(),
+                },
+                OutputFormat::Json,
+            )
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), ExitCode::ERROR);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_show_server_info_invalid_url_scheme_reports_structured_unavailable_not_raw_error()
+    {
+        // Regression test for #305: `server info` on an entry whose `url` fails scheme
+        // validation must return the structured `"status": "unavailable"` `ServerInfo` output
+        // through the normal `ExitCode` path, like the well-formed-but-unreachable case — not
+        // propagate a raw, unformatted `anyhow` error via `?`.
+        let temp = write_test_mcp_config(
+            r#"{"mcpServers": {"http-malformed": {"type": "http", "url": "not-a-url"}}}"#,
+        );
+
+        let result = with_home_pointed_at(temp.path(), || {
+            run(
+                ServerAction::Info {
+                    server: "http-malformed".to_string(),
+                },
+                OutputFormat::Json,
+            )
+        })
+        .await;
+
+        assert_eq!(
+            result.expect("must return Ok(ExitCode::ERROR), not propagate a raw Err"),
+            ExitCode::ERROR
+        );
+    }
+
+    #[test]
+    fn test_unavailable_server_info_reports_unavailable_status() {
+        // Direct coverage for #305's structured-body claim: `show_server_info`'s invalid-config
+        // and failed-introspection branches both build the reported `ServerInfo` through this
+        // helper, so asserting its output here confirms the JSON body actually carries
+        // `"status": "unavailable"` — the ExitCode-only end-to-end tests above cannot observe
+        // this crate's `println!`-only output (see `with_home_pointed_at` test comments).
+        let info = unavailable_server_info("http-malformed".to_string(), "curl".to_string());
+
+        assert_eq!(info.status, ServerStatus::Unavailable.as_str());
+        assert_eq!(info.id, "http-malformed");
+        assert_eq!(info.name, "http-malformed");
+        assert!(info.tools.is_empty());
+        assert!(info.capabilities.is_empty());
+
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"status\":\"unavailable\""));
     }
 
     #[test]
