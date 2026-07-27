@@ -89,7 +89,7 @@ const FIXTURE_BIN: &str = env!("CARGO_BIN_EXE_fixture-slow-mcp-server");
 #[tokio::test]
 async fn test_discover_server_connect_timeout_fires() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-connect-timeout");
+    let server_id = ServerId::new("test-connect-timeout").unwrap();
 
     let config = ServerConfig::builder()
         .command(FIXTURE_BIN.to_string())
@@ -122,7 +122,7 @@ async fn test_discover_server_connect_timeout_fires() {
 #[tokio::test]
 async fn test_discover_server_discover_timeout_fires() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-discover-timeout");
+    let server_id = ServerId::new("test-discover-timeout").unwrap();
 
     let config = ServerConfig::builder()
         .command(FIXTURE_BIN.to_string())
@@ -160,7 +160,7 @@ async fn test_discover_server_discover_timeout_fires() {
 #[tokio::test]
 async fn test_discover_server_connect_timeout_kills_child_process() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-connect-timeout-kills-child");
+    let server_id = ServerId::new("test-connect-timeout-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
     let pid_path = pid_file.path().to_path_buf();
@@ -198,7 +198,7 @@ async fn test_discover_server_connect_timeout_kills_child_process() {
 #[tokio::test]
 async fn test_discover_server_discover_timeout_kills_child_process() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-discover-timeout-kills-child");
+    let server_id = ServerId::new("test-discover-timeout-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
     let pid_path = pid_file.path().to_path_buf();
@@ -236,7 +236,7 @@ async fn test_discover_server_discover_timeout_kills_child_process() {
 #[tokio::test]
 async fn test_discover_server_succeeds_when_within_timeouts() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-fast-server");
+    let server_id = ServerId::new("test-fast-server").unwrap();
 
     let config = ServerConfig::builder()
         .command(FIXTURE_BIN.to_string())
@@ -260,7 +260,7 @@ async fn test_discover_server_succeeds_when_within_timeouts() {
 #[tokio::test]
 async fn test_discover_server_success_kills_child_process() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-success-kills-child");
+    let server_id = ServerId::new("test-success-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
     let pid_path = pid_file.path().to_path_buf();
@@ -304,7 +304,7 @@ async fn test_discover_server_success_kills_child_process() {
 #[tokio::test]
 async fn test_dropping_discover_server_future_kills_child_process() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-drop-future-kills-child");
+    let server_id = ServerId::new("test-drop-future-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
     let pid_path = pid_file.path().to_path_buf();
@@ -360,7 +360,7 @@ const ENV_MARKER_VAR: &str = "MCP_EXECUTION_TEST_ENV_MARKER";
 #[tokio::test]
 async fn test_discover_server_passes_env_and_cwd_to_child_process() {
     let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test-env-cwd");
+    let server_id = ServerId::new("test-env-cwd").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
     let report_file = tempfile::NamedTempFile::new().expect("create temp report file");

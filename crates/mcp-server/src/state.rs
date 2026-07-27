@@ -138,7 +138,7 @@ impl PendingTable {
 /// let state = StateManager::new();
 ///
 /// # let server_info = ServerInfo {
-/// #     id: ServerId::new("test"),
+/// #     id: ServerId::new("test").unwrap(),
 /// #     name: "Test".to_string(),
 /// #     version: "1.0.0".to_string(),
 /// #     capabilities: mcp_execution_introspector::ServerCapabilities {
@@ -149,7 +149,7 @@ impl PendingTable {
 /// #     tools: vec![],
 /// # };
 /// let pending = PendingGeneration::new(
-///     ServerId::new("github"),
+///     ServerId::new("github").unwrap(),
 ///     server_info,
 ///     ServerConfig::builder().command("npx".to_string()).build().unwrap(),
 ///     None,
@@ -392,7 +392,7 @@ mod tests {
     fn create_test_pending_with_clock(clock: &dyn Clock) -> PendingGeneration {
         use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
-        let server_id = ServerId::new("test");
+        let server_id = ServerId::new("test").unwrap();
         let server_info = ServerInfo {
             id: server_id.clone(),
             name: "Test Server".to_string(),
@@ -403,7 +403,7 @@ mod tests {
                 supports_prompts: false,
             },
             tools: vec![ToolInfo {
-                name: ToolName::new("test_tool"),
+                name: ToolName::new("test_tool").unwrap(),
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({}),
                 output_schema: None,
@@ -560,7 +560,7 @@ mod tests {
             let state_clone = Arc::clone(&state);
             handles.push(tokio::spawn(async move {
                 let mut pending = create_test_pending();
-                pending.server_id = ServerId::new(&format!("server-{i}"));
+                pending.server_id = ServerId::new(format!("server-{i}")).unwrap();
                 state_clone.store(pending).await
             }));
         }

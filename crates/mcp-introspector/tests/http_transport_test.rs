@@ -1,7 +1,7 @@
 //! Integration tests proving `Introspector::discover_server` works end-to-end
 //! over Streamable HTTP (issue #180): connects to a real in-process rmcp
 //! Streamable HTTP server, discovers its tools and handshake metadata, proves
-//! `TransportType::Sse` uses the same client path as `TransportType::Http`,
+//! `Transport::Sse` uses the same client path as `Transport::Http`,
 //! confirms a custom header set via `ServerConfig::header` actually reaches
 //! the server on the wire, and exercises the connect/discover timeout paths
 //! the same way `tests/timeout_test.rs` does for stdio.
@@ -156,7 +156,7 @@ async fn test_discover_server_http_lists_tools_and_metadata() {
         .unwrap();
 
     let result = introspector
-        .discover_server(ServerId::new("http-fixture"), &config)
+        .discover_server(ServerId::new("http-fixture").unwrap(), &config)
         .await;
 
     ct.cancel();
@@ -176,7 +176,7 @@ async fn test_discover_server_http_lists_tools_and_metadata() {
 }
 
 /// rmcp 2.2 has a single client transport for both `Http` and `Sse`
-/// (`TransportType::Sse` is documented as an alias) — this proves that
+/// (`Transport::Sse` is documented as an alias) — this proves that
 /// end-to-end against a real server, not just at the type level.
 #[tokio::test]
 async fn test_discover_server_sse_transport_also_works() {
@@ -191,7 +191,7 @@ async fn test_discover_server_sse_transport_also_works() {
         .unwrap();
 
     let result = introspector
-        .discover_server(ServerId::new("sse-fixture"), &config)
+        .discover_server(ServerId::new("sse-fixture").unwrap(), &config)
         .await;
 
     ct.cancel();
@@ -221,7 +221,7 @@ async fn test_discover_server_http_discover_timeout_fires() {
 
     let started = Instant::now();
     let result = introspector
-        .discover_server(ServerId::new("http-discover-timeout"), &config)
+        .discover_server(ServerId::new("http-discover-timeout").unwrap(), &config)
         .await;
     let elapsed = started.elapsed();
 
@@ -261,7 +261,7 @@ async fn test_discover_server_http_connect_timeout_fires() {
 
     let started = Instant::now();
     let result = introspector
-        .discover_server(ServerId::new("http-connect-timeout"), &config)
+        .discover_server(ServerId::new("http-connect-timeout").unwrap(), &config)
         .await;
     let elapsed = started.elapsed();
 
@@ -306,7 +306,7 @@ async fn test_discover_server_http_reserved_header_collision_is_legible() {
         .unwrap();
 
     let result = introspector
-        .discover_server(ServerId::new("reserved-header-fixture"), &config)
+        .discover_server(ServerId::new("reserved-header-fixture").unwrap(), &config)
         .await;
 
     match result {

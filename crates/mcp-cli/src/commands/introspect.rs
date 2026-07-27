@@ -248,7 +248,7 @@ pub async fn run(
 /// use mcp_execution_core::ServerId;
 ///
 /// let server_info = ServerInfo {
-///     id: ServerId::new("test"),
+///     id: ServerId::new("test").unwrap(),
 ///     name: "Test Server".to_string(),
 ///     version: "1.0.0".to_string(),
 ///     tools: vec![],
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn test_build_result_basic() {
         let server_info = ServerInfo {
-            id: ServerId::new("test-server"),
+            id: ServerId::new("test-server").unwrap(),
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![],
@@ -343,18 +343,18 @@ mod tests {
     #[test]
     fn test_build_result_with_tools_not_detailed() {
         let server_info = ServerInfo {
-            id: ServerId::new("test"),
+            id: ServerId::new("test").unwrap(),
             name: "Test".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![
                 ToolInfo {
-                    name: ToolName::new("tool1"),
+                    name: ToolName::new("tool1").unwrap(),
                     description: "First tool".to_string(),
                     input_schema: json!({"type": "object"}),
                     output_schema: None,
                 },
                 ToolInfo {
-                    name: ToolName::new("tool2"),
+                    name: ToolName::new("tool2").unwrap(),
                     description: "Second tool".to_string(),
                     input_schema: json!({"type": "string"}),
                     output_schema: Some(json!({"type": "boolean"})),
@@ -384,18 +384,18 @@ mod tests {
     #[test]
     fn test_build_result_with_tools_detailed() {
         let server_info = ServerInfo {
-            id: ServerId::new("test"),
+            id: ServerId::new("test").unwrap(),
             name: "Test".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![
                 ToolInfo {
-                    name: ToolName::new("tool1"),
+                    name: ToolName::new("tool1").unwrap(),
                     description: "First tool".to_string(),
                     input_schema: json!({"type": "object", "properties": {"name": {"type": "string"}}}),
                     output_schema: None,
                 },
                 ToolInfo {
-                    name: ToolName::new("tool2"),
+                    name: ToolName::new("tool2").unwrap(),
                     description: "Second tool".to_string(),
                     input_schema: json!({"type": "string"}),
                     output_schema: Some(json!({"type": "boolean"})),
@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn test_build_tool_metadata_not_detailed() {
         let tool_info = ToolInfo {
-            name: ToolName::new("send_message"),
+            name: ToolName::new("send_message").unwrap(),
             description: "Sends a message".to_string(),
             input_schema: json!({"type": "object"}),
             output_schema: Some(json!({"type": "string"})),
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn test_build_tool_metadata_detailed() {
         let tool_info = ToolInfo {
-            name: ToolName::new("send_message"),
+            name: ToolName::new("send_message").unwrap(),
             description: "Sends a message".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -593,24 +593,24 @@ mod tests {
     #[test]
     fn test_build_result_preserves_tool_order() {
         let server_info = ServerInfo {
-            id: ServerId::new("test"),
+            id: ServerId::new("test").unwrap(),
             name: "Test".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![
                 ToolInfo {
-                    name: ToolName::new("alpha"),
+                    name: ToolName::new("alpha").unwrap(),
                     description: "A".to_string(),
                     input_schema: json!({}),
                     output_schema: None,
                 },
                 ToolInfo {
-                    name: ToolName::new("beta"),
+                    name: ToolName::new("beta").unwrap(),
                     description: "B".to_string(),
                     input_schema: json!({}),
                     output_schema: None,
                 },
                 ToolInfo {
-                    name: ToolName::new("gamma"),
+                    name: ToolName::new("gamma").unwrap(),
                     description: "C".to_string(),
                     input_schema: json!({}),
                     output_schema: None,
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn test_build_result_empty_tools() {
         let server_info = ServerInfo {
-            id: ServerId::new("empty"),
+            id: ServerId::new("empty").unwrap(),
             name: "Empty Server".to_string(),
             version: "0.1.0".to_string(),
             tools: vec![],
@@ -785,7 +785,7 @@ mod tests {
         // Test with many tools to ensure no performance issues
         let tools: Vec<ToolInfo> = (0..100)
             .map(|i| ToolInfo {
-                name: ToolName::new(&format!("tool_{i}")),
+                name: ToolName::new(&format!("tool_{i}")).unwrap(),
                 description: format!("Tool number {i}"),
                 input_schema: json!({"type": "object"}),
                 output_schema: Some(json!({"type": "string"})),
@@ -793,7 +793,7 @@ mod tests {
             .collect();
 
         let server_info = ServerInfo {
-            id: ServerId::new("many-tools"),
+            id: ServerId::new("many-tools").unwrap(),
             name: "Server with many tools".to_string(),
             version: "1.0.0".to_string(),
             tools,
@@ -817,7 +817,7 @@ mod tests {
     #[test]
     fn test_build_tool_metadata_complex_schema() {
         let tool_info = ToolInfo {
-            name: ToolName::new("complex_tool"),
+            name: ToolName::new("complex_tool").unwrap(),
             description: "Tool with complex schema".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -930,11 +930,11 @@ mod tests {
     #[test]
     fn test_build_result_mixed_capabilities() {
         let server_info = ServerInfo {
-            id: ServerId::new("mixed"),
+            id: ServerId::new("mixed").unwrap(),
             name: "Mixed Server".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![ToolInfo {
-                name: ToolName::new("tool1"),
+                name: ToolName::new("tool1").unwrap(),
                 description: "First".to_string(),
                 input_schema: json!({}),
                 output_schema: None,

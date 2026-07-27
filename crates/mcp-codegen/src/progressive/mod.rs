@@ -43,7 +43,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Introspect server
 //! let mut introspector = Introspector::new();
-//! let server_id = ServerId::new("github");
+//! let server_id = ServerId::new("github").unwrap();
 //! let config = ServerConfig::builder()
 //!     .command("/path/to/github-server".to_string())
 //!     .build()?;

@@ -614,9 +614,12 @@ async fn transport_available(name: &str, entry: &McpServerEntry) -> bool {
 /// with a duration far shorter than [`LIST_AVAILABILITY_TIMEOUT`], without
 /// waiting multiple real seconds.
 async fn discover_within(name: &str, config: &ServerConfig, timeout: Duration) -> bool {
+    let Ok(server_id) = ServerId::new(name) else {
+        return false;
+    };
     tokio::time::timeout(
         timeout,
-        Introspector::new().discover_server(ServerId::new(name), config),
+        Introspector::new().discover_server(server_id, config),
     )
     .await
     .is_ok_and(|result| result.is_ok())

@@ -62,13 +62,26 @@ related:
 ```rust
 pub struct ServerId(String);
 pub struct ToolName(String);
+pub enum ServerIdError { InvalidFormat { id: String } }
+pub enum ToolNameError { InvalidFormat { name: String } }
 ```
-Both: `new(impl Into<String>) -> Self`, `as_str(&self) -> &str`,
-`into_inner(self) -> String`, `Display`, `From<String>`, `From<&str>`,
-`Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize`. No format
-validation at this layer (unlike `cli::ServerConnectionString` or
-`mcp-skill::validate_server_id`, which are the actual gatekeepers) — these
-are pure newtype wrappers for type safety, not validated value objects.
+Both: `new(impl Into<String>) -> Result<Self, XxxError>`, `as_str(&self) -> &str`,
+`into_inner(self) -> String`, `Display`,
+`Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize`. `new` enforces a baseline
+invariant shared with `path::validate_path_segment`: the input must be a single non-empty
+path segment (no `..`, no path separator, no root/prefix component), since both a server id
+and a tool name are ultimately used to derive a filesystem path or file name downstream.
+There is no `From<String>`/`From<&str>` impl, and `#[serde(try_from = "String")]` (backed by
+`impl TryFrom<String>` delegating to `new`) routes `Deserialize` through `new` too — `new` is
+the only construction path, including through deserialization, so the invariant cannot be
+bypassed by an infallible conversion or a direct-derive deserialize. Without
+`try_from = "String"`, a plain `#[derive(Deserialize)]` would still be able to construct
+`Self(raw_string)` directly since the derived impl lives in this same module and privacy
+doesn't block it — this is exactly the gap that made `mcp_execution_introspector::ServerInfo`/
+`ToolInfo` (which derive `Deserialize` and hold a `ServerId`/`ToolName` field) deserializable
+with an unvalidated id/name before this was added. `mcp-skill::validate_server_id`
+layers a stricter `[a-z0-9-]`-charset + length check on top of this baseline for its own
+contract; it does not replace it.
 
 ### `Error` / `Result<T>` (`src/error.rs`)
 
@@ -93,34 +106,46 @@ exists for `InvalidArgument`/`SerializationError` — callers match directly.
 `Error`'s own classification through wrapping (see
 `mcp-cli`'s `classify_core_error`, which recurses into it — [[../cli/spec]]).
 
-### `ServerConfig` / `ServerConfigBuilder` / `TransportType` (`src/server_config.rs`)
+### `ServerConfig` / `ServerConfigBuilder` / `Transport` (`src/server_config.rs`)
 
 ```rust
-pub enum TransportType { Stdio, Http, Sse } // #[default] Stdio
+pub enum Transport {
+    Stdio { command: String, args: Vec<String>, env: HashMap<String,String>, cwd: Option<PathBuf> },
+    Http { url: String, headers: HashMap<String,String> },
+    Sse { url: String, headers: HashMap<String,String> },
+}
 pub struct ServerConfig {
-    pub transport: TransportType,
-    pub command: String,           // stdio only
-    pub args: Vec<String>,         // stdio only
-    pub env: HashMap<String,String>,   // stdio only
-    pub cwd: Option<PathBuf>,      // stdio only
-    pub url: Option<String>,       // http/sse only
-    pub headers: HashMap<String,String>, // http/sse only
-    pub connect_timeout: Duration, // default 30s, all transports
-    pub discover_timeout: Duration, // default 30s, all transports
+    transport: Transport,           // private
+    connect_timeout: Duration,      // private, default 30s, all transports
+    discover_timeout: Duration,     // private, default 30s, all transports
 }
 ```
+`Transport` (issue #313) carries each transport's fields as enum payload rather than as flat,
+always-present fields on `ServerConfig`: a `Stdio` config has no `url`/`headers` fields to
+populate, and an `Http`/`Sse` config has no `command`/`args`/`env`/`cwd` fields — the
+illegal cross-transport combination (e.g. `args` set on an `Http` config) is unrepresentable,
+not merely unvalidated. `ServerConfig`'s two fields are private; read access goes through
+`transport()`, `command()`/`args()`/`env()`/`cwd()`/`url()`/`headers()` (each returning an
+empty/`None` default for the transport that doesn't carry that field, preserving the
+pre-#313 call-site shape), and `connect_timeout()`/`discover_timeout()`.
+
 Builder methods: `command`, `arg`, `args`, `env`, `environment`, `cwd`,
 `http_transport(url)`, `sse_transport(url)`, `url`, `header`, `headers`,
-`connect_timeout`, `discover_timeout`, `build() -> Result<ServerConfig>`.
+`connect_timeout`, `discover_timeout`, `build() -> Result<ServerConfig>`. The builder itself
+still accumulates all six transport-specific fields as flat, independently-settable state
+(via a private `TransportKind` discriminant) — only the *assembled* `ServerConfig` enforces
+the enum shape; `build()` picks the right `Transport` variant's fields from what was set.
 
 `build()` = `build_structural()` (presence checks: `command` required
 non-empty for stdio, `url` required for http/sse) **then**
 `validate_server_config(&config)` — full security validation runs
 unconditionally inside `build()`, so a `ServerConfig` obtained through the
-builder cannot exist without having passed it. This is a **builder-level**
-guarantee, not type-level: every field is `pub` and the type derives
-`Deserialize`, so a struct literal or `serde_json::from_str` bypasses it —
-see [[#Defense in depth]].
+builder cannot exist without having passed it. Since #313 this is also a
+**type-level** guarantee, not just a builder-level one: both fields are private, and
+`ServerConfig`'s `Deserialize` impl is hand-written to deserialize into a private shadow
+shape and then run `validate_server_config` before returning an `Err` on failure — so a
+struct literal (impossible outside this module — fields are private) or
+`serde_json::from_str` can no longer bypass validation. See [[#Defense in depth]].
 
 `ServerConfig` and `ServerConfigBuilder` both hand-write `Debug` to redact
 `args` (wholesale, via `RedactedItems`), `env`/`headers` (values only, keys
@@ -145,11 +170,10 @@ Constants (all `pub`): `MAX_ARG_COUNT` (256), `MAX_ARG_LEN` (4096),
 Validation order inside `validate_server_config` (all run unconditionally,
 regardless of transport, before transport-specific checks):
 
-1. `validate_size_bounds` — command/url/arg/env/header count and length
-   caps (CWE-400 backstop; runs even for a hand-crafted `ServerConfig` whose
-   fields don't match its declared transport, since every field is
-   `#[serde(default)]` and populated independent of transport at the type
-   level).
+1. `validate_stdio_size_bounds`/`validate_network_size_bounds` — command/url/arg/env/header
+   count and length caps (CWE-400 backstop), dispatched per `Transport` variant. Since #313
+   each only needs to check the fields that variant actually has — there is no cross-transport
+   bypass to guard against, because e.g. a `Stdio` config has no `headers` field to populate.
 2. Transport dispatch:
    - `Stdio` → `validate_command_string` (forbidden shell metachars:
      `; | & > < \` $ ( ) \n \r`) on `command` and each `arg`; absolute-path
@@ -209,11 +233,17 @@ change; consumers compare it and fail loudly on mismatch (see
 ```rust
 pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir to "~", falls back to scrubbing bare username
 pub fn validate_path_segment(segment: &str) -> Option<Component<'_>>; // single plain component, no "..", no separator
+pub fn contains_parent_dir(path: &Path) -> bool; // true if any component is `..`
 ```
 `validate_path_segment` is the shared building block for both
 `mcp-skill::resolve_skill_output_path` and
 `mcp-server::output_dir::resolve_output_dir`'s `server_id` confinement — a
-`..` or embedded separator in `server_id` is rejected identically by both.
+`..` or embedded separator in `server_id` is rejected identically by both;
+it also backs `ServerId::new`/`ToolName::new`'s own invariant (see above).
+`contains_parent_dir` (issue #289) is the shared `..`-only check used by
+`mcp-skill::output_path`, `mcp-server::output_dir`, and
+`mcp-cli::commands::skill::has_path_traversal` for the narrower "is any
+component `..`" question, previously three byte-for-byte-identical copies.
 
 ### `redact` module (`src/redact.rs`)
 
@@ -248,7 +278,7 @@ data into text an LLM later reads as instructions — see
 
 | Consumer | What it depends on from `mcp-core` |
 |---|---|
-| `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `TransportType`, `validate_server_config`, `Error`/`Result` |
+| `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result` |
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix` (renders them into the generated runtime bridge template) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen` |
 | `mcp-skill` | `sanitize_path_for_error`, `validate_path_segment`, `untrusted::*`, `metadata::*` |
@@ -257,17 +287,14 @@ data into text an LLM later reads as instructions — see
 
 ## 4. Defense in Depth
 
-`ServerConfig`'s "always validated" guarantee is a **builder-level**
-property, not a type-level one. Every downstream consumer that might
-receive a `ServerConfig` from somewhere other than the builder
-re-validates:
-
-- `mcp-introspector::Introspector::discover_server` calls
-  `validate_server_config` again before spawning/connecting.
-- Test code (`command.rs`'s own tests) deliberately constructs an
-  unvalidated `ServerConfig` via `serde_json::from_str` to exercise this
-  gap directly (e.g. an HTTP-transport config missing `url`, which
-  deserializes fine because every field is `#[serde(default)]`).
+Since #313, `ServerConfig`'s "always validated" guarantee is a **type-level**
+property: both fields are private and `Deserialize` is hand-written to run
+`validate_server_config` before returning, so there is no longer a construction path
+(builder, struct literal, `serde_json::from_str`) that skips it. `mcp-introspector`'s
+`Introspector::discover_server` still calls `validate_server_config` again before
+spawning/connecting anyway — not because it's needed to close a gap, but so this method
+stays self-defending against a future construction path that forgets to validate, rather than
+relying solely on the invariant holding elsewhere.
 
 ## 5. Edge Cases & Notable Behaviors (from tests)
 
@@ -275,7 +302,7 @@ re-validates:
 |---|---|
 | Header names differing only by case (`Authorization` vs `authorization`) | Rejected as duplicate (case-insensitive comparison), since `http::HeaderName` would otherwise silently collapse them |
 | Header name containing space/`:`/`@` | Rejected — not a control character, but outside RFC 7230 `tchar` |
-| `mcp.json` with `"transport": "http"` and no `url` | Deserializes successfully (all fields `#[serde(default)]`); caught by `validate_network_config`, not by deserialization |
+| `mcp.json` with `"transport": "http"` and no `url` | Fails to deserialize (`url` is a required field of `Transport::Http`, not `#[serde(default)]`) — rejected before a `ServerConfig` value exists at all |
 | Timeout of exactly `0` | Always rejected — no "infinite timeout" sentinel exists |
 | Timeout of `601s` (`MAX_TIMEOUT` = 600s) | Rejected; `600s` itself is accepted |
 | Absolute-path command that exists but lacks the execute bit | Rejected (Unix only) |

@@ -455,9 +455,12 @@ pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 /// function is shared by `introspect` and `server list`/`server show`, which
 /// have no need for `name` to be a filesystem-safe slug — only `generate`
 /// turns it into a directory name, so that check lives at `generate`'s own
-/// sink (`resolve_server_dir_name`) instead. Enforcing it here would hard-fail
-/// `introspect --from-config` for entirely legitimate `mcp.json` keys that
-/// aren't already `[a-z0-9-]` (e.g. `claude_ai_Gmail`).
+/// sink (`resolve_server_dir_name`) instead. Enforcing the stricter
+/// `[a-z0-9-]` charset here would hard-fail `introspect --from-config` for
+/// entirely legitimate `mcp.json` keys that aren't already in that charset
+/// (e.g. `claude_ai_Gmail`). [`ServerId::new`]'s own baseline invariant
+/// (non-empty, no `..`/path separator) still applies unconditionally, since
+/// it's now enforced at construction rather than being an opt-in check.
 pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
     let (server_id, entry) = get_mcp_server_entry(name)?;
     let server_config = build_core_config(&entry)?;
@@ -492,7 +495,10 @@ pub(crate) fn get_mcp_server_entry(name: &str) -> Result<(ServerId, McpServerEnt
         })?
         .clone();
 
-    Ok((ServerId::new(name), entry))
+    let server_id = ServerId::new(name).with_context(|| {
+        format!("server '{name}' in ~/.claude/mcp.json is not a valid server id")
+    })?;
+    Ok((server_id, entry))
 }
 
 /// Loads server configuration from `~/.claude/mcp.json` by server name.
@@ -1019,11 +1025,15 @@ fn slugify(input: &str) -> ServerId {
     let slug = &slug[..slug.len().min(MAX_SERVER_ID_LENGTH)];
     let slug = slug.trim_end_matches('-');
 
+    // The whitelist loop above only ever produces `[a-z0-9-]` characters (or the constant
+    // fallback), so the result is always non-empty and free of `..`/path separators — always a
+    // valid `ServerId` per `ServerId::new`'s invariant.
     ServerId::new(if slug.is_empty() {
         FALLBACK_SERVER_ID_SLUG
     } else {
         slug
     })
+    .expect("slugify only ever produces a valid path-segment ServerId")
 }
 
 /// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from

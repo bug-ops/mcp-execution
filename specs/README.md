@@ -239,7 +239,7 @@ the real source, not assumed):
 - **Transport support is undocumented.** `CLAUDE.md`'s data-flow diagram
   only shows a stdio subprocess path (`ServerConfig (security-validated...)
   → Introspector::discover_server() — spawns server process`). The real
-  `TransportType` enum has three variants — `Stdio`, `Http`, `Sse` — and
+  `Transport` enum has three variants — `Stdio`, `Http`, `Sse` — and
   `mcp-introspector` implements a full Streamable HTTP client path
   alongside stdio. Neither `ServerConfig`'s HTTP/SSE fields (`url`,
   `headers`) nor the CLI's `--http`/`--sse` flags nor `mcp.json`'s

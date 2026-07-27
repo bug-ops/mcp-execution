@@ -13,7 +13,7 @@ use std::hint::black_box;
 fn create_server_info(tool_count: usize) -> ServerInfo {
     let tools = (0..tool_count)
         .map(|i| ToolInfo {
-            name: ToolName::new(format!("tool_{i}")),
+            name: ToolName::new(format!("tool_{i}")).unwrap(),
             description: format!("Test tool number {i}"),
             input_schema: json!({
                 "type": "object",
@@ -28,7 +28,7 @@ fn create_server_info(tool_count: usize) -> ServerInfo {
         .collect();
 
     ServerInfo {
-        id: ServerId::new("test-server"),
+        id: ServerId::new("test-server").unwrap(),
         name: "Test Server".to_string(),
         version: "1.0.0".to_string(),
         tools,
@@ -88,7 +88,7 @@ fn bench_server_info_deserialization(c: &mut Criterion) {
 /// Benchmarks `ToolInfo` serialization
 fn bench_tool_info_serialization(c: &mut Criterion) {
     let tool = ToolInfo {
-        name: ToolName::new("test_tool"),
+        name: ToolName::new("test_tool").unwrap(),
         description: "A test tool for benchmarking".to_string(),
         input_schema: json!({
             "type": "object",
@@ -116,7 +116,7 @@ fn bench_tool_info_serialization(c: &mut Criterion) {
 /// Benchmarks `ToolInfo` deserialization
 fn bench_tool_info_deserialization(c: &mut Criterion) {
     let tool = ToolInfo {
-        name: ToolName::new("test_tool"),
+        name: ToolName::new("test_tool").unwrap(),
         description: "A test tool for benchmarking".to_string(),
         input_schema: json!({"type": "object"}),
         output_schema: None,

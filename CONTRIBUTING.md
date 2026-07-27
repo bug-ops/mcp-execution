@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_server_id_from_string() {
-        let id = ServerId::from("github");
+        let id = ServerId::new("github").unwrap();
         assert_eq!(id.as_str(), "github");
     }
 

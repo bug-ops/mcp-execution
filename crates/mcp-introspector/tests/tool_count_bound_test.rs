@@ -151,7 +151,7 @@ async fn test_discover_server_bails_early_once_accumulated_tool_count_exceeds_ma
         .unwrap();
 
     let result = introspector
-        .discover_server(ServerId::new("paginated-fixture-over"), &config)
+        .discover_server(ServerId::new("paginated-fixture-over").unwrap(), &config)
         .await;
 
     ct.cancel();
@@ -187,7 +187,7 @@ async fn test_discover_server_accepts_exactly_max_tool_count_across_pages() {
         .unwrap();
 
     let result = introspector
-        .discover_server(ServerId::new("paginated-fixture-exact"), &config)
+        .discover_server(ServerId::new("paginated-fixture-exact").unwrap(), &config)
         .await;
 
     ct.cancel();

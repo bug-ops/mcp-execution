@@ -8,14 +8,16 @@ const fn assert_send_sync<T: Send + Sync>() {}
 fn test_domain_types_are_send_sync() {
     // All domain types must be Send + Sync
     assert_send_sync::<ServerId>();
+    assert_send_sync::<ServerIdError>();
     assert_send_sync::<ToolName>();
+    assert_send_sync::<ToolNameError>();
 }
 
 #[test]
 fn test_config_types_are_send_sync() {
     // Configuration types must be Send + Sync
     assert_send_sync::<ServerConfig>();
-    assert_send_sync::<TransportType>();
+    assert_send_sync::<Transport>();
 }
 
 #[test]

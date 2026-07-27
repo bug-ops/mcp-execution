@@ -169,8 +169,8 @@ async fn discover_server_info(
     let override_id = name
         .map(|custom_name| {
             validate_server_id(custom_name)
-                .with_context(|| format!("invalid --name '{custom_name}'"))
-                .map(|()| ServerId::new(custom_name))
+                .with_context(|| format!("invalid --name '{custom_name}'"))?;
+            ServerId::new(custom_name).with_context(|| format!("invalid --name '{custom_name}'"))
         })
         .transpose()?;
 
@@ -448,11 +448,11 @@ mod tests {
 
     fn create_mock_server_info() -> ServerInfo {
         ServerInfo {
-            id: ServerId::new("test-server"),
+            id: ServerId::new("test-server").unwrap(),
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![ToolInfo {
-                name: mcp_execution_core::ToolName::new("test_tool"),
+                name: mcp_execution_core::ToolName::new("test_tool").unwrap(),
                 description: "A test tool".to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -795,9 +795,12 @@ mod tests {
             "..",
             "UPPER_CASE",
         ] {
-            let result =
-                discover_server_info(ServerId::new("placeholder"), &server_config, Some(bad_name))
-                    .await;
+            let result = discover_server_info(
+                ServerId::new("placeholder").unwrap(),
+                &server_config,
+                Some(bad_name),
+            )
+            .await;
 
             assert!(
                 result.is_err(),
@@ -824,13 +827,30 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_server_dir_name_rejects_traversal_and_absolute_ids() {
-        // Even though every arm that constructs `server_info.id` already
-        // guarantees this holds, this sink-level check must independently
-        // reject an unsafe id rather than trust its caller.
-        for bad_id in ["../../../../etc/passwd", "/etc/cron.d/evil", "UPPER_CASE"] {
+    fn test_server_id_construction_rejects_traversal_and_absolute_ids() {
+        // Regression guard for #287: `ServerId::new` now owns this
+        // invariant at construction time, so a traversal/absolute-shaped id
+        // can no longer reach `resolve_server_dir_name` (or anywhere else)
+        // in the first place — it is rejected before a `ServerId` even
+        // exists, rather than relying solely on this sink-level check.
+        for bad_id in ["../../../../etc/passwd", "/etc/cron.d/evil", ".."] {
+            assert!(
+                ServerId::new(bad_id).is_err(),
+                "expected id {bad_id:?} to be rejected by ServerId::new"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_server_dir_name_rejects_charset_violations() {
+        // `UPPER_CASE`, `a.b`, and `a_b` all pass `ServerId::new`'s baseline
+        // invariant (single, non-empty path segment, no `..`/separator), so
+        // this sink-level check must independently reject them rather than
+        // trust that `ServerId::new` alone is enough for a filesystem-safe
+        // directory name.
+        for bad_id in ["UPPER_CASE", "a.b", "a_b"] {
             let mut server_info = create_mock_server_info();
-            server_info.id = ServerId::new(bad_id);
+            server_info.id = ServerId::new(bad_id).unwrap();
 
             let result = resolve_server_dir_name(&server_info, false);
             assert!(result.is_err(), "expected id {bad_id:?} to be rejected");
@@ -845,7 +865,7 @@ mod tests {
         // the error must say so, not blame a user-supplied mcp.json key that
         // was never involved.
         let mut server_info = create_mock_server_info();
-        server_info.id = ServerId::new("UPPER_CASE");
+        server_info.id = ServerId::new("UPPER_CASE").unwrap();
 
         let err = resolve_server_dir_name(&server_info, false).unwrap_err();
         let err_msg = err.to_string();
@@ -861,7 +881,7 @@ mod tests {
         // (the user's config) and point at the `--name` workaround with a
         // ready-to-use slug, not blame this tool.
         let mut server_info = create_mock_server_info();
-        server_info.id = ServerId::new("claude_ai_Gmail");
+        server_info.id = ServerId::new("claude_ai_Gmail").unwrap();
 
         let err = resolve_server_dir_name(&server_info, true).unwrap_err();
         let err_msg = err.to_string();

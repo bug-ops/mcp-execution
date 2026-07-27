@@ -7,8 +7,8 @@
 //! # Architecture
 //!
 //! The introspector connects to MCP servers via stdio (subprocess) or
-//! Streamable HTTP transport (used for both `TransportType::Http` and
-//! `TransportType::Sse`) and uses rmcp's `ServiceExt` trait to query server
+//! Streamable HTTP transport (used for both `Transport::Http` and
+//! `Transport::Sse`) and uses rmcp's `ServiceExt` trait to query server
 //! capabilities. Discovered information is stored locally for subsequent
 //! code generation phases.
 //!
@@ -22,7 +22,7 @@
 //! let mut introspector = Introspector::new();
 //!
 //! // Connect to github server
-//! let server_id = ServerId::new("github");
+//! let server_id = ServerId::new("github").unwrap();
 //! let config = ServerConfig::builder()
 //!     .command("github-server".to_string())
 //!     .build()?;
@@ -48,7 +48,7 @@ use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
 use http::{HeaderName, HeaderValue};
 use mcp_execution_core::{
-    Error, Result, ServerConfig, ServerId, ToolName, TransportType, validate_server_config,
+    Error, Result, ServerConfig, ServerId, ToolName, Transport, validate_server_config,
 };
 use rmcp::RoleClient;
 use rmcp::ServiceExt;
@@ -165,7 +165,7 @@ const MAX_RESPONSE_LINE_SIZE: usize = 4 * 1024 * 1024;
 /// use mcp_execution_core::ServerId;
 ///
 /// let info = ServerInfo {
-///     id: ServerId::new("example"),
+///     id: ServerId::new("example").unwrap(),
 ///     name: "Example Server".to_string(),
 ///     version: "1.0.0".to_string(),
 ///     tools: vec![],
@@ -204,7 +204,7 @@ pub struct ServerInfo {
 /// use serde_json::json;
 ///
 /// let tool = ToolInfo {
-///     name: ToolName::new("send_message"),
+///     name: ToolName::new("send_message").unwrap(),
 ///     description: "Sends a message to a chat".to_string(),
 ///     input_schema: json!({
 ///         "type": "object",
@@ -280,13 +280,13 @@ pub struct ServerCapabilities {
 /// let mut introspector = Introspector::new();
 ///
 /// // Discover multiple servers
-/// let server1 = ServerId::new("server1");
+/// let server1 = ServerId::new("server1").unwrap();
 /// let config1 = ServerConfig::builder()
 ///     .command("server1-cmd".to_string())
 ///     .build()?;
 /// introspector.discover_server(server1.clone(), &config1).await?;
 ///
-/// let server2 = ServerId::new("server2");
+/// let server2 = ServerId::new("server2").unwrap();
 /// let config2 = ServerConfig::builder()
 ///     .command("server2-cmd".to_string())
 ///     .build()?;
@@ -356,14 +356,14 @@ impl Introspector {
     ///
     /// # Security
     ///
-    /// The stdio transport ([`TransportType::Stdio`], handled by the private
+    /// The stdio transport ([`Transport::Stdio`], handled by the private
     /// `discover_via_stdio`) bounds every response line read from the server's stdout to a
     /// fixed maximum size (issue #225). A line over that bound is dropped rather than
     /// erroring loudly: since it was never fully parsed, there is no request id to
     /// attribute a distinct error to, so the request it was answering instead runs out its
     /// configured timeout below and surfaces as [`Error::Timeout`].
     ///
-    /// The HTTP/SSE transport ([`TransportType::Http`], [`TransportType::Sse`], handled by
+    /// The HTTP/SSE transport ([`Transport::Http`], [`Transport::Sse`], handled by
     /// the private `discover_via_http`) has **no** such bound (issue #226): `rmcp` 2.2.0's Streamable
     /// HTTP client transport buffers each JSON response body and each SSE event fully in
     /// memory before this crate's own [`MAX_TOOL_COUNT`]/[`MAX_SCHEMA_SIZE_BYTES`] checks
@@ -383,7 +383,7 @@ impl Introspector {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
-    /// let server_id = ServerId::new("github");
+    /// let server_id = ServerId::new("github").unwrap();
     /// let config = ServerConfig::builder()
     ///     .command("github-server".to_string())
     ///     .build()?;
@@ -404,17 +404,16 @@ impl Introspector {
     ) -> Result<ServerInfo> {
         tracing::info!("Discovering MCP server: {}", server_id);
 
-        // Defense in depth: `config` is normally pre-validated by `ServerConfigBuilder::build`,
-        // but every field is `pub` and `ServerConfig` derives `Deserialize`, so a caller can
-        // still construct an unvalidated config directly. Re-validating here (rather than
-        // trusting the builder alone) means this method never spawns a process or opens a
-        // connection for a config that fails security validation, regardless of how it was
-        // constructed.
+        // Defense in depth: since #313, `ServerConfig` can only be obtained already validated
+        // (`ServerConfigBuilder::build` or its `Deserialize` impl both run
+        // `validate_server_config` internally, and its fields are private). Re-validating here
+        // anyway keeps this method self-defending against a future construction path that
+        // forgets to, rather than relying solely on that invariant holding elsewhere.
         validate_server_config(config)?;
 
         let discovery = match config.transport() {
-            TransportType::Stdio => discover_via_stdio_process(&server_id, config).await?,
-            TransportType::Http | TransportType::Sse => {
+            Transport::Stdio { .. } => discover_via_stdio_process(&server_id, config).await?,
+            Transport::Http { .. } | Transport::Sse { .. } => {
                 discover_via_http(&server_id, config).await?
             }
         };
@@ -440,7 +439,7 @@ impl Introspector {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
-    /// let server_id = ServerId::new("test");
+    /// let server_id = ServerId::new("test").unwrap();
     ///
     /// // Not discovered yet
     /// assert!(introspector.get_server(&server_id).is_none());
@@ -507,7 +506,7 @@ impl Introspector {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut introspector = Introspector::new();
-    /// let server_id = ServerId::new("test");
+    /// let server_id = ServerId::new("test").unwrap();
     /// let config = ServerConfig::builder()
     ///     .command("test-cmd".to_string())
     ///     .build()?;
@@ -539,8 +538,8 @@ impl Introspector {
     /// let config1 = ServerConfig::builder().command("cmd1".to_string()).build()?;
     /// let config2 = ServerConfig::builder().command("cmd2".to_string()).build()?;
     ///
-    /// introspector.discover_server(ServerId::new("s1"), &config1).await?;
-    /// introspector.discover_server(ServerId::new("s2"), &config2).await?;
+    /// introspector.discover_server(ServerId::new("s1").unwrap(), &config1).await?;
+    /// introspector.discover_server(ServerId::new("s2").unwrap(), &config2).await?;
     /// assert_eq!(introspector.server_count(), 2);
     ///
     /// introspector.clear();
@@ -615,10 +614,10 @@ struct DiscoveryResult {
 /// Returns [`Error::ConnectionFailed`] if the process cannot be spawned
 /// (e.g. the command does not exist or is not executable).
 fn spawn_introspection_child(server_id: &ServerId, config: &ServerConfig) -> Result<Child> {
-    let mut command = tokio::process::Command::new(&config.command);
-    command.args(&config.args);
-    command.envs(&config.env);
-    if let Some(cwd) = &config.cwd {
+    let mut command = tokio::process::Command::new(config.command());
+    command.args(config.args());
+    command.envs(config.env());
+    if let Some(cwd) = config.cwd() {
         command.current_dir(cwd);
     }
     command.stdin(Stdio::piped());
@@ -1019,7 +1018,7 @@ async fn discover_via_stdio(
 /// Connects to an MCP server over Streamable HTTP and lists its tools, with
 /// each step bounded by `config`'s configured timeouts.
 ///
-/// Used for both [`TransportType::Http`] and [`TransportType::Sse`]: rmcp 2.2
+/// Used for both [`Transport::Http`] and [`Transport::Sse`]: rmcp 2.2
 /// has a single client transport for network MCP servers ("Streamable
 /// HTTP"), which superseded the standalone SSE transport in the 2025-03-26
 /// MCP spec revision. There is no legacy SSE-only client to fall back to.
@@ -1173,7 +1172,15 @@ fn build_server_info(
 ///
 /// Returns [`Error::ResourceLimitExceeded`] if the tool's name exceeds [`MAX_TOOL_NAME_LEN`],
 /// its description exceeds [`MAX_TOOL_DESCRIPTION_LEN`], or its serialized input or output
-/// schema exceeds [`MAX_SCHEMA_SIZE_BYTES`].
+/// schema exceeds [`MAX_SCHEMA_SIZE_BYTES`]. Returns [`Error::ValidationError`] if the tool's
+/// name fails [`ToolName::new`]'s invariant (e.g. it is empty or contains a path separator) —
+/// like every other check in this function, this hard-fails the caller's whole
+/// [`build_server_info`] call (via `?`-propagation through
+/// `.collect::<Result<Vec<_>>>()`) rather than skipping just the one malformed tool with a
+/// warning: this is deliberate, matching how an oversized name/description/schema is already
+/// handled, since a tool this project can't safely name (it's used to derive an output file
+/// name downstream) shouldn't produce a partial, silently-incomplete result from an untrusted
+/// server (#287).
 fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
     let name = tool.name.to_string();
 
@@ -1236,8 +1243,13 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
         }
     }
 
+    let name = ToolName::new(name).map_err(|err| Error::ValidationError {
+        field: "tool name".to_string(),
+        reason: err.to_string(),
+    })?;
+
     Ok(ToolInfo {
-        name: ToolName::new(name),
+        name,
         description,
         input_schema,
         output_schema,
@@ -1275,10 +1287,10 @@ fn extract_peer_meta(
 /// Prefers `config.command` (stdio transport); falls back to `config.url()`
 /// since Http/Sse transports always leave `command` empty.
 fn fallback_server_name(config: &ServerConfig) -> String {
-    if config.command.is_empty() {
+    if config.command().is_empty() {
         config.url().unwrap_or_default().to_string()
     } else {
-        config.command.clone()
+        config.command().to_string()
     }
 }
 
@@ -1911,7 +1923,7 @@ mod tests {
     #[test]
     fn test_server_info_debug() {
         let info = ServerInfo {
-            id: ServerId::new("test"),
+            id: ServerId::new("test").unwrap(),
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![],
@@ -1929,7 +1941,7 @@ mod tests {
     #[test]
     fn test_tool_info_creation() {
         let tool = ToolInfo {
-            name: ToolName::new("test_tool"),
+            name: ToolName::new("test_tool").unwrap(),
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             output_schema: None,
@@ -1956,7 +1968,7 @@ mod tests {
     #[test]
     fn test_get_server_not_found() {
         let introspector = Introspector::new();
-        let server_id = ServerId::new("nonexistent");
+        let server_id = ServerId::new("nonexistent").unwrap();
         assert!(introspector.get_server(&server_id).is_none());
     }
 
@@ -1966,7 +1978,7 @@ mod tests {
 
         // Add some fake server data
         let info = ServerInfo {
-            id: ServerId::new("test"),
+            id: ServerId::new("test").unwrap(),
             name: "Test".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![],
@@ -1977,7 +1989,9 @@ mod tests {
             },
         };
 
-        introspector.servers.insert(ServerId::new("test"), info);
+        introspector
+            .servers
+            .insert(ServerId::new("test").unwrap(), info);
         assert_eq!(introspector.server_count(), 1);
 
         introspector.clear();
@@ -1987,7 +2001,7 @@ mod tests {
     #[test]
     fn test_remove_server() {
         let mut introspector = Introspector::new();
-        let server_id = ServerId::new("test");
+        let server_id = ServerId::new("test").unwrap();
 
         // Add fake server data
         let info = ServerInfo {
@@ -2022,7 +2036,7 @@ mod tests {
 
         // Add servers
         let info1 = ServerInfo {
-            id: ServerId::new("server1"),
+            id: ServerId::new("server1").unwrap(),
             name: "Server 1".to_string(),
             version: "1.0.0".to_string(),
             tools: vec![],
@@ -2034,7 +2048,7 @@ mod tests {
         };
 
         let info2 = ServerInfo {
-            id: ServerId::new("server2"),
+            id: ServerId::new("server2").unwrap(),
             name: "Server 2".to_string(),
             version: "2.0.0".to_string(),
             tools: vec![],
@@ -2045,8 +2059,12 @@ mod tests {
             },
         };
 
-        introspector.servers.insert(ServerId::new("server1"), info1);
-        introspector.servers.insert(ServerId::new("server2"), info2);
+        introspector
+            .servers
+            .insert(ServerId::new("server1").unwrap(), info1);
+        introspector
+            .servers
+            .insert(ServerId::new("server2").unwrap(), info2);
 
         let servers = introspector.list_servers();
         assert_eq!(servers.len(), 2);
@@ -2055,7 +2073,7 @@ mod tests {
     #[test]
     fn test_serialization() {
         let tool = ToolInfo {
-            name: ToolName::new("test_tool"),
+            name: ToolName::new("test_tool").unwrap(),
             description: "Test".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             output_schema: Some(serde_json::json!({"type": "string"})),
@@ -2304,7 +2322,7 @@ mod tests {
             .collect();
 
         let result = build_server_info(
-            &ServerId::new("test"),
+            &ServerId::new("test").unwrap(),
             PeerMeta {
                 server_name: "Test".to_string(),
                 server_version: "1.0.0".to_string(),
@@ -2325,7 +2343,7 @@ mod tests {
             .collect();
 
         let result = build_server_info(
-            &ServerId::new("test"),
+            &ServerId::new("test").unwrap(),
             PeerMeta {
                 server_name: "Test".to_string(),
                 server_version: "1.0.0".to_string(),
@@ -2357,6 +2375,52 @@ mod tests {
         let result = build_tool_info(tool);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().name.as_str().len(), MAX_TOOL_NAME_LEN);
+    }
+
+    /// #287 — a tool name that isn't a valid `ToolName` (here, containing a path separator)
+    /// hard-fails the whole `build_tool_info` call via `Error::ValidationError`, consistent
+    /// with this function's existing hard-fail-on-first-violation handling of oversized
+    /// names/descriptions/schemas (see `test_build_tool_info_rejects_oversized_name` above) —
+    /// this is a deliberate decision, not a gap: a single malformed tool name is not silently
+    /// skipped while the rest of the server's tools are returned.
+    #[test]
+    fn test_build_tool_info_rejects_tool_name_with_path_separator() {
+        let tool = make_raw_tool("evil/tool", "d", 0);
+
+        let result = build_tool_info(tool);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_validation_error());
+    }
+
+    /// Regression guard for a bypass found in review: `ServerInfo`/`ToolInfo` both derive
+    /// `Deserialize` and hold a `ServerId`/`ToolName` field directly, so before
+    /// `mcp_execution_core::{ServerId, ToolName}` routed `Deserialize` through their own
+    /// `new()` invariant (via `#[serde(try_from = "String")]`), a hostile `id`/tool `name`
+    /// (e.g. containing `..` or a path separator) survived deserialization unvalidated here —
+    /// even though `ServerId::new`/`ToolName::new` themselves had already been made fallible.
+    #[test]
+    fn test_server_info_deserialize_rejects_invalid_server_id() {
+        let json = serde_json::json!({
+            "id": "../escape",
+            "name": "Evil Server",
+            "version": "1.0.0",
+            "tools": [],
+            "capabilities": { "supports_tools": true, "supports_resources": false, "supports_prompts": false },
+        });
+        let result: std::result::Result<ServerInfo, _> = serde_json::from_value(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tool_info_deserialize_rejects_invalid_tool_name() {
+        let json = serde_json::json!({
+            "name": "evil/tool",
+            "description": "d",
+            "input_schema": {},
+            "output_schema": null,
+        });
+        let result: std::result::Result<ToolInfo, _> = serde_json::from_value(json);
+        assert!(result.is_err());
     }
 
     #[test]

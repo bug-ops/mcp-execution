@@ -12,12 +12,12 @@ use std::process::Command;
 /// Creates a mock server info for testing.
 fn create_test_server_info() -> ServerInfo {
     ServerInfo {
-        id: ServerId::new("github"),
+        id: ServerId::new("github").unwrap(),
         name: "GitHub".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![
             ToolInfo {
-                name: ToolName::new("create_issue"),
+                name: ToolName::new("create_issue").unwrap(),
                 description: "Creates a new issue".to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -40,7 +40,7 @@ fn create_test_server_info() -> ServerInfo {
                 output_schema: None,
             },
             ToolInfo {
-                name: ToolName::new("update_issue"),
+                name: ToolName::new("update_issue").unwrap(),
                 description: "Updates an existing issue".to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -60,7 +60,7 @@ fn create_test_server_info() -> ServerInfo {
                 output_schema: None,
             },
             ToolInfo {
-                name: ToolName::new("get_issue"),
+                name: ToolName::new("get_issue").unwrap(),
                 description: "Gets issue information".to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -410,7 +410,7 @@ fn test_progressive_generator_with_empty_server() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
 
     let server_info = ServerInfo {
-        id: ServerId::new("empty"),
+        id: ServerId::new("empty").unwrap(),
         name: "Empty Server".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![],
@@ -446,11 +446,11 @@ fn test_progressive_tool_camel_case_conversion() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
 
     let server_info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![ToolInfo {
-            name: ToolName::new("send_test_message"),
+            name: ToolName::new("send_test_message").unwrap(),
             description: "Test tool".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -491,11 +491,11 @@ fn test_progressive_tool_with_complex_types() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
 
     let server_info = ServerInfo {
-        id: ServerId::new("test"),
+        id: ServerId::new("test").unwrap(),
         name: "Test".to_string(),
         version: "1.0.0".to_string(),
         tools: vec![ToolInfo {
-            name: ToolName::new("complex_tool"),
+            name: ToolName::new("complex_tool").unwrap(),
             description: "Tool with complex types".to_string(),
             input_schema: json!({
                 "type": "object",

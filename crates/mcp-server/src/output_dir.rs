@@ -138,7 +138,7 @@ pub fn relative_subpath(output_dir: Option<&Path>) -> Result<PathBuf, OutputDirE
             path: sanitize_path_for_error(path),
         });
     }
-    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+    if mcp_execution_core::contains_parent_dir(path) {
         return Err(OutputDirError::ParentTraversal {
             path: sanitize_path_for_error(path),
         });
