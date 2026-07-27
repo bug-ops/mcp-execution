@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`mcp-execution-cli`**: `introspect --verbose` no longer logs the raw HTTP/SSE header values or
+  stdio environment variable values from the resolved `ServerConfig` at INFO level. The log line
+  previously formatted `config.transport()` (`&Transport`, plain derived `Debug`) directly; it now
+  formats `config` (`ServerConfig`), whose existing hand-written `Debug` impl already redacts
+  header/env values, args, and URL userinfo/query. `mcp_execution_core::Transport` itself still
+  derives a plain `Debug` and remains unredacted if formatted directly elsewhere — tracked
+  separately (#336, #345).
 - **`deny.toml`**: `[advisories]` now sets `unsound = "all"`, closing the gap where cargo-deny's
   default (`"workspace"`) silently drops RUSTSEC "unsound" advisories against transitive
   dependencies such as `unsafe-libyaml-norway` (reached via `mcp-skill -> serde_norway ->

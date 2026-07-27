@@ -140,6 +140,19 @@ tests assert specific secret substrings (e.g. `sk-verySECRETtoken...`)
 never appear in `format!("{:?}", cli.command)` for `--env`/`--header`/
 `--http`/`--sse` inputs.
 
+This discipline extends to `tracing` log lines, not just the error path:
+`commands::introspect::run` logs the resolved `ServerConfig` under
+`--verbose` (INFO level) by formatting `config` itself
+(`mcp_execution_core::ServerConfig`, whose own hand-written `Debug` impl
+applies the same redaction) rather than `config.transport()`
+(`&mcp_execution_core::Transport`). `Transport` is `mcp-core`'s one
+secret-bearing type that still derives a plain `Debug` — formatting it
+directly, here or anywhere else, reproduces the leak this log line was
+fixed for (#336; tracked for a structural fix, redacting `Debug` on
+`Transport` itself, in #345). Any new log line touching a `ServerConfig`
+must format the `ServerConfig`/`TransportArgs`/`McpTransport` wrapper, never
+`Transport` directly.
+
 ## 5. `runner.rs` — Dispatch and Exit-Code Classification
 
 ```rust

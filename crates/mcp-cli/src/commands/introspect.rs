@@ -191,7 +191,7 @@ pub async fn run(
     let (server_id, config) = resolve_server_config(source)?;
 
     info!("Introspecting server: {}", server_id);
-    info!("Transport: {:?}", config.transport());
+    info!("Server config: {config:?}");
     info!("Detailed: {}", detailed);
     info!("Output format: {}", output_format);
 
@@ -306,7 +306,7 @@ fn build_tool_metadata(tool_info: &ToolInfo, detailed: bool) -> ToolDisplay {
 mod tests {
     use super::*;
     use crate::commands::common::TransportArgs;
-    use mcp_execution_core::{ServerId, ToolName};
+    use mcp_execution_core::{REDACTED_PLACEHOLDER, ServerId, ToolName};
     use mcp_execution_introspector::ServerCapabilities;
     use serde_json::json;
 
@@ -1041,6 +1041,110 @@ mod tests {
             chain_msg.contains("greater than zero"),
             "expected connect_timeout validation error in the error chain, got: {chain_msg}"
         );
+    }
+
+    /// Captures the formatted `message` text of every tracing event observed while
+    /// installed as the default subscriber, so a test can assert on what an `info!`
+    /// call actually emitted instead of re-deriving it via a bare `format!` call.
+    ///
+    /// Minimal by design (mirrors the `WarnCounter`/`CorrelationLayer` precedents in
+    /// `mcp-introspector`/`mcp-server`'s test suites): no span bookkeeping beyond
+    /// what `tracing::Subscriber` requires, since these tests only need event text.
+    #[derive(Clone, Default)]
+    struct MessageCapture(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl MessageCapture {
+        fn joined(&self) -> String {
+            self.0.lock().unwrap().join("\n")
+        }
+    }
+
+    impl tracing::Subscriber for MessageCapture {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct MessageVisitor(Option<String>);
+            impl tracing::field::Visit for MessageVisitor {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 = Some(format!("{value:?}"));
+                    }
+                }
+            }
+
+            let mut visitor = MessageVisitor(None);
+            event.record(&mut visitor);
+            if let Some(message) = visitor.0 {
+                self.0.lock().unwrap().push(message);
+            }
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// Regression test for #336: drives the real CLI-args -> `resolve_server_config`
+    /// -> `run` path (not a bare `ServerConfig::builder()` + `format!` call) with an
+    /// HTTP header carrying a secret, and captures the actual tracing output the
+    /// `--verbose` log line emits. The server connection still fails (no real
+    /// server listening), but the log line fires before that attempt, so the
+    /// capture reflects exactly what a `--verbose` run would print to stderr.
+    #[tokio::test]
+    async fn test_run_verbose_log_redacts_http_header_secret() {
+        let secret_body = "sk-verySECRETtoken1234567890";
+        let header = format!("Authorization=Bearer {secret_body}");
+        let capture = MessageCapture::default();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+
+        let source = http_source("https://localhost:99999/invalid", vec![&header]);
+        let _ = run(source, false, OutputFormat::Json).await;
+
+        let logged = capture.joined();
+        assert!(logged.contains("Authorization"));
+        assert!(logged.contains(REDACTED_PLACEHOLDER));
+        assert!(!logged.contains(secret_body));
+    }
+
+    /// Regression test for #336, stdio transport variant: env var values (e.g.
+    /// `GITHUB_TOKEN`) must not leak into the same log line either, exercised
+    /// through the same CLI-args -> `run` path as the HTTP case above.
+    #[tokio::test]
+    async fn test_run_verbose_log_redacts_stdio_env_secret() {
+        let secret_body = "ghp_verySECRETtoken1234567890abcdef";
+        let capture = MessageCapture::default();
+        let _guard = tracing::subscriber::set_default(capture.clone());
+
+        let source = ServerSource::Flags {
+            transport: TransportArgs::Stdio {
+                command: "nonexistent-server-336".to_string(),
+                args: vec![],
+                env: vec![format!("GITHUB_TOKEN={secret_body}")],
+                cwd: None,
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+        let _ = run(source, false, OutputFormat::Json).await;
+
+        let logged = capture.joined();
+        assert!(logged.contains("GITHUB_TOKEN"));
+        assert!(logged.contains(REDACTED_PLACEHOLDER));
+        assert!(!logged.contains(secret_body));
     }
 
     #[tokio::test]
