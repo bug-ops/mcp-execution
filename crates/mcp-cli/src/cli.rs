@@ -5,15 +5,16 @@
 //! - `Commands` - Available subcommands
 
 use clap::builder::{PossibleValuesParser, TypedValueParser as _};
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use clap_complete::Shell;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::actions::ServerAction;
+use crate::commands::common::{ServerSource, TransportArgs};
 use mcp_execution_core::cli::OutputFormat;
-use mcp_execution_core::{RedactedItems, RedactedUrl};
+use mcp_execution_core::{Error as CoreError, RedactedItems, RedactedUrl, sanitize_path_for_error};
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
 ///
@@ -81,6 +82,234 @@ impl fmt::Debug for Cli {
     }
 }
 
+/// Shared server-selection, transport, and timeout flags for `introspect` and `generate`.
+///
+/// Fields are private: the only way to obtain a value of this type is via clap parsing
+/// (`#[command(flatten)]` on `Commands::Introspect`/`Commands::Generate`), which — via the
+/// `server_source` argument group below — guarantees exactly one of `--from-config`, the
+/// positional `server`, `--http`, or `--sse` is set before [`TryFrom<ServerFlags> for
+/// ServerSource`](ServerSource) ever runs. This makes the illegal states (zero or multiple
+/// selectors) unconstructible outside this module rather than merely checked at runtime.
+///
+/// # Examples
+///
+/// ```
+/// use clap::Parser;
+/// use mcp_execution_cli::cli::{Cli, Commands};
+///
+/// // The positional `server` and `--from-config`/`--http`/`--sse` are
+/// // alternative selectors accepted by the same `server_source` group.
+/// let cli = Cli::parse_from(["mcp-execution-cli", "introspect", "github-mcp-server"]);
+/// assert!(matches!(cli.command, Commands::Introspect { .. }));
+///
+/// let cli = Cli::parse_from([
+///     "mcp-execution-cli",
+///     "introspect",
+///     "--http",
+///     "https://api.example.com/mcp",
+/// ]);
+/// assert!(matches!(cli.command, Commands::Introspect { .. }));
+///
+/// // Exactly one selector is required: none set is a parse error.
+/// assert!(Cli::try_parse_from(["mcp-execution-cli", "introspect"]).is_err());
+/// ```
+#[derive(Args)]
+#[command(group(
+    ArgGroup::new("server_source")
+        .required(true)
+        .args(["from_config", "server", "http", "sse"])
+))]
+pub struct ServerFlags {
+    /// Load server configuration from ~/.claude/mcp.json by name
+    ///
+    /// When specified, all other server configuration options are ignored.
+    /// The server must be defined in ~/.claude/mcp.json with matching name.
+    ///
+    /// Example mcp.json (stdio and http entries can be mixed freely):
+    /// ```json
+    /// {
+    ///   "mcpServers": {
+    ///     "github": {
+    ///       "command": "docker",
+    ///       "args": ["run", "-i", "--rm", "..."],
+    ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
+    ///     },
+    ///     "remote": {
+    ///       "type": "http",
+    ///       "url": "https://api.example.com/mcp",
+    ///       "headers": {"Authorization": "Bearer ..."}
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    #[arg(long = "from-config", conflicts_with_all = ["server", "args", "env", "cwd", "http", "sse", "connect_timeout_secs", "discover_timeout_secs"])]
+    from_config: Option<String>,
+
+    /// Server command (binary name or path)
+    ///
+    /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
+    /// Not required when using --from-config, --http, or --sse
+    server: Option<String>,
+
+    /// Arguments to pass to the server command
+    #[arg(short, long = "arg", num_args = 1)]
+    args: Vec<String>,
+
+    /// Environment variables in KEY=VALUE format
+    #[arg(short, long = "env", num_args = 1)]
+    env: Vec<String>,
+
+    /// Working directory for the server process
+    #[arg(long)]
+    cwd: Option<String>,
+
+    /// Use HTTP transport with specified URL
+    #[arg(long, conflicts_with = "sse")]
+    http: Option<String>,
+
+    /// Use SSE transport with specified URL
+    #[arg(long, conflicts_with = "http")]
+    sse: Option<String>,
+
+    /// HTTP headers in KEY=VALUE format (for HTTP/SSE transport)
+    #[arg(long = "header", num_args = 1)]
+    headers: Vec<String>,
+
+    /// Override the connection (handshake) timeout, in seconds.
+    ///
+    /// Same field/units as `mcp.json`'s `connectTimeoutSecs`. Must be
+    /// greater than zero and at most 600 seconds (10 minutes); there is
+    /// no infinite-timeout option, since an unbounded wait would let a
+    /// hung server block this command forever.
+    ///
+    /// Conflicts with `--from-config`: to override the timeout for a
+    /// server defined in `mcp.json`, either edit its `connectTimeoutSecs`
+    /// field, or re-run this command without `--from-config` using the
+    /// server's command/args/env directly.
+    #[arg(long = "connect-timeout-secs")]
+    connect_timeout_secs: Option<u64>,
+
+    /// Override the tool discovery timeout, in seconds.
+    ///
+    /// Same field/units as `mcp.json`'s `discoverTimeoutSecs`. Same
+    /// bounds and `--from-config` conflict as `--connect-timeout-secs`.
+    #[arg(long = "discover-timeout-secs")]
+    discover_timeout_secs: Option<u64>,
+}
+
+// Hand-written to redact `server`/`env`/`http`/`sse`/`headers` — these carry
+// raw, unparsed `KEY=VALUE` secrets and URLs (which may embed credentials,
+// e.g. `https://user:token@host/mcp`) straight from argv, before
+// `TransportArgs`/`McpTransport` ever get a chance to redact them. `args` is
+// deliberately left unredacted here, matching the pre-existing
+// `Commands::Debug` invariant (see `test_commands_debug_does_not_redact_args`):
+// it is positional, not secret-shaped, and stays visible. This is an
+// intentional asymmetry with `TransportArgs::Stdio`/`McpTransport::Stdio`,
+// whose own `Debug` impls *do* wrap `args` in `RedactedItems` — a caller can
+// still smuggle a secret through `--arg` (e.g. `docker run -e TOKEN=...`
+// style), but by the time a `ServerSource`/`ServerConfig` value (the type
+// that actually flows through the app and can end up in an error's
+// `anyhow::Context`) is built from these flags, that later layer's
+// redaction applies. `ServerFlags::Debug` itself is not on that path today
+// (nothing prints a bare `Commands`/`ServerFlags` value), so this only
+// matters if a future caller adds one.
+
+impl fmt::Debug for ServerFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            from_config,
+            server,
+            args,
+            env,
+            cwd,
+            http,
+            sse,
+            headers,
+            connect_timeout_secs,
+            discover_timeout_secs,
+        } = self;
+        f.debug_struct("ServerFlags")
+            .field("from_config", from_config)
+            .field(
+                "server",
+                &server
+                    .as_deref()
+                    .map(|s| sanitize_path_for_error(Path::new(s))),
+            )
+            .field("args", args)
+            .field("env", &RedactedItems(env))
+            .field(
+                "cwd",
+                &cwd.as_deref()
+                    .map(|cwd| sanitize_path_for_error(Path::new(cwd))),
+            )
+            .field("http", &http.as_deref().map(RedactedUrl))
+            .field("sse", &sse.as_deref().map(RedactedUrl))
+            .field("headers", &RedactedItems(headers))
+            .field("connect_timeout_secs", connect_timeout_secs)
+            .field("discover_timeout_secs", discover_timeout_secs)
+            .finish()
+    }
+}
+
+/// Converts clap's parsed [`ServerFlags`] landing zone into the closed
+/// [`ServerSource`] domain enum.
+///
+/// # Errors
+///
+/// Returns [`CoreError::InvalidArgument`] if none or more than one of
+/// `from_config`/`server`/`http`/`sse` is set. Unreachable when `flags` came
+/// from real CLI parsing — the `server_source` argument group on
+/// [`ServerFlags`] already enforces exactly one — but reachable from a
+/// directly-constructed `ServerFlags` value (e.g. in tests, which can build
+/// one since they are a child module of this one).
+impl TryFrom<ServerFlags> for ServerSource {
+    type Error = CoreError;
+
+    fn try_from(flags: ServerFlags) -> Result<Self, Self::Error> {
+        let ServerFlags {
+            from_config,
+            server,
+            args,
+            env,
+            cwd,
+            http,
+            sse,
+            headers,
+            connect_timeout_secs,
+            discover_timeout_secs,
+        } = flags;
+
+        match (from_config, server, http, sse) {
+            (Some(name), None, None, None) => Ok(Self::Config { name }),
+            (None, Some(command), None, None) => Ok(Self::Flags {
+                transport: TransportArgs::Stdio {
+                    command,
+                    args,
+                    env,
+                    cwd,
+                },
+                connect_timeout_secs,
+                discover_timeout_secs,
+            }),
+            (None, None, Some(url), None) => Ok(Self::Flags {
+                transport: TransportArgs::Http { url, headers },
+                connect_timeout_secs,
+                discover_timeout_secs,
+            }),
+            (None, None, None, Some(url)) => Ok(Self::Flags {
+                transport: TransportArgs::Sse { url, headers },
+                connect_timeout_secs,
+                discover_timeout_secs,
+            }),
+            _ => Err(CoreError::InvalidArgument(
+                "exactly one of --from-config, a server command, --http, or --sse must be set"
+                    .to_string(),
+            )),
+        }
+    }
+}
+
 /// Available CLI subcommands.
 ///
 /// # Examples
@@ -143,86 +372,13 @@ pub enum Commands {
     ///     --header "Authorization=Bearer ghp_xxx"
     /// ```
     Introspect {
-        /// Load server configuration from ~/.claude/mcp.json by name
-        ///
-        /// When specified, all other server configuration options are ignored.
-        /// The server must be defined in ~/.claude/mcp.json with matching name.
-        ///
-        /// Example mcp.json (stdio and http entries can be mixed freely):
-        /// ```json
-        /// {
-        ///   "mcpServers": {
-        ///     "github": {
-        ///       "command": "docker",
-        ///       "args": ["run", "-i", "--rm", "..."],
-        ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
-        ///     },
-        ///     "remote": {
-        ///       "type": "http",
-        ///       "url": "https://api.example.com/mcp",
-        ///       "headers": {"Authorization": "Bearer ..."}
-        ///     }
-        ///   }
-        /// }
-        /// ```
-        #[arg(long = "from-config", conflicts_with_all = ["server", "args", "env", "cwd", "http", "sse", "connect_timeout_secs", "discover_timeout_secs"])]
-        from_config: Option<String>,
-
-        /// Server command (binary name or path)
-        ///
-        /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
-        /// Not required when using --http or --sse
-        #[arg(required_unless_present_any = ["from_config", "http", "sse"])]
-        server: Option<String>,
-
-        /// Arguments to pass to the server command
-        #[arg(short, long = "arg", num_args = 1)]
-        args: Vec<String>,
-
-        /// Environment variables in KEY=VALUE format
-        #[arg(short, long = "env", num_args = 1)]
-        env: Vec<String>,
-
-        /// Working directory for the server process
-        #[arg(long)]
-        cwd: Option<String>,
-
-        /// Use HTTP transport with specified URL
-        #[arg(long, conflicts_with = "sse")]
-        http: Option<String>,
-
-        /// Use SSE transport with specified URL
-        #[arg(long, conflicts_with = "http")]
-        sse: Option<String>,
-
-        /// HTTP headers in KEY=VALUE format (for HTTP/SSE transport)
-        #[arg(long = "header", num_args = 1)]
-        headers: Vec<String>,
+        /// Server selection, transport, and timeout flags (shared with `generate`)
+        #[command(flatten)]
+        flags: ServerFlags,
 
         /// Show detailed tool schemas
         #[arg(short, long)]
         detailed: bool,
-
-        /// Override the connection (handshake) timeout, in seconds.
-        ///
-        /// Same field/units as `mcp.json`'s `connectTimeoutSecs`. Must be
-        /// greater than zero and at most 600 seconds (10 minutes); there is
-        /// no infinite-timeout option, since an unbounded wait would let a
-        /// hung server block this command forever.
-        ///
-        /// Conflicts with `--from-config`: to override the timeout for a
-        /// server defined in `mcp.json`, either edit its `connectTimeoutSecs`
-        /// field, or re-run this command without `--from-config` using the
-        /// server's command/args/env directly.
-        #[arg(long = "connect-timeout-secs")]
-        connect_timeout_secs: Option<u64>,
-
-        /// Override the tool discovery timeout, in seconds.
-        ///
-        /// Same field/units as `mcp.json`'s `discoverTimeoutSecs`. Same
-        /// bounds and `--from-config` conflict as `--connect-timeout-secs`.
-        #[arg(long = "discover-timeout-secs")]
-        discover_timeout_secs: Option<u64>,
     },
 
     /// Generate Claude Code skill file from progressive loading tools.
@@ -323,61 +479,9 @@ pub enum Commands {
     ///     --env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx
     /// ```
     Generate {
-        /// Load server configuration from ~/.claude/mcp.json by name
-        ///
-        /// When specified, all other server configuration options are ignored.
-        /// The server must be defined in ~/.claude/mcp.json with matching name.
-        ///
-        /// Example mcp.json (stdio and http entries can be mixed freely):
-        /// ```json
-        /// {
-        ///   "mcpServers": {
-        ///     "github": {
-        ///       "command": "docker",
-        ///       "args": ["run", "-i", "--rm", "..."],
-        ///       "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "..."}
-        ///     },
-        ///     "remote": {
-        ///       "type": "http",
-        ///       "url": "https://api.example.com/mcp",
-        ///       "headers": {"Authorization": "Bearer ..."}
-        ///     }
-        ///   }
-        /// }
-        /// ```
-        #[arg(long = "from-config", conflicts_with_all = ["server", "server_args", "server_env", "server_cwd", "http_url", "sse_url", "connect_timeout_secs", "discover_timeout_secs"])]
-        from_config: Option<String>,
-
-        /// Server command (binary name or path)
-        ///
-        /// For stdio transport: command to execute (e.g., "docker", "npx", "github-mcp-server")
-        /// Not required when using --from-config, --http, or --sse
-        #[arg(required_unless_present_any = ["from_config", "http_url", "sse_url"])]
-        server: Option<String>,
-
-        /// Arguments to pass to the server command
-        #[arg(long = "arg", num_args = 1)]
-        server_args: Vec<String>,
-
-        /// Environment variables in KEY=VALUE format
-        #[arg(long = "env", num_args = 1)]
-        server_env: Vec<String>,
-
-        /// Working directory for the server process
-        #[arg(long = "cwd")]
-        server_cwd: Option<String>,
-
-        /// Use HTTP transport with specified URL
-        #[arg(long = "http", conflicts_with = "sse_url")]
-        http_url: Option<String>,
-
-        /// Use SSE transport with specified URL
-        #[arg(long = "sse", conflicts_with = "http_url")]
-        sse_url: Option<String>,
-
-        /// HTTP headers in KEY=VALUE format (for HTTP/SSE transport)
-        #[arg(long = "header", num_args = 1)]
-        server_headers: Vec<String>,
+        /// Server selection, transport, and timeout flags (shared with `introspect`)
+        #[command(flatten)]
+        flags: ServerFlags,
 
         /// Custom server name for directory (e.g., 'github' instead of 'docker')
         /// (default: uses server command name)
@@ -392,27 +496,6 @@ pub enum Commands {
         /// Preview files that would be generated without writing to disk
         #[arg(long)]
         dry_run: bool,
-
-        /// Override the connection (handshake) timeout, in seconds.
-        ///
-        /// Same field/units as `mcp.json`'s `connectTimeoutSecs`. Must be
-        /// greater than zero and at most 600 seconds (10 minutes); there is
-        /// no infinite-timeout option, since an unbounded wait would let a
-        /// hung server block this command forever.
-        ///
-        /// Conflicts with `--from-config`: to override the timeout for a
-        /// server defined in `mcp.json`, either edit its `connectTimeoutSecs`
-        /// field, or re-run this command without `--from-config` using the
-        /// server's command/args/env directly.
-        #[arg(long = "connect-timeout-secs")]
-        connect_timeout_secs: Option<u64>,
-
-        /// Override the tool discovery timeout, in seconds.
-        ///
-        /// Same field/units as `mcp.json`'s `discoverTimeoutSecs`. Same
-        /// bounds and `--from-config` conflict as `--connect-timeout-secs`.
-        #[arg(long = "discover-timeout-secs")]
-        discover_timeout_secs: Option<u64>,
     },
 
     /// Manage MCP server connections.
@@ -458,31 +541,10 @@ pub enum Commands {
 impl fmt::Debug for Commands {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Introspect {
-                from_config,
-                server,
-                args,
-                env,
-                cwd,
-                http,
-                sse,
-                headers,
-                detailed,
-                connect_timeout_secs,
-                discover_timeout_secs,
-            } => f
+            Self::Introspect { flags, detailed } => f
                 .debug_struct("Introspect")
-                .field("from_config", from_config)
-                .field("server", server)
-                .field("args", args)
-                .field("env", &RedactedItems(env))
-                .field("cwd", cwd)
-                .field("http", &http.as_deref().map(RedactedUrl))
-                .field("sse", &sse.as_deref().map(RedactedUrl))
-                .field("headers", &RedactedItems(headers))
+                .field("flags", flags)
                 .field("detailed", detailed)
-                .field("connect_timeout_secs", connect_timeout_secs)
-                .field("discover_timeout_secs", discover_timeout_secs)
                 .finish(),
             Self::Skill {
                 server,
@@ -501,34 +563,16 @@ impl fmt::Debug for Commands {
                 .field("overwrite", overwrite)
                 .finish(),
             Self::Generate {
-                from_config,
-                server,
-                server_args,
-                server_env,
-                server_cwd,
-                http_url,
-                sse_url,
-                server_headers,
+                flags,
                 name,
                 progressive_output,
                 dry_run,
-                connect_timeout_secs,
-                discover_timeout_secs,
             } => f
                 .debug_struct("Generate")
-                .field("from_config", from_config)
-                .field("server", server)
-                .field("server_args", server_args)
-                .field("server_env", &RedactedItems(server_env))
-                .field("server_cwd", server_cwd)
-                .field("http_url", &http_url.as_deref().map(RedactedUrl))
-                .field("sse_url", &sse_url.as_deref().map(RedactedUrl))
-                .field("server_headers", &RedactedItems(server_headers))
+                .field("flags", flags)
                 .field("name", name)
                 .field("progressive_output", progressive_output)
                 .field("dry_run", dry_run)
-                .field("connect_timeout_secs", connect_timeout_secs)
-                .field("discover_timeout_secs", discover_timeout_secs)
                 .finish(),
             Self::Server { action } => f.debug_struct("Server").field("action", action).finish(),
             Self::Setup => write!(f, "Setup"),
@@ -584,16 +628,13 @@ mod tests {
             "--arg=ghcr.io/github/github-mcp-server",
             "--env=GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx",
         ]);
-        if let Commands::Introspect {
-            server, args, env, ..
-        } = cli.command
-        {
-            assert_eq!(server, Some("docker".to_string()));
+        if let Commands::Introspect { flags, .. } = cli.command {
+            assert_eq!(flags.server, Some("docker".to_string()));
             assert_eq!(
-                args,
+                flags.args,
                 vec!["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
             );
-            assert_eq!(env, vec!["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"]);
+            assert_eq!(flags.env, vec!["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"]);
         } else {
             panic!("Expected Introspect command");
         }
@@ -609,16 +650,13 @@ mod tests {
             "--header",
             "Authorization=Bearer token",
         ]);
-        if let Commands::Introspect {
-            server,
-            http,
-            headers,
-            ..
-        } = cli.command
-        {
-            assert_eq!(server, None);
-            assert_eq!(http, Some("https://api.githubcopilot.com/mcp/".to_string()));
-            assert_eq!(headers, vec!["Authorization=Bearer token"]);
+        if let Commands::Introspect { flags, .. } = cli.command {
+            assert_eq!(flags.server, None);
+            assert_eq!(
+                flags.http,
+                Some("https://api.githubcopilot.com/mcp/".to_string())
+            );
+            assert_eq!(flags.headers, vec!["Authorization=Bearer token"]);
         } else {
             panic!("Expected Introspect command");
         }
@@ -635,14 +673,9 @@ mod tests {
             "--discover-timeout-secs",
             "90",
         ]);
-        if let Commands::Introspect {
-            connect_timeout_secs,
-            discover_timeout_secs,
-            ..
-        } = cli.command
-        {
-            assert_eq!(connect_timeout_secs, Some(5));
-            assert_eq!(discover_timeout_secs, Some(90));
+        if let Commands::Introspect { flags, .. } = cli.command {
+            assert_eq!(flags.connect_timeout_secs, Some(5));
+            assert_eq!(flags.discover_timeout_secs, Some(90));
         } else {
             panic!("Expected Introspect command");
         }
@@ -707,14 +740,9 @@ mod tests {
             "--discover-timeout-secs",
             "90",
         ]);
-        if let Commands::Generate {
-            connect_timeout_secs,
-            discover_timeout_secs,
-            ..
-        } = cli.command
-        {
-            assert_eq!(connect_timeout_secs, Some(5));
-            assert_eq!(discover_timeout_secs, Some(90));
+        if let Commands::Generate { flags, .. } = cli.command {
+            assert_eq!(flags.connect_timeout_secs, Some(5));
+            assert_eq!(flags.discover_timeout_secs, Some(90));
         } else {
             panic!("Expected Generate command");
         }
@@ -1052,5 +1080,248 @@ mod tests {
         let debug_output = format!("{:?}", cli.command);
         assert!(!debug_output.contains(secret));
         assert!(debug_output.contains("host.example.com/mcp"));
+    }
+
+    #[test]
+    fn test_server_flags_debug_redacts_secret_shaped_fields() {
+        // Migrated from the former `RawServerArgs` regression test: `server`'s
+        // home-relative path must be tilde-sanitized, not just the URL/env/header
+        // fields already covered above.
+        let secret = "sk-live-secret";
+        let home = dirs::home_dir().expect("home directory must be resolvable in test environment");
+        let server_path = home.join("tools").join("mcp-server");
+
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            &server_path.display().to_string(),
+            "--env",
+            &format!("GITHUB_TOKEN={secret}"),
+            "--connect-timeout-secs",
+            "30",
+        ]);
+
+        let debug_output = format!("{:?}", cli.command);
+        assert!(!debug_output.contains(secret));
+        assert!(!debug_output.contains(&home.display().to_string()));
+        assert!(debug_output.contains('~'));
+        assert!(debug_output.contains("connect_timeout_secs: Some(30)"));
+    }
+
+    // ── #314: `server_source` argument group makes the transport-selector
+    // exclusivity a clap-level guarantee instead of a runtime check ──
+
+    #[test]
+    fn test_cli_parsing_introspect_positional_with_http_errors() {
+        // Approved behavior change: previously the positional command was
+        // silently discarded by `TransportArgs::from_flags` in favor of
+        // `--http`. Now the `server_source` group rejects both being set.
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "introspect",
+            "docker",
+            "--http",
+            "https://api.example.com",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_positional_with_http_errors() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "generate",
+            "docker",
+            "--http",
+            "https://api.example.com",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_introspect_no_selector_errors() {
+        let result = Cli::try_parse_from(["mcp-cli", "introspect"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_no_selector_errors() {
+        let result = Cli::try_parse_from(["mcp-cli", "generate"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_introspect_http_and_sse_together_errors() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "introspect",
+            "--http",
+            "https://api.example.com",
+            "--sse",
+            "https://api.example.com/sse",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_http_and_sse_together_errors() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "generate",
+            "--http",
+            "https://api.example.com",
+            "--sse",
+            "https://api.example.com/sse",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_introspect_from_config_and_http_together_errors() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "introspect",
+            "--from-config",
+            "github",
+            "--http",
+            "https://api.example.com",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_from_config_and_http_together_errors() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "generate",
+            "--from-config",
+            "github",
+            "--http",
+            "https://api.example.com",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_server_source_try_from_server_flags_catch_all_errors() {
+        // Legal only because this test module is a child of `cli`, so it can
+        // see `ServerFlags`'s private fields. Unreachable via real CLI
+        // parsing: the `server_source` argument group already guarantees
+        // exactly one selector is set.
+        let flags = ServerFlags {
+            from_config: None,
+            server: None,
+            args: vec![],
+            env: vec![],
+            cwd: None,
+            http: None,
+            sse: None,
+            headers: vec![],
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        };
+
+        let result = ServerSource::try_from(flags);
+        assert!(result.is_err());
+    }
+
+    // ── S1: round-trip parse -> `TryFrom<ServerFlags>` -> assert variant and
+    // payload for each of the four `Ok` arms. Without these, transposing the
+    // `Http`/`Sse` arms or the `args`/`env` fields inside `Stdio` (all
+    // same-typed) would compile and pass the rest of the suite — exactly
+    // issue #286's bug class, previously guarded by the now-deleted
+    // `test_transport_args_from_flags_{stdio,http,sse}` tests. ──
+
+    fn introspect_flags(cli: Cli) -> ServerFlags {
+        match cli.command {
+            Commands::Introspect { flags, .. } => flags,
+            other => panic!("expected Introspect command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_server_source_try_from_config_arm() {
+        let cli = Cli::parse_from(["mcp-cli", "introspect", "--from-config", "github"]);
+        let source = ServerSource::try_from(introspect_flags(cli)).unwrap();
+
+        assert!(matches!(source, ServerSource::Config { name } if name == "github"));
+    }
+
+    #[test]
+    fn test_server_source_try_from_stdio_arm_does_not_transpose_args_and_env() {
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "docker",
+            "--arg=run",
+            "--env=TOKEN=abc",
+            "--cwd=/tmp/work",
+        ]);
+        let source = ServerSource::try_from(introspect_flags(cli)).unwrap();
+
+        match source {
+            ServerSource::Flags {
+                transport:
+                    TransportArgs::Stdio {
+                        command,
+                        args,
+                        env,
+                        cwd,
+                    },
+                ..
+            } => {
+                assert_eq!(command, "docker");
+                assert_eq!(args, vec!["run".to_string()]);
+                assert_eq!(env, vec!["TOKEN=abc".to_string()]);
+                assert_eq!(cwd, Some("/tmp/work".to_string()));
+            }
+            other => panic!("expected Flags{{Stdio}}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_server_source_try_from_http_arm_does_not_swap_with_sse() {
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "--http",
+            "https://api.example.com/mcp",
+            "--header=Authorization=Bearer x",
+        ]);
+        let source = ServerSource::try_from(introspect_flags(cli)).unwrap();
+
+        match source {
+            ServerSource::Flags {
+                transport: TransportArgs::Http { url, headers },
+                ..
+            } => {
+                assert_eq!(url, "https://api.example.com/mcp");
+                assert_eq!(headers, vec!["Authorization=Bearer x".to_string()]);
+            }
+            other => panic!("expected Flags{{Http}}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_server_source_try_from_sse_arm_does_not_swap_with_http() {
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "introspect",
+            "--sse",
+            "https://api.example.com/sse",
+            "--header=X-API-Key=secret",
+        ]);
+        let source = ServerSource::try_from(introspect_flags(cli)).unwrap();
+
+        match source {
+            ServerSource::Flags {
+                transport: TransportArgs::Sse { url, headers },
+                ..
+            } => {
+                assert_eq!(url, "https://api.example.com/sse");
+                assert_eq!(headers, vec!["X-API-Key=secret".to_string()]);
+            }
+            other => panic!("expected Flags{{Sse}}, got {other:?}"),
+        }
     }
 }

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`mcp-execution-cli`**: `introspect` and `generate` now flatten a shared `ServerFlags`
+  (private fields, `cli.rs`) instead of each declaring its own copy of the transport/timeout
+  flags. A single clap `ArgGroup` (`server_source`, over `from_config`/`server`/`http`/`sse`)
+  enforces "exactly one selector" at parse time, replacing the previous
+  `conflicts_with_all`/`required_unless_present_any` combination and the runtime
+  `TransportArgs::from_flags` check. `ServerFlags` converts into the closed `ServerSource` enum
+  (`Config { name }` / `Flags { transport, connect_timeout_secs, discover_timeout_secs }`) via
+  `TryFrom`, which also retires the domain-impossible "`from_config` set together with a
+  meaningless timeout override" state that `connect_timeout_secs`/`discover_timeout_secs` used to
+  document on both `introspect::run` and `generate::run`. `commands::introspect::run` and
+  `commands::generate::run` now take a `ServerSource` parameter instead of the old
+  `RawServerArgs` struct (#314).
+- **`mcp-execution-cli`**: `introspect <command> --http <url>` and `generate <command> --http
+  <url>` (or `--sse`) now fail to parse instead of silently discarding the positional server
+  command and using the HTTP/SSE transport — the previous behavior was an undocumented quirk of
+  `TransportArgs::from_flags` preferring `http`/`sse` over `server`, not an intentional feature.
+  Every other invocation shape (`--from-config`, positional command alone, `--http`/`--sse`
+  alone) is unchanged (#314).
+- **`mcp-execution-cli`**: `generate` gains the `-a`/`-e` short aliases for `--arg`/`--env` that
+  `introspect` already had — a side effect of both commands now flattening the same
+  `ServerFlags`, not a deliberate new feature in its own right (#314).
+
+### Removed
+
+- **`mcp-execution-cli`**: removed `commands::common::RawServerArgs` (`pub`, all-`Option`/`Vec`
+  fields with no invariant enforcement) and `TransportArgs::from_flags` (`pub`, the runtime
+  "exactly one transport" check) — both superseded by `ServerFlags`/`ServerSource` above (#314).
+
 ### Added
 
 - **`mcp-execution-codegen`**: new `pub` constant `common::typescript::MAX_SCHEMA_RECURSION_DEPTH`

@@ -2,7 +2,7 @@
 //!
 //! Connects to an MCP server and displays its capabilities, tools, and metadata.
 
-use super::common::{RawServerArgs, resolve_server_config};
+use super::common::{ServerSource, resolve_server_config};
 use anyhow::{Context, Result};
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_introspector::{Introspector, ServerInfo, ToolInfo};
@@ -126,11 +126,11 @@ pub struct ToolDisplay {
 ///
 /// # Arguments
 ///
-/// * `raw` - Server config-file selector, transport flags, and timeout
-///   overrides. `connect_timeout_secs` is ignored when `raw.from_config` is
-///   set (the `mcp.json` entry's `connectTimeoutSecs` applies instead); both
-///   timeout overrides share `mcp.json`'s bounds (greater than zero, at most
-///   600 seconds).
+/// * `source` - Resolved server-selection source: either a `~/.claude/mcp.json`
+///   name or CLI transport flags with timeout overrides. Timeout overrides
+///   only exist on the `Flags` arm — a `Config` source always uses the
+///   `mcp.json` entry's own `connectTimeoutSecs`/`discoverTimeoutSecs`, so
+///   there is no "ignored override" state to document.
 /// * `detailed` - Whether to show detailed tool schemas
 /// * `output_format` - Output format (json, text, pretty)
 ///
@@ -145,22 +145,20 @@ pub struct ToolDisplay {
 /// # Examples
 ///
 /// ```no_run
-/// use mcp_execution_cli::commands::common::RawServerArgs;
+/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
 /// use mcp_execution_cli::commands::introspect;
 /// use mcp_execution_core::cli::OutputFormat;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// // Simple server
 /// let exit_code = introspect::run(
-///     RawServerArgs {
-///         from_config: None,
-///         server: Some("github-mcp-server".to_string()),
-///         args: vec!["stdio".to_string()],
-///         env: vec![],
-///         cwd: None,
-///         http: None,
-///         sse: None,
-///         headers: vec![],
+///     ServerSource::Flags {
+///         transport: TransportArgs::Stdio {
+///             command: "github-mcp-server".to_string(),
+///             args: vec!["stdio".to_string()],
+///             env: vec![],
+///             cwd: None,
+///         },
 ///         connect_timeout_secs: None,
 ///         discover_timeout_secs: None,
 ///     },
@@ -170,15 +168,11 @@ pub struct ToolDisplay {
 ///
 /// // HTTP transport with a shorter connect timeout
 /// let exit_code = introspect::run(
-///     RawServerArgs {
-///         from_config: None,
-///         server: None,
-///         args: vec![],
-///         env: vec![],
-///         cwd: None,
-///         http: Some("https://api.githubcopilot.com/mcp/".to_string()),
-///         sse: None,
-///         headers: vec!["Authorization=Bearer token".to_string()],
+///     ServerSource::Flags {
+///         transport: TransportArgs::Http {
+///             url: "https://api.githubcopilot.com/mcp/".to_string(),
+///             headers: vec!["Authorization=Bearer token".to_string()],
+///         },
 ///         connect_timeout_secs: Some(5),
 ///         discover_timeout_secs: None,
 ///     },
@@ -189,12 +183,12 @@ pub struct ToolDisplay {
 /// # }
 /// ```
 pub async fn run(
-    raw: RawServerArgs,
+    source: ServerSource,
     detailed: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
     // Build server config: either from mcp.json or from CLI arguments
-    let (server_id, config) = resolve_server_config(raw)?;
+    let (server_id, config) = resolve_server_config(source)?;
 
     info!("Introspecting server: {}", server_id);
     info!("Transport: {:?}", config.transport());
@@ -311,9 +305,51 @@ fn build_tool_metadata(tool_info: &ToolInfo, detailed: bool) -> ToolDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::common::TransportArgs;
     use mcp_execution_core::{ServerId, ToolName};
     use mcp_execution_introspector::ServerCapabilities;
     use serde_json::json;
+
+    fn stdio_source(command: &str) -> ServerSource {
+        ServerSource::Flags {
+            transport: TransportArgs::Stdio {
+                command: command.to_string(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        }
+    }
+
+    fn http_source(url: &str, headers: Vec<&str>) -> ServerSource {
+        ServerSource::Flags {
+            transport: TransportArgs::Http {
+                url: url.to_string(),
+                headers: headers.into_iter().map(String::from).collect(),
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        }
+    }
+
+    fn sse_source(url: &str, headers: Vec<&str>) -> ServerSource {
+        ServerSource::Flags {
+            transport: TransportArgs::Sse {
+                url: url.to_string(),
+                headers: headers.into_iter().map(String::from).collect(),
+            },
+            connect_timeout_secs: None,
+            discover_timeout_secs: None,
+        }
+    }
+
+    fn config_source(name: &str) -> ServerSource {
+        ServerSource::Config {
+            name: name.to_string(),
+        }
+    }
 
     #[test]
     fn test_build_result_basic() {
@@ -533,11 +569,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_server_connection_failure() {
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server-xyz".to_string()),
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Json).await;
+        let source = stdio_source("nonexistent-server-xyz");
+        let result = run(source, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -634,11 +667,8 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_text_format() {
         // Test that Text format output works correctly (compact JSON)
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server".to_string()),
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Text).await;
+        let source = stdio_source("nonexistent-server");
+        let result = run(source, false, OutputFormat::Text).await;
 
         // Connection should fail but format handling should not panic
         assert!(result.is_err());
@@ -647,11 +677,8 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_pretty_format() {
         // Test that Pretty format output works correctly (colorized)
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server".to_string()),
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Pretty).await;
+        let source = stdio_source("nonexistent-server");
+        let result = run(source, false, OutputFormat::Pretty).await;
 
         // Connection should fail but format handling should not panic
         assert!(result.is_err());
@@ -660,11 +687,8 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_detailed_mode() {
         // Test that detailed mode doesn't cause crashes even with connection failure
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server".to_string()),
-            ..Default::default()
-        };
-        let result = run(raw, true, OutputFormat::Json).await; // detailed mode
+        let source = stdio_source("nonexistent-server");
+        let result = run(source, true, OutputFormat::Json).await; // detailed mode
 
         assert!(result.is_err());
     }
@@ -674,12 +698,11 @@ mod tests {
     /// deterministic without a live server.
     #[tokio::test]
     async fn test_run_http_transport() {
-        let raw = RawServerArgs {
-            http: Some("https://localhost:99999/invalid".to_string()),
-            headers: vec!["Authorization=Bearer test".to_string()],
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Json).await;
+        let source = http_source(
+            "https://localhost:99999/invalid",
+            vec!["Authorization=Bearer test"],
+        );
+        let result = run(source, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -706,12 +729,8 @@ mod tests {
     /// See `test_run_http_transport` — same deterministic-failure rationale.
     #[tokio::test]
     async fn test_run_sse_transport() {
-        let raw = RawServerArgs {
-            sse: Some("https://localhost:99999/sse".to_string()),
-            headers: vec!["X-API-Key=test-key".to_string()],
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Json).await;
+        let source = sse_source("https://localhost:99999/sse", vec!["X-API-Key=test-key"]);
+        let result = run(source, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -735,11 +754,8 @@ mod tests {
     async fn test_run_all_output_formats() {
         // Test all output formats don't cause panics
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-            let raw = RawServerArgs {
-                server: Some("nonexistent".to_string()),
-                ..Default::default()
-            };
-            let result = run(raw, false, format).await;
+            let source = stdio_source("nonexistent");
+            let result = run(source, false, format).await;
 
             assert!(result.is_err());
         }
@@ -749,11 +765,8 @@ mod tests {
     async fn test_run_detailed_with_all_formats() {
         // Test detailed mode with all output formats
         for format in [OutputFormat::Json, OutputFormat::Text, OutputFormat::Pretty] {
-            let raw = RawServerArgs {
-                server: Some("nonexistent".to_string()),
-                ..Default::default()
-            };
-            let result = run(raw, true, format).await; // detailed
+            let source = stdio_source("nonexistent");
+            let result = run(source, true, format).await; // detailed
 
             assert!(result.is_err());
         }
@@ -955,11 +968,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_from_config_not_found() {
-        let raw = RawServerArgs {
-            from_config: Some("nonexistent-server-xyz".to_string()),
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Json).await;
+        let source = config_source("nonexistent-server-xyz");
+        let result = run(source, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -974,13 +984,10 @@ mod tests {
     #[tokio::test]
     async fn test_run_from_config_takes_priority() {
         // When from_config is Some, it should be used for config loading
-        // (server arg should be None due to clap conflicts, but we test the logic)
-        let raw = RawServerArgs {
-            from_config: Some("test-server".to_string()),
-            server: None, // server is None when from_config is used
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Json).await;
+        // (server arg is unrepresentable alongside it — enforced by
+        // `ServerSource` being a closed enum rather than a runtime check).
+        let source = config_source("test-server");
+        let result = run(source, false, OutputFormat::Json).await;
 
         // Should fail because config doesn't exist, not because of server
         assert!(result.is_err());
@@ -995,11 +1002,8 @@ mod tests {
     #[tokio::test]
     async fn test_run_manual_mode_backward_compatible() {
         // Existing behavior: from_config = None, use server arg
-        let raw = RawServerArgs {
-            server: Some("test-server-direct".to_string()),
-            ..Default::default()
-        };
-        let result = run(raw, false, OutputFormat::Json).await;
+        let source = stdio_source("test-server-direct");
+        let result = run(source, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -1014,12 +1018,17 @@ mod tests {
     async fn test_run_zero_connect_timeout_override_rejected_by_validation() {
         // A zero override must surface the same connect_timeout validation
         // error as the mcp.json path, not just a generic connection failure.
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server-timeout-test".to_string()),
+        let source = ServerSource::Flags {
+            transport: TransportArgs::Stdio {
+                command: "nonexistent-server-timeout-test".to_string(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
             connect_timeout_secs: Some(0),
-            ..Default::default()
+            discover_timeout_secs: None,
         };
-        let result = run(raw, false, OutputFormat::Json).await;
+        let result = run(source, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1037,13 +1046,17 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_valid_timeout_overrides_reaches_connection_attempt() {
         // Valid overrides must not be rejected before the connection attempt.
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server-timeout-test-2".to_string()),
+        let source = ServerSource::Flags {
+            transport: TransportArgs::Stdio {
+                command: "nonexistent-server-timeout-test-2".to_string(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
             connect_timeout_secs: Some(5),
             discover_timeout_secs: Some(90),
-            ..Default::default()
         };
-        let result = run(raw, false, OutputFormat::Json).await;
+        let result = run(source, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

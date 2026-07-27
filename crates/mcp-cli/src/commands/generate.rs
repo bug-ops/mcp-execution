@@ -6,7 +6,7 @@
 //! 2. Generates TypeScript files for progressive loading (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
-use super::common::{RawServerArgs, derive_server_id_from_path_or_name, resolve_server_config};
+use super::common::{ServerSource, derive_server_id_from_path_or_name, resolve_server_config};
 use crate::formatters::escape_display;
 use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
@@ -90,11 +90,11 @@ fn format_size(bytes: usize) -> String {
 ///
 /// # Arguments
 ///
-/// * `raw` - Server config-file selector, transport flags, and timeout
-///   overrides. `connect_timeout_secs` is ignored when `raw.from_config` is
-///   set (the `mcp.json` entry's `connectTimeoutSecs` applies instead); both
-///   timeout overrides share `mcp.json`'s bounds (greater than zero, at most
-///   600 seconds).
+/// * `source` - Resolved server-selection source: either a `~/.claude/mcp.json`
+///   name or CLI transport flags with timeout overrides. Timeout overrides
+///   only exist on the `Flags` arm — a `Config` source always uses the
+///   `mcp.json` entry's own `connectTimeoutSecs`/`discoverTimeoutSecs`, so
+///   there is no "ignored override" state to document.
 /// * `name` - Custom server name for directory (default: `server_id`)
 /// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
 /// * `dry_run` - When true, preview files without writing to disk
@@ -110,19 +110,20 @@ fn format_size(bytes: usize) -> String {
 /// - Code generation fails
 /// - File export fails (skipped in dry-run mode)
 pub async fn run(
-    raw: RawServerArgs,
+    source: ServerSource,
     name: Option<String>,
     output_dir: Option<PathBuf>,
     dry_run: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
-    // Captured before `raw` is consumed below: an id resolved from
+    // Captured before `source` is consumed below: an id resolved from
     // `--from-config` without a `--name` override is the one case
     // `resolve_server_dir_name` isn't a redundant backstop for (see its doc
     // comment) — `--name` always overrides `server_info.id`, so if it was
     // given the id came from its own, already-validated value instead.
-    let id_from_unvalidated_config_key = raw.from_config.is_some() && name.is_none();
-    let (server_id, server_config) = resolve_server_config(raw)?;
+    let id_from_unvalidated_config_key =
+        matches!(source, ServerSource::Config { .. }) && name.is_none();
+    let (server_id, server_config) = resolve_server_config(source)?;
 
     let server_info = discover_server_info(server_id, &server_config, name.as_deref()).await?;
 
@@ -442,6 +443,7 @@ fn format_success(result: &GenerationResult, output_format: OutputFormat) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::common::TransportArgs;
     use mcp_execution_core::ServerId;
     use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
     use serde_json::json;
@@ -735,12 +737,17 @@ mod tests {
     async fn test_run_zero_connect_timeout_override_rejected_by_validation() {
         // A zero override must surface the same connect_timeout validation
         // error as the mcp.json path, not just a generic connection failure.
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server-timeout-test".to_string()),
+        let source = ServerSource::Flags {
+            transport: TransportArgs::Stdio {
+                command: "nonexistent-server-timeout-test".to_string(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
             connect_timeout_secs: Some(0),
-            ..Default::default()
+            discover_timeout_secs: None,
         };
-        let result = run(raw, None, None, false, OutputFormat::Json).await;
+        let result = run(source, None, None, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -758,13 +765,17 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_valid_timeout_overrides_reaches_connection_attempt() {
         // Valid overrides must not be rejected before the connection attempt.
-        let raw = RawServerArgs {
-            server: Some("nonexistent-server-timeout-test-2".to_string()),
+        let source = ServerSource::Flags {
+            transport: TransportArgs::Stdio {
+                command: "nonexistent-server-timeout-test-2".to_string(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
             connect_timeout_secs: Some(5),
             discover_timeout_secs: Some(90),
-            ..Default::default()
         };
-        let result = run(raw, None, None, false, OutputFormat::Json).await;
+        let result = run(source, None, None, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
