@@ -14,14 +14,15 @@
 //!
 //! ```
 //! use mcp_execution_core::metadata::{ServerMetadata, ToolMetadata, METADATA_SCHEMA_VERSION};
+//! use mcp_execution_core::{ServerId, ToolName};
 //!
 //! let meta = ServerMetadata {
 //!     schema_version: METADATA_SCHEMA_VERSION,
-//!     server_id: "github".to_string(),
+//!     server_id: ServerId::new("github").unwrap(),
 //!     server_name: "GitHub".to_string(),
 //!     server_version: "1.0.0".to_string(),
 //!     tools: vec![ToolMetadata {
-//!         name: "create_issue".to_string(),
+//!         name: ToolName::new("create_issue").unwrap(),
 //!         typescript_name: "createIssue".to_string(),
 //!         category: Some("issues".to_string()),
 //!         keywords: vec!["create".to_string(), "issue".to_string()],
@@ -35,6 +36,7 @@
 //! assert_eq!(round_tripped, meta);
 //! ```
 
+use crate::{ServerId, ToolName};
 use serde::{Deserialize, Serialize};
 
 /// Current schema version of the `_meta.json` sidecar format.
@@ -78,10 +80,11 @@ pub const METADATA_FILE_NAME: &str = "_meta.json";
 ///
 /// ```
 /// use mcp_execution_core::metadata::{ServerMetadata, METADATA_SCHEMA_VERSION};
+/// use mcp_execution_core::ServerId;
 ///
 /// let meta = ServerMetadata {
 ///     schema_version: METADATA_SCHEMA_VERSION,
-///     server_id: "github".to_string(),
+///     server_id: ServerId::new("github").unwrap(),
 ///     server_name: "GitHub".to_string(),
 ///     server_version: "1.0.0".to_string(),
 ///     tools: vec![],
@@ -99,7 +102,11 @@ pub struct ServerMetadata {
     pub schema_version: u32,
 
     /// MCP server identifier (e.g. `github`).
-    pub server_id: String,
+    ///
+    /// [`ServerId`]'s derived `Serialize`/`Deserialize` round-trip through a plain JSON string
+    /// (single-field newtype structs serialize transparently), so this field's on-the-wire
+    /// shape is unchanged from when it was a bare `String`.
+    pub server_id: ServerId,
 
     /// Human-readable server name.
     pub server_name: String,
@@ -117,9 +124,10 @@ pub struct ServerMetadata {
 ///
 /// ```
 /// use mcp_execution_core::metadata::ToolMetadata;
+/// use mcp_execution_core::ToolName;
 ///
 /// let tool = ToolMetadata {
-///     name: "create_issue".to_string(),
+///     name: ToolName::new("create_issue").unwrap(),
 ///     typescript_name: "createIssue".to_string(),
 ///     category: Some("issues".to_string()),
 ///     keywords: vec!["create".to_string(), "issue".to_string()],
@@ -127,12 +135,16 @@ pub struct ServerMetadata {
 ///     parameters: vec![],
 /// };
 ///
-/// assert_eq!(tool.name, "create_issue");
+/// assert_eq!(tool.name.as_str(), "create_issue");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolMetadata {
     /// Original MCP tool name (the call identifier), unmodified.
-    pub name: String,
+    ///
+    /// [`ToolName`]'s derived `Serialize`/`Deserialize` round-trip through a plain JSON string
+    /// (see [`ServerMetadata::server_id`]'s doc comment), so this field's on-the-wire shape is
+    /// unchanged from when it was a bare `String`.
+    pub name: ToolName,
 
     /// TypeScript-friendly name (camelCase), matching the generated file's
     /// basename (e.g. `createIssue` for `createIssue.ts`).
@@ -185,16 +197,17 @@ pub struct ParameterMetadata {
 #[cfg(test)]
 mod tests {
     use super::{METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata};
+    use crate::{ServerId, ToolName};
 
     #[test]
     fn round_trips_through_json() {
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
-            server_id: "github".to_string(),
+            server_id: ServerId::new("github").unwrap(),
             server_name: "GitHub".to_string(),
             server_version: "1.0.0".to_string(),
             tools: vec![ToolMetadata {
-                name: "create_issue".to_string(),
+                name: ToolName::new("create_issue").unwrap(),
                 typescript_name: "createIssue".to_string(),
                 category: Some("issues".to_string()),
                 keywords: vec!["create".to_string(), "issue".to_string()],

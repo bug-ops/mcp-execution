@@ -277,7 +277,7 @@ pub enum Transport {
 ///     .arg("mcp-server".to_string())
 ///     .build().unwrap();
 ///
-/// assert_eq!(config.command(), "docker");
+/// assert_eq!(config.command(), Some("docker"));
 /// assert_eq!(config.args().len(), 2);
 ///
 /// // HTTP transport
@@ -447,8 +447,13 @@ impl ServerConfig {
         &self.transport
     }
 
-    /// Returns the command as a string slice, or an empty string for a config that isn't
+    /// Returns the command as a string slice, or `None` for a config that isn't
     /// [`Transport::Stdio`].
+    ///
+    /// Mirrors [`Self::url`], which is `None` for [`Transport::Stdio`] and `Some` for the
+    /// other two variants — `command` only ever exists for `Stdio`, so absence is
+    /// represented the same way rather than as an empty string a caller would have to
+    /// remember to check for.
     ///
     /// # Examples
     ///
@@ -459,13 +464,19 @@ impl ServerConfig {
     ///     .command("test-server".to_string())
     ///     .build().unwrap();
     ///
-    /// assert_eq!(config.command(), "test-server");
+    /// assert_eq!(config.command(), Some("test-server"));
+    ///
+    /// let config = ServerConfig::builder()
+    ///     .http_transport("https://api.example.com/mcp".to_string())
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!(config.command(), None);
     /// ```
     #[must_use]
-    pub fn command(&self) -> &str {
+    pub fn command(&self) -> Option<&str> {
         match &self.transport {
-            Transport::Stdio { command, .. } => command,
-            Transport::Http { .. } | Transport::Sse { .. } => "",
+            Transport::Stdio { command, .. } => Some(command),
+            Transport::Http { .. } | Transport::Sse { .. } => None,
         }
     }
 
@@ -1096,7 +1107,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.command(), "docker");
+        assert_eq!(config.command(), Some("docker"));
         assert!(config.args().is_empty());
         assert!(config.env().is_empty());
         assert!(config.cwd().is_none());
@@ -1112,7 +1123,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.command(), "docker");
+        assert_eq!(config.command(), Some("docker"));
         assert_eq!(config.args(), vec!["run", "--rm", "mcp-server"]);
     }
 
@@ -1180,7 +1191,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.command(), "mcp-server");
+        assert_eq!(config.command(), Some("mcp-server"));
         assert_eq!(config.args().len(), 2);
         assert_eq!(config.env().len(), 1);
         assert_eq!(config.cwd(), Some(&PathBuf::from("/var/run")));
@@ -1236,7 +1247,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.command(), "docker");
+        assert_eq!(config.command(), Some("docker"));
         assert_eq!(config.args(), &["run".to_string()]);
         assert_eq!(config.env().len(), 1);
         assert_eq!(config.cwd(), Some(&PathBuf::from("/tmp")));
@@ -1453,7 +1464,7 @@ mod tests {
         assert!(matches!(config.transport(), Transport::Http { .. }));
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
         assert!(config.headers().is_empty());
-        assert!(config.command().is_empty());
+        assert!(config.command().is_none());
         assert!(config.args().is_empty());
         assert!(config.env().is_empty());
         assert_eq!(config.cwd(), None);
@@ -1553,7 +1564,7 @@ mod tests {
         assert!(matches!(config.transport(), Transport::Sse { .. }));
         assert_eq!(config.url(), Some("https://api.example.com/sse"));
         assert!(config.headers().is_empty());
-        assert!(config.command().is_empty());
+        assert!(config.command().is_none());
         assert!(config.args().is_empty());
         assert!(config.env().is_empty());
         assert_eq!(config.cwd(), None);

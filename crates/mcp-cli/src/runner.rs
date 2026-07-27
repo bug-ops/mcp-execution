@@ -339,6 +339,8 @@ fn classify_core_error(core_error: &CoreError) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mcp_execution_core::ResourceKind;
+    use mcp_execution_core::ServerId;
 
     fn wrap(core_error: CoreError) -> anyhow::Error {
         anyhow::Error::new(core_error)
@@ -365,7 +367,9 @@ mod tests {
     #[test]
     fn test_classify_exit_code_resource_limit_exceeded() {
         let err = wrap(CoreError::ResourceLimitExceeded {
-            resource: "tool count".to_string(),
+            resource: ResourceKind::ToolCount {
+                server_id: ServerId::new("github").unwrap(),
+            },
             actual: 1500,
             limit: 1000,
         });
@@ -446,7 +450,7 @@ mod tests {
             tool: "example_tool".to_string(),
             message: "failed to track generated tool file".to_string(),
             source: Some(Box::new(CoreError::ResourceLimitExceeded {
-                resource: "generated output size".to_string(),
+                resource: ResourceKind::GeneratedOutputSize,
                 actual: 10,
                 limit: 5,
             })),

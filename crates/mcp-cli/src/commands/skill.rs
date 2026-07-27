@@ -434,6 +434,7 @@ mod tests {
         METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
         ToolMetadata,
     };
+    use mcp_execution_core::{ServerId, ToolName};
     use tempfile::TempDir;
 
     /// Writes a minimal `_meta.json` sidecar with a single tool into `server_dir`,
@@ -444,11 +445,11 @@ mod tests {
     fn write_meta_sidecar(server_dir: &Path, server_id: &str, tool_name: &str) {
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
-            server_id: server_id.to_string(),
+            server_id: ServerId::new(server_id).unwrap(),
             server_name: server_id.to_string(),
             server_version: "1.0.0".to_string(),
             tools: vec![ToolMetadata {
-                name: tool_name.to_string(),
+                name: ToolName::new(tool_name).unwrap(),
                 typescript_name: tool_name.to_string(),
                 category: Some("testing".to_string()),
                 keywords: vec!["test".to_string()],
@@ -927,12 +928,12 @@ mod tests {
 
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
-            server_id: "github".to_string(),
+            server_id: ServerId::new("github").unwrap(),
             server_name: "GitHub".to_string(),
             server_version: "1.0.0".to_string(),
             tools: vec![
                 ToolMetadata {
-                    name: "create_issue".to_string(),
+                    name: ToolName::new("create_issue").unwrap(),
                     typescript_name: "createIssue".to_string(),
                     category: Some("issues".to_string()),
                     keywords: vec!["create".to_string()],
@@ -945,7 +946,7 @@ mod tests {
                     }],
                 },
                 ToolMetadata {
-                    name: "list_repos".to_string(),
+                    name: ToolName::new("list_repos").unwrap(),
                     typescript_name: "listRepos".to_string(),
                     category: Some("repos".to_string()),
                     keywords: vec!["list".to_string()],

@@ -1231,7 +1231,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(id.as_str(), "github-mcp-server");
-        assert_eq!(config.command(), "github-mcp-server");
+        assert_eq!(config.command(), Some("github-mcp-server"));
         assert_eq!(config.args(), &["stdio"]);
         assert_eq!(config.env().get("TOKEN"), Some(&"abc123".to_string()));
     }
@@ -1251,7 +1251,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(id.as_str(), "docker");
-        assert_eq!(config.command(), "docker");
+        assert_eq!(config.command(), Some("docker"));
         assert_eq!(
             config.args(),
             &["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]
@@ -1684,7 +1684,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(id.as_str(), "simple-server");
-        assert_eq!(config.command(), "simple-server");
+        assert_eq!(config.command(), Some("simple-server"));
         assert!(config.args().is_empty());
         assert!(config.env().is_empty());
     }
@@ -1804,7 +1804,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(id.as_str(), "docker");
-        assert_eq!(config.command(), "docker");
+        assert_eq!(config.command(), Some("docker"));
         assert_eq!(
             config.args(),
             &["run", "-i", "--rm", "--network=host", "my-image:latest"]

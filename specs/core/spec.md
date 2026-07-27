@@ -94,10 +94,26 @@ pub enum Error {
     InvalidArgument(String),
     ValidationError { field: String, reason: String },
     ScriptGenerationError { tool: String, message: String, source: Option<Box<dyn Error+Send+Sync>> },
-    ResourceLimitExceeded { resource: String, actual: usize, limit: usize },
+    ResourceLimitExceeded { resource: ResourceKind, actual: usize, limit: usize },
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub enum ResourceKind {
+    ToolCount { server_id: ServerId },
+    ToolNameLength,
+    DescriptionLength { tool_name: String },
+    InputSchemaSize { tool_name: String },
+    OutputSchemaSize { tool_name: String },
+    GeneratedOutputSize,
+    GeneratedFileCount,
+}
 ```
+`ResourceKind` (`error::ResourceKind`, re-exported at crate root) is a closed set replacing a
+free-form `resource: String` (issue #317): each variant's `Display` reproduces the same
+human-readable wording call sites used to build by hand (e.g. `ToolCount` renders `"tool count
+for server '{id}'"`), so `Error::ResourceLimitExceeded`'s own message is unchanged in substance.
+Covers `mcp-core` only — `mcp-files::FilesError::ResourceLimitExceeded` still uses a free-form
+`resource: String` (tracked separately as issue #343).
 Each variant has an `is_*` predicate (`is_connection_error`,
 `is_security_error`, `is_timeout`, `is_validation_error`,
 `is_script_generation_error`, `is_resource_limit_exceeded`). No predicate
@@ -126,8 +142,10 @@ populate, and an `Http`/`Sse` config has no `command`/`args`/`env`/`cwd` fields 
 illegal cross-transport combination (e.g. `args` set on an `Http` config) is unrepresentable,
 not merely unvalidated. `ServerConfig`'s two fields are private; read access goes through
 `transport()`, `command()`/`args()`/`env()`/`cwd()`/`url()`/`headers()` (each returning an
-empty/`None` default for the transport that doesn't carry that field, preserving the
-pre-#313 call-site shape), and `connect_timeout()`/`discover_timeout()`.
+empty/`None` default for the transport that doesn't carry that field), and
+`connect_timeout()`/`discover_timeout()`. `command()` returns `Option<&str>` (`None` for
+`Http`/`Sse`, issue #317) rather than `&str` with an empty string standing in for "not
+applicable" — mirroring `url()`, which was already `Option<&str>` (`None` for `Stdio`).
 
 Builder methods: `command`, `arg`, `args`, `env`, `environment`, `cwd`,
 `http_transport(url)`, `sse_transport(url)`, `url`, `header`, `headers`,
@@ -205,6 +223,8 @@ header name/value) — this is enforced by tests, not just convention.
 ```rust
 pub enum OutputFormat { Json, Text, #[default] Pretty } // FromStr, Display
 pub struct ExitCode(i32); // SUCCESS=0, ERROR=1, INVALID_INPUT=2, SERVER_ERROR=3, TIMEOUT=4
+// ExitCode::from_i32(code: i32) -> Option<ExitCode>: None outside 0..=255 (std::process::exit's
+// actual valid range), instead of accepting any i32 unchecked.
 pub struct ServerConnectionString(String); // charset [A-Za-z0-9-_./:], <=256 chars, no control chars
 ```
 `ServerConnectionString::new` is a defense-in-depth CLI-input validator
@@ -218,10 +238,15 @@ tested infrastructure in this crate's public surface.
 ```rust
 pub const METADATA_SCHEMA_VERSION: u32 = 1;
 pub const METADATA_FILE_NAME: &str = "_meta.json";
-pub struct ServerMetadata { schema_version, server_id, server_name, server_version, tools: Vec<ToolMetadata> }
-pub struct ToolMetadata { name, typescript_name, category: Option<String>, keywords: Vec<String>, description: Option<String>, parameters: Vec<ParameterMetadata> }
+pub struct ServerMetadata { schema_version: u32, server_id: ServerId, server_name: String, server_version: String, tools: Vec<ToolMetadata> }
+pub struct ToolMetadata { name: ToolName, typescript_name: String, category: Option<String>, keywords: Vec<String>, description: Option<String>, parameters: Vec<ParameterMetadata> }
 pub struct ParameterMetadata { name, typescript_type, required, description: Option<String> }
 ```
+`server_id`/`name` are `ServerId`/`ToolName` (issue #317, previously bare `String`); both
+newtypes' derived `Serialize`/`Deserialize` round-trip through a plain JSON string, so this is
+not a wire-format change. `typescript_name` stays `String` — it is a generated TypeScript
+identifier, not itself an MCP tool name.
+
 This is the **wire contract** between `mcp-codegen` (producer, writes
 `_meta.json`) and `mcp-skill`/`mcp-server` (consumers). Bumping
 `METADATA_SCHEMA_VERSION` is the intended way to signal a breaking shape

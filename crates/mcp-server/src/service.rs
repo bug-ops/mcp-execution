@@ -1502,7 +1502,7 @@ mod tests {
             tool: "send_message".to_string(),
             message: "failed to track generated tool file".to_string(),
             source: Some(Box::new(mcp_execution_core::Error::ResourceLimitExceeded {
-                resource: "generated output size".to_string(),
+                resource: mcp_execution_core::ResourceKind::GeneratedOutputSize,
                 actual: 10,
                 limit: 5,
             })),
@@ -3101,7 +3101,7 @@ mod tests {
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
         // The sidecar's `name` field must carry the RAW tool name, not the display form.
-        assert_eq!(tool_meta.name, "evil\ntool");
+        assert_eq!(tool_meta.name.as_str(), "evil\ntool");
         assert_eq!(
             tool_meta.category,
             Some("cat".to_string()),
@@ -3170,7 +3170,7 @@ mod tests {
 
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
-        assert_eq!(tool_meta.name, "tool&name");
+        assert_eq!(tool_meta.name.as_str(), "tool&name");
         assert_eq!(
             tool_meta.category,
             Some("cat".to_string()),
@@ -3238,7 +3238,7 @@ mod tests {
 
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
-        assert_eq!(tool_meta.name, "tool<name>end");
+        assert_eq!(tool_meta.name.as_str(), "tool<name>end");
         assert_eq!(
             tool_meta.category,
             Some("cat".to_string()),
@@ -3309,7 +3309,7 @@ mod tests {
 
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
-        assert_eq!(tool_meta.name, "a<b");
+        assert_eq!(tool_meta.name.as_str(), "a<b");
         assert_eq!(tool_meta.category, Some("cat".to_string()));
     }
 
@@ -4061,11 +4061,11 @@ mod tests {
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
-            server_id: "test-server".to_string(),
+            server_id: ServerId::new("test-server").unwrap(),
             server_name: "Test Server".to_string(),
             server_version: "1.0.0".to_string(),
             tools: vec![SidecarToolMetadata {
-                name: "create_issue".to_string(),
+                name: ToolName::new("create_issue").unwrap(),
                 typescript_name: "createIssue".to_string(),
                 category: None,
                 keywords: vec![],
@@ -4127,11 +4127,11 @@ mod tests {
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
-            server_id: "test-server".to_string(),
+            server_id: ServerId::new("test-server").unwrap(),
             server_name: "Test Server".to_string(),
             server_version: "1.0.0".to_string(),
             tools: vec![SidecarToolMetadata {
-                name: "create_issue".to_string(),
+                name: ToolName::new("create_issue").unwrap(),
                 typescript_name: "createIssue".to_string(),
                 category: None,
                 keywords: vec![],
