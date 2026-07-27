@@ -95,6 +95,7 @@ pub enum Error {
     ValidationError { field: String, reason: String },
     ScriptGenerationError { tool: String, message: String, source: Option<Box<dyn Error+Send+Sync>> },
     ResourceLimitExceeded { resource: ResourceKind, actual: usize, limit: usize },
+    DuplicateGeneratedFilePath { path: String },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -119,11 +120,21 @@ via `mcp-execution-codegen`), so sharing this enum would mean adding a new direc
 `mcp-core` for a single error variant — see [[../files/spec#7. Error Conditions]].
 Each variant has an `is_*` predicate (`is_connection_error`,
 `is_security_error`, `is_timeout`, `is_validation_error`,
-`is_script_generation_error`, `is_resource_limit_exceeded`). No predicate
-exists for `InvalidArgument`/`SerializationError` — callers match directly.
+`is_script_generation_error`, `is_resource_limit_exceeded`,
+`is_duplicate_generated_file_path`). No predicate exists for
+`InvalidArgument`/`SerializationError` — callers match directly.
 `ScriptGenerationError.source` is the vehicle for preserving an inner
 `Error`'s own classification through wrapping (see
 `mcp-cli`'s `classify_core_error`, which recurses into it — [[../cli/spec]]).
+
+`Error::DuplicateGeneratedFilePath { path: String }` (issue #312) is raised by
+`mcp-execution-codegen`'s `GeneratedCode::add_file` when a second file is added at a path
+already present in the same generated-code collection (e.g. a sanitized tool name colliding
+with a generator's own reserved output filename like `index`) — a silent overwrite that used
+to lose a generated file with no signal to the caller now fails loudly instead. `add_file`'s
+signature changed from `fn add_file(..)` to `fn add_file(..) -> Result<()>` accordingly; every
+in-tree call site (`mcp-codegen`'s own generator, `mcp-files`'s `FilesBuilder`) was updated to
+handle the new `Result`.
 
 ### `ServerConfig` / `ServerConfigBuilder` / `Transport` (`src/server_config.rs`)
 

@@ -137,6 +137,13 @@ introspect→categorize→save workflow.
   wrapped via `mcp_execution_core::untrusted::wrap_untrusted_block`
   (`wrap_introspect_result`) since the tool summaries it contains are
   server-reported, attacker-controlled text now shown to Claude.
+- Errors from building the `ServerConfig` or from discovery are classified via
+  `caller_or_internal_error`: a `ValidationError` **or** `SecurityViolation`
+  (shell metacharacters, a forbidden env var, etc.) reports as `invalid_params`
+  — the caller's fault — while anything else reports as `internal_error`.
+  `SecurityViolation` previously fell through to `internal_error`, misreporting
+  hostile caller input as a server-side fault; it is now handled identically to
+  `ValidationError`.
 
 ### `save_categorized_tools`
 
@@ -145,18 +152,37 @@ introspect→categorize→save workflow.
 
 1. `state.take(session_id)` — session must exist and not be expired, or
    `invalid_params`.
-2. Validates `categorized_tools` against the session's own introspected
-   tool names, **sanitized the same way `introspect_server` sanitized them
-   for Claude** (`sanitize_untrusted_text`) — so a well-behaved caller
-   echoing back exactly what it was shown never fails a raw-vs-sanitized
-   name mismatch. Rejects: more entries than `min(introspected count,
-   MAX_TOOL_FILES)` (reusing `mcp_execution_skill::MAX_TOOL_FILES` so this
-   stage can never generate more tool files than `generate_skill` will
-   later accept); a name not in the introspected set; a duplicate name;
-   any field (`name`/`category`/`keywords`/`short_description`) over its
-   own byte cap (`MAX_CATEGORIZED_TOOL_NAME_LEN`=128,
-   `MAX_CATEGORY_LEN`=100, `MAX_KEYWORDS_LEN`=500,
-   `MAX_SHORT_DESCRIPTION_LEN`=320).
+2. Builds a display-name→raw-name lookup (`display_to_raw`) before validating
+   any entry, since a caller can only ever echo back the *display* form of a
+   tool name `introspect_server` showed it, never the raw one. For each
+   introspected tool, both plausible display forms are computed (`display_forms`):
+   the fully escaped form actually shown (`sanitize_untrusted_text` followed by
+   `&`/`<`/`>` → `&amp;`/`&lt;`/`&gt;` entity-escaping, mirroring
+   `wrap_untrusted_block`'s own escaping) and the same text with those entities
+   decoded back, since `wrap_untrusted_block`'s preamble explicitly invites the
+   reader to do so. If two **distinct** raw tool names collide on the same
+   display key under either form, that key is dropped from the lookup
+   entirely — genuinely ambiguous, so a caller using it hits "not found" rather
+   than silently having one raw tool's categorization misattributed to another's.
+   Each `categorized_tools` entry's `name` is resolved through this lookup to a
+   raw tool name once; both the duplicate check and the codegen categorization
+   map are keyed by that **resolved raw name**, not the submitted string. This
+   fixes a categorization-lookup desync (issue #307): an earlier version built
+   the categorization map keyed by the submitted display string while codegen
+   looked up tools by their raw name, silently dropping category/keywords/
+   description for any tool name containing a control character, line
+   terminator, or `&`/`<`/`>`. Rejects: more entries than `min(introspected
+   count, MAX_TOOL_FILES)` (reusing `mcp_execution_skill::MAX_TOOL_FILES` so this
+   stage can never generate more tool files than `generate_skill` will later
+   accept — bounded by the true introspected tool count, not by the lookup's
+   size, since one raw tool can legitimately own two display keys and an
+   ambiguous key is excluded from the map); a name that doesn't resolve to any
+   raw tool (unknown, or an ambiguous display key); a name that resolves to a
+   raw tool a previous entry in the same call already claimed; any field
+   (`name`/`category`/`keywords`/`short_description`) over its own byte cap
+   (`MAX_CATEGORIZED_TOOL_NAME_LEN`=128, `MAX_CATEGORY_LEN`=100,
+   `MAX_KEYWORDS_LEN`=500, `MAX_SHORT_DESCRIPTION_LEN`=320 — each checked via a
+   single private `check_categorized_field_length` helper called once per field).
 3. `ProgressiveGenerator::generate_with_categories` → `FilesBuilder::from_generated_code(code, "/")` → `vfs.file_count()` captured.
 4. **Resolves `output_dir` fresh, right here** — not from any value cached
    on the session — via `output_dir::resolve_output_dir` (see
@@ -261,6 +287,14 @@ grows unboundedly; an unconditional `remove` keyed by value alone is a
 TOCTOU bug (it could evict a fresh handle a *third*, concurrent caller
 already inserted after a *second* caller's own eviction).
 
+Every lock helper (`introspector_for`/`evict_introspector`/`export_lock_for`/
+`evict_export_lock`) and every tool handler except `list_generated_servers`
+(`introspect_server`/`save_categorized_tools`/`generate_skill`/`save_skill`)
+carries a `#[tracing::instrument(skip_all, fields(server_id = ...))]` (or
+`output_dir = ...` for the lock helpers) span (issue #211) — this changes the
+shape of stderr output (nested spans, structured `server_id`/`output_dir`
+fields) but not log message text.
+
 ## 6. Output Directory Resolution (`output_dir.rs`)
 
 Mirrors `mcp-skill`'s `resolve_skill_output_path` for a directory target
@@ -312,6 +346,18 @@ than a terminal stream error, closing a `tokio_util` "stranded buffered
 request" stall (issue #273) that could otherwise leave a valid,
 already-buffered request undelivered forever if it shared a chunk with a
 preceding bad line.
+
+The acquired permit for an admitted request is attached to that request's
+`Extensions` (`attach_permit`) and released only when `rmcp`'s
+`RequestContext` for it is dropped — on handler completion or panic, not on
+cancellation alone, since `rmcp`'s own cancel path never aborts the handler
+task (issue #227). `RecoveringCodec`'s blank-line handling was later fixed
+(issue #284) to peek the next buffered line and silently fold a
+blank/whitespace-only line to `DecodedFrame::Skipped` rather than
+`Malformed`, avoiding a `tracing::warn!` per blank line — the same
+log-volume-amplification class already fixed for the introspector's
+symmetric decoder (#275/#282); a genuinely malformed non-blank line still
+warns.
 
 ## 9. Error Conditions
 

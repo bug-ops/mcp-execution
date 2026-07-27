@@ -72,7 +72,12 @@ impl FileSystem {
     pub fn export_to_filesystem_parallel(&self, base_path: impl AsRef<Path>) -> Result<()>;
 }
 
-pub struct ExportOptions { pub atomic: bool } // default: atomic=true
+pub struct ExportOptions { pub atomic: bool, confine_to: Option<PathBuf> } // atomic default true; confine_to default None
+impl ExportOptions {
+    pub const fn new() -> Self;
+    pub const fn with_atomic_writes(mut self, atomic: bool) -> Self;
+    pub fn with_confine_to(mut self, base_dir: impl Into<PathBuf>) -> Self;
+}
 
 pub struct FilesBuilder { /* vfs: FileSystem, errors: Vec<FilesError> */ }
 impl FilesBuilder {
@@ -113,7 +118,16 @@ single-file "group" swap the shared base directory wholesale in
 
 1. `check_export_bounds()` — file count ≤ `MAX_EXPORT_FILES`, total content
    bytes ≤ `MAX_EXPORT_BYTES` (CWE-400).
-2. `stage_export(target)`:
+2. `stage_export(target, confine_to)`:
+   - Confirms `target`'s parent directory exists.
+   - If `options.confine_to` is set (via `ExportOptions::with_confine_to`),
+     canonicalizes both the parent and `confine_to` and rejects the export
+     with `FilesError::PathEscapesBase` unless the canonicalized parent
+     starts with the canonicalized `confine_to` — see
+     [[#Confinement check (`with_confine_to`)]]. A canonicalization failure
+     on either path (missing directory, permission denied) is a plain
+     `FilesError::IoError`, not `PathEscapesBase`, since the confinement
+     check itself never ran.
    - Sweeps stale sibling artifacts from a **previous crashed** export of
      the *same* target (`sweep_stale_artifacts`, age-gated — see
      [[#Stale-artifact sweep]]).
@@ -156,6 +170,21 @@ this closes a real data-loss race (issue referenced in tests) where a
 name-only match could delete a concurrent in-flight export's staging *or*
 displaced-backup directory, defeating rollback and permanently losing the
 target.
+
+### Confinement check (`with_confine_to`)
+
+`ExportOptions::with_confine_to(base_dir)` is opt-in, defense-in-depth
+against a caller-built `target` that was assembled by joining untrusted
+input (e.g. a server id) onto a base directory: `PathBuf::join` silently
+discards `base_dir` entirely if the joined component is absolute, and a
+`..`-bearing component can walk back out of it even for a relative join.
+Only `export_to_filesystem_with_options` accepts `ExportOptions`, so this
+check is unavailable through `export_to_filesystem` (which always uses
+`ExportOptions::default()`, `confine_to: None`) or
+`export_to_filesystem_parallel` (which passes `None` directly to
+`stage_export`). `mcp-cli`'s `generate` command wires this in as a second
+layer behind its primary guard (sanitizing the server-id-derived directory
+name) — see [[../cli/spec#generate]].
 
 ### Non-goals / accepted gaps
 
@@ -232,6 +261,14 @@ avoids that coupling. Each variant's `Display` reproduces the same wording `chec
 used to build by hand (`"export file count"` / `"export total size"`), so
 `FilesError::ResourceLimitExceeded`'s message is unchanged in substance.
 
+`PathEscapesBase` is returned only by `export_to_filesystem_with_options` when
+`ExportOptions::with_confine_to` is set and the confinement check fails (see
+[[#Confinement check (`with_confine_to`)]]); `path` is the canonicalized
+export-target parent, `base` the canonicalized confinement directory. A
+canonicalization failure on either side is `FilesError::IoError` instead —
+`PathEscapesBase` specifically means "both paths resolved, and the target
+is outside the base" (#311).
+
 ## 8. Cross-Crate Contracts
 
 - **Consumes** `mcp-codegen::GeneratedCode`/`GeneratedFile`; derives
@@ -245,8 +282,12 @@ used to build by hand (`"export file count"` / `"export total size"`), so
   `vfs.export_to_filesystem(&output_dir)` inside `spawn_blocking`, guarded
   by a per-`output_dir` lock — see [[../server/spec#save_categorized_tools]]).
 - **Used by** `mcp-cli generate` (via
-  `FilesBuilder::from_generated_code(code, "/").build_and_export(base_dir)`
-  — see [[../cli/spec#generate]]).
+  `FilesBuilder::from_generated_code(code, "/").build()` then
+  `vfs.export_to_filesystem_with_options(output_path, &ExportOptions::new().with_confine_to(base_dir))`
+  — one server's tree per call, not the shared-root `build_and_export` path,
+  with the confinement check as a second defense-in-depth layer behind
+  sanitizing the server-id-derived directory name — see
+  [[../cli/spec#generate]]).
 
 ## 9. Edge Cases & Notable Behaviors
 
@@ -265,9 +306,17 @@ used to build by hand (`"export file count"` / `"export total size"`), so
   exact same staging/atomic-rename mechanism, writing files via `rayon`
   instead — faster for >50 files, may not preserve write order (order
   doesn't matter for a flat file tree).
+- `vfs_to_disk_path`'s defense-in-depth `..`-traversal check (a safety net
+  behind `FilePath::new`'s own validation) used to `assert!` on a match,
+  panicking the whole process if a `..` ever reached it. It now returns
+  `Result<PathBuf, FilesError>`, surfacing `FilesError::InvalidPathComponent`
+  instead. All three call sites — `collect_directories`, `write_files`, and
+  `export_to_filesystem_parallel`'s own inline call inside its `rayon`
+  closure — propagate this via `?` (#318), so a bug that would have reached
+  this check is now a normal `Err`, not a crash.
 
 ## 10. See Also
 
 - [[../codegen/spec]] — source of `GeneratedCode` and derived resource bounds
 - [[../server/spec#Per-resource locking]] — higher-layer serialization for concurrent exports to the same target
-- [[../cli/spec#generate]] — CLI-side consumer via `build_and_export`
+- [[../cli/spec#generate]] — CLI-side consumer, via `export_to_filesystem_with_options` with `ExportOptions::with_confine_to`
