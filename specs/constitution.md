@@ -52,7 +52,8 @@ related:
   hand-written sanitizers instead.
 - Schema/validation: `schemars` for JSON-Schema-derived MCP tool parameter
   schemas; `serde`/`serde_json` for wire types; `serde_norway` for YAML
-  (SKILL.md frontmatter) — never `serde_yaml`/`serde_yml`.
+  (SKILL.md frontmatter) — never `serde_yaml`/`serde_yml`. See §V's YAML
+  parse-time bound for the pre-parse cap this parser requires.
 - Error handling: `thiserror` in every library crate; `anyhow` only in
   `mcp-execution-cli`.
 - CLI: `clap` (derive API) + `clap_complete`.
@@ -109,6 +110,16 @@ and issue-number references dedicated to it.
   layer below it rather than choosing an independent number, specifically so
   that data which already cleared a lower layer's bound can never be
   rejected by a higher layer for merely being "as large as already allowed."
+- **YAML parse-time bound (a deliberate exception to the rule above)**:
+  `MAX_FRONTMATTER_SIZE` (`crates/mcp-skill/src/parser.rs`) caps the
+  extracted `SKILL.md` frontmatter block at 8 KiB *before* handing it to
+  `serde_norway`. Unlike the resource-exhaustion bounds above, this cap is
+  intentionally independent of the enclosing `SKILL.md` size limit rather
+  than derived from it: libyaml-based parsers are not linear-time on
+  pathologically nested input, so a much larger document-size bound would
+  not itself bound parse latency. Any future YAML parse entry point must
+  apply this same kind of independent, pre-parse cap to the exact slice it
+  hands to its parser.
 - **Prompt-injection / Markdown-injection defense**: any text that
   originates from an introspected (untrusted) MCP server and is later shown
   to an LLM or embedded in a document (tool names, descriptions, keywords,

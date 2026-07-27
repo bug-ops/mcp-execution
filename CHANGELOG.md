@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`deny.toml`**: `[advisories]` now sets `unsound = "all"`, closing the gap where cargo-deny's
+  default (`"workspace"`) silently drops RUSTSEC "unsound" advisories against transitive
+  dependencies such as `unsafe-libyaml-norway` (reached via `mcp-skill -> serde_norway ->
+  unsafe-libyaml-norway`, the workspace's only YAML parser and its largest unsafe-code
+  footprint). `yanked = "deny"` turns a yanked-crate warning into a hard CI failure. Both checks
+  are RUSTSEC/registry-driven — they catch an advisory or yank once filed, not before (#293).
+
 ### Changed
 
 - **`mcp-execution-skill`**: renamed the `pub enum ServerIdError` (returned by

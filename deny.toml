@@ -10,7 +10,24 @@
 
 [advisories]
 
-# Ignore specific advisories if needed (add RUSTSEC IDs here)
+# The workspace's only YAML parser reaches libyaml through
+# mcp-skill -> serde_norway -> unsafe-libyaml-norway (depth 2) -- by far the
+# largest unsafe-code footprint in the tree. cargo-deny's `unsound` field
+# (RUSTSEC "unsound" advisories, i.e. memory-safety unsoundness in unsafe
+# code) defaults to "workspace" and so silently drops advisories against
+# transitive dependencies like this one; `unsound = "all"` is the setting
+# that actually closes that gap. `unmaintained` already defaults to "all"
+# upstream, so restating it below is explicit policy, not a behavior change.
+# `yanked` defaults to "warn"; `yanked = "deny"` turns a yank into a hard CI
+# failure. Note all three checks are RUSTSEC/registry-driven: they only fire
+# once an advisory or yank record exists, they do not bound risk proactively.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+
+# Ignore specific advisories if needed (add RUSTSEC IDs here). A yanked
+# version can be allowed temporarily via "a-crate@x.y.z" or
+# { crate = "a-crate@x.y.z", reason = "..." }.
 ignore = []
 
 [licenses]
