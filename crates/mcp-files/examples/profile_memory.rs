@@ -1,6 +1,5 @@
-#![allow(clippy::format_push_string)]
-
 use mcp_execution_files::FilesBuilder;
+use std::fmt::Write as _;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -173,23 +172,26 @@ fn generate_typescript_file(index: usize, target_size: usize) -> String {
     let mut content = String::with_capacity(target_size);
 
     // File header
-    content.push_str(&format!(
+    let _ = write!(
+        content,
         "// Generated TypeScript file #{index}\n\
          // This is a sample MCP tool definition\n\n"
-    ));
+    );
 
     // Type definitions
-    content.push_str(&format!(
+    let _ = write!(
+        content,
         "export interface Params{index} {{\n\
          \x20\x20chatId: string;\n\
          \x20\x20messageId?: string;\n\
          \x20\x20text: string;\n\
          \x20\x20attachments?: Attachment[];\n\
          }}\n\n"
-    ));
+    );
 
     // Function definition
-    content.push_str(&format!(
+    let _ = write!(
+        content,
         "export async function tool_{index}(params: Params{index}): Promise<Result> {{\n\
          \x20\x20// Tool implementation\n\
          \x20\x20const result = await mcpBridge.callTool(\n\
@@ -198,14 +200,15 @@ fn generate_typescript_file(index: usize, target_size: usize) -> String {
          \x20\x20);\n\
          \x20\x20return JSON.parse(result) as Result;\n\
          }}\n\n"
-    ));
+    );
 
     // Add comments to reach target size
     while content.len() < target_size {
-        content.push_str(&format!(
-            "// Additional documentation line {}\n",
+        let _ = writeln!(
+            content,
+            "// Additional documentation line {}",
             content.len()
-        ));
+        );
     }
 
     content

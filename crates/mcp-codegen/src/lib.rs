@@ -3,13 +3,6 @@
 //! This crate generates TypeScript files for progressive loading pattern,
 //! where each MCP tool is a separate file. This enables Claude Code to
 //! discover and load tools on-demand, achieving 98% token savings.
-#![allow(clippy::missing_const_for_fn)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::option_if_let_else)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::elidable_lifetime_names)]
-#![allow(clippy::unused_self)]
-#![allow(clippy::unnecessary_wraps)]
 //!
 //! # Architecture
 //!

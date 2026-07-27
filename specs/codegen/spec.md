@@ -114,10 +114,23 @@ into a consumer's own build).
 ## 5. TypeScript Identifier Resolution
 
 - `resolve_typescript_names(tools)` computes a collision-free
-  `typescript_name` per tool, seeded with JS/TS reserved words (so a tool
-  literally named `delete` becomes `delete_2`, not a syntax error) and
-  disambiguated via `disambiguate_identifier` (numeric suffix `_2`, `_3`,
-  ...). Indexed by **position**, not by raw name, since two tools can share
+  `typescript_name` per tool via `disambiguate_output_filename`, which
+  combines two collision checks with different case sensitivity (numeric
+  suffix `_2`, `_3`, ... on collision, mirroring `disambiguate_identifier`'s
+  scheme):
+  - JS/TS reserved words (`delete`, `class`, `new`, ...) are checked
+    **case-sensitively** — an exact match against the lowercase reserved
+    word — since reserved words are only reserved in their exact lowercase
+    form (`Delete`, `New`, `Import` are all legal identifiers). A tool
+    literally named `delete` becomes `delete_2`; a tool named `Delete` is
+    left as-is.
+  - The fixed output filenames (`index`) and every previously-resolved tool
+    name are checked **case-insensitively**, since `typescript_name` doubles
+    as an output filename and filenames collide regardless of case on a
+    case-insensitive filesystem (macOS APFS, Windows NTFS by default) — a
+    tool named `Index` collides with the fixed `index.ts` output, and two
+    tools named `getUser`/`GetUser` collide with each other.
+  Indexed by **position**, not by raw name, since two tools can share
   an identical raw name.
 - `json_schema_to_typescript`/`extract_properties` similarly disambiguate
   sibling property names that sanitize to the same identifier (e.g. `a-b`

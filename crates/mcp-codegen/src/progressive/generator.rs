@@ -183,7 +183,7 @@ pub struct ProgressiveGenerator<'a> {
     engine: TemplateEngine<'a>,
 }
 
-impl<'a> ProgressiveGenerator<'a> {
+impl ProgressiveGenerator<'_> {
     /// Creates a new progressive generator.
     ///
     /// Initializes the template engine and registers all progressive
@@ -356,8 +356,21 @@ impl<'a> ProgressiveGenerator<'a> {
             let tool_name = tool.name.as_str();
             let categorization = categorizations.get(tool_name);
             let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
-            let tool_context =
-                self.create_tool_context(server_id, tool, categorization, typescript_name.clone())?;
+            let extracted_properties =
+                Self::extract_property_data(&tool.input_schema).map_err(|source| {
+                    Self::wrap_tool_generation_error(tool, "extract property schema", source)
+                })?;
+            let properties_for_context = extracted_properties
+                .iter()
+                .map(|(info, _)| info.clone())
+                .collect();
+            let tool_context = Self::create_tool_context(
+                server_id,
+                tool,
+                categorization,
+                typescript_name.clone(),
+                properties_for_context,
+            );
             let tool_code = self
                 .engine
                 .render("progressive/tool", &tool_context)
@@ -383,12 +396,17 @@ impl<'a> ProgressiveGenerator<'a> {
                 categorization.map(|c| &c.category)
             );
 
-            tool_metadata.push(self.create_tool_metadata(tool, categorization, typescript_name)?);
+            tool_metadata.push(Self::create_tool_metadata(
+                tool,
+                categorization,
+                typescript_name,
+                extracted_properties,
+            ));
         }
 
         // Generate index.ts with category grouping
         let index_context =
-            self.create_index_context(server_info, Some(categorizations), &typescript_names)?;
+            Self::create_index_context(server_info, Some(categorizations), &typescript_names);
         let index_code = self.engine.render("progressive/index", &index_context)?;
 
         add_tracked(
@@ -482,23 +500,22 @@ impl<'a> ProgressiveGenerator<'a> {
     /// collisions across a server's tools are disambiguated consistently between the tool
     /// file and its `index.ts` re-export.
     ///
-    /// # Errors
+    /// `properties` must come from [`extract_property_data`](Self::extract_property_data) run
+    /// against `tool.input_schema`. It is taken as a parameter rather than derived internally
+    /// so that callers generating both the tool context and [`ToolMetadata`] for the same tool
+    /// (see [`create_tool_metadata`](Self::create_tool_metadata)) can share a single schema
+    /// walk instead of parsing and sanitizing the same schema twice (issue #295).
     ///
-    /// Returns error if schema conversion fails.
+    /// Takes no `&self`: unlike [`extract_property_data`](Self::extract_property_data), nothing
+    /// here reads generator state (the `Handlebars` engine is only touched by the caller, when
+    /// rendering the context this returns).
     fn create_tool_context(
-        &self,
         server_id: &str,
         tool: &mcp_execution_introspector::ToolInfo,
         categorization: Option<&ToolCategorization>,
         typescript_name: String,
-    ) -> Result<ToolContext> {
-        // Extract properties from input schema
-        let properties = self
-            .extract_property_infos(&tool.input_schema)
-            .map_err(|source| {
-                Self::wrap_tool_generation_error(tool, "extract property schema", source)
-            })?;
-
+        properties: Vec<PropertyInfo>,
+    ) -> ToolContext {
         let description = sanitize_jsdoc(&tool.description, 256);
         // Falls back to the tool's own description when no LLM categorization is
         // available, so the header JSDoc always emits `@description` (issue #94).
@@ -507,7 +524,7 @@ impl<'a> ProgressiveGenerator<'a> {
             |c| sanitize_jsdoc(&c.short_description, 256),
         );
 
-        Ok(ToolContext {
+        ToolContext {
             server_id: sanitize_jsdoc(server_id, 256),
             name: sanitize_jsdoc(tool.name.as_str(), 256),
             name_literal: sanitize_ts_string_literal(tool.name.as_str()),
@@ -519,7 +536,7 @@ impl<'a> ProgressiveGenerator<'a> {
             category: categorization.map(|c| sanitize_jsdoc(&c.category, 128)),
             keywords: categorization.map(|c| render_keywords_for_jsdoc(&c.keywords)),
             short_description,
-        })
+        }
     }
 
     /// Creates index context from server information.
@@ -527,12 +544,14 @@ impl<'a> ProgressiveGenerator<'a> {
     /// `typescript_names` must be the same pre-resolved mapping (from
     /// [`resolve_typescript_names`]) used to generate each tool's file, so the `index.ts`
     /// re-exports reference the exact identifiers those files actually export.
+    ///
+    /// Takes no `&self`: this only transforms the arguments it is given, and does not touch
+    /// generator state.
     fn create_index_context(
-        &self,
         server_info: &ServerInfo,
         categorizations: Option<&HashMap<String, ToolCategorization>>,
         typescript_names: &[String],
-    ) -> Result<IndexContext> {
+    ) -> IndexContext {
         let tools: Vec<ToolSummary> = server_info
             .tools
             .iter()
@@ -585,13 +604,13 @@ impl<'a> ProgressiveGenerator<'a> {
             result
         });
 
-        Ok(IndexContext {
+        IndexContext {
             server_name: sanitize_jsdoc(&server_info.name, 256),
             server_version: sanitize_jsdoc(&server_info.version, 64),
             tool_count: server_info.tools.len(),
             tools,
             categories: category_groups,
-        })
+        }
     }
 
     /// Wraps a per-tool codegen failure — property-schema extraction, template rendering, or
@@ -614,7 +633,7 @@ impl<'a> ProgressiveGenerator<'a> {
         }
     }
 
-    /// Extracts property information from JSON Schema.
+    /// Extracts property information from JSON Schema, discarding raw descriptions.
     ///
     /// Converts JSON Schema properties into `PropertyInfo` structures
     /// suitable for template rendering. Sibling property names that sanitize to the same
@@ -622,12 +641,18 @@ impl<'a> ProgressiveGenerator<'a> {
     /// with a numeric suffix, since these become fields of the same generated `Params`
     /// interface and an undetected collision would produce a duplicate, non-compiling field.
     ///
+    /// Test-only: production code calls [`extract_property_data`](Self::extract_property_data)
+    /// directly and shares the single resulting `Vec` between
+    /// [`create_tool_context`](Self::create_tool_context) and
+    /// [`create_tool_metadata`](Self::create_tool_metadata) instead of extracting twice (issue
+    /// #295). This wrapper remains for tests that only care about the sanitized half.
+    ///
     /// # Errors
     ///
     /// Returns error if schema is malformed or type conversion fails.
-    fn extract_property_infos(&self, schema: &serde_json::Value) -> Result<Vec<PropertyInfo>> {
-        Ok(self
-            .extract_property_data(schema)?
+    #[cfg(test)]
+    fn extract_property_infos(schema: &serde_json::Value) -> Result<Vec<PropertyInfo>> {
+        Ok(Self::extract_property_data(schema)?
             .into_iter()
             .map(|(info, _raw_description)| info)
             .collect())
@@ -636,18 +661,23 @@ impl<'a> ProgressiveGenerator<'a> {
     /// Extracts property information from JSON Schema, alongside each property's raw
     /// (un-sanitized) description.
     ///
-    /// Shares the extraction logic with [`extract_property_infos`](Self::extract_property_infos),
-    /// which only needs the JSDoc-sanitized `PropertyInfo` for template rendering. Consumers
-    /// that need the description as originally authored — e.g. the `_meta.json` sidecar, which
-    /// is JSON consumed by Rust rather than text interpolated into a JS comment — should use
-    /// this method instead, so they are not subject to JSDoc-safety truncation/escaping that
-    /// doesn't apply to their format (issue #141).
+    /// Callers that only need the JSDoc-sanitized `PropertyInfo` for template rendering (e.g.
+    /// [`create_tool_context`](Self::create_tool_context)) can discard the raw-description half.
+    /// Consumers that need the description as originally authored — e.g. the `_meta.json`
+    /// sidecar built by [`create_tool_metadata`](Self::create_tool_metadata), which is JSON
+    /// consumed by Rust rather than text interpolated into a JS comment — use the raw half
+    /// instead, so they are not subject to JSDoc-safety truncation/escaping that doesn't apply
+    /// to their format (issue #141). Both are derived from a single call per tool rather than
+    /// two, since re-walking and re-sanitizing the same schema twice is wasted work (issue
+    /// #295).
+    ///
+    /// Takes no `&self`: this only walks the `schema` it is given, and does not touch
+    /// generator state.
     ///
     /// # Errors
     ///
     /// Returns error if schema is malformed or type conversion fails.
     fn extract_property_data(
-        &self,
         schema: &serde_json::Value,
     ) -> Result<Vec<(PropertyInfo, Option<String>)>> {
         let raw_properties = extract_properties(schema);
@@ -675,7 +705,7 @@ impl<'a> ProgressiveGenerator<'a> {
 
             // Extract description if available (looked up by the raw schema key, before
             // sanitization, since that's what the input schema is actually keyed by)
-            let raw_description = if let Some(obj) = schema.as_object() {
+            let raw_description = schema.as_object().and_then(|obj| {
                 obj.get("properties")
                     .and_then(|props| props.as_object())
                     .and_then(|props| props.get(&raw_name))
@@ -683,9 +713,7 @@ impl<'a> ProgressiveGenerator<'a> {
                     .and_then(|obj| obj.get("description"))
                     .and_then(|desc| desc.as_str())
                     .map(str::to_string)
-            } else {
-                None
-            };
+            });
             let description = raw_description
                 .as_deref()
                 .map(|desc| sanitize_jsdoc(desc, 256));
@@ -709,7 +737,7 @@ impl<'a> ProgressiveGenerator<'a> {
     ///
     /// Unlike [`create_tool_context`](Self::create_tool_context), `name`, `description`, and
     /// parameter descriptions all use the RAW, unsanitized MCP values: the sidecar is a data
-    /// contract consumed by other Rust code, not interpolated into a JSDoc comment, so
+    /// contract consumed by other Rust code, not interpolated into a `JSDoc` comment, so
     /// JSDoc-safety sanitization (truncation, `*/`-escaping, newline-flattening) would only
     /// lose fidelity. Parameter descriptions come from
     /// [`extract_property_data`](Self::extract_property_data)'s raw half rather than the
@@ -717,26 +745,24 @@ impl<'a> ProgressiveGenerator<'a> {
     /// the data loss described in issue #141 (the old regex-based parser could not recover
     /// parameter descriptions from the generated TypeScript at all).
     ///
-    /// # Errors
+    /// `properties` must come from [`extract_property_data`](Self::extract_property_data) run
+    /// against `tool.input_schema` — passed in rather than derived internally so this can share
+    /// a single schema walk with [`create_tool_context`](Self::create_tool_context) for the same
+    /// tool instead of parsing and sanitizing the same schema twice (issue #295).
     ///
-    /// Returns error if schema conversion fails.
+    /// Takes no `&self`: this only transforms the arguments it is given, and does not touch
+    /// generator state.
     fn create_tool_metadata(
-        &self,
         tool: &ToolInfo,
         categorization: Option<&ToolCategorization>,
         typescript_name: String,
-    ) -> Result<ToolMetadata> {
-        let properties = self
-            .extract_property_data(&tool.input_schema)
-            .map_err(|source| {
-                Self::wrap_tool_generation_error(tool, "extract property schema", source)
-            })?;
-
+        properties: Vec<(PropertyInfo, Option<String>)>,
+    ) -> ToolMetadata {
         let description = (!tool.description.is_empty()).then(|| tool.description.clone());
         let category = categorization.map(|c| c.category.clone());
         let keywords = categorization.map_or_else(Vec::new, |c| c.keywords.clone());
 
-        Ok(ToolMetadata {
+        ToolMetadata {
             name: tool.name.as_str().to_string(),
             typescript_name,
             category,
@@ -751,7 +777,7 @@ impl<'a> ProgressiveGenerator<'a> {
                     description: raw_description,
                 })
                 .collect(),
-        })
+        }
     }
 
     /// Builds the `_meta.json` sidecar file from per-tool metadata already collected
@@ -858,7 +884,7 @@ fn add_tracked(
     Ok(())
 }
 
-/// Sanitizes a server-controlled string for safe interpolation into JSDoc block comments.
+/// Sanitizes a server-controlled string for safe interpolation into `JSDoc` block comments.
 ///
 /// Neutralizes control characters (C0, DEL, C1 — everything `char::is_control` reports —
 /// plus U+2028 LINE SEPARATOR/U+2029 PARAGRAPH SEPARATOR, which ECMAScript treats as line
@@ -866,7 +892,7 @@ fn add_tracked(
 /// the shared [`mcp_execution_core::untrusted::sanitize_untrusted_text`], which *replaces*
 /// each with a space rather than deleting it — deleting would glue adjacent words together
 /// (`"tab\tseparated"` -> `"tabseparated"`) and, more importantly, would let a control
-/// character sitting between `*` and `/` collapse into a live JSDoc comment terminator once
+/// character sitting between `*` and `/` collapse into a live `JSDoc` comment terminator once
 /// removed. This neutralization runs *before* the `*/` escape step for exactly that reason:
 /// escaping first would see no `*/` match (the control character still separates them), then
 /// deleting/collapsing that character afterward would reopen the comment. Truncation to
@@ -882,7 +908,7 @@ fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Joins `ToolCategorization::keywords` into the comma-separated form JSDoc rendering displays
+/// Joins `ToolCategorization::keywords` into the comma-separated form `JSDoc` rendering displays
 /// (`@keywords foo, bar, baz`), sanitizing the joined text the same way any other JSDoc-embedded
 /// value is sanitized.
 fn render_keywords_for_jsdoc(keywords: &[String]) -> String {
@@ -963,10 +989,11 @@ const RESERVED_WORDS: &[&str] = &[
 
 /// Output filenames (without extension) that [`ProgressiveGenerator`] itself always emits
 /// alongside per-tool files, regardless of the introspected tool list. Seeded into
-/// [`resolve_typescript_names`]'s collision set for the same reason [`RESERVED_WORDS`] is: a
-/// tool whose sanitized name matches one of these would otherwise silently overwrite this
-/// generator's own fixed output file (issue #312) instead of being disambiguated like any
-/// other name collision.
+/// [`resolve_typescript_names`]'s case-insensitive `used_lower` collision set (unlike
+/// [`RESERVED_WORDS`], which is checked case-sensitively — see that function's docs for why the
+/// two differ): a tool whose sanitized name matches one of these would otherwise silently
+/// overwrite this generator's own fixed output file (issue #312) instead of being disambiguated
+/// like any other name collision.
 const RESERVED_OUTPUT_NAMES: &[&str] = &["index"];
 
 /// Resolves a collision-free TypeScript identifier for each tool, in tool order.
@@ -982,22 +1009,24 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &["index"];
 /// resolved identifiers even though both were correctly disambiguated. Callers must look up
 /// entries by the tool's index in the same `tools` slice.
 ///
-/// Collision detection is case-insensitive (via [`disambiguate_output_filename`]'s
-/// case-folded `used_lower` set), even though the *emitted* identifier preserves each tool's
-/// original case. `typescript_name` is not just a language-level identifier — it doubles as an
-/// output filename, and filenames collide regardless of case on a case-insensitive filesystem
-/// (macOS APFS, Windows NTFS by default, this project's primary dev platforms). Folding case for
-/// the collision check alone means: a sanitized name that matches a JS/TS reserved word (e.g. a
-/// tool literally named `delete`) or one of this generator's own fixed output filenames (e.g.
-/// `index`, in any case — `Index`, `INDEX`, ...) is treated as already taken and gets the same
-/// numeric-suffix disambiguation a same-case collision would (`delete` becomes `delete_2`, `index`
-/// or `Index` becomes `index_2`/`Index_2`); and two distinct tools whose names differ only by
-/// case (`getUser`/`GetUser`) are disambiguated from each other too, not just from the reserved
-/// sets (issue #312 S1, N2).
+/// Collision detection combines two checks with different case sensitivity, since
+/// `typescript_name` doubles as both a language-level identifier and an output filename:
+///
+/// - JS/TS reserved words (e.g. `delete`) are checked case-*sensitively*, an exact match
+///   against the lowercase reserved word — reserved words are only reserved in their exact
+///   lowercase form (`Delete`, `New`, `Import` are all legal identifiers).
+/// - The fixed output filenames (e.g. `index`) and previously-resolved tool names are checked
+///   case-*insensitively* (via [`disambiguate_output_filename`]'s case-folded `used_lower`
+///   set), because filenames collide regardless of case on a case-insensitive filesystem (macOS
+///   APFS, Windows NTFS by default, this project's primary dev platforms): a tool named `Index`
+///   collides with the fixed `index.ts` output, and two tools named `getUser`/`GetUser` collide
+///   with each other (issue #312 S1, N2).
+///
+/// The emitted identifier always preserves each tool's original case; only the collision
+/// *checks* fold or preserve case as described above.
 fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
-    let mut used_lower: HashSet<String> = RESERVED_WORDS
+    let mut used_lower: HashSet<String> = RESERVED_OUTPUT_NAMES
         .iter()
-        .chain(RESERVED_OUTPUT_NAMES.iter())
         .map(|&s| s.to_ascii_lowercase())
         .collect();
     let mut resolved = Vec::with_capacity(tools.len());
@@ -1010,11 +1039,13 @@ fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
     resolved
 }
 
-/// Disambiguates `base` against `used_lower` case-insensitively, appending a numeric suffix
-/// (`_2`, `_3`, ...) — mirroring [`disambiguate_identifier`]'s suffix scheme — until a
-/// case-insensitively-unique candidate is found, then reserves that candidate's lowercased form
-/// in `used_lower`. The returned identifier preserves `base`'s original casing; only the
-/// collision *check* is case-folded.
+/// Disambiguates `base` against reserved JS/TS words and `used_lower`, appending a numeric
+/// suffix (`_2`, `_3`, ...) — mirroring [`disambiguate_identifier`]'s suffix scheme — until a
+/// candidate is found that is neither an exact (case-sensitive) match for a
+/// [`RESERVED_WORDS`] entry nor a case-insensitive match in `used_lower`. The winning
+/// candidate's lowercased form is then reserved in `used_lower`. The returned identifier
+/// preserves `base`'s original casing; only the collision *checks* fold or preserve case (see
+/// [`resolve_typescript_names`] for why the two checks differ).
 ///
 /// A dedicated function rather than reusing [`disambiguate_identifier`]: that one is shared with
 /// property-name disambiguation, which must stay case-sensitive — `name` and `Name` are
@@ -1024,11 +1055,14 @@ fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
 fn disambiguate_output_filename(base: &str, used_lower: &mut HashSet<String>) -> String {
     let mut candidate = base.to_string();
     let mut suffix = 2;
-    while !used_lower.insert(candidate.to_ascii_lowercase()) {
+    loop {
+        let is_reserved_word = RESERVED_WORDS.contains(&candidate.as_str());
+        if !is_reserved_word && used_lower.insert(candidate.to_ascii_lowercase()) {
+            return candidate;
+        }
         candidate = format!("{base}_{suffix}");
         suffix += 1;
     }
-    candidate
 }
 
 fn sanitize_schema_jsdoc_descriptions(mut value: serde_json::Value) -> serde_json::Value {
@@ -1410,7 +1444,6 @@ mod tests {
 
     #[test]
     fn test_create_tool_context() {
-        let generator = ProgressiveGenerator::new().unwrap();
         let tool = ToolInfo {
             name: ToolName::new("send_message").unwrap(),
             description: "Sends a message".to_string(),
@@ -1433,14 +1466,14 @@ mod tests {
             ],
             short_description: "Send a message".to_string(),
         };
-        let context = generator
-            .create_tool_context(
-                "test-server",
-                &tool,
-                Some(&categorization),
-                "sendMessage".to_string(),
-            )
-            .unwrap();
+        let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
+        let context = ProgressiveGenerator::create_tool_context(
+            "test-server",
+            &tool,
+            Some(&categorization),
+            "sendMessage".to_string(),
+            properties,
+        );
 
         assert_eq!(context.server_id, "test-server");
         assert_eq!(context.name, "send_message");
@@ -1562,9 +1595,14 @@ mod tests {
             output_schema: None,
         };
 
-        let context = generator
-            .create_tool_context("test-server", &tool, None, "formatDocument".to_string())
-            .unwrap();
+        let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
+        let context = ProgressiveGenerator::create_tool_context(
+            "test-server",
+            &tool,
+            None,
+            "formatDocument".to_string(),
+            properties,
+        );
 
         assert_eq!(
             context.short_description,
@@ -1581,7 +1619,6 @@ mod tests {
 
     #[test]
     fn test_create_tool_context_input_schema_is_sanitized() {
-        let generator = ProgressiveGenerator::new().unwrap();
         let tool = ToolInfo {
             name: ToolName::new("send_message").unwrap(),
             description: "Sends a message".to_string(),
@@ -1596,9 +1633,14 @@ mod tests {
             output_schema: None,
         };
 
-        let context = generator
-            .create_tool_context("test-server", &tool, None, "sendMessage".to_string())
-            .unwrap();
+        let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
+        let context = ProgressiveGenerator::create_tool_context(
+            "test-server",
+            &tool,
+            None,
+            "sendMessage".to_string(),
+            properties,
+        );
 
         let expected = sanitize_schema_jsdoc_descriptions(tool.input_schema);
         assert_eq!(context.input_schema, expected);
@@ -1610,13 +1652,11 @@ mod tests {
 
     #[test]
     fn test_create_index_context() {
-        let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
         let typescript_names = resolve_typescript_names(&server_info.tools);
 
-        let context = generator
-            .create_index_context(&server_info, None, &typescript_names)
-            .unwrap();
+        let context =
+            ProgressiveGenerator::create_index_context(&server_info, None, &typescript_names);
 
         assert_eq!(context.server_name, "Test Server");
         assert_eq!(context.server_version, "1.0.0");
@@ -1853,7 +1893,6 @@ mod tests {
 
     #[test]
     fn test_extract_property_infos() {
-        let generator = ProgressiveGenerator::new().unwrap();
         let schema = json!({
             "type": "object",
             "properties": {
@@ -1868,7 +1907,7 @@ mod tests {
             "required": ["name"]
         });
 
-        let props = generator.extract_property_infos(&schema).unwrap();
+        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
 
         assert_eq!(props.len(), 2);
 
@@ -1886,7 +1925,6 @@ mod tests {
 
     #[test]
     fn test_extract_property_infos_sanitizes_malicious_property_name() {
-        let generator = ProgressiveGenerator::new().unwrap();
         let schema = json!({
             "type": "object",
             "properties": {
@@ -1898,7 +1936,7 @@ mod tests {
             "required": []
         });
 
-        let props = generator.extract_property_infos(&schema).unwrap();
+        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
 
         assert_eq!(props.len(), 1);
         assert!(!props[0].name.contains(['{', '}', ';', ':', ' ']));
@@ -1912,7 +1950,6 @@ mod tests {
         // "a-b" and "a.b" both sanitize to "a_b"; since both become fields of the same
         // top-level `Params` interface, the collision must be disambiguated rather than
         // producing a duplicate, non-compiling field.
-        let generator = ProgressiveGenerator::new().unwrap();
         let schema = json!({
             "type": "object",
             "properties": {
@@ -1922,7 +1959,7 @@ mod tests {
             "required": []
         });
 
-        let props = generator.extract_property_infos(&schema).unwrap();
+        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
         let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
         names.sort_unstable();
 
@@ -1935,7 +1972,6 @@ mod tests {
         // distinct identifiers; collapsing consecutive invalid runs now sanitizes both to
         // "a_b", introducing a *new* collision that must still be disambiguated rather than
         // producing a duplicate, non-compiling field.
-        let generator = ProgressiveGenerator::new().unwrap();
         let schema = json!({
             "type": "object",
             "properties": {
@@ -1945,7 +1981,7 @@ mod tests {
             "required": []
         });
 
-        let props = generator.extract_property_infos(&schema).unwrap();
+        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
         let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
         names.sort_unstable();
 
@@ -1954,7 +1990,6 @@ mod tests {
 
     #[test]
     fn test_extract_property_infos_disambiguates_three_way_collision() {
-        let generator = ProgressiveGenerator::new().unwrap();
         let schema = json!({
             "type": "object",
             "properties": {
@@ -1965,7 +2000,7 @@ mod tests {
             "required": []
         });
 
-        let props = generator.extract_property_infos(&schema).unwrap();
+        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
         let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
         names.sort_unstable();
 
@@ -2125,7 +2160,7 @@ mod tests {
     }
 
     /// Critic C1 regression: a control character sitting directly between `*` and `/`
-    /// must not survive as a live JSDoc comment terminator. The old (buggy) order
+    /// must not survive as a live `JSDoc` comment terminator. The old (buggy) order
     /// escaped `*/` before neutralizing control characters, so `*\u{0}/` had no `*/`
     /// substring at escape time, then the control character was deleted, reconstituting
     /// a bare `*/` that closed the comment early and let the trailing text become live
@@ -2379,6 +2414,79 @@ mod tests {
             "a reserved-word tool's fallback name must not collide with an unrelated tool that already claims it"
         );
         assert!(!RESERVED_WORDS.contains(&resolved[0].as_str()));
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_reserved_word_case_variant_is_not_suffixed() {
+        // Issue #320: JS/TS reserved words are reserved only in their exact lowercase form —
+        // `Delete`, `New`, `Import` are all legal identifiers — so a tool named `Delete` must
+        // not be treated as colliding with the reserved word `delete`.
+        let tools = vec![ToolInfo {
+            name: ToolName::new("Delete").unwrap(),
+            description: String::new(),
+            input_schema: json!({}),
+            output_schema: None,
+        }];
+
+        let resolved = resolve_typescript_names(&tools);
+
+        assert_eq!(resolved[0], "Delete");
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_exact_reserved_word_is_still_suffixed() {
+        let tools = vec![ToolInfo {
+            name: ToolName::new("delete").unwrap(),
+            description: String::new(),
+            input_schema: json!({}),
+            output_schema: None,
+        }];
+
+        let resolved = resolve_typescript_names(&tools);
+
+        assert_ne!(resolved[0], "delete");
+        assert!(!RESERVED_WORDS.contains(&resolved[0].as_str()));
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_delete_and_delete_case_variant_in_same_batch() {
+        // Issue #320 follow-up: `delete` and `Delete` in the same tool list must both resolve
+        // to distinct names regardless of order. A reserved-word candidate is rejected via
+        // `&&` short-circuit before it ever claims its lowercase slot in `used_lower`
+        // (`disambiguate_output_filename`), so `delete` being suffixed away must not block a
+        // later `Delete` from keeping its unsuffixed name (or vice versa).
+        let make_tools = |first: &str, second: &str| {
+            vec![
+                ToolInfo {
+                    name: ToolName::new(first).unwrap(),
+                    description: String::new(),
+                    input_schema: json!({}),
+                    output_schema: None,
+                },
+                ToolInfo {
+                    name: ToolName::new(second).unwrap(),
+                    description: String::new(),
+                    input_schema: json!({}),
+                    output_schema: None,
+                },
+            ]
+        };
+
+        let delete_first = resolve_typescript_names(&make_tools("delete", "Delete"));
+        assert_ne!(delete_first[0], "delete");
+        assert_eq!(delete_first[1], "Delete");
+        assert_ne!(
+            delete_first[0].to_ascii_lowercase(),
+            delete_first[1].to_ascii_lowercase()
+        );
+
+        let delete_second = resolve_typescript_names(&make_tools("Delete", "delete"));
+        assert_eq!(delete_second[0], "Delete");
+        assert_ne!(delete_second[1], "delete");
+        assert_ne!(
+            delete_second[0].to_ascii_lowercase(),
+            delete_second[1].to_ascii_lowercase()
+        );
     }
 
     #[test]

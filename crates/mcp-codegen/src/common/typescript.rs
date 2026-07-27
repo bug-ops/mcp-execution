@@ -26,7 +26,7 @@ use std::collections::HashSet;
 /// Maximum nesting depth [`json_schema_to_typescript`] will descend into before treating the
 /// remainder of a branch as opaque, rather than recursing further.
 ///
-/// The JSDoc description sanitizer in `progressive::generator` uses the same cap. Both
+/// The `JSDoc` description sanitizer in `progressive::generator` uses the same cap. Both
 /// functions recurse into every nested `object`/`array` schema with no depth limit of
 /// their own, and `mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES` bounds a schema's
 /// *serialized byte size*, not its nesting depth — so nothing in this crate stops a caller from
@@ -45,7 +45,7 @@ use std::collections::HashSet;
 /// against a stack overflow.
 ///
 /// This cap is therefore defense-in-depth for direct callers of these two functions — bounding
-/// a `Value` handed straight to `json_schema_to_typescript` or the JSDoc sanitizer, regardless
+/// a `Value` handed straight to `json_schema_to_typescript` or the `JSDoc` sanitizer, regardless
 /// of provenance — not a fix for a reachable wire-path denial of service, and **not** a
 /// guarantee that covers the rest of the `ProgressiveGenerator::generate`/
 /// `generate_with_categories` pipeline built on top of them. That pipeline has other
@@ -74,7 +74,7 @@ use std::collections::HashSet;
 /// ```
 pub const MAX_SCHEMA_RECURSION_DEPTH: usize = 128;
 
-/// Converts a snake_case name to camelCase for TypeScript.
+/// Converts a `snake_case` name to camelCase for TypeScript.
 ///
 /// # Examples
 ///
@@ -104,7 +104,7 @@ pub fn to_camel_case(snake_case: &str) -> String {
     result
 }
 
-/// Converts a snake_case name to PascalCase for TypeScript types.
+/// Converts a `snake_case` name to `PascalCase` for TypeScript types.
 ///
 /// # Examples
 ///
@@ -119,10 +119,9 @@ pub fn to_camel_case(snake_case: &str) -> String {
 pub fn to_pascal_case(snake_case: &str) -> String {
     let camel = to_camel_case(snake_case);
     let mut chars = camel.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-    }
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
 }
 
 /// Sanitizes a string for safe use as a TypeScript identifier (e.g. a function, export,
@@ -290,39 +289,38 @@ fn json_schema_to_typescript_at_depth(schema: &Value, depth: usize, cap_hit: &mu
                         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
                         .unwrap_or_default();
 
-                    if let Some(props) = properties {
-                        let mut fields = Vec::new();
-                        let mut used_keys = HashSet::new();
-                        for (key, value) in props {
-                            let is_required = required.contains(&key.as_str());
-                            let optional_marker = if is_required { "" } else { "?" };
-                            let ts_type =
-                                json_schema_to_typescript_at_depth(value, depth + 1, cap_hit);
-                            let base_key = sanitize_ts_identifier(key);
-                            let safe_key = disambiguate_identifier(&base_key, &mut used_keys);
-                            fields.push(format!("  {safe_key}{optional_marker}: {ts_type};"));
-                        }
+                    properties.map_or_else(
+                        || "Record<string, unknown>".to_string(),
+                        |props| {
+                            let mut fields = Vec::new();
+                            let mut used_keys = HashSet::new();
+                            for (key, value) in props {
+                                let is_required = required.contains(&key.as_str());
+                                let optional_marker = if is_required { "" } else { "?" };
+                                let ts_type =
+                                    json_schema_to_typescript_at_depth(value, depth + 1, cap_hit);
+                                let base_key = sanitize_ts_identifier(key);
+                                let safe_key = disambiguate_identifier(&base_key, &mut used_keys);
+                                fields.push(format!("  {safe_key}{optional_marker}: {ts_type};"));
+                            }
 
-                        if fields.is_empty() {
-                            "Record<string, unknown>".to_string()
-                        } else {
-                            format!("{{\n{}\n}}", fields.join("\n"))
-                        }
-                    } else {
-                        "Record<string, unknown>".to_string()
-                    }
+                            if fields.is_empty() {
+                                "Record<string, unknown>".to_string()
+                            } else {
+                                format!("{{\n{}\n}}", fields.join("\n"))
+                            }
+                        },
+                    )
                 }
-                "array" => {
-                    let items = obj.get("items");
-                    if let Some(item_schema) = items {
+                "array" => obj.get("items").map_or_else(
+                    || "unknown[]".to_string(),
+                    |item_schema| {
                         format!(
                             "{}[]",
                             json_schema_to_typescript_at_depth(item_schema, depth + 1, cap_hit)
                         )
-                    } else {
-                        "unknown[]".to_string()
-                    }
-                }
+                    },
+                ),
                 other => json_type_to_typescript(other).to_string(),
             }
         }

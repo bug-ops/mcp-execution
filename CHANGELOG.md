@@ -63,6 +63,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ()>` client. Both now delegate to a single private `connect_and_list_tools` helper, generic over
   the connect future each transport builds. No behavior change: timeout durations, error types and
   messages, and success output are unchanged (#294).
+- **`mcp-execution-codegen`**: `ProgressiveGenerator::generate_with_categories` called
+  `extract_property_data` on each tool's `input_schema` twice per tool — once via
+  `create_tool_context` (for the rendered `.ts` file) and again via `create_tool_metadata` (for
+  the `_meta.json` sidecar). The per-tool loop now extracts property data once and passes the
+  result into both, removing one of the two `extract_property_data` walks per tool.
+  `create_tool_context`'s separate `sanitize_schema_jsdoc_descriptions` walk over the whole
+  `input_schema` is unrelated and unchanged. No change to generated output (#295).
+- **`mcp-execution-codegen`**: removed all seven crate-level `#![allow(clippy::...)]` attributes
+  in `lib.rs` (`missing_const_for_fn`, `doc_markdown`, `option_if_let_else`,
+  `uninlined_format_args`, `elidable_lifetime_names`, `unused_self`, `unnecessary_wraps`), and
+  the unjustified `#![allow(clippy::format_push_string)]` in `mcp-execution-files`'s
+  `profile_memory` example, by fixing the underlying code each one was suppressing instead:
+  missing `const` on two trivially-const functions, missing backticks around technical terms in
+  doc comments, `if let`/`else` blocks rewritten as `map_or_else`/`and_then` chains, an
+  uninlined format argument, an elidable explicit lifetime, four generator helper methods that
+  never read `self` converted to associated functions, three of those methods' now-infallible
+  `Result` return types dropped once helper extraction stopped needing to fail, and four
+  `push_str(&format!(...))` calls in the profiling example rewritten as `write!`/`writeln!`
+  (#291).
 
 ### Fixed
 
@@ -86,6 +105,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numeric-suffix disambiguation (`index_2`, `Index_2`, ...) a genuine same-case collision already
   received — this also incidentally disambiguates any two tool names that differ only by case
   (e.g. `getUser`/`GetUser`), not just names colliding with a reserved name (#312).
+- **`mcp-execution-codegen`**: `resolve_typescript_names`'s reserved-word collision check
+  (introduced by #312) folded case for JS/TS reserved words the same way it does for output
+  filenames, so a tool named e.g. `Delete` was treated as colliding with the reserved word
+  `delete` and got a gratuitous `_2` suffix — even though JS/TS reserved words are reserved only
+  in their exact lowercase form (`Delete`, `New`, `Import`, ... are all legal identifiers). The
+  reserved-word check is now case-sensitive (exact match against the lowercase reserved-word
+  list only), while the output-filename/cross-tool collision check remains case-insensitive as
+  before (#320).
 - **`mcp-execution-server`**: `save_categorized_tools` built its codegen categorization map
   keyed by the *display* form of a tool name Claude was shown by `introspect_server`
   (control-character-sanitized, and — for a name containing `&`/`<`/`>` — additionally
