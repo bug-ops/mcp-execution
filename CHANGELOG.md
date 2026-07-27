@@ -169,6 +169,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call sites now distinguish `io::ErrorKind::NotFound` — which still reports the existing
   `DirectoryNotFound`/`MissingMetadata` variants — from any other I/O error, which now propagates
   the real cause via `ScanError::Io` instead of being discarded (#302).
+- **`mcp-execution-files`**: `FileSystem::vfs_to_disk_path`'s defense-in-depth path-traversal
+  check used `assert!`, panicking the whole process if a VFS path ever reached it still
+  containing `..` — turning a validation regression elsewhere into a process-killing DoS instead
+  of a recoverable error. It now returns `Result<PathBuf, FilesError>`, surfacing
+  `FilesError::InvalidPathComponent` instead; `collect_directories`, `write_files`, and
+  `export_to_filesystem_parallel` (its three call sites) now propagate the error via `?` (#318).
+- **`mcp-execution-cli`**: `server list`/`server info`/`server validate`'s `ServerEntry.status`
+  and `ServerInfo.status` fields were `pub status: String`, discarding the closed two-variant
+  `ServerStatus` enum already used internally to compute them — nothing in the type system
+  prevented a future call site from writing an arbitrary string into a field meant to only ever
+  be `"available"`/`"unavailable"`. Both fields are now `pub status: ServerStatus` (see the
+  `### Breaking` entry below for the compatibility impact); `#[derive(Serialize)]` with
+  `#[serde(rename_all = "lowercase")]` keeps JSON/pretty output unchanged (#318).
 
 ### Documentation
 
@@ -176,6 +189,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added justification comments to 3 undocumented `#[allow(...)]` clippy attributes explaining the tradeoff for each (#186).
 - Documented that `ServerConfig`'s `Serialize` output is a separate code path from its redacting `Debug` impl and is not covered by that guarantee — serialized output must never be logged or printed directly (#247).
 - Documented `tsconfig.json` leaf-configuration behavior in `mcp-codegen` crate docs and README: generated `tsconfig.json` is not intended to be `extends`-ed (silent `noEmit` inheritance), is regenerated on every `generate` run, and the generated package should be executed or type-checked as a separate process rather than merged into the consumer's own TypeScript compilation (#258).
+- **`mcp-execution-cli`**: reviewed `skill`'s `--output` path validation
+  (`validate_output_path`/`has_path_traversal`) against its sibling
+  `mcp_execution_skill::output_path::relative_target`, which additionally rejects absolute paths.
+  Confirmed the CLI's component-based traversal check was already correct as-is and does not need
+  to match the sibling: `--output` is an operator-supplied CLI flag (same trust level as the
+  invoking user), while `relative_target` confines the MCP-server-exposed `save_skill` tool
+  against an agent/LLM-supplied argument — different trust boundaries, so identical confinement
+  isn't actually appropriate here. No functional change; a doc comment now records this rationale
+  on `validate_output_path` (#318).
 
 ### Breaking
 
@@ -377,6 +399,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deserialization; `mcp-cli`'s `mcp.json` format is a distinct schema
   (`McpServerEntry`/`McpTransport`, with its own hand-written `Deserialize` and an optional
   `"type"` key inferred from `command`/`url` when absent) and is unaffected by this change.
+
+- **`mcp-execution-cli`**: `generate`'s `--name` override now rejects a value outside
+  `[a-z0-9-]` outright via `validate_server_id` instead of silently slugifying it into a
+  best-effort directory name (see the `### Fixed` entry above, #311). A caller that previously
+  relied on `--name` being auto-slugified (e.g. passing `My Server!`) now gets a hard error
+  instead of a generated `my-server` directory; existing callers already passing a valid
+  `[a-z0-9-]` id are unaffected.
+
+- **`mcp-execution-cli`**: `commands::server::ServerEntry.status` and `ServerInfo.status` changed
+  from `pub status: String` to `pub status: ServerStatus`, a new `pub`, closed, two-variant enum
+  (`Available`/`Unavailable`) replacing the previously untyped string (see the `### Fixed` entry
+  above, #318). Source-breaking for any downstream consumer of this crate as a library that
+  constructs `ServerEntry`/`ServerInfo` directly or pattern-matches/compares `.status` as a
+  `String`. `ServerStatus` derives `Serialize` with `#[serde(rename_all = "lowercase")]`, so CLI
+  JSON/pretty output is unchanged.
 
 ### Security
 

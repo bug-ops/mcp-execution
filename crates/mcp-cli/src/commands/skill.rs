@@ -393,6 +393,13 @@ fn validate_path_security(path: &Path, base: &Path) -> Result<PathBuf> {
 
 /// Validate output path for path traversal attacks.
 ///
+/// This only rejects traversal escapes (`..`), not absolute paths — callers must ensure `path`
+/// originates from a trusted source (e.g. an interactive CLI operator's own flag), not
+/// agent/LLM-supplied input. This is a narrower contract than
+/// `mcp_execution_skill::output_path::relative_target`, which additionally rejects absolute
+/// paths because it confines the MCP-server-exposed `save_skill` tool, reachable from
+/// agent/LLM-supplied arguments.
+///
 /// # Arguments
 ///
 /// * `path` - Output path to validate

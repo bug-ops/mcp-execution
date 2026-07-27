@@ -580,7 +580,7 @@ impl FileSystem {
                 })?;
 
         // Phase 1: Collect all unique directories
-        let dirs = self.collect_directories(&canonical_staging);
+        let dirs = self.collect_directories(&canonical_staging)?;
 
         // Phase 2: Create all directories in one pass
         Self::create_directories(&dirs)?;
@@ -687,7 +687,7 @@ impl FileSystem {
         self.files().collect::<Vec<_>>().par_iter().try_for_each(
             |(vfs_path, file)| -> Result<()> {
                 let staging_disk_path =
-                    Self::vfs_to_disk_path(vfs_path.as_str(), &canonical_staging);
+                    Self::vfs_to_disk_path(vfs_path.as_str(), &canonical_staging)?;
                 write_file_atomic(&staging_disk_path, file.content(), options.atomic)
             },
         )?;
@@ -734,11 +734,11 @@ impl FileSystem {
     /// Collects all unique directory paths needed for export.
     ///
     /// This is done in a single pass to minimize allocations.
-    fn collect_directories(&self, base: &Path) -> HashSet<PathBuf> {
+    fn collect_directories(&self, base: &Path) -> Result<HashSet<PathBuf>> {
         let mut dirs = HashSet::new();
 
         for (vfs_path, _) in self.files() {
-            let disk_path = Self::vfs_to_disk_path(vfs_path.as_str(), base);
+            let disk_path = Self::vfs_to_disk_path(vfs_path.as_str(), base)?;
 
             // Add all parent directories
             if let Some(parent) = disk_path.parent() {
@@ -754,7 +754,7 @@ impl FileSystem {
             }
         }
 
-        dirs
+        Ok(dirs)
     }
 
     /// Creates all directories in one pass.
@@ -772,7 +772,7 @@ impl FileSystem {
     /// Writes all files into the staging directory ahead of publishing.
     fn write_files(&self, staging_base: &Path, options: &ExportOptions) -> Result<()> {
         for (vfs_path, file) in self.files() {
-            let staging_disk_path = Self::vfs_to_disk_path(vfs_path.as_str(), staging_base);
+            let staging_disk_path = Self::vfs_to_disk_path(vfs_path.as_str(), staging_base)?;
             write_file_atomic(&staging_disk_path, file.content(), options.atomic)?;
         }
         Ok(())
@@ -1016,20 +1016,21 @@ impl FileSystem {
     ///
     /// Strips leading '/' and joins with base path.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if path contains `..` (path traversal attempt).
-    /// This is defense-in-depth since `FilePath::new()` also validates.
-    fn vfs_to_disk_path(vfs_path: &str, base: &Path) -> PathBuf {
+    /// Returns `FilesError::InvalidPathComponent` if `vfs_path` contains `..` (path traversal
+    /// attempt). This is defense-in-depth since `FilePath::new()` also validates.
+    fn vfs_to_disk_path(vfs_path: &str, base: &Path) -> Result<PathBuf> {
         // Strip leading '/' from VFS path
         let relative = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
 
         // Defense-in-depth: reject path traversal attempts
         // Primary validation is in FilePath::new(), this is a safety net
-        assert!(
-            !relative.contains(".."),
-            "SECURITY: Path traversal attempt detected in VFS path: {vfs_path}"
-        );
+        if relative.contains("..") {
+            return Err(FilesError::InvalidPathComponent {
+                path: vfs_path.to_string(),
+            });
+        }
 
         // Convert forward slashes to platform-specific separators
         let relative_path = if cfg!(target_os = "windows") {
@@ -1038,7 +1039,7 @@ impl FileSystem {
             PathBuf::from(relative)
         };
 
-        base.join(relative_path)
+        Ok(base.join(relative_path))
     }
 }
 
@@ -1215,6 +1216,24 @@ mod tests {
         let vfs = FileSystem::new();
         let result = vfs.read_file("/missing.ts");
         assert!(matches!(result, Err(FilesError::FileNotFound { .. })));
+    }
+
+    #[test]
+    fn test_vfs_to_disk_path_rejects_parent_dir_component() {
+        // Defense-in-depth: FilePath::new already rejects `..` at construction time, so this
+        // exercises vfs_to_disk_path's own safety net directly, bypassing that primary
+        // validation — it must return an error instead of panicking (#318).
+        let result = FileSystem::vfs_to_disk_path("/../etc/passwd", Path::new("/base"));
+        assert!(matches!(
+            result,
+            Err(FilesError::InvalidPathComponent { .. })
+        ));
+    }
+
+    #[test]
+    fn test_vfs_to_disk_path_accepts_valid_path() {
+        let result = FileSystem::vfs_to_disk_path("/foo/bar.ts", Path::new("/base")).unwrap();
+        assert_eq!(result, Path::new("/base/foo/bar.ts"));
     }
 
     #[test]
