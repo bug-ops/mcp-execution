@@ -341,6 +341,7 @@ mod tests {
     use super::*;
     use mcp_execution_core::ResourceKind;
     use mcp_execution_core::ServerId;
+    use mcp_execution_files::FilesResourceKind;
 
     fn wrap(core_error: CoreError) -> anyhow::Error {
         anyhow::Error::new(core_error)
@@ -382,7 +383,7 @@ mod tests {
     #[test]
     fn test_classify_exit_code_files_error_resource_limit_exceeded() {
         let files_error = FilesError::ResourceLimitExceeded {
-            resource: "export file count".to_string(),
+            resource: FilesResourceKind::ExportFileCount,
             actual: 3000,
             limit: 2000,
         };

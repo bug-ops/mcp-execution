@@ -19,6 +19,50 @@ use std::fmt;
 use std::path::Path;
 use thiserror::Error;
 
+/// Identifies which bounded resource a [`FilesError::ResourceLimitExceeded`] rejection concerns.
+///
+/// Closes the free-form `resource: String` field this replaced (issue #343) into a fixed set of
+/// variants, so a call site can no longer report a resource category via an arbitrary,
+/// typo-prone string. This mirrors `mcp-core`'s
+/// [`ResourceKind`](https://docs.rs/mcp-execution-core/latest/mcp_execution_core/enum.ResourceKind.html)
+/// closed-enum pattern (issue #317) but is kept local to this crate rather than added as variants
+/// there: `mcp-core`'s enum already has semantically adjacent variants (`GeneratedOutputSize`/
+/// `GeneratedFileCount`, the closest neighbors to `ExportTotalSize`/`ExportFileCount`), but this
+/// crate has no direct dependency on `mcp-execution-core` — only a transitive one via
+/// `mcp-execution-codegen` — so sharing that enum would mean adding a new direct dependency on
+/// `mcp-core` for a single error variant. A local enum avoids that coupling.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_files::FilesResourceKind;
+///
+/// assert_eq!(
+///     FilesResourceKind::ExportFileCount.to_string(),
+///     "export file count"
+/// );
+/// assert_eq!(
+///     FilesResourceKind::ExportTotalSize.to_string(),
+///     "export total size"
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilesResourceKind {
+    /// Number of files a single export batch would write.
+    ExportFileCount,
+    /// Combined byte size of every file's content in a single export batch.
+    ExportTotalSize,
+}
+
+impl fmt::Display for FilesResourceKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExportFileCount => f.write_str("export file count"),
+            Self::ExportTotalSize => f.write_str("export total size"),
+        }
+    }
+}
+
 /// Errors that can occur during VFS operations.
 ///
 /// All error variants include contextual information for diagnostics.
@@ -84,8 +128,8 @@ pub enum FilesError {
     /// limit (denial-of-service protection, CWE-400).
     #[error("export exceeds resource limit for {resource}: {actual} exceeds limit of {limit}")]
     ResourceLimitExceeded {
-        /// Human-readable name of the bounded resource (e.g. "export file count").
-        resource: String,
+        /// Which bounded resource was exceeded.
+        resource: FilesResourceKind,
         /// The actual observed size/count that triggered the rejection.
         actual: usize,
         /// The configured maximum allowed for this resource.
@@ -112,10 +156,10 @@ impl FilesError {
     /// # Examples
     ///
     /// ```
-    /// use mcp_execution_files::FilesError;
+    /// use mcp_execution_files::{FilesError, FilesResourceKind};
     ///
     /// let error = FilesError::ResourceLimitExceeded {
-    ///     resource: "export file count".to_string(),
+    ///     resource: FilesResourceKind::ExportFileCount,
     ///     actual: 3000,
     ///     limit: 2000,
     /// };
@@ -419,6 +463,32 @@ pub type Result<T> = std::result::Result<T, FilesError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_resource_limit_exceeded_display_export_file_count() {
+        let err = FilesError::ResourceLimitExceeded {
+            resource: FilesResourceKind::ExportFileCount,
+            actual: 3000,
+            limit: 2000,
+        };
+        assert_eq!(
+            err.to_string(),
+            "export exceeds resource limit for export file count: 3000 exceeds limit of 2000"
+        );
+    }
+
+    #[test]
+    fn test_resource_limit_exceeded_display_export_total_size() {
+        let err = FilesError::ResourceLimitExceeded {
+            resource: FilesResourceKind::ExportTotalSize,
+            actual: 5_000_000,
+            limit: 4_000_000,
+        };
+        assert_eq!(
+            err.to_string(),
+            "export exceeds resource limit for export total size: 5000000 exceeds limit of 4000000"
+        );
+    }
 
     #[test]
     fn test_vfs_path_new_valid() {

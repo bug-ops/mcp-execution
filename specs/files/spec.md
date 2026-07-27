@@ -38,7 +38,7 @@ such that:
 // crate root
 pub use builder::FilesBuilder;
 pub use filesystem::{ExportOptions, FileSystem};
-pub use types::{FileEntry, FilePath, FilesError, Result};
+pub use types::{FileEntry, FilePath, FilesError, FilesResourceKind, Result};
 
 pub struct FilePath(String); // validated: absolute ('/'-prefixed), no "..", no empty/"." components, Unix-style on all platforms
 impl FilePath {
@@ -211,9 +211,26 @@ pub enum FilesError {
     PathNotAbsolute { path },
     InvalidPathComponent { path },
     IoError { path, source: std::io::Error },
-    ResourceLimitExceeded { resource, actual, limit }, // is_resource_limit_exceeded()
+    ResourceLimitExceeded { resource: FilesResourceKind, actual, limit }, // is_resource_limit_exceeded()
+    PathEscapesBase { path, base },
+}
+
+pub enum FilesResourceKind {
+    ExportFileCount,
+    ExportTotalSize,
 }
 ```
+`FilesResourceKind` (`types::FilesResourceKind`, re-exported at crate root) closes what was a
+free-form `resource: String` (issue #343), mirroring `mcp-core::ResourceKind`'s closed-enum
+pattern (issue #317, [[../core/spec#`Error` / `Result<T>` (`src/error.rs`)]]) without adding
+variants to that enum: `mcp-core`'s `ResourceKind` already has semantically adjacent variants
+(`GeneratedOutputSize`/`GeneratedFileCount`, the closest neighbors to
+`ExportTotalSize`/`ExportFileCount`), but this crate has no direct dependency on
+`mcp-execution-core` (only a transitive one via `mcp-execution-codegen`), so sharing that enum
+would mean adding a new direct dependency on `mcp-core` for a single error variant — a local enum
+avoids that coupling. Each variant's `Display` reproduces the same wording `check_export_bounds`
+used to build by hand (`"export file count"` / `"export total size"`), so
+`FilesError::ResourceLimitExceeded`'s message is unchanged in substance.
 
 ## 8. Cross-Crate Contracts
 

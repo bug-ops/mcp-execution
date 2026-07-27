@@ -448,6 +448,7 @@ fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::FilesResourceKind;
     use mcp_execution_codegen::GeneratedFile;
     use tempfile::TempDir;
 
@@ -883,10 +884,16 @@ mod tests {
         let target = temp_dir.path().join("out");
         let result = builder.build_and_export(&target);
 
-        assert!(matches!(
-            result,
-            Err(FilesError::ResourceLimitExceeded { .. })
-        ));
+        assert!(
+            matches!(
+                result,
+                Err(FilesError::ResourceLimitExceeded {
+                    resource: FilesResourceKind::ExportFileCount,
+                    ..
+                })
+            ),
+            "expected ResourceLimitExceeded{{resource: ExportFileCount}}, got: {result:?}"
+        );
         // Rejected before any per-group publish ran, so the target directory
         // (which build_and_export would otherwise create unconditionally)
         // must never have been created.

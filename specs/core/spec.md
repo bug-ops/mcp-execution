@@ -112,8 +112,11 @@ pub enum ResourceKind {
 free-form `resource: String` (issue #317): each variant's `Display` reproduces the same
 human-readable wording call sites used to build by hand (e.g. `ToolCount` renders `"tool count
 for server '{id}'"`), so `Error::ResourceLimitExceeded`'s own message is unchanged in substance.
-Covers `mcp-core` only — `mcp-files::FilesError::ResourceLimitExceeded` still uses a free-form
-`resource: String` (tracked separately as issue #343).
+Covers `mcp-core` only. `mcp-files::FilesError::ResourceLimitExceeded` closed its own free-form
+`resource: String` separately (issue #343) with a local `FilesResourceKind` enum rather than
+adding variants here: `mcp-files` has no direct dependency on `mcp-core` (only a transitive one
+via `mcp-execution-codegen`), so sharing this enum would mean adding a new direct dependency on
+`mcp-core` for a single error variant — see [[../files/spec#7. Error Conditions]].
 Each variant has an `is_*` predicate (`is_connection_error`,
 `is_security_error`, `is_timeout`, `is_validation_error`,
 `is_script_generation_error`, `is_resource_limit_exceeded`). No predicate
