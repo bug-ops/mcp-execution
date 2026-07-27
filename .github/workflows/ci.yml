@@ -23,13 +23,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Detect whether the diff touches anything beyond documentation so the full
+  # check chain can be skipped on docs-only changes. Workflow file changes
+  # always force the full chain to run, since they could be the thing that's
+  # broken. Scheduled runs (weekly security audit) always run everything too,
+  # since there's no meaningful diff to compare against.
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run-checks: ${{ github.event_name == 'schedule' || steps.filter.outputs.code == 'true' || steps.filter.outputs.workflows == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check changed paths
+        if: github.event_name != 'schedule'
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!specs/**'
+              - '!docs/**'
+              - '!README*'
+              - '!CHANGELOG*'
+              - '!CONTRIBUTING*'
+              - '!LICENSE*'
+              - '!SECURITY*'
+            workflows:
+              - '.github/workflows/**'
+
   # Quick checks first - fail fast strategy
   check:
     name: Check
+    needs: [changes]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
+    if: always() && needs.changes.outputs.run-checks == 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -63,10 +100,12 @@ jobs:
   # Security audit using cargo-deny
   security:
     name: Security Audit
+    needs: [changes]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
+    if: always() && needs.changes.outputs.run-checks == 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -81,11 +120,12 @@ jobs:
   # Cross-platform tests with matrix
   test:
     name: Test (${{ matrix.os }}, Rust ${{ matrix.rust }})
-    needs: [check]
+    needs: [changes, check]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:
       contents: read
+    if: always() && needs.changes.outputs.run-checks == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -139,12 +179,13 @@ jobs:
   # Code coverage (Linux only for speed)
   coverage:
     name: Code Coverage
-    needs: [check]
+    needs: [changes, check]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       actions: write  # For uploading artifacts
+    if: always() && needs.changes.outputs.run-checks == 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -202,11 +243,12 @@ jobs:
   # MSRV check (Minimum Supported Rust Version)
   msrv:
     name: Check MSRV (1.91)
-    needs: [check]
+    needs: [changes, check]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
+    if: always() && needs.changes.outputs.run-checks == 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -226,11 +268,12 @@ jobs:
   # Benchmarks (build only, don't run in CI)
   benchmark:
     name: Benchmark Build
-    needs: [check]
+    needs: [changes, check]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
       contents: read
+    if: always() && needs.changes.outputs.run-checks == 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -248,11 +291,12 @@ jobs:
   # Release build check
   release:
     name: Release Build
-    needs: [test]
+    needs: [changes, test]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
       contents: read
+    if: always() && needs.changes.outputs.run-checks == 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -278,21 +322,30 @@ jobs:
   # All checks passed
   ci-success:
     name: CI Success
-    needs: [check, security, test, coverage, msrv, benchmark]
+    needs: [changes, check, security, test, coverage, msrv, benchmark]
     runs-on: ubuntu-latest
     if: always()
     permissions:
       contents: read
     steps:
       - name: Check all jobs
+        # `skipped` is an acceptable outcome here: on docs-only diffs, the
+        # gated jobs (check/security/test/coverage/msrv/benchmark) skip
+        # themselves via the `changes` job's `run-checks` output rather than
+        # failing, and this status check must still report success/neutral
+        # rather than staying red or permanently pending.
         run: |
-          if [[ "${{ needs.check.result }}" != "success" ]] || \
-             [[ "${{ needs.security.result }}" != "success" ]] || \
-             [[ "${{ needs.test.result }}" != "success" ]] || \
-             [[ "${{ needs.coverage.result }}" != "success" ]] || \
-             [[ "${{ needs.msrv.result }}" != "success" ]] || \
-             [[ "${{ needs.benchmark.result }}" != "success" ]]; then
-            echo "One or more required jobs failed or were cancelled"
-            exit 1
-          fi
-          echo "All required jobs passed successfully!"
+          for result in \
+            "${{ needs.changes.result }}" \
+            "${{ needs.check.result }}" \
+            "${{ needs.security.result }}" \
+            "${{ needs.test.result }}" \
+            "${{ needs.coverage.result }}" \
+            "${{ needs.msrv.result }}" \
+            "${{ needs.benchmark.result }}"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "One or more required jobs failed or were cancelled"
+              exit 1
+            fi
+          done
+          echo "All required jobs passed successfully (or were skipped as docs-only)!"
