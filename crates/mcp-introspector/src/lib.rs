@@ -58,6 +58,7 @@ use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::process::Stdio;
 use std::task::Poll;
 use tokio::io::AsyncRead;
@@ -956,35 +957,32 @@ where
     })
 }
 
-/// Connects to an already-spawned MCP server over `transport` and lists its
-/// tools, with each step bounded by `config`'s configured timeouts.
-///
-/// Returns the discovered tools alongside the handshake-derived server name,
-/// version, and capability flags (resources / prompts support).
+/// Drives the connect / list-tools / peer-meta pipeline shared by
+/// [`discover_via_stdio`] and [`discover_via_http`] (issue #294): awaits
+/// `connect` bounded by `config.connect_timeout()`, then
+/// [`list_tools_bounded`] bounded by `config.discover_timeout()`, then
+/// extracts [`PeerMeta`] from the resulting client's handshake info. The two
+/// callers differ only in how `connect` builds its transport — both produce
+/// the same `RunningService<RoleClient, ()>` client type from that point on.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Timeout`] if the connect or discovery step exceeds its
-/// configured timeout, or [`Error::ConnectionFailed`] if the underlying rmcp
-/// connection or request fails.
-async fn discover_via_stdio(
+/// configured timeout, [`Error::ConnectionFailed`] if `connect` or the
+/// tool-listing request fails, or [`Error::ResourceLimitExceeded`] if the
+/// accumulated tool count exceeds [`MAX_TOOL_COUNT`] (see
+/// [`list_tools_bounded`]).
+async fn connect_and_list_tools<F, T>(
     server_id: &ServerId,
     config: &ServerConfig,
-    transport: (tokio::process::ChildStdout, tokio::process::ChildStdin),
-) -> Result<DiscoveryResult> {
-    // The default `(ChildStdout, ChildStdin)` transport (`AsyncRwTransport`) reads
-    // lines via an unbounded `read_until`, bypassing `JsonRpcMessageCodec`'s
-    // `max_length` entirely (issue #225). Building the sink/stream pair explicitly
-    // routes stdout through `bounded_response_stream` instead.
-    let (stdout, stdin) = transport;
-    let sink = FramedWrite::new(
-        stdin,
-        JsonRpcMessageCodec::<TxJsonRpcMessage<RoleClient>>::new(),
-    );
-    let stream = bounded_response_stream(stdout, MAX_RESPONSE_LINE_SIZE);
-
-    // Create client using serve pattern, bounded by the connect timeout
-    let client = tokio::time::timeout(config.connect_timeout(), ().serve((sink, stream)))
+    connect: F,
+) -> Result<DiscoveryResult>
+where
+    F: Future<Output = std::result::Result<rmcp::service::RunningService<RoleClient, ()>, T>>,
+    T: std::error::Error + Send + Sync + 'static,
+{
+    // Bounded by the connect timeout.
+    let client = tokio::time::timeout(config.connect_timeout(), connect)
         .await
         .map_err(|_elapsed| Error::Timeout {
             operation: format!("connect to {server_id}"),
@@ -1006,13 +1004,43 @@ async fn discover_via_stdio(
         .map_err(|e| map_list_tools_bounded_error(server_id, e))?;
 
     // Extract name, version, and capabilities from the MCP handshake result.
-    // Falls back to the command string / "unknown" if the server did not send peer info.
     let peer_meta = extract_peer_meta(config, client.peer_info().as_deref());
 
     Ok(DiscoveryResult {
         tools: tool_list,
         peer_meta,
     })
+}
+
+/// Connects to an already-spawned MCP server over `transport` and lists its
+/// tools, with each step bounded by `config`'s configured timeouts.
+///
+/// Returns the discovered tools alongside the handshake-derived server name,
+/// version, and capability flags (resources / prompts support).
+///
+/// # Errors
+///
+/// Returns [`Error::Timeout`] if the connect or discovery step exceeds its
+/// configured timeout, [`Error::ConnectionFailed`] if the underlying rmcp
+/// connection or request fails, or [`Error::ResourceLimitExceeded`] if the
+/// accumulated tool count exceeds [`MAX_TOOL_COUNT`].
+async fn discover_via_stdio(
+    server_id: &ServerId,
+    config: &ServerConfig,
+    transport: (tokio::process::ChildStdout, tokio::process::ChildStdin),
+) -> Result<DiscoveryResult> {
+    // The default `(ChildStdout, ChildStdin)` transport (`AsyncRwTransport`) reads
+    // lines via an unbounded `read_until`, bypassing `JsonRpcMessageCodec`'s
+    // `max_length` entirely (issue #225). Building the sink/stream pair explicitly
+    // routes stdout through `bounded_response_stream` instead.
+    let (stdout, stdin) = transport;
+    let sink = FramedWrite::new(
+        stdin,
+        JsonRpcMessageCodec::<TxJsonRpcMessage<RoleClient>>::new(),
+    );
+    let stream = bounded_response_stream(stdout, MAX_RESPONSE_LINE_SIZE);
+
+    connect_and_list_tools(server_id, config, ().serve((sink, stream))).await
 }
 
 /// Connects to an MCP server over Streamable HTTP and lists its tools, with
@@ -1033,10 +1061,12 @@ async fn discover_via_stdio(
 /// # Errors
 ///
 /// Returns [`Error::Timeout`] if the connect or discovery step exceeds its
-/// configured timeout, or [`Error::ConnectionFailed`] if a header cannot be
+/// configured timeout, [`Error::ConnectionFailed`] if a header cannot be
 /// constructed, or the underlying rmcp connection or request fails (this
 /// includes a reserved-header collision, e.g. a caller-supplied `Accept`
-/// header, which rmcp rejects as `StreamableHttpError::ReservedHeaderConflict`).
+/// header, which rmcp rejects as `StreamableHttpError::ReservedHeaderConflict`),
+/// or [`Error::ResourceLimitExceeded`] if the accumulated tool count exceeds
+/// [`MAX_TOOL_COUNT`].
 async fn discover_via_http(server_id: &ServerId, config: &ServerConfig) -> Result<DiscoveryResult> {
     // `ServerConfigBuilder::build` already guarantees `url` is `Some` for
     // Http/Sse transports — no `ServerConfig` can exist otherwise.
@@ -1067,36 +1097,11 @@ async fn discover_via_http(server_id: &ServerId, config: &ServerConfig) -> Resul
         StreamableHttpClientTransportConfig::with_uri(url).custom_headers(custom_headers),
     );
 
-    let client = tokio::time::timeout(config.connect_timeout(), ().serve(transport))
-        .await
-        .map_err(|_elapsed| Error::Timeout {
-            operation: format!("connect to {server_id}"),
-            duration_secs: config.connect_timeout().as_secs(),
-        })?
-        .map_err(|e| Error::ConnectionFailed {
-            server: server_id.to_string(),
-            source: Box::new(e),
-        })?;
-
-    let tool_list = tokio::time::timeout(config.discover_timeout(), list_tools_bounded(&client))
-        .await
-        .map_err(|_elapsed| Error::Timeout {
-            operation: format!("list_all_tools for {server_id}"),
-            duration_secs: config.discover_timeout().as_secs(),
-        })?
-        .map_err(|e| map_list_tools_bounded_error(server_id, e))?;
-
-    // Extract name, version, and capabilities from the MCP handshake result.
-    // Dropping `client` here triggers `WorkerTransport`'s drop guard, which
-    // cancels the worker task; a cancelled worker cannot itself issue a
-    // session-DELETE request, so no explicit disconnect happens on this path
-    // — the server-side session simply expires on its own timeout instead.
-    let peer_meta = extract_peer_meta(config, client.peer_info().as_deref());
-
-    Ok(DiscoveryResult {
-        tools: tool_list,
-        peer_meta,
-    })
+    // The client `connect_and_list_tools` builds internally is dropped when it returns, which
+    // triggers `WorkerTransport`'s drop guard, cancelling the worker task; a cancelled worker
+    // cannot itself issue a session-DELETE request, so no explicit disconnect happens on this path —
+    // the server-side session simply expires on its own timeout instead.
+    connect_and_list_tools(server_id, config, ().serve(transport)).await
 }
 
 /// Assembles a [`ServerInfo`] from the raw tool list and handshake metadata
