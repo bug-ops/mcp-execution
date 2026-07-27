@@ -141,6 +141,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fixture-paginated-stdio-server` binary that never signals pagination completion, mirroring the
   existing HTTP-only `PaginatedFixtureHandler` test to prove `list_tools_bounded`'s
   `MAX_TOOL_COUNT` early-bailout also fires over the stdio transport (#332).
+- **`mcp-execution-skill`**: added a regression test pinning `RawFrontmatter`'s alias-bomb
+  short-circuit (ADR-341 §3.3/§5, follow-up to #349). The bomb sits under a YAML key
+  `RawFrontmatter` does not declare, so the test's primary gate is a deterministic outcome flip
+  rather than a wall-clock budget: today parsing succeeds fast because the unknown key is
+  discarded without expanding nested aliases; if a future `#[serde(flatten)]`-style buffering
+  field reopened the amplification path, the same fixture would flip to `Err` on
+  `serde_norway`'s own repetition-limit guard. A wall-clock assertion is kept only as a
+  1-second hang guard, not as the detection mechanism (#350).
 
 ### Added
 
@@ -339,6 +347,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against an agent/LLM-supplied argument — different trust boundaries, so identical confinement
   isn't actually appropriate here. No functional change; a doc comment now records this rationale
   on `validate_output_path` (#318).
+- **`specs/constitution.md`**: generalized the untrusted-source-echo guard in section V beyond
+  the YAML-parser-specific footnote it was scoped to in ADR-341 §3.5/§8. States as a general
+  principle that error text derived from parsing untrusted input must not echo verbatim source
+  excerpts into any LLM/client-facing error surface, independent of which specific parser or
+  dependency is in use, so a future parser swap or new parsing path is checked against this rule
+  up front rather than discovered ad hoc. Cross-references ADR-341 as the originating finding
+  (#351).
 
 ### Breaking
 
