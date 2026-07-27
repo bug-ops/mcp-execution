@@ -24,6 +24,28 @@ test = false
 doc = false
 required-features = ["test-fixtures"]
 
+[[bin]]
+# Test fixture spawned by tests/stdio_connect_failure_test.rs: a process that
+# spawns successfully but exits immediately without behaving as an MCP
+# server. Not part of the public crate API; only built with `--features
+# test-fixtures` (implied by `--all-features`, which is how CI runs tests).
+name = "fixture-immediate-exit-server"
+path = "tests/fixtures/immediate_exit_server.rs"
+test = false
+doc = false
+required-features = ["test-fixtures"]
+
+[[bin]]
+# Test fixture spawned by tests/tool_count_bound_test.rs: an MCP server over
+# stdio that never signals pagination completion. Not part of the public
+# crate API; only built with `--features test-fixtures` (implied by
+# `--all-features`, which is how CI runs tests).
+name = "fixture-paginated-stdio-server"
+path = "tests/fixtures/paginated_stdio_server.rs"
+test = false
+doc = false
+required-features = ["test-fixtures"]
+
 [features]
 # Enables the server-side rmcp features needed by the slow-server (stdio) and
 # HTTP fixture servers used in tests, without pulling them into the default
