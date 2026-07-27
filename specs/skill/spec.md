@@ -85,8 +85,14 @@ Handlebars render context for both templates), `SkillCategory`/`SkillTool`/
 Replaces a historical regex-based `.ts`-file scanner (issue #141: it could
 never recover parameter descriptions). Now:
 
-1. Canonicalizes `dir`, then canonicalizes `dir/_meta.json` and requires it
-   to `starts_with(canonical_base)` — defends against a symlinked
+1. Canonicalizes `dir`: an `io::ErrorKind::NotFound` maps to
+   `ScanError::DirectoryNotFound`; any other I/O error (e.g. a symlink loop,
+   a permission failure) now propagates as `ScanError::Io` with the real
+   underlying cause, instead of being collapsed into `DirectoryNotFound` as
+   before (issue #302's fix). Then canonicalizes `dir/_meta.json` under the
+   same split — `NotFound` → `ScanError::MissingMetadata`, any other kind →
+   `ScanError::Io` — and requires the resolved sidecar path to
+   `starts_with(canonical_base)` — defends against a symlinked
    `_meta.json` escaping the directory (path-traversal via symlink).
 2. Size-checks the sidecar (`MAX_FILE_SIZE`), parses as
    `mcp_core::metadata::ServerMetadata`, checks
@@ -103,7 +109,16 @@ never recover parameter descriptions). Now:
    drift must be visible to a structured caller, not just server-side
    tracing). `index.ts` (the aggregator) is never treated as an "extra"
    file.
-4. Tools returned sorted by name.
+4. Each surviving sidecar entry is converted to a `ParsedToolFile` via the
+   private `parsed_tool_file_from_metadata(meta, server_id)` function, which
+   takes the scanned `server_id` directly. This replaced a public
+   `impl From<ToolMetadata> for ParsedToolFile` that could only ever set
+   `server_id: String::new()` as a placeholder, relying on this function to
+   patch it in afterward — a representable-but-wrong intermediate state.
+   Removing the `From` impl is a breaking change for any external caller
+   that used it directly; `ParsedToolFile`'s own fields stay public, so it
+   remains constructible directly (e.g. by test fixtures) (issue #342).
+5. Tools returned sorted by name.
 
 ## 4. `build_skill_context` — Sanitization & Grouping
 
@@ -170,6 +185,23 @@ after the file's opening `---`).
 > [[../decisions/ADR-341-serde-saphyr-vs-serde-norway]] for the full
 > evidence ledger, the reasons the swap is deferred rather than rejected,
 > and the measurable gate/review date (2026-10-27) for revisiting it.
+
+Regression tests pin an incidental parser characteristic worth preserving:
+`RawFrontmatter`'s `name`/`description` fields are declared as plain
+`Option<String>`, not a buffering type. Because of that, a YAML "alias
+bomb" (a handful of anchors each referencing the previous several times,
+expanding to millions of nodes if fully materialized) placed under an
+undeclared key — or under `description` itself, since deserializing a
+sequence into `Option<String>` short-circuits on an immediate type
+mismatch — is discarded by serde's derived visitor today without expanding
+nested aliases, so parsing stays cheap. Retyping either field to a
+buffering shape (`serde_norway::Value`, an untagged enum, or a buffering
+`#[serde(deserialize_with)]`) would force alias expansion before per-field
+routing and trip `serde_norway`'s own repetition-limit guard instead —
+still bounded, but no longer free. This is a currently-true property of
+`RawFrontmatter`'s field shape, not a designed defense in its own right;
+see [[../decisions/ADR-341-serde-saphyr-vs-serde-norway]] for the
+evaluation this characteristic factored into.
 
 ## 8. `resolve_skill_output_path` — Path Confinement
 

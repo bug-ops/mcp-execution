@@ -44,6 +44,12 @@ pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefin
 pub use progressive::ProgressiveGenerator;
 pub use template_engine::TemplateEngine;
 
+impl GeneratedCode {
+    // Returns Error::DuplicateGeneratedFilePath if `file.path` is already present, instead
+    // of silently overwriting the existing entry (issue #312).
+    pub fn add_file(&mut self, file: GeneratedFile) -> Result<()>;
+}
+
 // mcp_execution_codegen::progressive
 pub struct ProgressiveGenerator<'a> { /* engine: TemplateEngine<'a> */ }
 impl<'a> ProgressiveGenerator<'a> {
@@ -51,19 +57,29 @@ impl<'a> ProgressiveGenerator<'a> {
     pub fn generate(&self, server_info: &ServerInfo) -> Result<GeneratedCode>;
     pub fn generate_with_categories(&self, server_info: &ServerInfo, categorizations: &HashMap<String, ToolCategorization>) -> Result<GeneratedCode>;
 }
-pub struct ToolCategorization { pub category: String, pub keywords: String, pub short_description: String }
-pub struct BridgeContext { pub forbidden_chars: Vec<String>, pub forbidden_env_names: Vec<String>, pub forbidden_env_prefix: String }
-// BridgeContext::default() populates from mcp_execution_core::forbidden_chars()/forbidden_env_names()/forbidden_env_prefix() — hand-written, no derive(Default), so it can never render a fail-open (empty) bridge.
+pub struct ToolCategorization { pub category: String, pub keywords: Vec<String>, pub short_description: String }
+
+// BridgeContext's three fields are private with read-only accessor methods of the same
+// name; `BridgeContext::default()` is the only construction path (no `pub` fields, no
+// `derive(Default)`, no `Deserialize`) — see [[#Runtime bridge]] and issue #315.
+pub struct BridgeContext { /* forbidden_chars, forbidden_env_names, forbidden_env_prefix: private */ }
+impl BridgeContext {
+    pub fn forbidden_chars(&self) -> &[String];
+    pub fn forbidden_env_names(&self) -> &[String];
+    pub fn forbidden_env_prefix(&self) -> &str;
+}
+impl Default for BridgeContext { /* populates from mcp_execution_core::forbidden_chars()/forbidden_env_names()/forbidden_env_prefix() — hand-written, so it can never render a fail-open (empty) bridge */ }
 
 pub const MAX_GENERATED_FILES: usize; // = introspector::MAX_TOOL_COUNT + 5 (fixed files)
 pub const MAX_GENERATED_BYTES: usize; // = 2 * MAX_TOOL_COUNT * (MAX_TOOL_NAME_LEN + MAX_TOOL_DESCRIPTION_LEN + MAX_SCHEMA_SIZE_BYTES)
 
 // mcp_execution_codegen::common::typescript
+pub const MAX_SCHEMA_RECURSION_DEPTH: usize = 128; // see [[#Recursion Depth Bound]]
 pub fn to_camel_case(s: &str) -> String;
 pub fn to_pascal_case(s: &str) -> String;
 pub fn sanitize_ts_identifier(s: &str) -> String; // collapses invalid-char runs to one '_'; prefixes '_' if leading digit/empty
 pub fn json_type_to_typescript(json_type: &str) -> &'static str;
-pub fn json_schema_to_typescript(schema: &serde_json::Value) -> String;
+pub fn json_schema_to_typescript(schema: &serde_json::Value) -> String; // depth-capped at MAX_SCHEMA_RECURSION_DEPTH
 pub fn extract_properties(schema: &serde_json::Value) -> Vec<serde_json::Value>;
 
 // mcp_execution_codegen::template_engine
@@ -84,14 +100,26 @@ of the sanitizers documented below, run **before** rendering.
 
 `generate`/`generate_with_categories` accept `&ServerInfo` (from
 [[../introspector/spec]]) and an optional `HashMap<String, ToolCategorization>`
-keyed by raw tool name (`ToolCategorization.category`/`.keywords`
-comma-separated/`.short_description` — supplied by Claude via
-`mcp-server`'s `save_categorized_tools`, or absent for the CLI's plain
-`generate` command). `generate` delegates to `generate_with_categories` with
+keyed by the tool's **raw** name (`ToolInfo.name`), not its
+display-sanitized `typescript_name` — every lookup in
+`generate_with_categories` indexes the map by `tool.name.as_str()` before any
+sanitization, so a `categorizations` map keyed by a display name would
+silently miss. `ToolCategorization.keywords` is a `Vec<String>` (not a
+comma-joined `String`); JSDoc rendering joins it via the internal
+`render_keywords_for_jsdoc` helper (`keywords.join(", ")`, then
+`sanitize_jsdoc`) whenever a display string is needed — supplied by Claude
+via `mcp-server`'s `save_categorized_tools`, or absent for the CLI's plain
+`generate` command. `generate` delegates to `generate_with_categories` with
 an **empty** map — this must produce byte-identical `index.ts` category
 behavior to "no categorization at all" (regression-tested: an empty-but-
 `Some` map must not synthesize a spurious "uncategorized" `CategoryInfo`
 group).
+
+`ToolContext::short_description` (populated for each tool's JSDoc header) is
+a plain `String`, not `Option<String>`: `create_tool_context` always falls
+back to the tool's own (sanitized) `description` when no categorization
+short description is supplied, so the type reflects that a tool file's
+header always has a short description to render.
 
 ## 4. Output: Generated File Set
 
@@ -105,6 +133,16 @@ For a server with N tools, exactly `N + 5` files:
 | `package.json` | `{"type":"module","devDependencies":{"@types/node":"^22"}}` |
 | `tsconfig.json` | `target: ES2022`, `module`/`moduleResolution: NodeNext`, `strict: true`, `noEmit: true`, `allowImportingTsExtensions: true`, `skipLibCheck: true`, `types: ["node"]` |
 | `_meta.json` | `mcp_execution_core::metadata::ServerMetadata` (schema_version, server_id/name/version, per-tool metadata incl. **raw, unsanitized** parameter descriptions) |
+
+Each tool's `{Name}Params` is emitted as a `type` alias, not an `interface` —
+only a `type` alias gets the implicit `Record<string, unknown>`-compatible
+index signature `callMCPTool`'s parameter requires; an `interface` is not
+structurally assignable there. Each tool's `{Name}Result` is
+`Record<string, unknown> | unknown[] | string` — a union, not a bare
+`interface { [key: string]: unknown }` — reflecting that `callMCPTool`
+resolves to a parsed JSON object/array, plain text, or (for a non-text
+content item) the content object itself; callers must narrow the type
+before accessing a field on the result.
 
 `package.json`/`tsconfig.json` are regenerated on every `generate` call —
 documented as **read-only, not meant to be extended** (e.g. via
@@ -136,16 +174,55 @@ into a consumer's own build).
   sibling property names that sanitize to the same identifier (e.g. `a-b`
   and `a.b` both → `a_b`) — the second becomes `a_b_2`.
 
-## 6. Injection Defense (Sanitization Pipeline)
+## 6. Recursion Depth Bound
+
+`common::typescript::MAX_SCHEMA_RECURSION_DEPTH` (`= 128`) bounds how far
+`json_schema_to_typescript` and the JSDoc description sanitizer
+(`sanitize_schema_jsdoc_descriptions`/`sanitize_schema_jsdoc_value` in
+`progressive::generator`) will descend into a nested `object`/`array`
+schema before treating the remaining branch as opaque (`unknown`/
+`unknown[]`, or leaving a `description` unsanitized) rather than recursing
+further. Both functions log a single `tracing::warn!` per call the first
+time any branch trips the cap (not once per clipped branch).
+
+This is **defense-in-depth for direct callers of these two `pub` functions
+with a hand-built `serde_json::Value`**, not a fix for a reachable
+wire-path denial of service: a schema arriving over the wire from an MCP
+server's `tools/list` response is deserialized by `serde_json`, which
+enforces its own default recursion limit (128) before
+`mcp-execution-introspector` ever constructs a `ToolInfo` — that ceiling
+caps *reachable* nesting at 122 levels for an array-shaped schema and ~61
+levels for `properties`-nested objects, well under this constant's value,
+so no schema that actually clears introspection is ever clipped here. `128`
+is chosen to sit at that wire-path ceiling and is coupled to `serde_json`'s
+own default staying at 128; a future change to either needs re-verifying
+this property.
+
+This cap does **not** cover the rest of the generation pipeline's other
+unconditionally-recursive touches on the same schema — e.g.
+`create_tool_context`'s `tool.input_schema.clone()`, the schema's later
+re-serialization and Handlebars rendering, or `serde_json::Value`'s own
+recursive `Drop` impl.
+
+## 7. Injection Defense (Sanitization Pipeline)
 
 All of the following run **before** any Handlebars render, and are the
 actual injection-safety mechanism given `no_escape` is set:
 
 | Function | Neutralizes | Applied to |
 |---|---|---|
-| `sanitize_jsdoc(s, max_len)` | `*/` (JSDoc comment terminator, escaped to `*\/`), all newline-class chars (incl. U+2028/U+2029) flattened to space, truncated to `max_len` chars | tool/server descriptions, categories, keywords rendered into `.ts` JSDoc comments |
+| `sanitize_jsdoc(s, max_len)` | Every control character (C0, DEL, C1 — everything `char::is_control` reports — plus U+2028/U+2029, which ECMAScript treats as line terminators) is *replaced with a space* by delegating to `mcp_execution_core::untrusted::sanitize_untrusted_text`; **then** `*/` (JSDoc comment terminator) is escaped to `*\/`; truncation to `max_len` chars runs last | tool/server descriptions, categories, keywords rendered into `.ts` JSDoc comments |
 | `sanitize_ts_string_literal(s)` | backslash, single-quote, `\r`/`\n`, U+2028/U+2029 | tool name / server id embedded as single-quoted TS string literals (`callMCPTool('{{{server_id_literal}}}', ...)`) |
-| `sanitize_schema_jsdoc_descriptions(value)` | recursively applies `sanitize_jsdoc` to every `"description"` key in the input JSON Schema before it's embedded in a tool's JSDoc | `input_schema` field of `ToolContext` |
+| `sanitize_schema_jsdoc_descriptions(value)` | recursively applies `sanitize_jsdoc` to every `"description"` key in the input JSON Schema before it's embedded in a tool's JSDoc, up to [[#Recursion Depth Bound]] | `input_schema` field of `ToolContext` |
+
+> [!warning]
+> `sanitize_jsdoc`'s ordering is load-bearing: control-character
+> neutralization must run **before** the `*/` escape step. A control
+> character sitting between `*` and `/` would otherwise prevent the `*/`
+> match during escaping, and neutralizing/removing it afterward could
+> collapse the two characters back together into a live, comment-closing
+> `*/` — reopening the JSDoc block comment (issue #300). Replacing with a
+> space (not deleting) also avoids gluing adjacent words together.
 
 > [!warning]
 > The `_meta.json` sidecar deliberately uses the **raw, unsanitized** MCP
@@ -154,7 +231,7 @@ actual injection-safety mechanism given `no_escape` is set:
 > would only lose fidelity (regression-tested against issue #141, where the
 > old regex-based parser could not recover parameter descriptions at all).
 
-## 7. Runtime Bridge (`_runtime/mcp-bridge.ts`)
+## 8. Runtime Bridge (`_runtime/mcp-bridge.ts`)
 
 Generated once per server (identical content regardless of tool count,
 except for the forbidden-char/env-name lists rendered from `BridgeContext`).
@@ -186,7 +263,7 @@ Responsibilities:
   `structuredContent`) success response is currently indistinguishable from
   a misbehaving server and is surfaced as a thrown error.
 
-## 8. Resource-Exhaustion Bounds (CWE-400)
+## 9. Resource-Exhaustion Bounds (CWE-400)
 
 - `enforce_tool_count_bound` rejects before any per-tool rendering if
   `tools.len() + 5 > MAX_GENERATED_FILES`.
@@ -203,7 +280,7 @@ Responsibilities:
   deterministically rejected here for simply being "as large as
   introspection already allows."
 
-## 9. Error Conditions
+## 10. Error Conditions
 
 | Condition | `Error` variant |
 |---|---|
@@ -212,9 +289,10 @@ Responsibilities:
 | Malformed property schema (`name`/`type` not a string) | `ValidationError` |
 | Handlebars render failure | `SerializationError` (message embeds Handlebars' own error text) |
 | `_meta.json` serialization failure | `SerializationError` |
+| `GeneratedCode::add_file` called with a `path` already present in the collection | `DuplicateGeneratedFilePath { path }` — the original entry is left untouched, not overwritten; defense-in-depth once `resolve_typescript_names` already seeds its own collision set with this generator's reserved output filenames, not a path this generator expects to hit in practice (issue #312) |
 | Any per-tool failure above | Re-wrapped as `ScriptGenerationError { tool, message, source: Some(...) }` via `wrap_tool_generation_error`, preserving the original error's own classification (e.g. a wrapped `ResourceLimitExceeded` still reports as such downstream — see [[../cli/spec#classify_core_error]]) |
 
-## 10. Cross-Crate Contracts
+## 11. Cross-Crate Contracts
 
 - **Consumes**: `mcp-core::metadata`/error types/forbidden-char constants;
   `mcp-introspector::{ServerInfo, ToolInfo}` and its `MAX_TOOL_COUNT`/
@@ -227,7 +305,7 @@ Responsibilities:
 - **Produced for** `mcp-skill`/`mcp-server`: the `_meta.json` sidecar
   (schema owned by `mcp-core::metadata`).
 
-## 11. Edge Cases & Notable Behaviors
+## 12. Edge Cases & Notable Behaviors
 
 - A tool name containing only invalid identifier characters (e.g. all
   non-ASCII) sanitizes to a bare `_`, then gets disambiguated if colliding.
@@ -239,8 +317,18 @@ Responsibilities:
   two independent nested objects can each reuse the same disambiguated name
   without conflict (verified by
   `test_disambiguate_identifier_reuses_base_across_independent_scopes`).
+- `sanitize_ts_identifier` collapses an entire run of consecutive
+  invalid/underscore-producing characters into a single `_`, not one `_`
+  per character — a name like `café_menu_日本語` sanitizes to `caf_menu_`,
+  and regenerating a server whose tools have such names can produce
+  different identifiers than an older generated package did.
+- `ProgressiveGenerator::create_tool_context`/`create_tool_metadata` both
+  consume a single `extract_property_data` call per tool rather than
+  extracting twice — the JSDoc-sanitized `PropertyInfo` half feeds the
+  `.ts` template, the raw-description half feeds `_meta.json`, sharing one
+  schema walk (issue #295).
 
-## 12. See Also
+## 13. See Also
 
 - [[../introspector/spec]] — source of `ServerInfo`/`ToolInfo`
 - [[../files/spec]] — consumer of `GeneratedCode`
