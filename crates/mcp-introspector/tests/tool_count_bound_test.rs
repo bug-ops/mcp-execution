@@ -14,7 +14,7 @@
 #![cfg(feature = "test-fixtures")]
 
 use axum::Router;
-use mcp_execution_core::{ServerConfig, ServerId};
+use mcp_execution_core::{Error, ServerConfig, ServerId};
 use mcp_execution_introspector::{Introspector, MAX_TOOL_COUNT};
 use rmcp::model::{
     Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
@@ -199,4 +199,65 @@ async fn test_discover_server_accepts_exactly_max_tool_count_across_pages() {
 
     let expected_pages = MAX_TOOL_COUNT.div_ceil(PAGE_SIZE);
     assert_eq!(call_count.load(Ordering::SeqCst), expected_pages);
+}
+
+/// Absolute path to the `fixture-paginated-stdio-server` binary built
+/// alongside this test target. Unlike [`PaginatedFixtureHandler`] above (HTTP
+/// only, issue #226's rationale for why HTTP has no response-size bound), the
+/// stdio path reads through `bounded_response_stream`, but pagination
+/// early-bailout happens in `list_tools_bounded` before that bound is ever
+/// relevant — this fixture proves the same early-bailout logic used by the
+/// HTTP tests above also fires via stdio, closing the coverage gap noted in
+/// issue #332.
+const STDIO_FIXTURE_BIN: &str = env!("CARGO_BIN_EXE_fixture-paginated-stdio-server");
+
+/// Stdio counterpart to
+/// `test_discover_server_bails_early_once_accumulated_tool_count_exceeds_max`:
+/// the fixture never signals pagination completion, so if
+/// `list_tools_bounded` did not bail out mid-pagination over the stdio
+/// transport, this test would hang until `discover_timeout` fires instead of
+/// failing fast with `Error::ResourceLimitExceeded`.
+#[tokio::test]
+async fn test_discover_server_stdio_bails_early_once_accumulated_tool_count_exceeds_max() {
+    let mut introspector = Introspector::new();
+    let config = ServerConfig::builder()
+        .command(STDIO_FIXTURE_BIN.to_string())
+        .connect_timeout(Duration::from_secs(5))
+        .discover_timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    let result = introspector
+        .discover_server(
+            ServerId::new("paginated-stdio-fixture-over").unwrap(),
+            &config,
+        )
+        .await;
+
+    let err = result.expect_err(
+        "discover_server must reject once accumulated tool count exceeds MAX_TOOL_COUNT",
+    );
+
+    // Smallest page count `k` such that `k * PAGE_SIZE > MAX_TOOL_COUNT` (see the HTTP sibling
+    // test's identical calculation above) — the fixture's `PAGE_SIZE` matches this file's.
+    let expected_pages = MAX_TOOL_COUNT / PAGE_SIZE + 1;
+    let expected_actual = expected_pages * PAGE_SIZE;
+    match err {
+        Error::ResourceLimitExceeded {
+            resource,
+            actual,
+            limit,
+        } => {
+            assert!(
+                resource.contains("tool count"),
+                "expected a tool-count resource limit, got resource={resource:?}"
+            );
+            assert_eq!(
+                actual, expected_actual,
+                "must bail on the page that first pushes the running total over MAX_TOOL_COUNT"
+            );
+            assert_eq!(limit, MAX_TOOL_COUNT);
+        }
+        other => panic!("expected Error::ResourceLimitExceeded, got {other:?}"),
+    }
 }

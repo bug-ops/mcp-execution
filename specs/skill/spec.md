@@ -52,11 +52,11 @@ pub use parser::{MAX_FILE_SIZE, MAX_FRONTMATTER_SIZE, MAX_TOOL_FILES,
     extract_skill_metadata, scan_tools_directory};
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH,
-    SaveSkillParams, SaveSkillResult, ServerIdError, SkillCategory, SkillMetadata,
+    SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata, SkillServerIdError,
     SkillTool, ToolExample, validate_server_id};
 
 pub const MAX_SERVER_ID_LENGTH: usize = 64;
-pub fn validate_server_id(server_id: &str) -> Result<(), ServerIdError>;
+pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError>;
 // Rules: non-empty, <= 64 bytes, only [a-z0-9-]
 
 pub const MAX_TOOL_FILES: usize = 500;
@@ -197,7 +197,7 @@ reach):
 `InvalidPath`, `ServerIdIsSymlink`, `Escape`, `NotADirectory`, `NotAFile`,
 `CreateDir`, `Io`.
 
-`ServerIdError`: `Empty`, `TooLong { len, limit }`, `InvalidCharacters`.
+`SkillServerIdError`: `Empty`, `TooLong { len, limit }`, `InvalidCharacters`.
 
 ## 10. Cross-Crate Contracts
 

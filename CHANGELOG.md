@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-skill`**: renamed the `pub enum ServerIdError` (returned by
+  `validate_server_id`) to `SkillServerIdError` to remove a name collision with the unrelated
+  `mcp_execution_core::ServerIdError` enum in the same workspace, which was a rename hazard for
+  glob imports and auto-import. Pure rename — variants (`Empty`, `TooLong`, `InvalidCharacters`)
+  and validation behavior are unchanged (#329).
 - **`mcp-execution-cli`**: `introspect` and `generate` now flatten a shared `ServerFlags`
   (private fields, `cli.rs`) instead of each declaring its own copy of the transport/timeout
   flags. A single clap `ArgGroup` (`server_source`, over `from_config`/`server`/`http`/`sse`)
@@ -36,6 +41,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: removed `commands::common::RawServerArgs` (`pub`, all-`Option`/`Vec`
   fields with no invariant enforcement) and `TransportArgs::from_flags` (`pub`, the runtime
   "exactly one transport" check) — both superseded by `ServerFlags`/`ServerSource` above (#314).
+
+### Testing
+
+- **`mcp-execution-introspector`**: added stdio-path coverage for two `connect_and_list_tools`
+  error branches previously only exercised via HTTP fixtures. `tests/stdio_connect_failure_test.rs`
+  spawns a new `fixture-immediate-exit-server` binary — a process that spawns successfully but
+  exits immediately, closing stdout before answering the `initialize` handshake — to prove the
+  non-timeout `Error::ConnectionFailed` mapping fires over stdio (the existing
+  `test_discover_server_nonexistent_command` only covers process *spawn* failure, before
+  `connect_and_list_tools` ever runs). `tests/tool_count_bound_test.rs` gained
+  `test_discover_server_stdio_bails_early_once_accumulated_tool_count_exceeds_max`, using a new
+  `fixture-paginated-stdio-server` binary that never signals pagination completion, mirroring the
+  existing HTTP-only `PaginatedFixtureHandler` test to prove `list_tools_bounded`'s
+  `MAX_TOOL_COUNT` early-bailout also fires over the stdio transport (#332).
 
 ### Added
 
