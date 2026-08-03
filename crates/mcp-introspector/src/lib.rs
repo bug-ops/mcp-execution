@@ -1288,7 +1288,7 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
 /// peer information (i.e. `peer_info` is `None`).
 fn extract_peer_meta(
     config: &ServerConfig,
-    peer_info: Option<&rmcp::model::InitializeResult>,
+    peer_info: Option<&rmcp::model::ServerPeerInfo>,
 ) -> PeerMeta {
     peer_info.map_or_else(
         || PeerMeta {
@@ -1298,8 +1298,16 @@ fn extract_peer_meta(
             has_prompts: false,
         },
         |info| PeerMeta {
-            server_name: info.server_info.name.clone(),
-            server_version: info.server_info.version.clone(),
+            // `ServerPeerInfo::server_info` is optional (unlike `InitializeResult`'s), since
+            // a server is not required to send its implementation identity on handshake.
+            server_name: info
+                .server_info
+                .as_ref()
+                .map_or_else(|| fallback_server_name(config), |si| si.name.clone()),
+            server_version: info
+                .server_info
+                .as_ref()
+                .map_or_else(|| "unknown".to_string(), |si| si.version.clone()),
             has_resources: info.capabilities.resources.is_some(),
             has_prompts: info.capabilities.prompts.is_some(),
         },
@@ -2121,7 +2129,7 @@ mod tests {
         version: &str,
         has_resources: bool,
         has_prompts: bool,
-    ) -> rmcp::model::InitializeResult {
+    ) -> rmcp::model::ServerPeerInfo {
         // rmcp structs are #[non_exhaustive]; construct via JSON deserialization.
         let mut capabilities = serde_json::json!({});
         if has_resources {
@@ -2136,7 +2144,7 @@ mod tests {
             "serverInfo": { "name": name, "version": version },
             "capabilities": capabilities
         });
-        serde_json::from_value(raw).expect("valid InitializeResult JSON")
+        serde_json::from_value(raw).expect("valid ServerPeerInfo JSON")
     }
 
     fn test_config(command: &str) -> ServerConfig {

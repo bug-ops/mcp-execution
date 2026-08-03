@@ -84,11 +84,9 @@ impl ServerHandler for PaginatedFixtureHandler {
             .map(|i| Tool::new(format!("tool{}", start + i), "d", serde_json::Map::new()))
             .collect();
 
-        Ok(ListToolsResult {
-            meta: None,
-            next_cursor,
-            tools,
-        })
+        let mut result = ListToolsResult::with_all_items(tools);
+        result.next_cursor = next_cursor;
+        Ok(result)
     }
 }
 
