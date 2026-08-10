@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **workspace**: sorted `[dependencies]` alphabetically in `mcp-execution-files` and
   `mcp-execution-skill` (#391).
+- **`mcp-execution-introspector`**: `discover_via_http` now sets
+  `StreamableHttpClientTransportConfig::max_sse_event_size` explicitly (16 MiB, matching `rmcp`
+  3.1.2's own default) instead of relying on it implicitly, so a future upstream default change
+  cannot silently loosen this crate's bound. Corrected the `# Security` docs on `discover_server`
+  and `discover_via_http`, and `specs/introspector/spec.md`, which still described the HTTP/SSE
+  path as entirely unbounded against `rmcp` 2.2.0: as of the now-locked `rmcp` 3.1.2, SSE events
+  are bounded; only the plain JSON response body and a non-2xx error body remain unbounded,
+  buffered fully in memory by `rmcp` with no config knob to cap either — a known upstream
+  limitation this crate cannot fix without reimplementing `rmcp`'s HTTP transport client-side
+  (#390).
 - **CI**: extracted `cargo build --all-targets --all-features --workspace` out of the `test`
   job into a new, independent `build` job that runs on the same OS/toolchain matrix in
   parallel with `test` (nextest already builds what it needs on its own, so the two no longer

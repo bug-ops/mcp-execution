@@ -469,7 +469,7 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 - **A response-size bound on the HTTP/SSE introspection transport.**
   Documented as a known, currently-unfixable upstream (`rmcp`) limitation,
   not a deliberate scope decision, and not yet resolved
-  (`specs/introspector/spec.md#Known Gap: HTTP Response Size`).
+  (`specs/introspector/spec.md#Known Gap: HTTP JSON Response Size`).
 
 ## Integrations & Dependencies
 

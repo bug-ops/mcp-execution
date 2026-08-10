@@ -175,7 +175,7 @@ async fn test_discover_server_http_lists_tools_and_metadata() {
     );
 }
 
-/// rmcp 2.2 has a single client transport for both `Http` and `Sse`
+/// rmcp 3.1.2 has a single client transport for both `Http` and `Sse`
 /// (`Transport::Sse` is documented as an alias) — this proves that
 /// end-to-end against a real server, not just at the type level.
 #[tokio::test]

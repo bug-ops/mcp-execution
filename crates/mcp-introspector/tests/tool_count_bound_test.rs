@@ -201,8 +201,8 @@ async fn test_discover_server_accepts_exactly_max_tool_count_across_pages() {
 
 /// Absolute path to the `fixture-paginated-stdio-server` binary built
 /// alongside this test target. Unlike [`PaginatedFixtureHandler`] above (HTTP
-/// only, issue #226's rationale for why HTTP has no response-size bound), the
-/// stdio path reads through `bounded_response_stream`, but pagination
+/// only, issue #226's rationale for why HTTP's JSON response body has no
+/// size bound), the stdio path reads through `bounded_response_stream`, but pagination
 /// early-bailout happens in `list_tools_bounded` before that bound is ever
 /// relevant — this fixture proves the same early-bailout logic used by the
 /// HTTP tests above also fires via stdio, closing the coverage gap noted in
