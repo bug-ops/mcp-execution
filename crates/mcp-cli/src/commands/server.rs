@@ -291,9 +291,7 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
         let server_list = ServerList {
             servers: Vec::new(),
         };
-        let formatted = crate::formatters::format_output(&server_list, output_format)?;
-        println!("{formatted}");
-        return Ok(ExitCode::SUCCESS);
+        return crate::formatters::emit(&server_list, output_format, ExitCode::SUCCESS);
     }
 
     // Each server's status check may include a full MCP introspection
@@ -316,10 +314,7 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
     let entries = futures_util::future::join_all(checks).await;
 
     let server_list = ServerList { servers: entries };
-    let formatted = crate::formatters::format_output(&server_list, output_format)?;
-    println!("{formatted}");
-
-    Ok(ExitCode::SUCCESS)
+    crate::formatters::emit(&server_list, output_format, ExitCode::SUCCESS)
 }
 
 /// Shows detailed information about a specific server.
@@ -342,12 +337,11 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
                 server,
                 escape_error_text(&e.to_string())
             );
-            let formatted = crate::formatters::format_output(
+            return crate::formatters::emit(
                 &unavailable_server_info(server, command),
                 output_format,
-            )?;
-            println!("{formatted}");
-            return Ok(ExitCode::ERROR);
+                ExitCode::ERROR,
+            );
         }
     };
 
@@ -389,10 +383,7 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
                 capabilities,
             };
 
-            let formatted = crate::formatters::format_output(&server_info, output_format)?;
-            println!("{formatted}");
-
-            Ok(ExitCode::SUCCESS)
+            crate::formatters::emit(&server_info, output_format, ExitCode::SUCCESS)
         }
         Err(e) => {
             warn!(
@@ -401,13 +392,11 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
                 escape_error_text(&e.to_string())
             );
 
-            let formatted = crate::formatters::format_output(
+            crate::formatters::emit(
                 &unavailable_server_info(server, command),
                 output_format,
-            )?;
-            println!("{formatted}");
-
-            Ok(ExitCode::ERROR)
+                ExitCode::ERROR,
+            )
         }
     }
 }
@@ -442,9 +431,7 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
                 valid: false,
                 message: format!("Server not found in configuration: {e}"),
             };
-            let formatted = crate::formatters::format_output(&result, output_format)?;
-            println!("{formatted}");
-            return Ok(ExitCode::ERROR);
+            return crate::formatters::emit(&result, output_format, ExitCode::ERROR);
         }
     };
 
@@ -472,9 +459,7 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
             valid: false,
             message,
         };
-        let formatted = crate::formatters::format_output(&result, output_format)?;
-        println!("{formatted}");
-        return Ok(ExitCode::ERROR);
+        return crate::formatters::emit(&result, output_format, ExitCode::ERROR);
     }
 
     // The precheck above catches the common malformed-URL/missing-command cases, but
@@ -490,9 +475,7 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
                 valid: false,
                 message: format!("Server '{server_name}' has an invalid configuration: {e}"),
             };
-            let formatted = crate::formatters::format_output(&result, output_format)?;
-            println!("{formatted}");
-            return Ok(ExitCode::ERROR);
+            return crate::formatters::emit(&result, output_format, ExitCode::ERROR);
         }
     };
 
@@ -509,9 +492,7 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
                     "Server '{server_name}' is available and responds to MCP protocol"
                 ),
             };
-            let formatted = crate::formatters::format_output(&result, output_format)?;
-            println!("{formatted}");
-            Ok(ExitCode::SUCCESS)
+            crate::formatters::emit(&result, output_format, ExitCode::SUCCESS)
         }
         Err(e) => {
             warn!(
@@ -532,9 +513,7 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
                 valid: false,
                 message,
             };
-            let formatted = crate::formatters::format_output(&result, output_format)?;
-            println!("{formatted}");
-            Ok(ExitCode::ERROR)
+            crate::formatters::emit(&result, output_format, ExitCode::ERROR)
         }
     }
 }

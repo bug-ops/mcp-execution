@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`mcp-execution-cli`**: extracted `formatters::emit`, a shared helper that formats a value,
+  prints it, and returns the given `ExitCode`, collapsing the repeated
+  format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`, and
+  `introspect.rs`'s command handlers. Behavior-preserving refactor only — no change to CLI output
+  or exit codes (#368).
+
 ### Fixed
 
 - **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
