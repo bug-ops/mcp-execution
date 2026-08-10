@@ -470,6 +470,13 @@ impl GeneratorService {
     /// categorization. Requires `session_id` from a previous `introspect_server`
     /// call.
     ///
+    /// The session named by `session_id` is only consumed once `categorized_tools` passes
+    /// every validation check (entry-count cap, tool-not-found, duplicate entry, field-length
+    /// limits) and `output_dir` resolves successfully. A failure in either leaves the session
+    /// intact at its original expiry, so the caller can fix the payload (or, for a resolution
+    /// failure caused by something in the filesystem, the environment) and retry with the same
+    /// `session_id` before that expiry is reached (issue #371).
+    ///
     /// Does not observe request cancellation, unlike `introspect_server` and
     /// `generate_skill`. An earlier version raced the wait for the
     /// per-`output_dir` export lock against `ct.cancelled()`, but that
@@ -492,13 +499,18 @@ impl GeneratorService {
         &self,
         Parameters(params): Parameters<SaveCategorizedToolsParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Retrieve pending generation
-        let pending = self.state.take(params.session_id).await.ok_or_else(|| {
-            McpError::invalid_params(
-                "Session not found or expired. Please run introspect_server again.",
-                None,
-            )
-        })?;
+        // Peek (not consume) the pending session so a validation failure below can't destroy
+        // it: every earlier version of this handler called `take` here, which meant a single
+        // bad entry in `categorized_tools` (typo'd tool name, duplicate, too many entries)
+        // permanently burned the session even though nothing was ever exported and the
+        // session's TTL hadn't elapsed, forcing the caller to re-run `introspect_server` just
+        // to retry (issue #371). The session is only actually consumed, via `take` below,
+        // once every validation check in this function has passed.
+        let pending = self
+            .state
+            .get(params.session_id)
+            .await
+            .ok_or_else(session_not_found_error)?;
         tracing::Span::current().record("server_id", tracing::field::display(&pending.server_id));
 
         // Validate categorized tools match introspected tools.
@@ -641,6 +653,63 @@ impl GeneratorService {
             *categories.entry(cat_tool.category.clone()).or_default() += 1;
         }
 
+        // Resolve and confine the output directory before consuming the session (moved ahead
+        // of `take`, rather than run afterward as in an earlier version of this fix): this -
+        // not the preview stored on `pending.output_dir` - is what creates the confinement
+        // chain's directories and rejects a symlink planted anywhere along it, including at
+        // `server_id`'s own directory. Running this here rather than once at `introspect_server`
+        // time closes the TOCTOU window a cached, pre-resolved path would leave open for the
+        // session's full lifetime (issue #216). Running it before `take` extends the same
+        // retry-with-the-same-session_id guarantee #371 gives `categorized_tools` validation to
+        // `ServerDirIsSymlink`/`NotADirectory`/`Escape`, which are environment-dependent and
+        // otherwise fixable between retries — a stale confinement violation shouldn't force a
+        // caller back to `introspect_server` any more than a stale tool name should.
+        let output_dir = resolve_output_dir(
+            &self.servers_base_dir(),
+            pending.server_id.as_str(),
+            pending.output_dir_override.as_deref(),
+        )
+        .await
+        .map_err(|e| match e {
+            OutputDirError::InvalidServerId { .. }
+            | OutputDirError::AbsolutePath { .. }
+            | OutputDirError::ParentTraversal { .. }
+            | OutputDirError::ServerDirIsSymlink { .. }
+            | OutputDirError::Escape { .. }
+            | OutputDirError::NotADirectory { .. } => {
+                McpError::invalid_params(format!("Invalid output_dir: {e}"), None)
+            }
+            OutputDirError::CreateDir { .. } | OutputDirError::Io(_) => {
+                McpError::internal_error(format!("Failed to resolve output_dir: {e}"), None)
+            }
+        })?;
+
+        // Release the peeked clone before consuming the session: `StateManager::get` deep-clones
+        // the entire session, including every introspected tool's schema, and holding that clone
+        // alive alongside the copy `take` returns below would double peak memory (up to ~140MB
+        // for a maximum-sized session, per `MAX_SINGLE_SESSION_BYTES`) across codegen, VFS build,
+        // and the export that follow. `display_to_raw`/`seen_raw_names` both borrow `pending`, so
+        // they're dropped first to end those borrows before `pending` itself is dropped.
+        drop(display_to_raw);
+        drop(seen_raw_names);
+        drop(pending);
+
+        // All validation above has passed: only now consume the session. `pending` is
+        // re-fetched (rather than reusing the peeked clone) so a session removed by a
+        // concurrent call for the same `session_id` between the peek above and this `take`
+        // is caught here and reported the same way a first-time miss would be, instead of
+        // this call proceeding to export with a copy of the session that's no longer the
+        // authoritative, still-owned one. `output_dir` and `categorization` above were derived
+        // from the dropped peek, not this re-fetch, but that's sound: `StateManager` exposes no
+        // method that mutates a stored session in place (only `store`/`take`/`get`), so a
+        // session's contents cannot change between a successful peek and a successful `take` of
+        // the same `session_id` - only disappear entirely, which the `ok_or_else` below catches.
+        let pending = self
+            .state
+            .take(params.session_id)
+            .await
+            .ok_or_else(session_not_found_error)?;
+
         // Generate code with categorization
         let generator = ProgressiveGenerator::new().map_err(|e| {
             McpError::internal_error(
@@ -669,32 +738,6 @@ impl GeneratorService {
 
         // Capture file count before moving vfs
         let files_generated = vfs.file_count();
-
-        // Resolve and confine the output directory fresh, right before any filesystem work:
-        // this - not the preview stored on `pending.output_dir` - is what creates the
-        // confinement chain's directories and rejects a symlink planted anywhere along it,
-        // including at `server_id`'s own directory. Running this here rather than once at
-        // `introspect_server` time closes the TOCTOU window a cached, pre-resolved path would
-        // leave open for the session's full lifetime (issue #216).
-        let output_dir = resolve_output_dir(
-            &self.servers_base_dir(),
-            pending.server_id.as_str(),
-            pending.output_dir_override.as_deref(),
-        )
-        .await
-        .map_err(|e| match e {
-            OutputDirError::InvalidServerId { .. }
-            | OutputDirError::AbsolutePath { .. }
-            | OutputDirError::ParentTraversal { .. }
-            | OutputDirError::ServerDirIsSymlink { .. }
-            | OutputDirError::Escape { .. }
-            | OutputDirError::NotADirectory { .. } => {
-                McpError::invalid_params(format!("Invalid output_dir: {e}"), None)
-            }
-            OutputDirError::CreateDir { .. } | OutputDirError::Io(_) => {
-                McpError::internal_error(format!("Failed to resolve output_dir: {e}"), None)
-            }
-        })?;
 
         // Export to filesystem (blocking operation wrapped in spawn_blocking).
         // Held across the export so a second concurrent call for the same
@@ -1342,6 +1385,17 @@ fn extract_parameter_names(schema: &serde_json::Value) -> Vec<String> {
 /// identical to a persistent bug worth escalating or giving up on (issue #198 M3).
 fn capacity_error(message: String) -> McpError {
     McpError::new(rmcp::model::ErrorCode(-32000), message, None)
+}
+
+/// Builds the [`McpError`] `save_categorized_tools` returns when `session_id` names no live
+/// pending session, whether from [`crate::state::StateManager::get`] (the initial peek) or
+/// [`crate::state::StateManager::take`] (the final consume). Shared so both call sites report
+/// the identical message a caller can match on, regardless of which lookup missed.
+fn session_not_found_error() -> McpError {
+    McpError::invalid_params(
+        "Session not found or expired. Please run introspect_server again.",
+        None,
+    )
 }
 
 /// Formats `err`'s `Display` text followed by every cause in its `source()` chain, joined by
@@ -2840,6 +2894,134 @@ mod tests {
         assert!(err.message.contains("appears more than once"));
     }
 
+    // ========================================================================
+    // save_categorized_tools Session Survival Tests (issue #371)
+    // ========================================================================
+
+    /// Core regression for #371: a `categorized_tools` entry naming a tool that was never
+    /// introspected must fail validation without destroying the session, so the caller can
+    /// retry with a corrected payload and the same `session_id`. Before the fix, the first
+    /// (failing) call already consumed the session via `take`, so this retry would fail with
+    /// "Session not found or expired" instead of succeeding.
+    #[tokio::test]
+    async fn test_save_categorized_tools_retries_after_tool_mismatch_with_same_session() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(2))
+            .await
+            .unwrap();
+
+        let failing_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("does-not-exist")],
+        };
+        let failing_result = service
+            .save_categorized_tools(Parameters(failing_params))
+            .await;
+        let err = failing_result.expect_err("an unknown tool name must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("not found in introspected tools"));
+
+        let retry_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool1")],
+        };
+        let retry_result = service
+            .save_categorized_tools(Parameters(retry_params))
+            .await;
+        assert!(
+            retry_result.is_ok(),
+            "retry with the same session_id after a validation failure must succeed: {:?}",
+            retry_result.err()
+        );
+    }
+
+    /// A duplicate-entry validation failure must equally preserve the session for retry - the
+    /// same #371 contract as the tool-mismatch case above, exercised against a different
+    /// validation branch (the `seen_raw_names` check, not the `display_to_raw` lookup).
+    #[tokio::test]
+    async fn test_save_categorized_tools_retries_after_duplicate_entry_with_same_session() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(2))
+            .await
+            .unwrap();
+
+        let failing_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool0")],
+        };
+        let failing_result = service
+            .save_categorized_tools(Parameters(failing_params))
+            .await;
+        let err = failing_result.expect_err("a repeated tool name must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("appears more than once"));
+
+        let retry_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool1")],
+        };
+        let retry_result = service
+            .save_categorized_tools(Parameters(retry_params))
+            .await;
+        assert!(
+            retry_result.is_ok(),
+            "retry with the same session_id after a validation failure must succeed: {:?}",
+            retry_result.err()
+        );
+    }
+
+    /// Guards against the fix accidentally making sessions reusable: once `save_categorized_tools`
+    /// actually succeeds (all validation passed and `take` consumed the session), a second call
+    /// with the same `session_id` must fail exactly like a first-time miss, not silently re-export.
+    #[tokio::test]
+    async fn test_save_categorized_tools_consumes_session_on_success() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(1))
+            .await
+            .unwrap();
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0")],
+        };
+        let first_result = service.save_categorized_tools(Parameters(params)).await;
+        assert!(
+            first_result.is_ok(),
+            "the first call with a valid payload must succeed: {:?}",
+            first_result.err()
+        );
+
+        let repeat_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0")],
+        };
+        let repeat_result = service
+            .save_categorized_tools(Parameters(repeat_params))
+            .await;
+        let err = repeat_result
+            .expect_err("a session consumed by a successful call must not be reusable");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("Session not found or expired"));
+    }
+
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_oversized_name() {
         let service = GeneratorService::new();
@@ -3546,6 +3728,65 @@ mod tests {
         assert!(
             !temp_dir.path().join("server-a").join("index.ts").exists(),
             "server-a's directory must not have been written through the server-b symlink"
+        );
+    }
+
+    /// #371's fix moved `resolve_output_dir` ahead of the session-consuming `take` so an
+    /// environment-dependent confinement failure (symlink, non-directory, escape) no longer
+    /// burns the session either, the same guarantee already covering `categorized_tools`
+    /// validation. Proven end-to-end: the first call hits the same symlink confinement
+    /// rejection as `test_save_categorized_tools_rejects_symlinked_server_id_directory_to_sibling`,
+    /// then the violation is fixed on disk (the symlink removed) and a retry with the identical
+    /// `session_id` succeeds.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_save_categorized_tools_retries_after_output_dir_resolution_failure_with_same_session()
+     {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        tokio::fs::create_dir_all(temp_dir.path().join("server-a"))
+            .await
+            .unwrap();
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("server-a"),
+            temp_dir.path().join("server-b"),
+        )
+        .unwrap();
+
+        let pending = pending_with_server_id_and_tool_count("server-b", 1);
+        let session_id = service.state.store(pending).await.unwrap();
+
+        let failing_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0")],
+        };
+        let failing_result = service
+            .save_categorized_tools(Parameters(failing_params))
+            .await;
+        let err = failing_result.expect_err("a symlinked server_id directory must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("Invalid output_dir"));
+
+        // Fix the confinement violation on disk: remove the symlink so `server-b` can be
+        // created as a real directory on retry.
+        std::fs::remove_file(temp_dir.path().join("server-b")).unwrap();
+
+        let retry_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0")],
+        };
+        let retry_result = service
+            .save_categorized_tools(Parameters(retry_params))
+            .await;
+        assert!(
+            retry_result.is_ok(),
+            "retry with the same session_id after an output_dir resolution failure must \
+             succeed once the confinement violation is fixed: {:?}",
+            retry_result.err()
         );
     }
 

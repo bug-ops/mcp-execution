@@ -150,8 +150,15 @@ introspect→categorize→save workflow.
 `SaveCategorizedToolsParams { session_id: Uuid, categorized_tools: Vec<CategorizedTool> }`
 → `SaveCategorizedToolsResult { success, files_generated, output_dir, categories: HashMap<String,usize>, errors: Vec<ToolGenerationError> }`.
 
-1. `state.take(session_id)` — session must exist and not be expired, or
-   `invalid_params`.
+1. `state.get(session_id)` — a non-consuming peek. The session must exist and not be
+   expired, or `invalid_params`. Nothing is removed from `StateManager` yet: both
+   validation steps below (2 and 3) run against this peeked copy, so a failure in
+   either leaves the session in place, at its original expiry, for the caller
+   to retry with the same `session_id` (issue #371). Only step 4 actually consumes
+   it, via `state.take(session_id)` — which re-checks existence/expiry against the
+   live table and can itself still miss (e.g. a concurrent call for the same
+   `session_id` already consumed it between steps 1 and 4), reporting the identical
+   `invalid_params` error as step 1's miss.
 2. Builds a display-name→raw-name lookup (`display_to_raw`) before validating
    any entry, since a caller can only ever echo back the *display* form of a
    tool name `introspect_server` showed it, never the raw one. For each
@@ -183,13 +190,22 @@ introspect→categorize→save workflow.
    (`MAX_CATEGORIZED_TOOL_NAME_LEN`=128, `MAX_CATEGORY_LEN`=100,
    `MAX_KEYWORDS_LEN`=500, `MAX_SHORT_DESCRIPTION_LEN`=320 — each checked via a
    single private `check_categorized_field_length` helper called once per field).
-3. `ProgressiveGenerator::generate_with_categories` → `FilesBuilder::from_generated_code(code, "/")` → `vfs.file_count()` captured.
-4. **Resolves `output_dir` fresh, right here** — not from any value cached
-   on the session — via `output_dir::resolve_output_dir` (see
-   [[#Output directory resolution]]).
-5. Exports inside `spawn_blocking`, holding a **per-`output_dir`** lock for
+3. **Resolves `output_dir` fresh, right here, still before consuming the session** —
+   not from any value cached on the session — via `output_dir::resolve_output_dir`
+   (see [[#Output directory resolution]]). Moved ahead of step 4 as part of #371: a
+   `ServerDirIsSymlink`/`NotADirectory`/`Escape` failure here is environment-dependent
+   and thus retriable, so it gets the same session-preserving treatment as step 2's
+   validation instead of destroying the session the way it did before #371.
+4. Drops the peeked session (and `display_to_raw`/`seen_raw_names`, which borrow it)
+   now that steps 2-3 have both passed, then calls `state.take(session_id)` to
+   actually consume it (see step 1). Dropping first bounds peak memory to one live
+   session copy instead of two across the codegen/export work below —
+   `state.get`'s peek in step 1 is a full deep clone of the session, including every
+   introspected tool's schema.
+5. `ProgressiveGenerator::generate_with_categories` → `FilesBuilder::from_generated_code(code, "/")` → `vfs.file_count()` captured.
+6. Exports inside `spawn_blocking`, holding a **per-`output_dir`** lock for
    the duration (see [[#Per-resource locking]]).
-6. Does **not** observe request cancellation — a documented, deliberate
+7. Does **not** observe request cancellation — a documented, deliberate
    choice: an earlier version raced the *lock wait* (not the export
    itself, which was already excluded) against cancellation, but that
    produced two successive correctness bugs (a leaked lock-table entry, or
@@ -304,8 +320,9 @@ rather than a file:
   fast, commit to nothing, create nothing.
 - `resolve_output_dir` (filesystem-touching: creates and confinement-checks
   every intermediate directory, symlink-strict at `server_id`'s own
-  directory) is called **only from `save_categorized_tools`**, immediately
-  before `export_to_filesystem` — not once at `introspect_server` time with
+  directory) is called **only from `save_categorized_tools`**, as the last
+  validation step before the session is consumed (see step 3 in
+  [[#save_categorized_tools]]) — not once at `introspect_server` time with
   the result cached on the session. Caching it would leave a window (up to
   the full 30-minute session lifetime) in which a symlink planted after
   resolution is never re-checked, and would create directories for any

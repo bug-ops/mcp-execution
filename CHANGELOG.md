@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
   `mcp-execution-codegen`'s `TemplateEngine`. Without it, a template referencing a typo'd or
   removed field silently rendered an empty string instead of failing at render time.
+- **`mcp-execution-server`**: `save_categorized_tools` no longer destroys its pending session
+  on a `categorized_tools` validation failure or an `output_dir` resolution failure. Both now
+  run against a non-consuming peek of the session (`StateManager::get`), and the session is
+  only consumed (`StateManager::take`) once every check has passed, immediately before
+  generation and export. Previously, a single bad entry (typo'd tool name, duplicate, too many
+  entries) or a transient output-directory confinement issue permanently burned the session
+  even though nothing was ever exported and the session's TTL hadn't elapsed, forcing the
+  caller back to `introspect_server` just to retry (#371).
 
 ### Removed
 
