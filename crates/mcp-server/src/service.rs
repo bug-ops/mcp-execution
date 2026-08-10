@@ -1730,11 +1730,21 @@ mod tests {
     /// `IntrospectedToolSummary` are self-reported by the introspected MCP server —
     /// untrusted input. Embedded line breaks that mimic Markdown/prompt structure
     /// must be flattened before the summary is built.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects a raw newline
+    /// outright, so the heading-injection payload previously carried on `name` moves to
+    /// `description` (still free-text, still routed through `sanitize_untrusted_text`) and the
+    /// tool gets a benign name instead. The `!summaries[0].name.contains('\n')` assertion this
+    /// test previously had is dropped rather than kept as a no-op: it would now hold trivially
+    /// for every `ToolName`, since `ToolName::new` itself already guarantees no newline can
+    /// reach `build_introspected_summaries` in the first place — the `description`/`parameters`
+    /// assertions below are what actually still exercises that function's own sanitization.
     #[test]
     fn test_build_introspected_summaries_sanitizes_untrusted_fields() {
         let tools = vec![ToolInfo {
-            name: ToolName::new("evil\n### Injected Heading").unwrap(),
-            description: "desc\n```\ninjected code block\n```".to_string(),
+            name: ToolName::new("evil_tool").unwrap(),
+            description: "evil\n### Injected Heading\ndesc\n```\ninjected code block\n```"
+                .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": { "param\nname": { "type": "string" } }
@@ -1745,11 +1755,6 @@ mod tests {
         let summaries = build_introspected_summaries(&tools);
 
         assert_eq!(summaries.len(), 1);
-        assert!(
-            !summaries[0].name.contains('\n'),
-            "name: {}",
-            summaries[0].name
-        );
         assert!(
             !summaries[0].description.contains('\n'),
             "description: {}",
@@ -3433,8 +3438,17 @@ mod tests {
     /// containing a control character/line terminator would desync the two calls
     /// and fail with a misleading "not found" error even though Claude behaved
     /// exactly as instructed.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects every
+    /// character `sanitize_untrusted_text` would otherwise transform, so a raw tool name and
+    /// its sanitized display form are always identical from construction onward — the desync
+    /// this test originally reproduced (a control character in the name) is closed by
+    /// construction and can no longer be built. Renamed from
+    /// `..._matches_sanitized_name_from_introspect_server` (issue #433 code review) since the
+    /// name no longer contains anything to sanitize; what remains is the ordinary
+    /// (now-only-possible) case: a plain raw name is accepted as its own display form.
     #[tokio::test]
-    async fn test_save_categorized_tools_matches_sanitized_name_from_introspect_server() {
+    async fn test_save_categorized_tools_matches_display_form_equal_to_raw_name() {
         let service = GeneratorService::new();
 
         let server_info = mcp_execution_introspector::ServerInfo {
@@ -3447,7 +3461,7 @@ mod tests {
                 supports_prompts: false,
             },
             tools: vec![ToolInfo {
-                name: ToolName::new("evil\ntool").unwrap(),
+                name: ToolName::new("evil_tool").unwrap(),
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
@@ -3466,10 +3480,11 @@ mod tests {
         let session_id = service.state.store(pending).await.unwrap();
 
         // What Claude actually saw and is echoing back: the sanitized name
-        // `build_introspected_summaries` would have produced for "evil\ntool".
+        // `build_introspected_summaries` would have produced for "evil_tool" — identical to
+        // the raw name, since no character it contains needs sanitizing.
         let params = SaveCategorizedToolsParams {
             session_id,
-            categorized_tools: vec![categorized_tool("evil tool")],
+            categorized_tools: vec![categorized_tool("evil_tool")],
         };
 
         let result = service
@@ -3490,9 +3505,16 @@ mod tests {
     /// codegen categorization map keyed by the echoed display name, which desynced
     /// from `ProgressiveGenerator`'s raw-name lookup for any tool name containing a
     /// control character, line terminator, or `&`/`<`/`>`.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects control
+    /// characters/line terminators outright, so this uses a plain benign name — the raw and
+    /// display forms are always identical from construction onward. Renamed from
+    /// `..._for_control_character_tool_name` (issue #433 code review), since the name no
+    /// longer contains a control character; kept as a separate case (rather than folded into
+    /// the M1 test above) because it additionally exercises the full metadata-sidecar
+    /// round-trip below, which that lighter test does not.
     #[tokio::test]
-    async fn test_save_categorized_tools_preserves_categorization_for_control_character_tool_name()
-    {
+    async fn test_save_categorized_tools_preserves_categorization_for_a_plain_tool_name() {
         use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
         use tempfile::TempDir;
 
@@ -3510,7 +3532,7 @@ mod tests {
                 supports_prompts: false,
             },
             tools: vec![ToolInfo {
-                name: ToolName::new("evil\ntool").unwrap(),
+                name: ToolName::new("evil_tool").unwrap(),
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
@@ -3528,11 +3550,10 @@ mod tests {
         );
         let session_id = service.state.store(pending).await.unwrap();
 
-        // The display name Claude actually saw for "evil\ntool" (control character
-        // flattened to a space).
+        // The display name Claude actually saw for "evil_tool" — identical to the raw name.
         let params = SaveCategorizedToolsParams {
             session_id,
-            categorized_tools: vec![categorized_tool("evil tool")],
+            categorized_tools: vec![categorized_tool("evil_tool")],
         };
 
         let result = service
@@ -3549,7 +3570,7 @@ mod tests {
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
         // The sidecar's `name` field must carry the RAW tool name, not the display form.
-        assert_eq!(tool_meta.name.as_str(), "evil\ntool");
+        assert_eq!(tool_meta.name.as_str(), "evil_tool");
         assert_eq!(
             tool_meta.category,
             Some("cat".to_string()),
@@ -3563,8 +3584,16 @@ mod tests {
     /// HTML/XML-entity-escaped (`&`/`<`/`>`) as part of delimiting untrusted MCP
     /// metadata (issue #292/#310), independent of control-character sanitization.
     /// A tool name containing `&` must round-trip its categorization the same way.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects `&` outright,
+    /// closing this entity-escaping desync for tool names by construction — this pins the
+    /// ordinary (now-only-possible) case instead: a plain name round-trips unescaped. Renamed
+    /// from `..._for_ampersand_tool_name` (issue #433 code review), since the name no longer
+    /// contains `&`; behaviorally identical to the plain-tool-name case above, kept as a
+    /// separate regression slot for traceability back to this test's original issue (#307).
     #[tokio::test]
-    async fn test_save_categorized_tools_preserves_categorization_for_ampersand_tool_name() {
+    async fn test_save_categorized_tools_preserves_categorization_for_a_plain_tool_name_formerly_ampersand()
+     {
         use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
         use tempfile::TempDir;
 
@@ -3582,7 +3611,7 @@ mod tests {
                 supports_prompts: false,
             },
             tools: vec![ToolInfo {
-                name: ToolName::new("tool&name").unwrap(),
+                name: ToolName::new("tool_name").unwrap(),
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
@@ -3600,11 +3629,11 @@ mod tests {
         );
         let session_id = service.state.store(pending).await.unwrap();
 
-        // The display name Claude actually saw for "tool&name": `&` entity-escaped by
-        // `wrap_introspect_result`.
+        // The display name Claude actually saw for "tool_name" — identical to the raw name,
+        // since it contains no character `wrap_introspect_result` entity-escapes.
         let params = SaveCategorizedToolsParams {
             session_id,
-            categorized_tools: vec![categorized_tool("tool&amp;name")],
+            categorized_tools: vec![categorized_tool("tool_name")],
         };
 
         let result = service
@@ -3620,7 +3649,7 @@ mod tests {
 
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
-        assert_eq!(tool_meta.name.as_str(), "tool&name");
+        assert_eq!(tool_meta.name.as_str(), "tool_name");
         assert_eq!(
             tool_meta.category,
             Some("cat".to_string()),
@@ -3633,8 +3662,17 @@ mod tests {
     /// and `>` are entity-escaped by `wrap_introspect_result` independently of `&`
     /// (`.replace('&', ...)` runs first, then `<`/`>`), so a tool name containing them
     /// must round-trip its categorization the same way.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects `<`/`>`
+    /// outright, closing this entity-escaping desync for tool names by construction — this
+    /// pins the ordinary (now-only-possible) case instead: a plain name round-trips unescaped.
+    /// Renamed from `..._for_angle_bracket_tool_name` (issue #433 code review), since the name
+    /// no longer contains `<`/`>`; behaviorally identical to the plain-tool-name case above,
+    /// kept as a separate regression slot for traceability back to this test's original issue
+    /// (#307).
     #[tokio::test]
-    async fn test_save_categorized_tools_preserves_categorization_for_angle_bracket_tool_name() {
+    async fn test_save_categorized_tools_preserves_categorization_for_a_plain_tool_name_formerly_angle_bracket()
+     {
         use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
         use tempfile::TempDir;
 
@@ -3652,7 +3690,7 @@ mod tests {
                 supports_prompts: false,
             },
             tools: vec![ToolInfo {
-                name: ToolName::new("tool<name>end").unwrap(),
+                name: ToolName::new("tool_name_end").unwrap(),
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
@@ -3670,11 +3708,11 @@ mod tests {
         );
         let session_id = service.state.store(pending).await.unwrap();
 
-        // The display name Claude actually saw for "tool<name>end": `<`/`>`
-        // entity-escaped by `wrap_introspect_result`.
+        // The display name Claude actually saw for "tool_name_end" — identical to the raw
+        // name, since it contains no character `wrap_introspect_result` entity-escapes.
         let params = SaveCategorizedToolsParams {
             session_id,
-            categorized_tools: vec![categorized_tool("tool&lt;name&gt;end")],
+            categorized_tools: vec![categorized_tool("tool_name_end")],
         };
 
         let result = service
@@ -3690,7 +3728,7 @@ mod tests {
 
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
-        assert_eq!(tool_meta.name.as_str(), "tool<name>end");
+        assert_eq!(tool_meta.name.as_str(), "tool_name_end");
         assert_eq!(
             tool_meta.category,
             Some("cat".to_string()),
@@ -3705,8 +3743,16 @@ mod tests {
     /// literal form (`a<b`) instead of the literally-shown escaped form (`a&lt;b`) must still
     /// be accepted: the pre-#307-S2 fix only recognized the escaped form and hard-rejected
     /// this previously-working case with an unrecoverable "not found" error.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects `<`/`>`
+    /// outright, so a raw tool name can no longer have two distinct display forms at all —
+    /// [`display_forms`] always returns a single form for it. This pins that closed-by-
+    /// construction guarantee instead: the (now-only) display form is the raw name itself.
+    /// Renamed from `..._accepts_unescaped_form_of_angle_bracket_tool_name` (issue #433 code
+    /// review), since the name no longer contains an angle bracket to escape or decode.
     #[tokio::test]
-    async fn test_save_categorized_tools_accepts_unescaped_form_of_angle_bracket_tool_name() {
+    async fn test_save_categorized_tools_preserves_categorization_while_pinning_single_display_form()
+     {
         use mcp_execution_core::metadata::{METADATA_FILE_NAME, ServerMetadata};
         use tempfile::TempDir;
 
@@ -3724,7 +3770,7 @@ mod tests {
                 supports_prompts: false,
             },
             tools: vec![ToolInfo {
-                name: ToolName::new("a<b").unwrap(),
+                name: ToolName::new("a_b").unwrap(),
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
@@ -3742,11 +3788,11 @@ mod tests {
         );
         let session_id = service.state.store(pending).await.unwrap();
 
-        // The DECODED literal form, not the escaped form ("a&lt;b") Claude was literally
-        // shown — a legitimate echo per `wrap_untrusted_block`'s own preamble.
+        assert_eq!(display_forms("a_b"), vec!["a_b".to_string()]);
+
         let params = SaveCategorizedToolsParams {
             session_id,
-            categorized_tools: vec![categorized_tool("a<b")],
+            categorized_tools: vec![categorized_tool("a_b")],
         };
 
         let result = service
@@ -3763,19 +3809,40 @@ mod tests {
 
         assert_eq!(meta.tools.len(), 1);
         let tool_meta = &meta.tools[0];
-        assert_eq!(tool_meta.name.as_str(), "a<b");
+        assert_eq!(tool_meta.name.as_str(), "a_b");
         assert_eq!(tool_meta.category, Some("cat".to_string()));
     }
 
     /// Regression guard for #307 S3: two distinct raw tool names that sanitize to the same
     /// display form must not silently misattribute categorization to the wrong tool.
-    /// `evil\ntool` (control character flattened to a space) and `evil tool` (already that
-    /// exact text) both produce the display key `"evil tool"`. Attempting to categorize using
-    /// that ambiguous shared key must fail explicitly instead of a `HashMap`'s last-write-wins
-    /// silently resolving it to whichever raw tool happened to be processed last.
+    /// Attempting to categorize using an ambiguous shared key must fail explicitly instead of
+    /// a `HashMap`'s last-write-wins silently resolving it to whichever raw tool happened to
+    /// be processed last.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) closes the entity-escaping
+    /// and control-character collision class this test originally used (`evil\ntool` vs.
+    /// `evil tool`) — for that class specifically, [`display_forms`] now always returns a
+    /// single form equal to the raw name itself, so two distinct valid raw names can no longer
+    /// collide via it (see `test_save_categorized_tools_preserves_categorization_while_pinning_single_display_form`
+    /// above, which pins that narrower closure directly). It does **not** close the S3 branch
+    /// itself: `sanitize_untrusted_text` still truncates at `MAX_UNTRUSTED_FIELD_LEN` (500
+    /// chars), and `ToolName::new` has no length bound of its own, so two distinct raw names
+    /// that only differ after the truncation point still collide on the same display key. This
+    /// uses that truncation collision instead. In the live `Introspector::discover_server` path
+    /// this specific collision is pre-empted by `mcp-introspector::MAX_TOOL_NAME_LEN` (256
+    /// bytes, well under the 500-char truncation point) rejecting the oversized name outright
+    /// before it ever reaches this code — so this test exercises a branch that is reachable
+    /// only when `ToolInfo`s are constructed directly (as every test in this module does), not
+    /// dead code; a future change to either constant could make it live-reachable again.
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_ambiguous_display_name_instead_of_misattributing()
     {
+        let raw_a = format!("{}1", "a".repeat(500));
+        let raw_b = format!("{}2", "a".repeat(500));
+        let truncated_display_key = "a".repeat(500);
+        assert_eq!(display_forms(&raw_a), vec![truncated_display_key.clone()]);
+        assert_eq!(display_forms(&raw_b), vec![truncated_display_key.clone()]);
+
         let service = GeneratorService::new();
 
         let server_info = mcp_execution_introspector::ServerInfo {
@@ -3789,13 +3856,13 @@ mod tests {
             },
             tools: vec![
                 ToolInfo {
-                    name: ToolName::new("evil\ntool").unwrap(),
+                    name: ToolName::new(raw_a).unwrap(),
                     description: "First tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
                 },
                 ToolInfo {
-                    name: ToolName::new("evil tool").unwrap(),
+                    name: ToolName::new(raw_b).unwrap(),
                     description: "Second tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
@@ -3816,7 +3883,7 @@ mod tests {
 
         let params = SaveCategorizedToolsParams {
             session_id,
-            categorized_tools: vec![categorized_tool("evil tool")],
+            categorized_tools: vec![categorized_tool(&truncated_display_key)],
         };
 
         let result = service
@@ -3839,12 +3906,21 @@ mod tests {
     /// two distinct display keys (its escaped and unescaped forms). A caller submitting BOTH
     /// forms as separate `categorized_tools` entries for the SAME raw tool must be rejected as
     /// a duplicate — deduping on the submitted display string (`cat_tool.name`) would miss this,
-    /// since `"a&lt;b"` and `"a<b"` are different strings that both resolve to raw tool `a<b`,
-    /// letting the second entry silently overwrite the first's categorization with no error.
+    /// since two different strings could both resolve to the same raw tool, letting the second
+    /// entry silently overwrite the first's categorization with no error.
+    ///
+    /// `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects `&`/`<`/`>`
+    /// outright, so [`display_forms`] always returns a single form for any valid raw name and
+    /// the dual-form pairing this test originally used (`"a&lt;b"` / `"a<b"`) is
+    /// unconstructible. This pins the closed-by-construction guarantee directly, then still
+    /// exercises the resolve-once-per-raw-name dedup logic via the (now only possible) case of
+    /// two entries submitting the exact same single display form.
     #[tokio::test]
     async fn test_save_categorized_tools_rejects_duplicate_via_two_display_forms_of_same_raw_name()
     {
         let service = GeneratorService::new();
+
+        assert_eq!(display_forms("a_b"), vec!["a_b".to_string()]);
 
         let server_info = mcp_execution_introspector::ServerInfo {
             id: ServerId::new("dual-form-dup-server").unwrap(),
@@ -3857,8 +3933,8 @@ mod tests {
             },
             tools: vec![
                 ToolInfo {
-                    name: ToolName::new("a<b").unwrap(),
-                    description: "Angle bracket tool".to_string(),
+                    name: ToolName::new("a_b").unwrap(),
+                    description: "Underscore tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
                 },
@@ -3882,11 +3958,11 @@ mod tests {
         );
         let session_id = service.state.store(pending).await.unwrap();
 
-        // Both entries name the SAME raw tool (`a<b`) via its two different display forms —
-        // the escaped form Claude was literally shown, and the decoded literal form.
+        // Both entries name the SAME raw tool (`a_b`) via its single display form, submitted
+        // twice.
         let params = SaveCategorizedToolsParams {
             session_id,
-            categorized_tools: vec![categorized_tool("a&lt;b"), categorized_tool("a<b")],
+            categorized_tools: vec![categorized_tool("a_b"), categorized_tool("a_b")],
         };
 
         let result = service

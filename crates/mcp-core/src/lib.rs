@@ -63,7 +63,10 @@ pub use command::{
 };
 
 // Re-export path helpers shared by confinement checks
-pub use path::{contains_parent_dir, sanitize_path_for_error, validate_path_segment};
+pub use path::{
+    contains_parent_dir, first_disallowed_identifier_char, sanitize_path_for_error,
+    validate_path_segment,
+};
 
 // Re-export the shared path-confinement walk
 pub use confinement::{ConfinementError, ConfinementTarget, resolve_confined_path};

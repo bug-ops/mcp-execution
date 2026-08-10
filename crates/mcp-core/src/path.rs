@@ -232,6 +232,33 @@ pub fn validate_path_segment(segment: &str) -> Option<Component<'_>> {
     }
 }
 
+/// Returns the first `char` in `s` that is not UTS #39 `Identifier_Status=Allowed`, or `None`
+/// if every character is Allowed.
+///
+/// Backs [`crate::ServerId::new`]/[`crate::ToolName::new`]'s stricter, second-layer invariant —
+/// a layer *on top of* [`validate_path_segment`], not a replacement for it: this function says
+/// nothing about path separators, `..`, or root/prefix components, and `validate_path_segment`
+/// says nothing about Unicode identifier safety. Both checks apply together. The Allowed set
+/// (from the [`unicode_security`] crate's `GeneralSecurityProfile::identifier_allowed` tables,
+/// Unicode 16.0) excludes format/control characters, most bidi controls, invisible characters,
+/// and other code points UTS #39 flags as unsafe in identifiers — but it does **not** detect
+/// homoglyphs (e.g. Cyrillic "а" U+0430 renders identically to Latin "a" but is Allowed); callers
+/// needing that protection must add a separate, dedicated check.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::first_disallowed_identifier_char;
+///
+/// assert_eq!(first_disallowed_identifier_char("café_menu_日本語"), None);
+/// assert_eq!(first_disallowed_identifier_char("get_issue\u{200D}"), Some('\u{200D}'));
+/// ```
+#[must_use]
+pub fn first_disallowed_identifier_char(s: &str) -> Option<char> {
+    use unicode_security::GeneralSecurityProfile;
+    s.chars().find(|c| !c.identifier_allowed())
+}
+
 /// Returns `true` if `path` contains a `..` (parent-directory) component.
 ///
 /// Shared by every crate that confines a caller-supplied path to a base directory
@@ -277,6 +304,28 @@ mod tests {
     #[test]
     fn validate_path_segment_rejects_path_separator() {
         assert!(validate_path_segment("a/b").is_none());
+    }
+
+    #[test]
+    fn first_disallowed_identifier_char_accepts_plain_and_non_ascii() {
+        assert_eq!(first_disallowed_identifier_char("my-server"), None);
+        assert_eq!(first_disallowed_identifier_char("café_menu_日本語"), None);
+    }
+
+    #[test]
+    fn first_disallowed_identifier_char_rejects_zwj() {
+        assert_eq!(
+            first_disallowed_identifier_char("get_issue\u{200D}"),
+            Some('\u{200D}')
+        );
+    }
+
+    #[test]
+    fn first_disallowed_identifier_char_guard_leaves_validate_path_segment_unchanged() {
+        // `validate_path_segment` must stay a purely structural check, unaware of Unicode
+        // identifier safety — proves this function was added as a sibling, not folded into it.
+        assert!(validate_path_segment("my notes").is_some());
+        assert!(validate_path_segment("a\u{200D}b").is_some());
     }
 
     #[test]

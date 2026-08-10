@@ -2228,9 +2228,17 @@ mod tests {
 
     #[test]
     fn test_generate_sanitizes_call_site_string_literal_injection() {
+        // `ToolName::new`'s Unicode-identifier allowlist (issue #433) now rejects every
+        // string-literal-breakout character except the apostrophe, which is a legitimate
+        // identifier character (UTS #39 Identifier_Status=Allowed) — so this test's raw
+        // tool name is trimmed to just an embedded apostrophe rather than a full
+        // `'); alert('pwned` payload; that is still exactly the character
+        // `sanitize_ts_string_literal` must escape to keep `name_literal` from breaking out
+        // of the single-quoted string literal passed to `callMCPTool`.
+        let raw_name = "create_issue's_evil_twin";
         let generator = ProgressiveGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
-        server_info.tools[0].name = ToolName::new("create_issue'); alert('pwned").unwrap();
+        server_info.tools[0].name = ToolName::new(raw_name).unwrap();
 
         let code = generator.generate(&server_info).unwrap();
         let tool = code
@@ -2260,7 +2268,11 @@ mod tests {
             .find(|line| line.contains("return (await callMCPTool("))
             .expect("generated tool file must contain a callMCPTool(...) invocation");
         assert!(
-            !call_site_line.contains("'); alert('pwned"),
+            call_site_line.contains("create_issue\\'s_evil_twin"),
+            "the apostrophe in the tool name must be escaped in the callMCPTool string literal: {call_site_line}"
+        );
+        assert!(
+            !call_site_line.contains(raw_name),
             "raw quote must not break out of the callMCPTool string literal: {call_site_line}"
         );
     }
@@ -2281,7 +2293,11 @@ mod tests {
                 output_schema: None,
             },
             ToolInfo {
-                name: ToolName::new("foo bar").unwrap(),
+                // `ToolName::new`'s Unicode-identifier allowlist (issue #433) rejects a raw
+                // space, so this uses `:` (also non-alphanumeric, also sanitized to `_` by
+                // `sanitize_ts_identifier`) as the third distinct separator that collides
+                // with the other two after sanitization.
+                name: ToolName::new("foo:bar").unwrap(),
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,

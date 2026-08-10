@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of ADR-341's decision to defer this swap, the corrected Evidence Ledger findings, the
   measured Budget/latency figures, and resolutions to ADR-341's three open owner rulings
   (#405).
+- **`mcp-execution-core`**: `path::first_disallowed_identifier_char` — returns the first
+  character in a string that is not UTS #39 `Identifier_Status=Allowed`, backing
+  `ServerId::new`/`ToolName::new`'s new Unicode-identifier-safety invariant (see the `###
+  Breaking` entry below). Adds the `unicode-security` 0.1.2 dependency (unconditional, unlike
+  the existing platform-gated `unicode-normalization`), pulling in `unicode-script` 0.5.8 as a
+  new transitive dependency (#433).
 
 ### Changed
 
@@ -174,6 +180,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-skill`**: `SkillMetadataError` is now `#[non_exhaustive]` and gained the new
   `FrontmatterTooComplex` variant. An exhaustive `match` on this enum outside `mcp-execution-skill`
   will now fail to compile (none exist in-tree today).
+- **`mcp-execution-core`**: `ServerId::new`/`ToolName::new` now enforce a second, layered
+  invariant on top of `validate_path_segment`: every character must be UTS #39
+  `Identifier_Status=Allowed` (via the `unicode-security` crate, Unicode 16.0 tables), checked
+  with the new `first_disallowed_identifier_char` (backed by
+  `unicode_security::GeneralSecurityProfile::identifier_allowed`). Both `ServerIdError` and
+  `ToolNameError` gained a `DisallowedCharacter { id/name: String, code_point: u32 }` variant —
+  source-breaking for any downstream consumer exhaustively matching either enum without a
+  wildcard arm. Rationale: tool names and server ids are attacker-controlled (a remote MCP
+  server) and are rendered into LLM-facing text (`introspect_server` summaries, generated
+  `SKILL.md`); `untrusted::sanitize_untrusted_text` is a deliberate denylist that passes through
+  ZWNJ/ZWJ, variation selectors, soft hyphen, and other invisible characters by design (#430),
+  so a hostile server could previously publish a tool named near-identically to a legitimate one
+  (e.g. `get_issue` vs. `get_issue\u{00AD}`), spoofing it in LLM-facing summaries. An allowlist
+  at the newtype construction boundary closes this class of spoofing by construction rather than
+  adding more denylist entries. Deliberately does **not** detect homoglyphs (e.g. Cyrillic `а`
+  U+0430 is Allowed and renders identically to Latin `a`) — a hand-rolled ASCII-only allowlist
+  was rejected in favor of this Unicode-tracked one specifically to keep accepting legitimate
+  non-ASCII tool/server names (e.g. `café_menu_日本語`), which an ASCII allowlist would break.
+  **Compatibility risk**: a remote MCP server exposing a tool named with a space or
+  `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright — `Introspector::discover_server`
+  aborts for the whole server the moment one `ToolName::new` call fails (mapped to a graceful
+  `Error::ValidationError`, not a panic). This is a deliberate fail-closed trade-off: Claude's
+  own tool-name contract is `^[a-zA-Z0-9_-]{1,128}$`, a strict subset of what remains accepted.
+  Similarly, an `mcp.json` key containing such a character is no longer usable as a `ServerId`
+  at all (#433).
 - **`mcp-execution-core`**: `Error::is_connection_error()` and `Error::is_timeout()` removed —
   neither had any real (non-test/non-doctest) call site anywhere in the workspace.
   `mcp-cli`'s `classify_core_error` (`runner.rs`) is an exhaustive `match` over every `Error`
