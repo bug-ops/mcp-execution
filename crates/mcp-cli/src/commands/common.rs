@@ -458,9 +458,14 @@ pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 /// sink (`resolve_server_dir_name`) instead. Enforcing the stricter
 /// `[a-z0-9-]` charset here would hard-fail `introspect --from-config` for
 /// entirely legitimate `mcp.json` keys that aren't already in that charset
-/// (e.g. `claude_ai_Gmail`). [`ServerId::new`]'s own baseline invariant
-/// (non-empty, no `..`/path separator) still applies unconditionally, since
-/// it's now enforced at construction rather than being an opt-in check.
+/// (e.g. `claude_ai_Gmail`). [`ServerId::new`]'s own baseline invariants
+/// (non-empty, no `..`/path separator, and — since issue #433 — every
+/// character UTS #39 `Identifier_Status=Allowed`) still apply
+/// unconditionally, since they're enforced at construction rather than
+/// being opt-in. An `mcp.json` key containing a character outside that
+/// Unicode-identifier-safe set (e.g. a space) is no longer usable as a
+/// `ServerId` at all, and this function surfaces that as an ordinary
+/// `ServerId::new` error rather than a silent pass-through.
 pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
     let (server_id, entry) = get_mcp_server_entry(name)?;
     let server_config = build_core_config(&entry)?;
@@ -947,8 +952,9 @@ fn slugify(input: &str) -> ServerId {
     let slug = slug.trim_end_matches('-');
 
     // The whitelist loop above only ever produces `[a-z0-9-]` characters (or the constant
-    // fallback), so the result is always non-empty and free of `..`/path separators — always a
-    // valid `ServerId` per `ServerId::new`'s invariant.
+    // fallback), so the result is always non-empty and free of `..`/path separators, and every
+    // character is ASCII alphanumeric or `-` — all UTS #39 `Identifier_Status=Allowed` — so this
+    // always satisfies `ServerId::new`'s full invariant (issue #433).
     ServerId::new(if slug.is_empty() {
         FALLBACK_SERVER_ID_SLUG
     } else {

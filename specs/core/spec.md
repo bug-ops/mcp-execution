@@ -50,11 +50,15 @@ related:
      `..`-traversal checks); `validate_path_segment` backs `ServerId`/
      `ToolName`'s own baseline path-segment invariant and, since #395, is
      also used internally by `confinement::resolve_confined_path` as its
-     generic (looser) segment check. `types::validate_server_id_slug`
-     (issue #401) is the separate, stricter charset check both crates'
-     `server_id` confinement now additionally enforces *before* calling
-     into `resolve_confined_path` (see below) — `resolve_confined_path`
-     itself stays generic and does not know about the slug rule.
+     generic (looser) segment check. `first_disallowed_identifier_char`
+     (issue #433) is the second, independent layer `ServerId`/`ToolName`
+     also gate on — a UTS #39 `Identifier_Status=Allowed` Unicode-safety
+     check, unrelated to path-segment structure (see below).
+     `types::validate_server_id_slug` (issue #401) is the separate,
+     stricter charset check both crates' `server_id` confinement now
+     additionally enforces *before* calling into `resolve_confined_path`
+     (see below) — `resolve_confined_path` itself stays generic and does
+     not know about the slug rule.
    - `confinement` — `resolve_confined_path` (issue #395), the shared
      component-by-component resolve-and-confine filesystem walk used by both
      `mcp-skill::resolve_skill_output_path` and
@@ -74,24 +78,49 @@ related:
 ```rust
 pub struct ServerId(String);
 pub struct ToolName(String);
-pub enum ServerIdError { InvalidFormat { id: String } }
-pub enum ToolNameError { InvalidFormat { name: String } }
+pub enum ServerIdError { InvalidFormat { id: String }, DisallowedCharacter { id: String, code_point: u32 } }
+pub enum ToolNameError { InvalidFormat { name: String }, DisallowedCharacter { name: String, code_point: u32 } }
 ```
 Both: `new(impl Into<String>) -> Result<Self, XxxError>`, `as_str(&self) -> &str`,
 `into_inner(self) -> String`, `Display`,
-`Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize`. `new` enforces a baseline
-invariant shared with `path::validate_path_segment`: the input must be a single non-empty
-path segment (no `..`, no path separator, no root/prefix component), since both a server id
-and a tool name are ultimately used to derive a filesystem path or file name downstream.
-There is no `From<String>`/`From<&str>` impl, and `#[serde(try_from = "String")]` (backed by
-`impl TryFrom<String>` delegating to `new`) routes `Deserialize` through `new` too — `new` is
-the only construction path, including through deserialization, so the invariant cannot be
-bypassed by an infallible conversion or a direct-derive deserialize. Without
-`try_from = "String"`, a plain `#[derive(Deserialize)]` would still be able to construct
-`Self(raw_string)` directly since the derived impl lives in this same module and privacy
-doesn't block it — this is exactly the gap that made `mcp_execution_introspector::ServerInfo`/
-`ToolInfo` (which derive `Deserialize` and hold a `ServerId`/`ToolName` field) deserializable
-with an unvalidated id/name before this was added.
+`Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize`. `new` enforces two layered
+invariants, in order: first `path::validate_path_segment` (the input must be a single
+non-empty path segment — no `..`, no path separator, no root/prefix component — since both a
+server id and a tool name are ultimately used to derive a filesystem path or file name
+downstream), then `path::first_disallowed_identifier_char` (issue #433: every character must
+be UTS #39 `Identifier_Status=Allowed`, checked via the `unicode-security` crate's
+`GeneralSecurityProfile::identifier_allowed`). The second check exists because tool
+names/server ids are attacker-controlled (a remote MCP server) and are rendered into
+LLM-facing text (`introspect_server` summaries, generated `SKILL.md`); before #433 a hostile
+server could publish near-identical tool names differing only by an invisible or bidi-control
+character (e.g. `get_issue` vs. `get_issue\u{00AD}`) that `untrusted::sanitize_untrusted_text`
+deliberately passes through by design (see its own doc comment). The Allowed set does **not**
+detect homoglyphs (e.g. Cyrillic `а` U+0430 is Allowed and renders identically to Latin `a`) —
+that is an explicitly out-of-scope, separate protection. A path-traversal attempt is still
+reported as `InvalidFormat` (checked first), not `DisallowedCharacter`. `DisallowedCharacter`'s
+`code_point` is the `u32` Unicode scalar value of the first rejected character; the `{:?}`
+`Debug` formatting used in both variants' error messages escapes control/format code points in
+the rejected string, so an attacker-controlled value can't smuggle an escape sequence into the
+rendered error. There is no `From<String>`/`From<&str>` impl, and
+`#[serde(try_from = "String")]` (backed by `impl TryFrom<String>` delegating to `new`) routes
+`Deserialize` through `new` too — `new` is the only construction path, including through
+deserialization, so neither invariant can be bypassed by an infallible conversion or a
+direct-derive deserialize. Without `try_from = "String"`, a plain `#[derive(Deserialize)]`
+would still be able to construct `Self(raw_string)` directly since the derived impl lives in
+this same module and privacy doesn't block it — this is exactly the gap that made
+`mcp_execution_introspector::ServerInfo`/`ToolInfo` (which derive `Deserialize` and hold a
+`ServerId`/`ToolName` field) deserializable with an unvalidated id/name before this was added.
+
+Compatibility note (#433): a remote MCP server exposing a tool named with a space or
+`@`/`+`/`(` now fails `ToolName::new` outright, which aborts `Introspector::discover_server`
+for the whole server (`mcp-introspector` maps the failure to a graceful
+`Error::ValidationError`, not a panic, but discovery still cannot proceed). This is a
+deliberate fail-closed trade-off: Claude's own tool-name contract is `^[a-zA-Z0-9_-]{1,128}$`,
+a strict subset of what remains accepted. Similarly, an `mcp.json` key containing a space is no
+longer usable as a `ServerId` at all — `mcp-cli`'s config-key lookup
+(`commands::common::get_mcp_server`) previously accepted such keys, deliberately not enforcing
+the stricter slug rule ([[../cli/spec]]) since `ServerId::new`'s own baseline was already the
+only gate; that baseline is now the Unicode-identifier-safe one described above.
 
 ### `validate_server_id_slug` / `ServerIdSlugError` (`src/types.rs`, issue #401)
 
@@ -154,13 +183,17 @@ Covers `mcp-core` only. `mcp-files::FilesError::ResourceLimitExceeded` closed it
 adding variants here: `mcp-files` has no direct dependency on `mcp-core` (only a transitive one
 via `mcp-execution-codegen`), so sharing this enum would mean adding a new direct dependency on
 `mcp-core` for a single error variant — see [[../files/spec#7. Error Conditions]].
-Each variant has an `is_*` predicate (`is_connection_error`,
-`is_security_error`, `is_timeout`, `is_validation_error`,
+Most variants have an `is_*` predicate (`is_security_error`, `is_validation_error`,
 `is_script_generation_error`, `is_resource_limit_exceeded`,
 `is_duplicate_generated_file_path`). No predicate exists for
 `InvalidArgument`/`SerializationError` — callers match directly.
-`ScriptGenerationError.source` is the vehicle for preserving an inner
-`Error`'s own classification through wrapping (see
+`ConnectionFailed`/`Timeout` have no `is_connection_error`/`is_timeout` predicate either
+(removed, issue #427, mirroring #199/#202's identical dead-predicate-removal precedent): their
+only real call site, `mcp-cli`'s `classify_core_error`, is an exhaustive `match` over every
+`Error` variant with no wildcard arm, so it always matched each variant by name directly rather
+than through a predicate — adding a variant there is a compile error at that `match`, a
+guarantee an `if`/`else if` predicate chain would silently lose. `ScriptGenerationError.source`
+is the vehicle for preserving an inner `Error`'s own classification through wrapping (see
 `mcp-cli`'s `classify_core_error`, which recurses into it — [[../cli/spec]]).
 
 `Error::DuplicateGeneratedFilePath { path: String }` (issue #312) is raised by
@@ -341,6 +374,7 @@ change; consumers compare it and fail loudly on mismatch (see
 ```rust
 pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir to "~", falls back to scrubbing bare username
 pub fn validate_path_segment(segment: &str) -> Option<Component<'_>>; // single plain component, no "..", no separator
+pub fn first_disallowed_identifier_char(s: &str) -> Option<char>; // first char failing UTS #39 Identifier_Status=Allowed
 pub fn contains_parent_dir(path: &Path) -> bool; // true if any component is `..`
 ```
 On Windows/macOS, the home-directory component comparison inside `sanitize_path_for_error`
@@ -374,6 +408,19 @@ normalized forms is missed. This covers both German "ß" needle against a haysta
 and a normalization-adjacent case introduced by the post-fold re-normalization itself (e.g. needle
 `"J\u{30C}an"` against haystack `"\u{1F0}an"`) — an accepted, pre-existing limitation (see the
 module's tests), not a regression from either the #417 or #416 fix.
+
+`first_disallowed_identifier_char` (issue #433) is a sibling check, not a replacement for
+`validate_path_segment` and deliberately not folded into it: it says nothing about path
+separators/`..`/root components, and `validate_path_segment` says nothing about Unicode
+identifier safety. `ServerId::new`/`ToolName::new` apply both, in that order (structural check
+first, so a traversal attempt keeps reporting `InvalidFormat`). It is *not* used by
+`confinement::resolve_confined_path` or either crate's `server_id` output-confinement path —
+those stay scoped to filesystem-path safety, which `validate_path_segment`/
+`validate_server_id_slug` already cover; Unicode-identifier safety is a display/LLM-spoofing
+concern specific to `ServerId::new`/`ToolName::new`'s construction-time gate, not a filesystem
+concern. Backed by the `unicode-security` crate's `GeneralSecurityProfile::identifier_allowed`
+(Unicode 16.0 tables); does not detect homoglyphs (see `ServerId`/`ToolName`'s own doc comment
+above for the full rationale).
 
 `validate_path_segment` backs `ServerId::new`/`ToolName::new`'s own baseline invariant (see
 above) and, since #395, is used internally by `confinement::resolve_confined_path` as its own

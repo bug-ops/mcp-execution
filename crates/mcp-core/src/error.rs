@@ -213,24 +213,6 @@ pub enum Error {
 }
 
 impl Error {
-    /// Returns `true` if this is a connection error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_core::Error;
-    ///
-    /// let err = Error::ConnectionFailed {
-    ///     server: "test".to_string(),
-    ///     source: "connection refused".into(),
-    /// };
-    /// assert!(err.is_connection_error());
-    /// ```
-    #[must_use]
-    pub const fn is_connection_error(&self) -> bool {
-        matches!(self, Self::ConnectionFailed { .. })
-    }
-
     /// Returns `true` if this is a security violation error.
     ///
     /// # Examples
@@ -246,24 +228,6 @@ impl Error {
     #[must_use]
     pub const fn is_security_error(&self) -> bool {
         matches!(self, Self::SecurityViolation { .. })
-    }
-
-    /// Returns `true` if this is a timeout error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_core::Error;
-    ///
-    /// let err = Error::Timeout {
-    ///     operation: "execute_code".to_string(),
-    ///     duration_secs: 30,
-    /// };
-    /// assert!(err.is_timeout());
-    /// ```
-    #[must_use]
-    pub const fn is_timeout(&self) -> bool {
-        matches!(self, Self::Timeout { .. })
     }
 
     /// Returns `true` if this is a validation error.
@@ -372,32 +336,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_connection_error_detection() {
-        let err = Error::ConnectionFailed {
-            server: "test-server".to_string(),
-            source: "network error".into(),
-        };
-        assert!(err.is_connection_error());
-        assert!(!err.is_security_error());
-    }
-
-    #[test]
     fn test_security_error_detection() {
         let err = Error::SecurityViolation {
             reason: "Access denied".to_string(),
         };
         assert!(err.is_security_error());
-        assert!(!err.is_connection_error());
-    }
-
-    #[test]
-    fn test_timeout_error_detection() {
-        let err = Error::Timeout {
-            operation: "long_operation".to_string(),
-            duration_secs: 60,
-        };
-        assert!(err.is_timeout());
-        assert!(!err.is_validation_error());
     }
 
     #[test]

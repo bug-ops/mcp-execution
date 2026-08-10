@@ -20,7 +20,7 @@
 //! let tool = ToolName::new("execute_code").unwrap();
 //! ```
 
-use crate::path::validate_path_segment;
+use crate::path::{first_disallowed_identifier_char, validate_path_segment};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
@@ -46,6 +46,18 @@ pub enum ServerIdError {
         /// The rejected input.
         id: String,
     },
+
+    /// `id` is a well-formed path segment but contains a character that is not UTS #39
+    /// `Identifier_Status=Allowed` (see [`crate::first_disallowed_identifier_char`]).
+    #[error(
+        "invalid server id {id:?}: disallowed character U+{code_point:04X} (identifiers accept only UTS #39 Identifier_Status=Allowed characters)"
+    )]
+    DisallowedCharacter {
+        /// The rejected input.
+        id: String,
+        /// Unicode scalar value of the first disallowed character found.
+        code_point: u32,
+    },
 }
 
 /// Server identifier (newtype over String).
@@ -53,9 +65,11 @@ pub enum ServerIdError {
 /// Represents a unique identifier for an MCP server. Using a strong type
 /// prevents accidentally mixing server IDs with other string values, and
 /// [`ServerId::new`] enforces that every `ServerId` is safe to use as a single
-/// path segment (see [`validate_path_segment`](crate::validate_path_segment)),
+/// path segment (see [`validate_path_segment`](crate::validate_path_segment)) and a
+/// Unicode-safe identifier (see
+/// [`first_disallowed_identifier_char`](crate::first_disallowed_identifier_char), issue #433),
 /// since server IDs are ultimately confined into filesystem paths (e.g.
-/// `~/.claude/servers/{server_id}`).
+/// `~/.claude/servers/{server_id}`) and rendered into LLM-facing text.
 ///
 /// This baseline invariant is deliberately looser than [`validate_server_id_slug`]'s: a
 /// `ServerId` may contain uppercase letters, underscores, or other path-segment-safe
@@ -92,12 +106,16 @@ impl TryFrom<String> for ServerId {
 
 impl ServerId {
     /// Creates a new server identifier, validating that `id` is a single non-empty path
-    /// segment with no `..` or path separator.
+    /// segment with no `..` or path separator, and that every character in it is UTS #39
+    /// `Identifier_Status=Allowed` (issue #433).
     ///
     /// # Errors
     ///
     /// Returns [`ServerIdError::InvalidFormat`] if `id` is empty, or contains a `..`, a path
-    /// separator, or a root/prefix component.
+    /// separator, or a root/prefix component. Returns [`ServerIdError::DisallowedCharacter`]
+    /// if `id` passes that check but contains a character outside the UTS #39
+    /// `Identifier_Status=Allowed` set (see
+    /// [`first_disallowed_identifier_char`](crate::first_disallowed_identifier_char)).
     ///
     /// # Examples
     ///
@@ -109,12 +127,19 @@ impl ServerId {
     /// assert_eq!(id, from_string);
     /// assert!(ServerId::new("").is_err());
     /// assert!(ServerId::new("a/b").is_err());
+    /// assert!(ServerId::new("evil\u{200D}server").is_err());
     /// ```
     #[inline]
     pub fn new(id: impl Into<String>) -> Result<Self, ServerIdError> {
         let id = id.into();
         if validate_path_segment(&id).is_none() {
             return Err(ServerIdError::InvalidFormat { id });
+        }
+        if let Some(c) = first_disallowed_identifier_char(&id) {
+            return Err(ServerIdError::DisallowedCharacter {
+                id,
+                code_point: c as u32,
+            });
         }
         Ok(Self(id))
     }
@@ -259,14 +284,28 @@ pub enum ToolNameError {
         /// The rejected input.
         name: String,
     },
+
+    /// `name` is a well-formed path segment but contains a character that is not UTS #39
+    /// `Identifier_Status=Allowed` (see [`crate::first_disallowed_identifier_char`]).
+    #[error(
+        "invalid tool name {name:?}: disallowed character U+{code_point:04X} (identifiers accept only UTS #39 Identifier_Status=Allowed characters)"
+    )]
+    DisallowedCharacter {
+        /// The rejected input.
+        name: String,
+        /// Unicode scalar value of the first disallowed character found.
+        code_point: u32,
+    },
 }
 
 /// Tool name identifier (newtype over String).
 ///
 /// Represents the name of an MCP tool. Using a strong type ensures tool names are not
 /// confused with other string values, and [`ToolName::new`] enforces the same baseline
-/// shape as [`ServerId::new`] (see [`validate_path_segment`](crate::validate_path_segment)),
-/// since generated tool names are ultimately used to derive output file names.
+/// shape as [`ServerId::new`] (see [`validate_path_segment`](crate::validate_path_segment) and
+/// [`first_disallowed_identifier_char`](crate::first_disallowed_identifier_char), issue #433),
+/// since generated tool names are ultimately used to derive output file names and are
+/// rendered into LLM-facing text.
 ///
 /// # Examples
 ///
@@ -297,12 +336,16 @@ impl TryFrom<String> for ToolName {
 
 impl ToolName {
     /// Creates a new tool name, validating that `name` is a single non-empty path segment
-    /// with no `..` or path separator.
+    /// with no `..` or path separator, and that every character in it is UTS #39
+    /// `Identifier_Status=Allowed` (issue #433).
     ///
     /// # Errors
     ///
     /// Returns [`ToolNameError::InvalidFormat`] if `name` is empty, or contains a `..`, a
-    /// path separator, or a root/prefix component.
+    /// path separator, or a root/prefix component. Returns [`ToolNameError::DisallowedCharacter`]
+    /// if `name` passes that check but contains a character outside the UTS #39
+    /// `Identifier_Status=Allowed` set (see
+    /// [`first_disallowed_identifier_char`](crate::first_disallowed_identifier_char)).
     ///
     /// # Examples
     ///
@@ -312,12 +355,19 @@ impl ToolName {
     /// let name = ToolName::new("my_tool").unwrap();
     /// assert_eq!(name.as_str(), "my_tool");
     /// assert!(ToolName::new("a/b").is_err());
+    /// assert!(ToolName::new("evil\u{200D}tool").is_err());
     /// ```
     #[inline]
     pub fn new(name: impl Into<String>) -> Result<Self, ToolNameError> {
         let name = name.into();
         if validate_path_segment(&name).is_none() {
             return Err(ToolNameError::InvalidFormat { name });
+        }
+        if let Some(c) = first_disallowed_identifier_char(&name) {
+            return Err(ToolNameError::DisallowedCharacter {
+                name,
+                code_point: c as u32,
+            });
         }
         Ok(Self(name))
     }
@@ -412,6 +462,44 @@ mod tests {
         assert!(ServerId::new("a/b").is_err());
     }
 
+    /// Issue #433: `ServerId::new` must accept every character UTS #39
+    /// `Identifier_Status=Allowed` covers, not just ASCII — including non-ASCII scripts and
+    /// the wider punctuation set an `mcp.json` key may legitimately use.
+    #[test]
+    fn test_server_id_accepts_unicode_identifier_chars() {
+        for candidate in [
+            "my-server",
+            "claude_ai_Gmail",
+            "mcp__chrome__browser_batch",
+            "café_menu_日本語",
+            "工具",
+            "foo.bar",
+            "a--b",
+            "server123",
+        ] {
+            assert!(ServerId::new(candidate).is_ok(), "{candidate:?}");
+        }
+    }
+
+    /// Issue #433: at least the Tags-block, ZWJ, and RLO cases must be rejected for
+    /// `ServerId`, mirroring `ToolName`'s exhaustive coverage below.
+    #[test]
+    fn test_server_id_rejects_disallowed_identifier_chars() {
+        for candidate in [
+            "evil\u{E0061}server",
+            "evil\u{200D}server",
+            "evil\u{202E}server",
+        ] {
+            assert!(
+                matches!(
+                    ServerId::new(candidate),
+                    Err(ServerIdError::DisallowedCharacter { .. })
+                ),
+                "{candidate:?}"
+            );
+        }
+    }
+
     /// Regression guard: `#[serde(try_from = "String")]` must route `Deserialize` through
     /// `new`'s invariant, not just `From`/a bare `#[derive(Deserialize)]`. Without this, a
     /// struct holding a `ServerId` field (e.g. `mcp_execution_introspector::ServerInfo`) could
@@ -466,6 +554,91 @@ mod tests {
     #[test]
     fn test_tool_name_rejects_path_separator() {
         assert!(ToolName::new("a/b").is_err());
+    }
+
+    /// Issue #433: `ToolName::new` must accept every character UTS #39
+    /// `Identifier_Status=Allowed` covers, not just ASCII.
+    #[test]
+    fn test_tool_name_accepts_unicode_identifier_chars() {
+        for candidate in [
+            "my-server",
+            "claude_ai_Gmail",
+            "mcp__chrome__browser_batch",
+            "café_menu_日本語",
+            "工具",
+            "foo.bar",
+            "a--b",
+            "server123",
+        ] {
+            assert!(ToolName::new(candidate).is_ok(), "{candidate:?}");
+        }
+    }
+
+    /// Issue #433: `ToolName::new` must reject a tool name attacker-controlled MCP servers
+    /// could otherwise use to spoof another tool's display text (Tags block, zero-width
+    /// joiners, BOM, soft hyphen, variation selectors, bidi overrides/isolates/marks) or to
+    /// smuggle structural breakout characters (newline, space, `&`).
+    #[test]
+    fn test_tool_name_rejects_disallowed_identifier_chars() {
+        for candidate in [
+            "get_issue\u{E0061}", // Tags block
+            "get_issue\u{E007F}", // Tags terminator
+            "get\u{200B}issue",   // ZWSP
+            "get_issue\u{200D}",  // ZWJ
+            "get_issue\u{200C}",  // ZWNJ
+            "get_issue\u{FEFF}",  // BOM
+            "get_issue\u{00AD}",  // soft hyphen
+            "get_issue\u{FE0F}",  // VS16
+            "get_issue\u{E0100}", // IVS
+            "get\u{202E}issue",   // RLO
+            "get\u{2066}issue",   // LRI
+            "get\u{200E}issue",   // LRM
+            "evil\ntool",         // newline
+            "evil tool",          // space
+            "tool&name",          // ampersand
+        ] {
+            assert!(
+                matches!(
+                    ToolName::new(candidate),
+                    Err(ToolNameError::DisallowedCharacter { .. })
+                ),
+                "{candidate:?}"
+            );
+        }
+    }
+
+    /// Issue #433: the error must carry the offending code point, not just the raw string —
+    /// callers (e.g. `mcp-cli` diagnostics) rely on `code_point` to report which character was
+    /// rejected without re-scanning the input themselves.
+    #[test]
+    fn test_tool_name_disallowed_character_error_carries_code_point() {
+        let err = ToolName::new("get_issue\u{200D}").unwrap_err();
+        assert!(matches!(
+            err,
+            ToolNameError::DisallowedCharacter {
+                code_point: 0x200D,
+                ..
+            }
+        ));
+    }
+
+    /// Issue #433: `ToolName`'s `Deserialize` must reject a ZWJ the same way direct
+    /// construction does — mirrors `test_tool_name_deserialize_rejects_invalid_value` below,
+    /// which only covers the path-separator invariant.
+    #[test]
+    fn test_tool_name_deserialize_rejects_disallowed_identifier_char() {
+        let result: std::result::Result<ToolName, _> =
+            serde_json::from_str("\"get_issue\u{200D}\"");
+        assert!(result.is_err());
+    }
+
+    /// Issue #433: this newer, stricter `ToolName`/`ServerId` invariant must not leak into
+    /// `validate_path_segment`, which backs `resolve_confined_path`'s filesystem-path
+    /// confinement and must stay purely structural (see its own doc comment).
+    #[test]
+    fn test_validate_path_segment_unaffected_by_identifier_allowlist() {
+        assert!(validate_path_segment("my notes").is_some());
+        assert!(validate_path_segment("a\u{200D}b").is_some());
     }
 
     /// Mirrors `test_server_id_deserialize_rejects_invalid_value`: `ToolName`'s `Deserialize`
