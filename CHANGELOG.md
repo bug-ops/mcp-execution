@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CI**: extracted `cargo build --all-targets --all-features --workspace` out of the `test`
+  job into a new, independent `build` job that runs on the same OS/toolchain matrix in
+  parallel with `test` (nextest already builds what it needs on its own, so the two no longer
+  need to run sequentially). `ci-success` now also gates on `build`'s result.
+- **CI**: the `release` job now only runs on pushes to `master`, instead of on every PR and
+  branch push covered by the workflow's triggers.
 - **`mcp-execution-cli`**: extracted `formatters::emit`, a shared helper that formats a value,
   prints it, and returns the given `ExitCode`, collapsing the repeated
   format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`, and
