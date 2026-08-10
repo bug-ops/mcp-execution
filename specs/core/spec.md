@@ -111,6 +111,14 @@ this same module and privacy doesn't block it — this is exactly the gap that m
 `mcp_execution_introspector::ServerInfo`/`ToolInfo` (which derive `Deserialize` and hold a
 `ServerId`/`ToolName` field) deserializable with an unvalidated id/name before this was added.
 
+`ToolName::new` deliberately carries no length bound of its own — only the two character-level
+invariants above. The root tool-name length limit lives one layer up, at
+`mcp-introspector::MAX_TOOL_NAME_LEN`, per the "resource bounds cascade downward by value" cross-
+block contract in [[../README#Cross-Block Contracts (the load-bearing ones)]]: adding a length
+cap here would duplicate that root bound rather than deriving from it, and would invert the
+contract by making a lower layer (`mcp-core`) reject data a higher layer (`mcp-introspector`) is
+still willing to accept (issue #447).
+
 Compatibility note (#433): a remote MCP server exposing a tool named with a space or
 `@`/`+`/`(` now fails `ToolName::new` outright, which aborts `Introspector::discover_server`
 for the whole server (`mcp-introspector` maps the failure to a graceful
