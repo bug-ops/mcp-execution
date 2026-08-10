@@ -3,9 +3,10 @@
 //! Confinement checks in `mcp-execution-skill` (`save_skill`'s `output_path`) and
 //! `mcp-execution-server` (`introspect_server`'s `output_dir`) report the offending path back
 //! to the caller. [`sanitize_path_for_error`] is the one place that redaction happens, so both
-//! crates report errors with the same privacy guarantee. [`validate_path_segment`] is the one
-//! place both crates validate a caller-supplied `server_id` as a single plain path component,
-//! so a `..` or path-separator smuggled into it is rejected identically by both.
+//! crates report errors with the same privacy guarantee. [`validate_path_segment`] backs
+//! `ServerId::new`/`ToolName::new`'s own baseline path-segment invariant; the stricter,
+//! filesystem-safe-*slug* rule both crates' `server_id` confinement checks enforce lives in
+//! [`crate::validate_server_id_slug`] instead (see its own doc comment for why).
 
 use std::path::{Component, Path};
 
@@ -93,8 +94,14 @@ fn scrub_username(path: &Path, home: &Path) -> String {
 
 #[cfg(any(windows, target_os = "macos"))]
 fn components_match(home: Component<'_>, path: Component<'_>) -> bool {
-    // TODO(critic): ASCII-only case folding misses non-ASCII usernames (e.g. Cyrillic); the
-    // scrub_username fallback in sanitize_path_for_error covers that gap.
+    // TODO(#406): ASCII-only case folding misses a non-ASCII username that differs only by
+    // case (e.g. Cyrillic "Аня" vs "аня") — NOT mitigated by scrub_username's fallback below:
+    // replace_case_aware's Windows/macOS arm folds case the same ASCII-only way (see its own
+    // doc comment), so a case-differing non-ASCII username is redacted by neither path and
+    // survives verbatim in the sanitized output. Unaffected on other platforms, which compare
+    // path components exactly rather than case-insensitively. Accepted as a known, low-severity
+    // residual gap for now (#406): a correct fix needs Unicode-aware case folding that preserves
+    // replace_case_aware's byte-offset alignment invariant, not a naive `to_lowercase` swap.
     home.as_os_str()
         .to_string_lossy()
         .eq_ignore_ascii_case(&path.as_os_str().to_string_lossy())

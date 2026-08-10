@@ -9,14 +9,15 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use thiserror::Error;
 
 /// Maximum `server_id` length (denial-of-service protection).
 ///
-/// `pub` (rather than private) so downstream crates' schemars drift-guard tests — e.g.
-/// `mcp-execution-server`'s, for `IntrospectServerParams::server_id` — can assert the declared
-/// schema length against this real constant instead of a hardcoded literal (issue #198 S3).
-pub const MAX_SERVER_ID_LENGTH: usize = 64;
+/// Re-exported from `mcp_execution_core`, the authoritative owner of the server id slug
+/// invariant (see [`validate_server_id`]). `pub` (rather than private) so downstream crates'
+/// schemars drift-guard tests — e.g. `mcp-execution-server`'s, for
+/// `IntrospectServerParams::server_id` — can assert the declared schema length against this
+/// real constant instead of a hardcoded literal (issue #198 S3).
+pub use mcp_execution_core::MAX_SERVER_ID_LENGTH;
 
 // ============================================================================
 // generate_skill types
@@ -238,34 +239,21 @@ pub struct SkillMetadata {
 // ============================================================================
 
 /// Errors returned by [`validate_server_id`].
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum SkillServerIdError {
-    /// `server_id` was empty.
-    ///
-    /// An empty `server_id` would collapse a per-server confinement
-    /// directory back to its shared parent, so it is rejected explicitly
-    /// rather than falling through the (vacuously true) character-class
-    /// check below.
-    #[error("server_id must not be empty")]
-    Empty,
-
-    /// `server_id` exceeded the maximum allowed length.
-    #[error("server_id too long: {len} chars exceeds {limit} limit")]
-    TooLong {
-        /// Actual length of the rejected `server_id`, in bytes (`str::len`,
-        /// not `chars().count()`).
-        len: usize,
-        /// Maximum allowed length (`MAX_SERVER_ID_LENGTH`).
-        limit: usize,
-    },
-
-    /// `server_id` contained a character other than a lowercase letter,
-    /// digit, or hyphen.
-    #[error("server_id must contain only lowercase letters, digits, and hyphens")]
-    InvalidCharacters,
-}
+///
+/// A re-export of [`mcp_execution_core::ServerIdSlugError`] — the authoritative error type for
+/// this invariant — under this crate's own name, so existing callers of
+/// `mcp_execution_skill::SkillServerIdError` are unaffected. This crate previously hand-rolled a
+/// structurally identical enum plus a manual `From` conversion; that let this crate's error
+/// wording drift from `mcp_execution_core`'s (the MCP tool handlers in `mcp-execution-server`
+/// surface the core wording directly, so the two had visibly disagreed on identical input). A
+/// re-export makes that drift structurally impossible: there is only one type, and therefore
+/// only one `Display` wording, to keep in sync.
+pub use mcp_execution_core::ServerIdSlugError as SkillServerIdError;
 
 /// Validate `server_id` format and length.
+///
+/// Delegates to [`mcp_execution_core::validate_server_id_slug`], the authoritative owner of
+/// this invariant.
 ///
 /// # Arguments
 ///
@@ -300,30 +288,7 @@ pub enum SkillServerIdError {
 /// assert!(validate_server_id("my_server").is_err()); // underscore
 /// ```
 pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError> {
-    // Check emptiness (the character-class check below is vacuously true for
-    // an empty string, and an empty server_id would collapse a per-server
-    // confinement directory back to its shared parent)
-    if server_id.is_empty() {
-        return Err(SkillServerIdError::Empty);
-    }
-
-    // Check length
-    if server_id.len() > MAX_SERVER_ID_LENGTH {
-        return Err(SkillServerIdError::TooLong {
-            len: server_id.len(),
-            limit: MAX_SERVER_ID_LENGTH,
-        });
-    }
-
-    // Check format
-    if !server_id
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        return Err(SkillServerIdError::InvalidCharacters);
-    }
-
-    Ok(())
+    mcp_execution_core::validate_server_id_slug(server_id)
 }
 
 #[cfg(test)]

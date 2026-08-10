@@ -57,6 +57,12 @@ pub enum ServerIdError {
 /// since server IDs are ultimately confined into filesystem paths (e.g.
 /// `~/.claude/servers/{server_id}`).
 ///
+/// This baseline invariant is deliberately looser than [`validate_server_id_slug`]'s: a
+/// `ServerId` may contain uppercase letters, underscores, or other path-segment-safe
+/// characters that are not valid in a filesystem-safe *slug*. If you need the id to become a
+/// directory name or generated-code identifier — not just a safe path segment — validate it
+/// with [`validate_server_id_slug`] too, in addition to constructing it here.
+///
 /// # Examples
 ///
 /// ```
@@ -151,6 +157,85 @@ impl fmt::Display for ServerId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
+}
+
+/// Maximum length, in bytes, of a slug-shaped server id (see [`validate_server_id_slug`]).
+pub const MAX_SERVER_ID_LENGTH: usize = 64;
+
+/// Errors returned by [`validate_server_id_slug`].
+///
+/// Every message names the parameter as `server_id` (matching the MCP tool JSON field and this
+/// crate's other `server_id`-named APIs) rather than "server id" — callers surface these
+/// messages verbatim to end users/MCP clients, so wording here must stay actionable and
+/// consistent with every other layer that reports the same rejection.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ServerIdSlugError {
+    /// The candidate was empty.
+    #[error("server_id must not be empty")]
+    Empty,
+
+    /// The candidate exceeded [`MAX_SERVER_ID_LENGTH`].
+    #[error("server_id too long: {len} chars exceeds {limit} limit")]
+    TooLong {
+        /// Actual length of the rejected id, in bytes (`str::len`, not `chars().count()`).
+        len: usize,
+        /// Maximum allowed length ([`MAX_SERVER_ID_LENGTH`]).
+        limit: usize,
+    },
+
+    /// The candidate contained a character other than a lowercase ASCII letter, digit, or
+    /// hyphen.
+    #[error("server_id must contain only lowercase letters, digits, and hyphens")]
+    InvalidCharacters,
+}
+
+/// Validates that `id` is a filesystem-safe server id *slug*: 1-64 lowercase ASCII letters,
+/// digits, or hyphens (`^[a-z0-9-]+$`).
+///
+/// This is a stricter, opt-in invariant layered on top of [`ServerId::new`]'s own baseline
+/// (single non-empty path segment, no `..` or path separator): every slug-shaped id is
+/// automatically a valid [`ServerId`], but not every valid `ServerId` is slug-shaped — e.g. a
+/// raw `mcp.json` key like `claude_ai_Gmail` (mixed case, underscore) is a legitimate
+/// `ServerId` but not a valid slug. [`ServerId::new`] deliberately does not enforce this
+/// tighter rule itself, since callers that only need a safe path segment (e.g. looking up an
+/// existing `mcp.json` entry) must keep accepting non-slug-shaped ids. Callers that need the id
+/// to become a directory name or generated-code identifier — where entry validation and
+/// filesystem confinement must agree on the exact same rule — should call this function too,
+/// in addition to [`ServerId::new`].
+///
+/// # Errors
+///
+/// Returns [`ServerIdSlugError`] if `id` is empty, exceeds [`MAX_SERVER_ID_LENGTH`] bytes, or
+/// contains a character other than a lowercase ASCII letter, digit, or hyphen.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::validate_server_id_slug;
+///
+/// assert!(validate_server_id_slug("github").is_ok());
+/// assert!(validate_server_id_slug("my-server-123").is_ok());
+/// assert!(validate_server_id_slug("").is_err());
+/// assert!(validate_server_id_slug("GitHub").is_err());
+/// assert!(validate_server_id_slug("my_server").is_err());
+/// ```
+pub fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
+    if id.is_empty() {
+        return Err(ServerIdSlugError::Empty);
+    }
+    if id.len() > MAX_SERVER_ID_LENGTH {
+        return Err(ServerIdSlugError::TooLong {
+            len: id.len(),
+            limit: MAX_SERVER_ID_LENGTH,
+        });
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(ServerIdSlugError::InvalidCharacters);
+    }
+    Ok(())
 }
 
 /// Error returned when a candidate string fails the invariant [`ToolName::new`] enforces.
@@ -405,6 +490,113 @@ mod tests {
         assert_sync::<ServerId>();
         assert_send::<ServerIdError>();
         assert_sync::<ServerIdError>();
+    }
+
+    // validate_server_id_slug tests
+    #[test]
+    fn test_validate_server_id_slug_valid() {
+        assert!(validate_server_id_slug("github").is_ok());
+        assert!(validate_server_id_slug("my-server").is_ok());
+        assert!(validate_server_id_slug("server123").is_ok());
+        assert!(validate_server_id_slug("my-server-123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_server_id_slug_empty() {
+        assert_eq!(validate_server_id_slug(""), Err(ServerIdSlugError::Empty));
+    }
+
+    #[test]
+    fn test_validate_server_id_slug_uppercase() {
+        assert_eq!(
+            validate_server_id_slug("GitHub"),
+            Err(ServerIdSlugError::InvalidCharacters)
+        );
+    }
+
+    #[test]
+    fn test_validate_server_id_slug_underscore() {
+        assert_eq!(
+            validate_server_id_slug("my_server"),
+            Err(ServerIdSlugError::InvalidCharacters)
+        );
+    }
+
+    #[test]
+    fn test_validate_server_id_slug_special_chars() {
+        assert_eq!(
+            validate_server_id_slug("my@server"),
+            Err(ServerIdSlugError::InvalidCharacters)
+        );
+    }
+
+    #[test]
+    fn test_validate_server_id_slug_too_long() {
+        let long_id = "a".repeat(65);
+        assert_eq!(
+            validate_server_id_slug(&long_id),
+            Err(ServerIdSlugError::TooLong {
+                len: 65,
+                limit: MAX_SERVER_ID_LENGTH
+            })
+        );
+    }
+
+    #[test]
+    fn test_validate_server_id_slug_max_length() {
+        let max_id = "a".repeat(64);
+        assert!(validate_server_id_slug(&max_id).is_ok());
+    }
+
+    /// A slug-shaped id must always also satisfy `ServerId::new`'s own (looser) baseline
+    /// invariant — the slug charset is a strict subset of what a plain path segment allows.
+    #[test]
+    fn test_valid_slug_is_always_a_valid_server_id() {
+        // Every single character in the slug charset, individually — not just a handful of
+        // hand-picked compositions, so a future charset change to `validate_server_id_slug`
+        // that quietly adds a character `ServerId::new` would reject (e.g. a path separator)
+        // is caught here rather than only in a hand-picked example.
+        const CHARSET: &str = "abcdefghijklmnopqrstuvwxyz0123456789-";
+        for c in CHARSET.chars() {
+            let single = c.to_string();
+            assert!(validate_server_id_slug(&single).is_ok(), "{single:?}");
+            assert!(ServerId::new(&single).is_ok(), "{single:?}");
+        }
+        for candidate in [
+            "github",
+            "my-server",
+            "server123",
+            "my-server-123",
+            "-leading-hyphen",
+            "trailing-hyphen-",
+            "0123456789",
+            &"a".repeat(MAX_SERVER_ID_LENGTH),
+        ] {
+            assert!(validate_server_id_slug(candidate).is_ok(), "{candidate:?}");
+            assert!(ServerId::new(candidate).is_ok(), "{candidate:?}");
+        }
+    }
+
+    /// The converse of the test above: `ServerId::new`'s baseline is strictly looser than
+    /// `validate_server_id_slug`'s charset, not merely equal to it in practice. Mixed case and
+    /// underscores are legitimate path segments (e.g. a raw `mcp.json` key like
+    /// `claude_ai_Gmail`, issue #311) even though they fail the slug charset — this must keep
+    /// holding after #401, which deliberately left `ServerId::new` untouched rather than
+    /// tightening it to the slug rule.
+    #[test]
+    fn test_server_id_new_accepts_non_slug_shaped_baseline() {
+        for candidate in ["GitHub", "my_server", "claude_ai_Gmail"] {
+            assert!(validate_server_id_slug(candidate).is_err());
+            assert!(ServerId::new(candidate).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_server_id_slug_error_is_send_sync() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+        assert_send::<ServerIdSlugError>();
+        assert_sync::<ServerIdSlugError>();
     }
 
     #[test]

@@ -9,6 +9,7 @@ fn test_domain_types_are_send_sync() {
     // All domain types must be Send + Sync
     assert_send_sync::<ServerId>();
     assert_send_sync::<ServerIdError>();
+    assert_send_sync::<ServerIdSlugError>();
     assert_send_sync::<ToolName>();
     assert_send_sync::<ToolNameError>();
 }

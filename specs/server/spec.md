@@ -135,10 +135,12 @@ issue #381).
   guard against reintroducing SSRF risk, since `ServerConfig`'s own docs
   note this crate is exactly the kind of server-context embedder expected
   to add SSRF allowlisting before ever setting Http/Sse transport.
-- `server_id` validated via `mcp_execution_skill::validate_server_id`
-  before anything else; the tracing span's `server_id` field is left empty
-  on early validation failure (never logging unvalidated attacker input
-  into a structured field).
+- `server_id` validated via `mcp_execution_core::validate_server_id_slug`
+  (issue #401 — previously imported from `mcp_execution_skill::validate_server_id`,
+  which now delegates to the same core function) before anything else; the
+  tracing span's `server_id` field is left empty on early validation
+  failure (never logging unvalidated attacker input into a structured
+  field).
 - `output_dir`, if given, is checked with the cheap, I/O-free
   `relative_subpath` (rejects absolute/`..`) — **not** the full
   filesystem-touching confinement walk, which is deliberately deferred to
@@ -481,8 +483,10 @@ warns.
 
 `StateError`: `AtCapacity { limit }`, `MemoryBudgetExceeded { limit }`.
 
-`OutputDirError`: `InvalidServerId`, `AbsolutePath`, `ParentTraversal`,
-`ServerDirIsSymlink`, `Escape`, `NotADirectory`, `CreateDir`, `Io`.
+`OutputDirError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
+`source` carries the precise slug-format violation, so the message can't independently drift
+from the actual rule `mcp_execution_core::validate_server_id_slug` enforces), `AbsolutePath`,
+`ParentTraversal`, `ServerDirIsSymlink`, `Escape`, `NotADirectory`, `CreateDir`, `Io`.
 
 Every tool method maps its internal errors to `rmcp::ErrorData` via either
 `McpError::invalid_params` (caller's fault — bad input, missing session,
@@ -494,14 +498,21 @@ environment's fault — I/O failure, task join error, serialization failure).
 - **Consumes**: `mcp-introspector::Introspector`/`ServerInfo`,
   `mcp-codegen::ProgressiveGenerator`, `mcp-files::FilesBuilder`/
   `FileSystem`, `mcp-skill::{scan_tools_directory, build_skill_context,
-  resolve_skill_output_path, extract_skill_metadata, validate_server_id,
+  resolve_skill_output_path, extract_skill_metadata,
   MAX_TOOL_FILES}`, `mcp-core::{ServerConfig, ServerId,
-  sanitize_path_for_error, untrusted::*, confinement::{ConfinementError,
-  ConfinementTarget, resolve_confined_path}}` (the last three, since #395,
-  used only by `output_dir::resolve_output_dir`; `resolve_list_base_dir`
-  reuses `output_dir.rs`'s own `relative_subpath` and hand-rolls its own,
-  weaker confinement check rather than calling `resolve_confined_path`,
-  since it is out of scope for the confinement consolidation — see §6).
+  sanitize_path_for_error, validate_server_id_slug, ServerIdSlugError,
+  untrusted::*, confinement::{ConfinementError, ConfinementTarget,
+  resolve_confined_path}}` (the `confinement::*` items, since #395, used only
+  by `output_dir::resolve_output_dir`; `resolve_list_base_dir` reuses
+  `output_dir.rs`'s own `relative_subpath` and hand-rolls its own, weaker
+  confinement check rather than calling `resolve_confined_path`, since it is
+  out of scope for the confinement consolidation — see §6).
+  `validate_server_id` is no longer imported from `mcp-skill` (issue #401) —
+  the three tool handlers (`introspect_server`, `generate_skill`,
+  `save_skill`) now validate `server_id` via
+  `mcp_execution_core::validate_server_id_slug` directly, and
+  `output_dir::resolve_output_dir` gates `server_id` with the same function
+  before delegating the filesystem walk itself to `resolve_confined_path`.
 - **Schema drift guards**: `service.rs`'s own tests assert the `schemars`-
   derived schema for `CategorizedTool`/`SaveCategorizedToolsParams`/
   `IntrospectServerParams` matches the real runtime constants

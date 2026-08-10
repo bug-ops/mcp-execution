@@ -51,6 +51,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-core`**: added `validate_server_id_slug`, `ServerIdSlugError`, and
+  `MAX_SERVER_ID_LENGTH` — the authoritative, core-owned invariant for a slug-shaped server id
+  (1-64 lowercase ASCII letters, digits, or hyphens), distinct from `ServerId::new()`'s own
+  looser baseline (single non-empty path segment, no `..`/separator), which is left unchanged.
+  `mcp-execution-skill`'s `validate_server_id` now delegates to it, and `SkillServerIdError` is
+  now a re-export of `ServerIdSlugError` rather than a hand-rolled, structurally identical mirror
+  type — the previous mirror had already let the two crates' error wording drift apart (MCP
+  clients and the CLI disagreed on identical input), which a re-export makes impossible rather
+  than merely fixing once. `mcp-execution-server`'s tool handlers (`introspect_server`,
+  `generate_skill`, `save_skill`) call the core function directly instead of importing
+  `mcp_execution_skill::validate_server_id`. Also fixes a gate/confine mismatch: the
+  output-confinement checks in `mcp-execution-server`'s `output_dir` and `mcp-execution-skill`'s
+  `output_path` previously confined a `server_id` using the looser `validate_path_segment` even
+  though entry validation already gated it with the stricter slug rule; both now confine using
+  the same `validate_server_id_slug` check that gates entry, and their `InvalidServerId` error
+  now carries and reports the specific slug-format violation instead of a hardcoded "must be a
+  single non-empty path segment" message that became inaccurate once the confinement rule
+  tightened (e.g. `"My-Server"` is a valid path segment but not a valid slug) (#401).
+- **`mcp-execution-core`**: `path::components_match`'s `TODO` comment is now accurate about the
+  ASCII-only case-folding gap: it previously claimed `scrub_username`'s fallback mitigates a
+  non-ASCII username differing only by case (e.g. Cyrillic), but that fallback shares the same
+  ASCII-only limitation and does not actually catch this case — the username is not redacted.
+  The comment now states this plainly and tracks the real fix as a new follow-up (#406) rather
+  than closing the loop with an inaccurate mitigation claim. No behavior change (#402).
 - **workspace**: sorted `[dependencies]` alphabetically in `mcp-execution-files` and
   `mcp-execution-skill` (#391).
 - **`mcp-execution-introspector`**: `discover_via_http` now sets

@@ -10,7 +10,7 @@
 
 use mcp_execution_core::{
     ConfinementError, ConfinementTarget, resolve_confined_path, sanitize_path_for_error,
-    validate_path_segment,
+    validate_server_id_slug,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -18,12 +18,18 @@ use thiserror::Error;
 /// Errors from resolving and confining a skill output path to its base directory.
 #[derive(Debug, Error)]
 pub enum OutputPathError {
-    /// `server_id` is empty or is not a single plain path segment (e.g. it
-    /// contains a `..`, `/`, or is otherwise not a bare directory name).
-    #[error("server_id must be a single non-empty path segment: {server_id:?}")]
+    /// `server_id` failed [`mcp_execution_core::validate_server_id_slug`]'s slug-format check
+    /// (e.g. it is empty, too long, or contains a character other than a lowercase ASCII
+    /// letter, digit, or hyphen). `source` carries the precise reason; the message is derived
+    /// from it rather than hardcoded, so it can't independently drift from the actual rule
+    /// enforced.
+    #[error("invalid server_id {server_id:?}: {source}")]
     InvalidServerId {
         /// The rejected server id.
         server_id: String,
+        /// The specific slug-format violation.
+        #[source]
+        source: mcp_execution_core::ServerIdSlugError,
     },
 
     /// The caller supplied an absolute `output_path`, which would override
@@ -103,11 +109,26 @@ pub enum OutputPathError {
 /// [`OutputPathError::NotAFile`] here (the terminal component `resolve_skill_output_path` walks
 /// is always a file), which is the only variant this crate names differently than
 /// `mcp-execution-server`'s equivalent `From` impl.
+///
+/// [`ConfinementError::InvalidSegment`] doesn't carry a [`mcp_execution_core::ServerIdSlugError`]
+/// (the underlying walk only knows the looser [`mcp_execution_core::validate_path_segment`]
+/// rule), so this re-derives one by re-running [`validate_server_id_slug`] on the rejected
+/// segment. `resolve_skill_output_path` already validates with `validate_server_id_slug` before
+/// this path can be reached, so in practice that second call always fails the same way the first
+/// one did — `unwrap_or` never actually falls back — but doing it this way keeps this `From` impl
+/// itself panic-free instead of `expect`-ing an invariant that only holds because of a check made
+/// somewhere else.
 impl From<ConfinementError> for OutputPathError {
     fn from(err: ConfinementError) -> Self {
         match err {
             ConfinementError::InvalidSegment { segment } => {
-                Self::InvalidServerId { server_id: segment }
+                let source = validate_server_id_slug(&segment)
+                    .err()
+                    .unwrap_or(mcp_execution_core::ServerIdSlugError::InvalidCharacters);
+                Self::InvalidServerId {
+                    server_id: segment,
+                    source,
+                }
             }
             ConfinementError::SegmentIsSymlink { path } => Self::ServerIdIsSymlink { path },
             ConfinementError::Escape { path } => Self::Escape { path },
@@ -147,13 +168,14 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 
 /// Resolves a `save_skill` output path, confining it to `base_dir/server_id`.
 ///
-/// `server_id` is validated as a single plain path segment **before** `output_path` is checked
-/// at all, matching this crate's pre-#395 error precedence: a caller supplying both an invalid
-/// `server_id` and an invalid `output_path` sees [`OutputPathError::InvalidServerId`], not a
-/// relative-path error - `mcp_execution_server`'s `save_skill` handler keeps `InvalidServerId` in
-/// its own error-classification arm specifically for external callers of this public function
-/// that skip its own upstream `validate_server_id` check, so masking it behind a relative-path
-/// error would defeat that.
+/// `server_id` is validated against the same slug rule entry validation gates with
+/// ([`validate_server_id_slug`]) **before** `output_path` is checked at all, matching this
+/// crate's pre-#395 error precedence: a caller supplying both an invalid `server_id` and an
+/// invalid `output_path` sees [`OutputPathError::InvalidServerId`], not a relative-path error -
+/// `mcp_execution_server`'s `save_skill` handler keeps `InvalidServerId` in its own
+/// error-classification arm specifically for external callers of this public function that skip
+/// its own upstream `validate_server_id_slug` check, so masking it behind a relative-path error
+/// would defeat that.
 ///
 /// `server_id` and `output_path` are both attacker-influenced, so both are walked and
 /// confinement-checked by the shared [`resolve_confined_path`], rooted at `base_dir`: `server_id`
@@ -185,13 +207,11 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 ///
 /// # Errors
 ///
-/// Returns [`OutputPathError`] if `server_id` is empty or not a single
-/// plain path segment, if `output_path` is absolute, contains a `..`
-/// component, or has no file name, if the resolved path escapes `base_dir`
-/// (including via a symlink at `server_id` itself or any deeper
-/// component), if a required directory could not be created, or if a path
-/// component that must be a directory (or must hold the output file)
-/// already exists as the wrong kind of entry.
+/// Returns [`OutputPathError`] if `server_id` fails [`validate_server_id_slug`], if `output_path`
+/// is absolute, contains a `..` component, or has no file name, if the resolved path escapes
+/// `base_dir` (including via a symlink at `server_id` itself or any deeper component), if a
+/// required directory could not be created, or if a path component that must be a directory (or
+/// must hold the output file) already exists as the wrong kind of entry.
 ///
 /// # Examples
 ///
@@ -213,12 +233,12 @@ pub async fn resolve_skill_output_path(
 ) -> Result<PathBuf, OutputPathError> {
     // Validated again, I/O-free, before `relative_target` so an invalid `server_id` is reported
     // even when `output_path` is also invalid - matching this crate's pre-#395 error precedence
-    // (`resolve_confined_path` re-validates it a second time as part of its own walk).
-    if validate_path_segment(server_id).is_none() {
-        return Err(OutputPathError::InvalidServerId {
-            server_id: server_id.to_string(),
-        });
-    }
+    // (`resolve_confined_path` re-validates it a second time, against the looser structural rule,
+    // as part of its own walk).
+    validate_server_id_slug(server_id).map_err(|source| OutputPathError::InvalidServerId {
+        server_id: server_id.to_string(),
+        source,
+    })?;
 
     let relative = relative_target(output_path)?;
 
@@ -333,6 +353,44 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, OutputPathError::InvalidServerId { .. }));
+    }
+
+    /// #401 regression: a `server_id` that is a valid, path-segment-safe `ServerId` but not
+    /// slug-shaped (uppercase letters) must be rejected here too, not just at
+    /// `service::save_skill`'s entry gate — entry validation and confinement must agree on the
+    /// exact same rule.
+    #[tokio::test]
+    async fn server_id_with_uppercase_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_skill_output_path(base.path(), "My-Server", None)
+            .await
+            .unwrap_err();
+        // Asserts on the specific reason, not just the outer variant, so a regression that
+        // rejects "My-Server" for the wrong cause (or with stale wording) is still caught.
+        assert!(matches!(
+            err,
+            OutputPathError::InvalidServerId {
+                source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
+                ..
+            }
+        ));
+    }
+
+    /// #401 regression: same as above, for an underscore (also a valid `ServerId` character but
+    /// not a valid slug character).
+    #[tokio::test]
+    async fn server_id_with_underscore_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_skill_output_path(base.path(), "my_server", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            OutputPathError::InvalidServerId {
+                source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
