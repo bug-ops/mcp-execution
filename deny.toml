@@ -10,17 +10,23 @@
 
 [advisories]
 
-# The workspace's only YAML parser reaches libyaml through
-# mcp-skill -> serde_norway -> unsafe-libyaml-norway (depth 2) -- by far the
-# largest unsafe-code footprint in the tree. cargo-deny's `unsound` field
-# (RUSTSEC "unsound" advisories, i.e. memory-safety unsoundness in unsafe
-# code) defaults to "workspace" and so silently drops advisories against
-# transitive dependencies like this one; `unsound = "all"` is the setting
-# that actually closes that gap. `unmaintained` already defaults to "all"
-# upstream, so restating it below is explicit policy, not a behavior change.
-# `yanked` defaults to "warn"; `yanked = "deny"` turns a yank into a hard CI
-# failure. Note all three checks are RUSTSEC/registry-driven: they only fire
-# once an advisory or yank record exists, they do not bound risk proactively.
+# The workspace's YAML parser is `serde-saphyr` (`granit-parser` backend),
+# both `#![forbid(unsafe_code)]` (issue #405 / ADR-405, superseding ADR-341's
+# earlier "not adopted" decision). The largest remaining unsafe-code item in
+# the tree is `encoding_rs` (pulled in via the non-optional `encoding_rs_io`
+# dependency of serde-saphyr's `deserialize` feature, even though this crate
+# only exercises the `from_str`/`&str`-based path, never `from_reader`).
+# cargo-deny's `unsound` field (RUSTSEC "unsound" advisories, i.e.
+# memory-safety unsoundness in unsafe code) defaults to "workspace" and so
+# silently drops advisories against transitive dependencies; `unsound = "all"`
+# is the setting that actually closes that gap, and is kept deliberately
+# rather than removed by this swap (ADR-405 notes ADR-341 §2(a)'s "closes
+# this special case entirely" pro did not materialize). `unmaintained`
+# already defaults to "all" upstream, so restating it below is explicit
+# policy, not a behavior change. `yanked` defaults to "warn"; `yanked =
+# "deny"` turns a yank into a hard CI failure. Note all three checks are
+# RUSTSEC/registry-driven: they only fire once an advisory or yank record
+# exists, they do not bound risk proactively.
 unmaintained = "all"
 unsound = "all"
 yanked = "deny"

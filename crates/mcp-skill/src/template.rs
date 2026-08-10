@@ -48,7 +48,7 @@ static HANDLEBARS: LazyLock<Handlebars<'static>> = LazyLock::new(|| {
 });
 
 /// Whole shape of `SKILL.md`'s YAML frontmatter, serialized as a single unit so both
-/// fields go through one `serde_norway` emitter pass (see [`render_skill_md`]).
+/// fields go through one `serde-saphyr` emitter pass (see [`render_skill_md`]).
 ///
 /// Field declaration order is emission order — `serde`'s struct serialization streams
 /// fields in the order declared, unlike a `BTreeMap` (which would sort them
@@ -62,42 +62,45 @@ struct Frontmatter<'a> {
 
 impl Frontmatter<'_> {
     /// Renders this frontmatter as the raw text to splice between the `SKILL.md`
-    /// template's `---` delimiters, delegating all escaping to `serde_norway`'s YAML
+    /// template's `---` delimiters, delegating all escaping to `serde-saphyr`'s YAML
     /// emitter instead of a hand-maintained escape table — so it covers `:`, a
     /// leading `-`, embedded newlines, and C0 control characters (NUL, BEL, ESC, ...)
-    /// that a narrower hand-rolled escaper would miss. `serde_norway` (via
-    /// `unsafe-libyaml-norway`) targets YAML 1.1 emission, not 1.2. That distinction is
-    /// immaterial for [`crate::parser::extract_skill_metadata`], which parses with the
-    /// same library, but SKILL.md's primary consumer is Claude Code's own (YAML
-    /// 1.2-ish) frontmatter parser, not this crate's: for the extremely rare case of a
-    /// `U+2028`/`U+2029` line/paragraph separator in the input, `unsafe-libyaml-norway`
-    /// emits it as a literal line break with a 2-space fold indent, which a strict YAML
-    /// 1.2 reader parses back with two spurious leading spaces — a narrow regression
-    /// against the old hand-rolled escaper for that one external consumer. Our own
-    /// round-trip is unaffected.
+    /// that a narrower hand-rolled escaper would miss. `serde-saphyr` is YAML-1.2-correct:
+    /// a `U+2028`/`U+2029` line/paragraph separator in the input is emitted as a `\L`/`\P`
+    /// escape inside a double-quoted scalar, which both `serde-saphyr` and libyaml-based
+    /// readers parse back exactly — a net improvement over the previous emitter, which
+    /// rendered these as a literal line break with a 2-space fold indent (a narrow
+    /// regression for strict YAML-1.2 external consumers).
     ///
-    /// `serde_norway::to_string` always ends the document in exactly one `\n`. When
+    /// Injection safety (S3) rests on a structural property of the emitter, not on
+    /// escaping alone: every emitted block-scalar body line carries at least 2
+    /// (`indent_step`) leading spaces, so no attacker-controlled `description` can ever
+    /// produce a line starting with `---` at column 0 that would prematurely close the
+    /// frontmatter block. This is an internal property of `serde-saphyr`'s serializer
+    /// with no stability contract, so it is pinned by a direct assertion on the emitted
+    /// text in the round-trip test below rather than trusted blindly.
+    ///
+    /// `serde_saphyr::to_string` always ends the document in exactly one `\n`. When
     /// `description` (the last-declared, and so last-emitted, field) itself ends in
     /// `\n`, that final `\n` is not a plain document terminator but part of the
     /// scalar's semantic content — a multi-line value emitted as a YAML block literal
     /// (`|`, `|-`, `|+`, ...) uses a trailing newline to signal "clip"/"keep"
-    /// chomping. [`crate::parser::extract_skill_metadata`] locates the frontmatter
-    /// block with a regex that greps for the literal text `\n---` and treats that
-    /// `\n` as a pure separator, consuming it out of the captured block — so if the
-    /// emitter's own trailing `\n` were left to double as that separator, a
-    /// content-significant newline would be silently swallowed by the extraction
-    /// step. Appending one extra `\n` here whenever `description` ends in `\n` gives
-    /// the regex a spare, non-semantic newline to consume as the separator while
-    /// leaving the content-significant one inside the captured block.
+    /// chomping. No compensation is applied for this, and none is needed: it is
+    /// unobservable through our own round-trip, since `granit-parser` 1.0.1's scanner
+    /// (`scanner.rs:2981-2989`) applies EOF-chomping leniency to a block scalar
+    /// terminated by end-of-input, recovering the content newline regardless. It is
+    /// also unobservable by a plausible external YAML-1.2 consumer extracting the
+    /// frontmatter block by region-capture or by a classic
+    /// `^---\n([\s\S]*?)\n---` regex: `serde-saphyr` indents `|+` blank body lines
+    /// (unlike a libyaml-based emitter, which renders them truly empty), so the final
+    /// `\n` is never load-bearing under either extraction method.
     fn to_yaml_block(&self) -> String {
         // PANIC: serializing two `&str` fields to YAML has no fallible step (no
-        // recursion, no I/O) — this cannot fail.
-        let mut rendered =
-            serde_norway::to_string(self).expect("YAML serialization of Frontmatter is infallible");
-        if self.description.ends_with('\n') {
-            rendered.push('\n');
-        }
-        rendered
+        // recursion, no I/O) — this cannot fail. `serde-saphyr`'s only
+        // `Error::custom` call site in the serializer (`ser/serializer.rs:766`) is
+        // caught locally with a quoting fallback (`:877`); its remaining
+        // `Error::custom` sites live in unused `Rc`/`Arc` recursive-wrapper code paths.
+        serde_saphyr::to_string(self).expect("YAML serialization of Frontmatter is infallible")
     }
 }
 
@@ -399,7 +402,7 @@ mod tests {
     fn test_render_skill_md_yaml_frontmatter_control_chars_safe() {
         // Issue #398: the old hand-rolled escaper only covered `\`, `"`, `\n`, and `\r` —
         // it left other C0 control characters unescaped, which a spec-compliant YAML
-        // double-quoted scalar must escape. Delegating to `serde_norway` must close
+        // double-quoted scalar must escape. Delegating to `serde-saphyr` must close
         // that gap.
         let mut context = create_test_context();
         context.server_description = Some("NUL:\u{0} BEL:\u{7} ESC:\u{1b} desc".to_string());
@@ -416,7 +419,7 @@ mod tests {
     #[test]
     fn test_render_skill_md_yaml_frontmatter_trailing_newline_preserved() {
         // S2 regression: a description ending in a semantically significant '\n' must
-        // round-trip exactly. `serde_norway` renders it as a YAML block literal whose
+        // round-trip exactly. `serde-saphyr` renders it as a YAML block literal whose
         // own trailing '\n' is real content (clip chomping), not just a document
         // terminator; naively stripping "the" trailing newline from the emitter's
         // output silently drops it instead.
@@ -645,7 +648,7 @@ mod tests {
     #[test]
     fn test_frontmatter_to_yaml_block_round_trips_through_extract_skill_metadata() {
         // The exact quoting style (plain/single/double/block literal) is an
-        // implementation detail of `serde_norway`'s emitter; what matters is that
+        // implementation detail of `serde-saphyr`'s emitter; what matters is that
         // `name` and `description` round-trip exactly through the project's own
         // frontmatter parser, and that no case yields a second top-level key.
         let cases = [
@@ -660,6 +663,15 @@ mod tests {
             "trailing newline\n",
             "multiple trailing\n\n\n",
             "before\n---\nafter",
+            // U+2028/U+2029 net improvement: the previous emitter rendered these as a
+            // literal line break with a 2-space fold indent (a YAML-1.1 regression for
+            // strict YAML-1.2 external consumers); `serde-saphyr` emits `\L`/`\P`
+            // escapes, which round-trip exactly through this crate's own parser too.
+            "line\u{2028}sep\u{2029}para",
+            // >80-char folded (`>-`) scalar: default `prefer_block_scalars` folds a
+            // single-line value longer than 80 chars instead of leaving it plain.
+            "this description is intentionally longer than eighty characters so it \
+             triggers the default folded scalar style   with   irregular   spacing",
         ];
 
         for description in cases {
@@ -667,7 +679,22 @@ mod tests {
                 name: "test-progressive",
                 description,
             };
-            let md = format!("---\n{}---\n\n# heading\n", frontmatter.to_yaml_block());
+            let block = frontmatter.to_yaml_block();
+            // S1 pin: no trailing-newline compensation is applied (see
+            // `to_yaml_block`'s doc comment), so the emitted block must never end in
+            // a double newline, regardless of what `description` ends in.
+            assert!(
+                !block.ends_with("\n\n"),
+                "unexpected double trailing newline for {description:?}: {block}"
+            );
+            // M2 pin: every emitted block-scalar body line carries >= 2 leading spaces,
+            // so no attacker-controlled description can produce a column-0 "---" line
+            // that would prematurely close the frontmatter block.
+            assert!(
+                !block.lines().any(|l| l.starts_with("---")),
+                "column-0 --- line detected for {description:?}: {block}"
+            );
+            let md = format!("---\n{block}---\n\n# heading\n");
             let metadata = crate::parser::extract_skill_metadata(&md).unwrap_or_else(|e| {
                 panic!("extract_skill_metadata failed for {description:?}: {e}\n{md}")
             });

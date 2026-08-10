@@ -51,9 +51,11 @@ related:
   is TypeScript/JSDoc, not HTML — injection safety is handled upstream by
   hand-written sanitizers instead.
 - Schema/validation: `schemars` for JSON-Schema-derived MCP tool parameter
-  schemas; `serde`/`serde_json` for wire types; `serde_norway` for YAML
-  (SKILL.md frontmatter) — never `serde_yaml`/`serde_yml`. See §V's YAML
-  parse-time bound for the pre-parse cap this parser requires.
+  schemas; `serde`/`serde_json` for wire types; `serde-saphyr` for YAML
+  (SKILL.md frontmatter) — never `serde_yaml`/`serde_yml`/`serde_norway`. See
+  §V's YAML parse-time bound for the pre-parse cap and explicit parse
+  `Budget` this parser requires (see
+  [[decisions/ADR-405-adopt-serde-saphyr]]).
 - Error handling: `thiserror` in every library crate; `anyhow` only in
   `mcp-execution-cli`.
 - CLI: `clap` (derive API) + `clap_complete`.
@@ -110,16 +112,23 @@ and issue-number references dedicated to it.
   layer below it rather than choosing an independent number, specifically so
   that data which already cleared a lower layer's bound can never be
   rejected by a higher layer for merely being "as large as already allowed."
-- **YAML parse-time bound (a deliberate exception to the rule above)**:
+- **YAML parse-time bound (deliberate exceptions to the rule above)**:
   `MAX_FRONTMATTER_SIZE` (`crates/mcp-skill/src/parser.rs`) caps the
   extracted `SKILL.md` frontmatter block at 8 KiB *before* handing it to
-  `serde_norway`. Unlike the resource-exhaustion bounds above, this cap is
+  `serde-saphyr`. Unlike the resource-exhaustion bounds above, this cap is
   intentionally independent of the enclosing `SKILL.md` size limit rather
-  than derived from it: libyaml-based parsers are not linear-time on
-  pathologically nested input, so a much larger document-size bound would
-  not itself bound parse latency. Any future YAML parse entry point must
-  apply this same kind of independent, pre-parse cap to the exact slice it
-  hands to its parser.
+  than derived from it: YAML parsers are not inherently linear-time on
+  pathologically nested or aliased input, so a much larger document-size
+  bound would not itself bound parse latency. Any future YAML parse entry
+  point must apply this same kind of independent, pre-parse cap to the exact
+  slice it hands to its parser. This size cap is now paired with an explicit
+  parse `Budget` (`frontmatter_options` in `crates/mcp-skill/src/parser.rs`;
+  see [[decisions/ADR-405-adopt-serde-saphyr]]) as a second, parser-level
+  bound. A second deliberate exception to the derived-bound rule lives
+  inside that budget: `max_depth: 64` is not derived from the 8 KiB cap the
+  way the budget's other fields are — 8 KiB of deeply nested flow sequences
+  can nest thousands of levels deep, so no size-derived depth value would be
+  meaningful.
 - **Prompt-injection / Markdown-injection defense**: any text that
   originates from an introspected (untrusted) MCP server and is later shown
   to an LLM or embedded in a document (tool names, descriptions, keywords,

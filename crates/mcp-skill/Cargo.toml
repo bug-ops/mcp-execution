@@ -20,8 +20,8 @@ mcp-execution-core = { workspace = true }
 regex = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde-saphyr = { workspace = true }
 serde_json = { workspace = true }
-serde_norway = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
