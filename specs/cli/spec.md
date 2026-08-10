@@ -285,6 +285,50 @@ URL sitting inside a JSON-escaped string (`serde_json` escaping `"` to
 otherwise leave an unescaped `"` and invalid JSON — see
 [[../core/spec#redact module|redact_urls_in_text]].
 
+Issue #421: this crate is a *client* of third-party MCP servers
+(`mcp_execution_introspector::Introspector`), and `rmcp` 3.1.2's transport layer logs raw,
+unsanitized peer input at `debug` level. `RedactingWriter` only rewrites embedded URLs — it does
+not neutralize this, so without a cap, `--verbose` alone (`filter = EnvFilter::new("debug")`, no
+`RUST_LOG` involved at all) streams an untrusted server's raw stdout lines into stderr. `init_logging`
+closes this specific path — *debug-level, raw-line* logging — via a private pure function,
+`cap_rmcp_log_level(EnvFilter) -> EnvFilter`, applied to *both* branches of the `verbose` `if`/`else`
+— not just the non-verbose branch's `try_from_default_env().unwrap_or_else(...)` fallback, since a
+directive folded only into that fallback string would never apply to the verbose branch (which
+never calls `try_from_default_env` at all) and is dead code in the non-verbose branch whenever
+`RUST_LOG` parses successfully:
+
+```rust
+let filter = cap_rmcp_log_level(if verbose {
+    EnvFilter::new("debug")
+} else {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+});
+```
+
+The cap is level-based, not a content filter: `rmcp` also logs a `Debug`-formatted peer
+notification at `info` (`service.rs`'s `tracing::info!(?notification, ...)`), which `rmcp=info`
+does not and cannot suppress. That site is mitigated (`?` renders via `Debug`, which escapes
+control characters, unlike the raw-`Display` `message`-field sites this cap targets), not
+eliminated — the full notification content still reaches stderr. Closing it would require
+content-level sanitization of `rmcp`'s own event, not a level directive, and is out of scope here.
+
+`cap_rmcp_log_level` adds an `rmcp=info` directive via `EnvFilter::add_directive`.
+`tracing_subscriber` orders directives by target specificity, so this directive (more specific
+than a bare global `debug`) wins over it. An operator who explicitly sets a *more specific*
+directive, e.g. `RUST_LOG=rmcp::transport=debug`, still wins over this one — intentional, since
+the goal is closing the accidental broad-`debug` case (including plain `--verbose`), not blocking
+a deliberate request for `rmcp` transport debug logs; this is the escape hatch for an operator who
+needs one. Specificity is a different axis from level, though: an *equally* specific
+`RUST_LOG=rmcp=debug` (same `rmcp` target this cap sets, different level) is not merged with this
+cap's `rmcp=info` — `tracing_subscriber`'s `Directive` ordering does not compare level, so
+`EnvFilter::add_directive` on a same-target directive *replaces* the existing entry, silently
+downgrading an operator's explicit `rmcp=debug` to `info`. Both the escape hatch and the
+replace-not-merge behavior are pinned by dedicated tests rather than assumed. Being a pure
+function (no `std::env` access), `cap_rmcp_log_level` is unit-tested directly with a scoped
+subscriber rather than by mutating `RUST_LOG` in-process (parallel test threads share one
+process) — mirroring the `SharedBuf`-based scoped-subscriber pattern `runner.rs`'s
+`RedactingWriter` tests already establish.
+
 `execute_command` **never propagates a handler failure as `Err`** — it
 always resolves to `Ok(classified_exit_code)` (issue #195's fix, so `main`
 can always reach `std::process::exit` with a semantic code instead of

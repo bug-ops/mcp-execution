@@ -556,6 +556,41 @@ by `SanitizedCodecError` rather than by omitting the value outright, since
 that value (a codec error's `Display`) carries diagnostic content worth
 keeping, unlike the rejected-env-var case above.
 
+Issue #421: `rmcp` 3.1.2's own transport layer logs raw, unsanitized peer input at `debug` level
+(`rmcp::transport::async_rw`'s parse-failure line embeds the offending line verbatim) — this fires
+inside this binary's own decode path *before* §8's `SanitizedCodecError` mitigation ever sees it,
+so a broad `RUST_LOG=debug` streams untrusted peer text into the log unfiltered. `main`'s private
+`cap_rmcp_log_level(EnvFilter) -> EnvFilter` closes this specific path — *debug-level, raw-line*
+logging — by `add_directive`-ing `rmcp=info` onto the *result* of
+`EnvFilter::try_from_default_env().unwrap_or_else(...)`, not folded into only the fallback string —
+a directive added solely to the fallback is dead code whenever `RUST_LOG` parses successfully,
+which is exactly the case this exists to cover.
+
+The cap is level-based, not a content filter, so it does not cover every untrusted-data-into-log
+site: `rmcp`'s `service.rs` also logs a `Debug`-formatted peer notification at `info`
+(`tracing::info!(?notification, "received notification")`), which `rmcp=info` does not and cannot
+suppress — `info` is exactly the level this cap still allows. That site fires under this binary's
+*default* filter with no `RUST_LOG` set at all. It is mitigated, not eliminated: `?` renders via
+`Debug`, which escapes control characters, so it lacks the newline/ANSI-forging vector the
+`message`-field `debug!` sites carry — but the full notification content still reaches the log
+verbatim otherwise. Closing that site (if ever warranted) would require a content-level
+sanitization of `rmcp`'s own event, not a level directive.
+
+`tracing_subscriber` orders directives by target specificity, so this `rmcp=info` directive (more
+specific than a bare global `debug`) wins over it; an operator who explicitly sets a *more
+specific* directive, e.g. `RUST_LOG=rmcp::transport=debug`, still wins over this one —
+intentional, since the goal is closing the accidental broad-`debug` case, not blocking a
+deliberate request for `rmcp` transport debug logs, and it is the escape hatch for an operator who
+needs one. Specificity is not the same axis as level, though: an *equally* specific
+`RUST_LOG=rmcp=debug` (same `rmcp` target this cap sets, different level) is not merged with this
+cap's `rmcp=info` — `tracing_subscriber`'s `Directive` ordering does not compare level, so
+`EnvFilter::add_directive` on a same-target directive *replaces* the existing entry, silently
+downgrading an operator's explicit `rmcp=debug` to `info`. Both the escape hatch and the
+replace-not-merge behavior are pinned by dedicated tests rather than assumed, per the original
+audit's request. `cap_rmcp_log_level` is a pure function (not env-mutating), so it is unit-tested
+directly with a scoped subscriber rather than by setting `RUST_LOG` in-process (parallel test
+threads share one process).
+
 ## 10. Error Conditions
 
 `StateError`: `AtCapacity { limit }`, `MemoryBudgetExceeded { limit }`.

@@ -310,8 +310,6 @@ fn build_generation_prompt(
 **Server ID**: {server_id}
 **Total Tools**: {}
 
-### Categories and Tools
-
 "#,
         categories.iter().map(|c| c.tools.len()).sum::<usize>()
     ));
@@ -637,6 +635,10 @@ mod tests {
         // exactly one real opening and one real closing delimiter in the prompt.
         assert_eq!(prompt.matches("<untrusted-data>").count(), 1);
         assert_eq!(prompt.matches("</untrusted-data>").count(), 1);
+        // Issue #419: the "### Categories and Tools" heading must be emitted exactly once, from
+        // inside the untrusted-data boundary -- not once there and once again in the trusted
+        // preamble above it.
+        assert_eq!(prompt.matches("### Categories and Tools").count(), 1);
     }
 
     /// Issue #411 (S1): a custom `skill_name` (attacker-controlled the same way tool metadata

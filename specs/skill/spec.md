@@ -273,6 +273,19 @@ document-size limit (see [[../constitution#V. Security]]).
 line number is corrected to be file-relative (the block starts one line
 after the file's opening `---`).
 
+`name` is additionally passed through `crate::types::validate_skill_name` (issue #419): the two
+`generate` call sites (`mcp-cli`'s `skill` command, `mcp-server`'s `generate_skill` tool) already
+enforce `MAX_SKILL_NAME_LENGTH` by calling `validate_skill_name` directly on a caller-supplied
+override before it reaches this function, but `save_skill` writes caller-supplied `SKILL.md`
+content straight through to `extract_skill_metadata` and never calls `validate_skill_name`
+itself — so before this fix, `save_skill`'s `name` was bounded only by `MAX_FRONTMATTER_SIZE` (8
+KiB), while every other path bounded it at 200 chars. `extract_skill_metadata` is the one `pub`
+chokepoint both paths share, so the bound lives here rather than being duplicated in the
+`save_skill` handler. `SkillNameError::TooLong` maps onto `SkillMetadataError::NameTooLong`;
+`SkillNameError::Empty` maps onto the existing `SkillMetadataError::MissingField { field: "name" }`
+— unreachable via this call site today, since `require_field` already rejects a blank `name`
+first, but mapped rather than panicking so the match stays safe if that ordering ever changes.
+
 > [!note]
 > `serde_norway` remains this project's mandated YAML parser. A pure-Rust
 > replacement (`serde-saphyr`) was evaluated and **not adopted** — see
@@ -337,7 +350,8 @@ name before any filesystem work; the rest is delegated with
 `StaleMetadata`.
 
 `SkillMetadataError`: `MissingFrontmatter`, `FrontmatterTooLarge`,
-`InvalidYaml`, `MissingField`.
+`InvalidYaml`, `MissingField`, `NameTooLong { len, limit }` (issue #419 — `name` exceeded
+`MAX_SKILL_NAME_LENGTH`; see §7).
 
 `OutputPathError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
 confinement now validates `server_id` via `mcp_execution_core::validate_server_id_slug`, the

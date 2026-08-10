@@ -439,6 +439,21 @@ pub enum SkillMetadataError {
         /// Name of the missing/empty field (e.g. `"name"`, `"description"`).
         field: &'static str,
     },
+
+    /// The frontmatter `name` exceeded [`MAX_SKILL_NAME_LENGTH`](crate::types::MAX_SKILL_NAME_LENGTH).
+    ///
+    /// Enforced here rather than only on the two `generate` call sites
+    /// (`crates/mcp-cli/src/commands/skill.rs`, `crates/mcp-server/src/service.rs`) so that
+    /// `save_skill` — which writes caller-supplied `SKILL.md` content directly and never routes
+    /// through [`crate::types::validate_skill_name`] — cannot persist an unbounded `name` into
+    /// the always-loaded skill index (issue #419).
+    #[error("skill_name too long: {len} chars exceeds {limit} limit")]
+    NameTooLong {
+        /// Actual length of the rejected name, in `char`s.
+        len: usize,
+        /// Maximum allowed length (`MAX_SKILL_NAME_LENGTH`).
+        limit: usize,
+    },
 }
 
 /// Renders a `serde_norway` deserialization error, correcting its line number
@@ -523,8 +538,9 @@ fn require_field(value: Option<String>, field: &'static str) -> Result<String, S
 /// # Errors
 ///
 /// Returns [`SkillMetadataError`] if the YAML frontmatter is missing, too
-/// large (`MAX_FRONTMATTER_SIZE`), malformed, or a required field (`name`,
-/// `description`) is absent or empty.
+/// large (`MAX_FRONTMATTER_SIZE`), malformed, a required field (`name`,
+/// `description`) is absent or empty, or `name` exceeds
+/// [`MAX_SKILL_NAME_LENGTH`](crate::types::MAX_SKILL_NAME_LENGTH).
 ///
 /// # Examples
 ///
@@ -573,6 +589,19 @@ pub fn extract_skill_metadata(
         .map_err(|e| SkillMetadataError::InvalidYaml(describe_yaml_error(&e)))?;
 
     let name = require_field(frontmatter.name, "name")?;
+    match crate::types::validate_skill_name(&name) {
+        Ok(()) => {}
+        // `require_field` already rejects a blank/empty `name`, so this arm is unreachable via
+        // this call site today — mapped onto the equivalent `MissingField` rather than a `panic!`
+        // or a second, inconsistent "empty" error so the match stays exhaustive and safe even if
+        // `require_field`'s blank-rejection is ever relaxed.
+        Err(crate::types::SkillNameError::Empty) => {
+            return Err(SkillMetadataError::MissingField { field: "name" });
+        }
+        Err(crate::types::SkillNameError::TooLong { len, limit }) => {
+            return Err(SkillMetadataError::NameTooLong { len, limit });
+        }
+    }
     let description = require_field(frontmatter.description, "description")?;
 
     // Count sections (H2 headers)
@@ -1123,6 +1152,37 @@ More content.
             result,
             Err(SkillMetadataError::MissingField { field: "name" })
         ));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_name_too_long_rejected() {
+        // Issue #419: `save_skill` writes caller-supplied SKILL.md content directly, never
+        // routing `name` through `validate_skill_name` the way the two `generate` call sites do.
+        // `extract_skill_metadata` is the one chokepoint both paths share, so the bound has to
+        // live here.
+        let long_name = "a".repeat(crate::types::MAX_SKILL_NAME_LENGTH + 1);
+        let content = format!("---\nname: {long_name}\ndescription: test\n---\n# Test");
+
+        let result = extract_skill_metadata(&content);
+
+        assert!(matches!(
+            result,
+            Err(SkillMetadataError::NameTooLong {
+                len,
+                limit
+            }) if len == crate::types::MAX_SKILL_NAME_LENGTH + 1
+                && limit == crate::types::MAX_SKILL_NAME_LENGTH
+        ));
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_name_at_max_length_accepted() {
+        let max_name = "a".repeat(crate::types::MAX_SKILL_NAME_LENGTH);
+        let content = format!("---\nname: {max_name}\ndescription: test\n---\n# Test");
+
+        let result = extract_skill_metadata(&content);
+
+        assert_eq!(result.unwrap().name, max_name);
     }
 
     #[test]
