@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
+  `mcp-execution-codegen`'s `TemplateEngine`. Without it, a template referencing a typo'd or
+  removed field silently rendered an empty string instead of failing at render time.
+
+### Removed
+
+- **`mcp-execution-core`**: dropped the unused `async-trait`, `chrono`, `tracing`, and `uuid`
+  direct dependencies — none were referenced in the crate's own source. Side effect: `uuid`'s
+  `fast-rng` feature (declared only by `mcp-execution-core`, not by `mcp-execution-server`, which
+  also depends on `uuid`) is no longer unified across the workspace build, so
+  `mcp-execution-server`'s `Uuid::new_v4()` calls now use the default RNG path instead of the
+  faster one — a negligible, perf-only effect with no behavioral change.
+- **`mcp-execution-skill`**: dropped the unused `dirs` direct dependency — not referenced in the
+  crate's own source.
+
 ## [0.9.0] - 2026-07-27
 
 ### Security

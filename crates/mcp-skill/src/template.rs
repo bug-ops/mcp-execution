@@ -34,6 +34,10 @@ const SKILL_MD_TEMPLATE: &str = include_str!("templates/skill-md.hbs");
 /// Templates are parsed and validated on first access.
 static HANDLEBARS: LazyLock<Handlebars<'static>> = LazyLock::new(|| {
     let mut hb = Handlebars::new();
+
+    // Strict mode: fail on missing variables
+    hb.set_strict_mode(true);
+
     hb.register_template_string("skill", SKILL_GENERATION_TEMPLATE)
         .expect("embedded skill-generation template must be valid Handlebars syntax");
     hb.register_template_string("skill-md", SKILL_MD_TEMPLATE)
@@ -70,7 +74,10 @@ fn yaml_quote(s: &str) -> String {
 ///
 /// # Errors
 ///
-/// Returns `TemplateError` if template rendering fails.
+/// Returns `TemplateError` if template rendering fails, including when
+/// `context` is missing a field the template references — Handlebars strict
+/// mode is enabled, so a missing variable hard-fails instead of silently
+/// rendering an empty string.
 ///
 /// # Examples
 ///
@@ -114,7 +121,10 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 ///
 /// # Errors
 ///
-/// Returns [`TemplateError`] if Handlebars rendering fails.
+/// Returns [`TemplateError`] if Handlebars rendering fails, including when
+/// `context` is missing a field the template references — Handlebars strict
+/// mode is enabled, so a missing variable hard-fails instead of silently
+/// rendering an empty string.
 ///
 /// # Examples
 ///
@@ -353,6 +363,55 @@ mod tests {
         assert!(
             md.contains("Injected Heading"),
             "sanitized content must still render, just inert"
+        );
+    }
+
+    /// Pins that `HANDLEBARS` actually has strict mode enabled, rather than relying on
+    /// the missing-variable regression tests below alone: if a future change (or a
+    /// `handlebars` upgrade defaulting strict mode differently) silently flips this
+    /// back off, this test fails immediately instead of only weakening the other two.
+    #[test]
+    fn test_handlebars_strict_mode_enabled() {
+        assert!(HANDLEBARS.strict_mode());
+    }
+
+    /// Issue #370 regression: a context missing a variable the template references
+    /// must hard-fail rendering (`TemplateError::RenderFailed`) rather than silently
+    /// producing an incomplete SKILL.md/prompt. Exercises the actual `HANDLEBARS`
+    /// static and the real embedded templates, not a hand-rolled stand-in.
+    #[test]
+    fn test_render_generation_prompt_fails_on_missing_variable() {
+        let context = serde_json::json!({
+            "server_id": "test",
+            // "skill_name" intentionally omitted — referenced unconditionally by
+            // skill-generation.hbs.
+            "tool_count": 1,
+        });
+
+        let result = HANDLEBARS.render("skill", &context);
+
+        assert!(
+            result.is_err(),
+            "rendering with a missing referenced variable must fail under strict mode, got: {result:?}"
+        );
+    }
+
+    /// Same guarantee as above, exercised against the `skill-md.hbs` template used by
+    /// `render_skill_md`.
+    #[test]
+    fn test_render_skill_md_fails_on_missing_variable() {
+        let context = serde_json::json!({
+            "server_id": "test",
+            // "skill_name" intentionally omitted — referenced unconditionally by
+            // skill-md.hbs.
+            "tool_count": 1,
+        });
+
+        let result = HANDLEBARS.render("skill-md", &context);
+
+        assert!(
+            result.is_err(),
+            "rendering with a missing referenced variable must fail under strict mode, got: {result:?}"
         );
     }
 
