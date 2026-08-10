@@ -1027,6 +1027,80 @@ fn test_runtime_bridge_rejects_forbidden_env_var_before_spawn() {
         stdout.contains("LD_PRELOAD"),
         "rejection reason should name the forbidden env var: {stdout}"
     );
+
+    // Case-varied regression guard for #428: the bridge's `validateEnvName` must reject a
+    // differently-cased spelling of a forbidden name too, mirroring the Rust-side
+    // `validate_env_name` fix — Windows treats environment variable names as
+    // case-insensitive, so `Ld_Preload` is just as real a `LD_PRELOAD` override as the
+    // canonical spelling once the subprocess is spawned.
+    let mcp_json_case_varied = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": { "Ld_Preload": "/tmp/evil.so" }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_forbidden_env_var_before_spawn_case_varied",
+        &bridge.content,
+        &mcp_json_case_varied,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the case-varied Ld_Preload config before spawning:\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the case-varied config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("Ld_Preload"),
+        "rejection reason should name the forbidden env var as passed: {stdout}"
+    );
+
+    // Case-varied regression guard for the `DYLD_` *prefix* branch specifically (the exact-name
+    // and prefix checks are separate code paths in `validateEnvName`, so the exact-name case
+    // above does not exercise this one).
+    let mcp_json_dyld_prefix_case_varied = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": { "dyld_insert_libraries": "/tmp/evil.so" }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_forbidden_env_var_before_spawn_dyld_prefix_case_varied",
+        &bridge.content,
+        &mcp_json_dyld_prefix_case_varied,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the case-varied dyld_insert_libraries config before spawning:\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the case-varied prefix config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("dyld_insert_libraries"),
+        "rejection reason should name the forbidden env var as passed: {stdout}"
+    );
 }
 
 /// Behavioral regression guard for #201's critic follow-up (S3): `{"transport":"http",...}`

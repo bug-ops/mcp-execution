@@ -289,10 +289,13 @@ at each point it could have arrived from an unvalidated source.
   1. `ServerConfigBuilder::build()` runs full validation unconditionally and
      returns `Err` for any of: a forbidden shell metacharacter
      (`;|&><\`$()` or CR/LF) in `command`/any `arg`; a forbidden environment
-     variable name (exact match against a fixed list, or the `DYLD_` prefix);
-     an unsupported URL scheme for HTTP/SSE transport; a header name outside
-     RFC 7230 `tchar`, or a duplicate header name (case-insensitively); a
-     timeout of `0` or greater than 600s.
+     variable name (exact match against a fixed list, or the `DYLD_` prefix,
+     both compared case-insensitively — Windows treats environment variable
+     names as case-insensitive at the OS level, so e.g. `Path`/`path` are
+     rejected the same as `PATH`); an unsupported URL scheme for HTTP/SSE
+     transport; a header name outside RFC 7230 `tchar`, or a duplicate
+     header name (case-insensitively); a timeout of `0` or greater than
+     600s.
   2. `Introspector::discover_server` re-runs `validate_server_config` on its
      `config` argument even though callers are expected to have already
      validated it via the builder.

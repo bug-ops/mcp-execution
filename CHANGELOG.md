@@ -177,6 +177,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-core`**: `validate_env_name` now compares environment variable names against
+  `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` (`DYLD_`) with an ASCII-case-insensitive match
+  instead of an exact byte comparison. Windows treats environment variable names as
+  case-insensitive at the OS/`CreateProcess` level, so a case-varied spelling such as `Path` or
+  `path` previously bypassed the forbidden-name check entirely while still overriding `PATH` for
+  the spawned subprocess (#428). As a behavior change, a POSIX-legal but distinctly-cased name
+  that is not the canonical spelling (e.g. `path`, `node_options`, `ld_preload`) is now rejected
+  too, even on platforms where env var names are case-sensitive, so the check behaves
+  identically regardless of host OS.
+- **`mcp-execution-codegen`**: the generated runtime bridge's `validateEnvName` (rendered into
+  `_runtime/mcp-bridge.ts`) now mirrors the same case-insensitive comparison, closing the
+  matching gap in the TypeScript copy of this check (#428).
 - **`mcp-execution-skill`**: `render_skill_md`'s YAML frontmatter (`name`, `description`) is
   now serialized as a whole via `serde-saphyr`'s emitter instead of hand-rolled escaping applied
   only to `description`. The previous escaper covered just `\`, `"`, and `\n`/`\r`, leaving other

@@ -211,16 +211,22 @@ function validateCommandString(value: unknown, context: string): void {
 /**
  * Validates an environment variable name against the forbidden list.
  *
- * Mirrors `validate_env_name` in `mcp-execution-core`'s `command.rs`.
+ * Mirrors `validate_env_name` in `mcp-execution-core`'s `command.rs`, including its
+ * case-insensitive comparison: Windows treats environment variable names as case-insensitive
+ * at the OS/`CreateProcess` level, so a case-varied spelling such as `Path` or `path` must be
+ * rejected exactly like the canonical `PATH`. `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` are
+ * rendered from the Rust source already upper-cased, so upper-casing `name` before comparing
+ * is sufficient.
  *
  * @param name - The environment variable name to validate
- * @throws {Error} If the name is forbidden (exact match or `DYLD_*` prefix)
+ * @throws {Error} If the name is forbidden (exact match or `DYLD_*` prefix, case-insensitive)
  */
 function validateEnvName(name: string): void {
-  if (FORBIDDEN_ENV_NAMES.includes(name)) {
+  const upperName = name.toUpperCase();
+  if (FORBIDDEN_ENV_NAMES.includes(upperName)) {
     throw new Error(`Forbidden environment variable name: ${name}`);
   }
-  if (name.startsWith(FORBIDDEN_ENV_PREFIX)) {
+  if (upperName.startsWith(FORBIDDEN_ENV_PREFIX)) {
     throw new Error(`Forbidden environment variable prefix ${FORBIDDEN_ENV_PREFIX}: ${name}`);
   }
 }

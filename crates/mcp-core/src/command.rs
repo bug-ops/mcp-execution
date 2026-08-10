@@ -44,6 +44,11 @@ const FORBIDDEN_CHARS: &[char] = &[';', '|', '&', '>', '<', '`', '$', '(', ')', 
 
 /// Forbidden environment variable names that pose security risks.
 ///
+/// Matched by [`validate_env_name`] using an ASCII-case-insensitive comparison — Windows
+/// treats environment variable names as case-insensitive at the OS/`CreateProcess` level, so
+/// a config carrying e.g. `Path` or `NODE_options` is rejected exactly like the canonical
+/// spelling shown below.
+///
 /// # Threat Model — What This List Does and Does Not Protect Against
 ///
 /// This is an **accidental/indirect-misconfiguration guard, not a sandbox
@@ -96,6 +101,8 @@ const FORBIDDEN_ENV_NAMES: &[&str] = &[
 
 /// Environment-variable-name prefix rejected regardless of exact match: macOS's
 /// dynamic-linker variable family (`DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, ...).
+///
+/// Matched by [`validate_env_name`] case-insensitively, same as [`FORBIDDEN_ENV_NAMES`].
 const FORBIDDEN_ENV_PREFIX: &str = "DYLD_";
 
 /// Upper bound for `connect_timeout`/`discover_timeout`, matching the
@@ -266,8 +273,9 @@ pub const fn forbidden_env_prefix() -> &'static str {
 /// - **Forbidden env names**: dynamic-linker (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
 ///   `LD_AUDIT`, `DYLD_*`), `PATH`, and interpreter hijack vectors
 ///   (`NODE_OPTIONS`, `BASH_ENV`, `PYTHONPATH`, `PYTHONSTARTUP`, `RUBYOPT`,
-///   `PERL5OPT`, `JAVA_TOOL_OPTIONS`) — see the `FORBIDDEN_ENV_NAMES` constant's
-///   doc comment in this module's source for the full threat-model note
+///   `PERL5OPT`, `JAVA_TOOL_OPTIONS`), matched case-insensitively — see the
+///   `FORBIDDEN_ENV_NAMES` constant's doc comment in this module's source for
+///   the full threat-model note
 /// - **Absolute paths**: Must exist and be executable
 /// - **Binary names**: Allowed (resolved via PATH at runtime)
 /// - **URL scheme**: Must be `http://` or `https://`
@@ -794,16 +802,30 @@ fn validate_absolute_path(command: &str) -> Result<()> {
 /// This is an internal helper that checks if an environment variable name is in the
 /// forbidden list. Length is already bounded unconditionally by [`validate_stdio_size_bounds`]
 /// before this runs.
+///
+/// The comparison is ASCII-case-insensitive: Windows treats environment variable names as
+/// case-insensitive at the OS/`CreateProcess` level (and so does std's `Command` environment
+/// block on that platform), so a case-varied spelling such as `Path` or `path` would otherwise
+/// bypass this list while still functioning as a real override when the subprocess is spawned.
 fn validate_env_name(name: &str) -> Result<()> {
-    // Check for forbidden env names (exact match)
-    if FORBIDDEN_ENV_NAMES.contains(&name) {
+    // Check for forbidden env names (exact match, case-insensitive)
+    if FORBIDDEN_ENV_NAMES
+        .iter()
+        .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
+    {
         return Err(Error::SecurityViolation {
             reason: format!("Forbidden environment variable name: {name}"),
         });
     }
 
-    // Check for DYLD_* prefix (macOS dynamic linker variables)
-    if name.starts_with(FORBIDDEN_ENV_PREFIX) {
+    // Check for DYLD_* prefix (macOS dynamic linker variables), case-insensitive.
+    // Compared as bytes (not `str` slicing) so a multi-byte UTF-8 name can never
+    // panic on a non-char-boundary split.
+    if name
+        .as_bytes()
+        .get(..FORBIDDEN_ENV_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(FORBIDDEN_ENV_PREFIX.as_bytes()))
+    {
         return Err(Error::SecurityViolation {
             reason: format!("Forbidden environment variable prefix DYLD_: {name}"),
         });
@@ -1255,6 +1277,58 @@ mod tests {
         assert!(validate_env_name("LD_DEBUG").is_ok()); // Not in list
         assert!(validate_env_name("MY_PATH").is_ok()); // Not exact match
         assert!(validate_env_name("DYLD").is_ok()); // No underscore, not prefix match
+    }
+
+    #[test]
+    fn test_validate_env_name_case_insensitive() {
+        // Windows treats env var names as case-insensitive, so any casing of an
+        // exact-match forbidden name must be rejected, not just the canonical spelling.
+        assert!(validate_env_name("Path").is_err());
+        assert!(validate_env_name("path").is_err());
+        assert!(validate_env_name("PATH").is_err());
+        assert!(validate_env_name("PaTh").is_err());
+
+        assert!(validate_env_name("Ld_Preload").is_err());
+        assert!(validate_env_name("ld_preload").is_err());
+
+        assert!(validate_env_name("Node_Options").is_err());
+        assert!(validate_env_name("node_options").is_err());
+
+        // Prefix match must also be case-insensitive.
+        assert!(validate_env_name("dyld_insert_libraries").is_err());
+        assert!(validate_env_name("Dyld_Insert_Libraries").is_err());
+        assert!(validate_env_name("dYlD_anything").is_err());
+
+        // Sanity: names that are not case variants of a forbidden entry stay allowed.
+        assert!(validate_env_name("MyPath").is_ok());
+        assert!(validate_env_name("dyl").is_ok()); // too short for DYLD_ prefix, not a match
+    }
+
+    #[test]
+    fn test_validate_env_name_prefix_check_does_not_panic_on_utf8_boundary() {
+        // "DYL€_REST": the euro sign ('\u{20AC}') is a 3-byte UTF-8 sequence occupying byte
+        // indices 3..6, so byte index `FORBIDDEN_ENV_PREFIX.len()` (5) falls strictly inside
+        // it and is not a char boundary. A naive `name[..5]` slice would panic here; the
+        // byte-slice `eq_ignore_ascii_case` comparison in `validate_env_name` must not.
+        let name = "DYL\u{20AC}_REST";
+        assert_eq!(name.len(), 3 + 3 + 5);
+        assert!(!name.is_char_boundary(5));
+        assert!(validate_env_name(name).is_ok());
+    }
+
+    #[test]
+    fn test_forbidden_env_constants_are_already_ascii_uppercase() {
+        // The generated TS runtime bridge (`runtime-bridge.ts.hbs`) renders these constants
+        // verbatim and upper-cases only the *input* name before comparing, relying on
+        // `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` already being upper-case. This invariant
+        // protects that render-from-Rust drift guarantee.
+        for forbidden in FORBIDDEN_ENV_NAMES {
+            assert_eq!(*forbidden, forbidden.to_ascii_uppercase());
+        }
+        assert_eq!(
+            FORBIDDEN_ENV_PREFIX,
+            FORBIDDEN_ENV_PREFIX.to_ascii_uppercase()
+        );
     }
 
     // ── Http/Sse transport validation ────────────────────────────────────────
