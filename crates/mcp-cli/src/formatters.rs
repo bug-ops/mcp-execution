@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use mcp_execution_core::cli::OutputFormat;
+use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use serde::Serialize;
 
 /// Format data according to the specified output format.
@@ -46,6 +46,38 @@ pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<Str
         OutputFormat::Text => text::format(data),
         OutputFormat::Pretty => pretty::format(data),
     }
+}
+
+/// Formats `data` per `format`, prints it to stdout, and returns `exit_code`.
+///
+/// Collapses the format/print/return-exit-code sequence repeated across every CLI command
+/// handler's branches into a single call site, so each branch only has to state which exit code
+/// it wants.
+///
+/// # Errors
+///
+/// Returns an error if formatting `data` fails (see [`format_output`]).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::formatters::emit;
+/// use mcp_execution_core::cli::{ExitCode, OutputFormat};
+/// use serde::Serialize;
+///
+/// #[derive(Serialize)]
+/// struct Data {
+///     value: i32,
+/// }
+///
+/// let code = emit(&Data { value: 42 }, OutputFormat::Json, ExitCode::SUCCESS)?;
+/// assert_eq!(code, ExitCode::SUCCESS);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn emit<T: Serialize>(data: &T, format: OutputFormat, exit_code: ExitCode) -> Result<ExitCode> {
+    let formatted = format_output(data, format)?;
+    println!("{formatted}");
+    Ok(exit_code)
 }
 
 /// Escapes a string for safe interpolation into hand-crafted `Text`/`Pretty` output lines.

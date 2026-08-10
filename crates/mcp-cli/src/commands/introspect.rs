@@ -217,12 +217,8 @@ pub async fn run(
     let result = build_result(&server_info, detailed);
 
     // Format and display output
-    let formatted = crate::formatters::format_output(&result, output_format)
-        .context("failed to format introspection results")?;
-
-    println!("{formatted}");
-
-    Ok(ExitCode::SUCCESS)
+    crate::formatters::emit(&result, output_format, ExitCode::SUCCESS)
+        .context("failed to format introspection results")
 }
 
 /// Builds the introspection result from server info.

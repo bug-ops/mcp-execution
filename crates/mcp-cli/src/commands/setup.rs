@@ -105,12 +105,10 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
 
     if output_format == OutputFormat::Pretty {
         print_pretty_summary(&result);
-    } else {
-        let formatted = crate::formatters::format_output(&result, output_format)?;
-        println!("{formatted}");
+        return Ok(ExitCode::SUCCESS);
     }
 
-    Ok(ExitCode::SUCCESS)
+    crate::formatters::emit(&result, output_format, ExitCode::SUCCESS)
 }
 
 /// Prints the human-readable setup summary (the `Pretty` format rendering).
