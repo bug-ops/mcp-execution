@@ -105,6 +105,29 @@ pub struct IntrospectServerParams {
 ///
 /// Contains tool metadata for Claude to categorize and a session ID
 /// for use with `save_categorized_tools`.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::{IntrospectServerResult, IntrospectedToolSummary};
+/// use chrono::Utc;
+/// use uuid::Uuid;
+///
+/// let result = IntrospectServerResult {
+///     server_id: "github".to_string(),
+///     server_name: "GitHub MCP Server".to_string(),
+///     tools_found: 1,
+///     tools: vec![IntrospectedToolSummary {
+///         name: "create_issue".to_string(),
+///         description: "Create a new issue".to_string(),
+///         parameters: vec!["title".to_string(), "body".to_string()],
+///     }],
+///     session_id: Uuid::new_v4(),
+///     expires_at: Utc::now(),
+/// };
+///
+/// assert_eq!(result.tools_found, 1);
+/// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct IntrospectServerResult {
     /// Server identifier
@@ -130,6 +153,20 @@ pub struct IntrospectServerResult {
 ///
 /// Includes the tool name, description, and parameter names to help
 /// Claude understand the tool's purpose and assign appropriate categories.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::IntrospectedToolSummary;
+///
+/// let summary = IntrospectedToolSummary {
+///     name: "create_issue".to_string(),
+///     description: "Create a new issue".to_string(),
+///     parameters: vec!["title".to_string(), "body".to_string()],
+/// };
+///
+/// assert_eq!(summary.parameters.len(), 2);
+/// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct IntrospectedToolSummary {
     /// Original tool name
@@ -230,6 +267,23 @@ pub struct CategorizedTool {
 ///
 /// Reports success status, number of files generated, and any errors
 /// that occurred during generation.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::SaveCategorizedToolsResult;
+/// use std::collections::HashMap;
+///
+/// let result = SaveCategorizedToolsResult {
+///     success: true,
+///     files_generated: 3,
+///     output_dir: "~/.claude/servers/github".to_string(),
+///     categories: HashMap::from([("issues".to_string(), 3)]),
+///     errors: vec![],
+/// };
+///
+/// assert!(result.success);
+/// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SaveCategorizedToolsResult {
     /// Whether generation succeeded
@@ -250,6 +304,19 @@ pub struct SaveCategorizedToolsResult {
 }
 
 /// Error that occurred while generating a specific tool.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::ToolGenerationError;
+///
+/// let error = ToolGenerationError {
+///     tool_name: "create_issue".to_string(),
+///     error: "invalid parameter schema".to_string(),
+/// };
+///
+/// assert_eq!(error.tool_name, "create_issue");
+/// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ToolGenerationError {
     /// Name of the tool that failed
@@ -264,6 +331,14 @@ pub struct ToolGenerationError {
 // ============================================================================
 
 /// Parameters for listing generated servers.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::ListGeneratedServersParams;
+///
+/// let params = ListGeneratedServersParams { base_dir: None };
+/// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ListGeneratedServersParams {
     /// Base directory to scan, relative to `~/.claude/servers`
@@ -274,6 +349,24 @@ pub struct ListGeneratedServersParams {
 }
 
 /// Result from listing generated servers.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::{ListGeneratedServersResult, GeneratedServerInfo};
+///
+/// let result = ListGeneratedServersResult {
+///     servers: vec![GeneratedServerInfo {
+///         id: "github".to_string(),
+///         tool_count: 12,
+///         generated_at: None,
+///         output_dir: "~/.claude/servers/github".to_string(),
+///     }],
+///     total_servers: 1,
+/// };
+///
+/// assert_eq!(result.total_servers, 1);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListGeneratedServersResult {
     /// List of servers with generated files
@@ -284,6 +377,21 @@ pub struct ListGeneratedServersResult {
 }
 
 /// Information about a server with generated progressive loading files.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::GeneratedServerInfo;
+///
+/// let info = GeneratedServerInfo {
+///     id: "github".to_string(),
+///     tool_count: 12,
+///     generated_at: None,
+///     output_dir: "~/.claude/servers/github".to_string(),
+/// };
+///
+/// assert_eq!(info.id, "github");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GeneratedServerInfo {
     /// Server identifier
@@ -307,6 +415,27 @@ pub struct GeneratedServerInfo {
 ///
 /// Stores introspection data between `introspect_server` and
 /// `save_categorized_tools` calls.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::types::PendingGeneration;
+/// use mcp_execution_server::clock::SystemClock;
+/// use mcp_execution_core::{ServerId, ServerConfig};
+/// use mcp_execution_introspector::ServerInfo;
+///
+/// # fn example(server_info: ServerInfo) {
+/// let pending = PendingGeneration::new(
+///     ServerId::new("github").unwrap(),
+///     server_info,
+///     ServerConfig::builder().command("npx".to_string()).build().unwrap(),
+///     None,
+///     &SystemClock,
+/// );
+///
+/// assert_eq!(pending.server_id.as_str(), "github");
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct PendingGeneration {
     /// Server identifier

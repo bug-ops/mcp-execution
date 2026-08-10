@@ -80,7 +80,7 @@ pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024; // 8 KiB, extracted YAML block
 pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError>;
 pub struct ScanResult { pub tools: Vec<ParsedToolFile>, pub warnings: Vec<String> }
 
-pub fn build_skill_context(server_id: &str, tools: &[ParsedToolFile], use_case_hints: Option<&[String]>) -> GenerateSkillResult;
+pub fn build_skill_context(server_id: &str, tools: &[ParsedToolFile], use_case_hints: Option<&[String]>, custom_name: Option<&str>) -> GenerateSkillResult;
 
 pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String, TemplateError>;
 pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, TemplateError>;
@@ -153,14 +153,31 @@ without a category are grouped under `"uncategorized"`, sorted last.
 category, then fills remaining slots.
 
 `skill_name` itself — unlike `ParsedToolFile`'s fields, which all flow
-through `group_by_category` — is set directly by `build_skill_context`
-(`{server_id}-progressive`, always safe: composed from `server_id`, an
-already-validated `[a-z0-9-]+` slug) or overridden afterward by a caller
-(`mcp-cli`'s `--skill-name` flag, or `generate_skill`'s `skill_name` MCP
-tool argument). Both override sites call `validate_skill_name` before
-assigning (issue #413) but do not sanitize at assignment time; sanitization
-instead happens per render surface, at the two places `skill_name` actually
-gets spliced into rendered text — see §5 and §6 below (issue #410, #411).
+through `group_by_category` — is resolved as the very first step inside
+`build_skill_context`, from its own `custom_name: Option<&str>` parameter:
+the caller's override when `Some`, else the default
+`{server_id}-progressive`. Either way, the resolved name is immediately
+flattened with `sanitize_untrusted_text` (idempotent against
+`build_generation_prompt`'s own identical call below) so
+`GenerateSkillResult::skill_name` holds exactly the same
+control-character-flattened, length-truncated text as the prompt's
+`**Skill Name**` line — the two can never visibly disagree on control
+characters, invisible Unicode, or length truncation (issue #435, S1).
+Every derived field the function builds afterward — including
+`generation_prompt` — is built from this already-resolved, already-flattened
+name, so a custom name can never be reflected in `GenerateSkillResult::
+skill_name` while `generation_prompt` still embeds the stale default
+(issue #436; previously `build_skill_context` always computed the default
+internally and callers patched `result.skill_name` onto the already-built
+result afterward, which is exactly the bug #436 fixed — `generation_prompt`
+had already been built by that point). Both callers (`mcp-cli`'s
+`--skill-name` flag, `generate_skill`'s `skill_name` MCP tool argument) call
+`validate_skill_name` *before* calling `build_skill_context` (issue #413);
+`sanitize_untrusted_text` inside `build_skill_context` is a distinct,
+additional defense layered on top of that validation, not a substitute for
+it. The prompt's `**Skill Name**` line gets one further layer beyond the
+flattening applied to `GenerateSkillResult::skill_name` — see §5 below
+(issue #410, #411).
 
 ## 5. Prompt Injection Defense
 

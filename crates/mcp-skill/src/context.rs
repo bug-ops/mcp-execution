@@ -75,8 +75,9 @@ pub fn build_skill_context(
         MAX_UNTRUSTED_FIELD_LEN,
     );
 
-    // Build output path
-    let output_path = format!("~/.claude/skills/{server_id}/SKILL.md");
+    // Build default output path hint (display-only; see
+    // `GenerateSkillResult::default_output_path_hint`)
+    let default_output_path_hint = format!("~/.claude/skills/{server_id}/SKILL.md");
 
     // Render generation prompt
     let generation_prompt = build_generation_prompt(
@@ -95,7 +96,7 @@ pub fn build_skill_context(
         tool_count,
         example_tools,
         generation_prompt,
-        output_path,
+        default_output_path_hint,
         // Populated by the caller from `ScanResult::warnings`; `build_skill_context`
         // only sees already-scanned `tools`, not the drift detected while scanning.
         warnings: Vec::new(),
