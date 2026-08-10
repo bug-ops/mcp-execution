@@ -348,11 +348,66 @@ impl ProgressiveGenerator<'_> {
 
         let mut code = GeneratedCode::new();
         let mut total_bytes = 0usize;
-        let server_id = server_info.id.as_str();
         let typescript_names = resolve_typescript_names(&server_info.tools);
+
+        let tool_metadata = self.emit_tool_files(
+            server_info,
+            categorizations,
+            &typescript_names,
+            &mut code,
+            &mut total_bytes,
+        )?;
+
+        self.emit_index_file(
+            server_info,
+            categorizations,
+            &typescript_names,
+            &mut code,
+            &mut total_bytes,
+        )?;
+
+        self.emit_scaffolding_files(&mut code, &mut total_bytes)?;
+
+        // Generate _meta.json sidecar with structured tool metadata
+        add_tracked(
+            &mut code,
+            &mut total_bytes,
+            Self::create_metadata_file(server_info, tool_metadata)?,
+        )?;
+
+        tracing::debug!("Generated {}", METADATA_FILE_NAME);
+
+        if categorizations.is_empty() {
+            tracing::info!(
+                "Successfully generated {} files for {} (progressive loading)",
+                code.file_count(),
+                server_info.name
+            );
+        } else {
+            tracing::info!(
+                "Successfully generated {} files for {} with categorizations (progressive loading)",
+                code.file_count(),
+                server_info.name
+            );
+        }
+
+        Ok(code)
+    }
+
+    /// Renders one `.ts` file per tool with categorization metadata, tracking each into `code`.
+    ///
+    /// Returns per-tool [`ToolMetadata`] in tool order for the `_meta.json` sidecar.
+    fn emit_tool_files(
+        &self,
+        server_info: &ServerInfo,
+        categorizations: &HashMap<String, ToolCategorization>,
+        typescript_names: &[String],
+        code: &mut GeneratedCode,
+        total_bytes: &mut usize,
+    ) -> Result<Vec<ToolMetadata>> {
+        let server_id = server_info.id.as_str();
         let mut tool_metadata = Vec::with_capacity(server_info.tools.len());
 
-        // Generate tool files (one per tool) with categorization metadata
         for (idx, tool) in server_info.tools.iter().enumerate() {
             let tool_name = tool.name.as_str();
             let categorization = categorizations.get(tool_name);
@@ -380,8 +435,8 @@ impl ProgressiveGenerator<'_> {
                 })?;
 
             add_tracked(
-                &mut code,
-                &mut total_bytes,
+                code,
+                total_bytes,
                 GeneratedFile {
                     path: format!("{}.ts", tool_context.typescript_name),
                     content: tool_code,
@@ -405,14 +460,25 @@ impl ProgressiveGenerator<'_> {
             ));
         }
 
-        // Generate index.ts with category grouping
+        Ok(tool_metadata)
+    }
+
+    /// Builds and renders `index.ts` with category grouping, tracking it into `code`.
+    fn emit_index_file(
+        &self,
+        server_info: &ServerInfo,
+        categorizations: &HashMap<String, ToolCategorization>,
+        typescript_names: &[String],
+        code: &mut GeneratedCode,
+        total_bytes: &mut usize,
+    ) -> Result<()> {
         let index_context =
-            Self::create_index_context(server_info, Some(categorizations), &typescript_names);
+            Self::create_index_context(server_info, Some(categorizations), typescript_names);
         let index_code = self.engine.render("progressive/index", &index_context)?;
 
         add_tracked(
-            &mut code,
-            &mut total_bytes,
+            code,
+            total_bytes,
             GeneratedFile {
                 path: "index.ts".to_string(),
                 content: index_code,
@@ -424,6 +490,16 @@ impl ProgressiveGenerator<'_> {
             categorizations.len()
         );
 
+        Ok(())
+    }
+
+    /// Emits the tool-independent scaffolding files: the runtime bridge, `package.json`, and
+    /// `tsconfig.json`.
+    fn emit_scaffolding_files(
+        &self,
+        code: &mut GeneratedCode,
+        total_bytes: &mut usize,
+    ) -> Result<()> {
         // Generate runtime bridge (same as non-categorized)
         let bridge_context = BridgeContext::default();
         let bridge_code = self
@@ -431,8 +507,8 @@ impl ProgressiveGenerator<'_> {
             .render("progressive/runtime-bridge", &bridge_context)?;
 
         add_tracked(
-            &mut code,
-            &mut total_bytes,
+            code,
+            total_bytes,
             GeneratedFile {
                 path: "_runtime/mcp-bridge.ts".to_string(),
                 content: bridge_code,
@@ -444,8 +520,8 @@ impl ProgressiveGenerator<'_> {
         // Generate package.json for ES module identification and the @types/node devDependency
         // needed for the runtime bridge to type-check (see PACKAGE_JSON doc comment)
         add_tracked(
-            &mut code,
-            &mut total_bytes,
+            code,
+            total_bytes,
             GeneratedFile {
                 path: "package.json".to_string(),
                 content: PACKAGE_JSON.to_string(),
@@ -457,8 +533,8 @@ impl ProgressiveGenerator<'_> {
         // Generate tsconfig.json so `tsc --noEmit` accepts the `.ts`-extensioned import in
         // each tool file (see TSCONFIG_JSON doc comment)
         add_tracked(
-            &mut code,
-            &mut total_bytes,
+            code,
+            total_bytes,
             GeneratedFile {
                 path: "tsconfig.json".to_string(),
                 content: TSCONFIG_JSON.to_string(),
@@ -467,30 +543,7 @@ impl ProgressiveGenerator<'_> {
 
         tracing::debug!("Generated tsconfig.json");
 
-        // Generate _meta.json sidecar with structured tool metadata
-        add_tracked(
-            &mut code,
-            &mut total_bytes,
-            Self::create_metadata_file(server_info, tool_metadata)?,
-        )?;
-
-        tracing::debug!("Generated {}", METADATA_FILE_NAME);
-
-        if categorizations.is_empty() {
-            tracing::info!(
-                "Successfully generated {} files for {} (progressive loading)",
-                code.file_count(),
-                server_info.name
-            );
-        } else {
-            tracing::info!(
-                "Successfully generated {} files for {} with categorizations (progressive loading)",
-                code.file_count(),
-                server_info.name
-            );
-        }
-
-        Ok(code)
+        Ok(())
     }
 
     /// Creates tool context from MCP tool information.

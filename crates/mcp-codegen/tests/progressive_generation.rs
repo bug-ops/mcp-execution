@@ -1544,6 +1544,9 @@ fn test_runtime_bridge_times_out_when_server_never_replies() {
 ///
 /// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
 #[test]
+// One end-to-end scenario (generate -> embed fake out-of-order MCP server -> compile -> run ->
+// assert) whose fake-server script and assertions must stay in one body to remain readable.
+#[allow(clippy::too_many_lines)]
 fn test_runtime_bridge_dispatches_concurrent_out_of_order_responses_by_request_id() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();

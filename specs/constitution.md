@@ -81,8 +81,10 @@ related:
 
 - Clippy `all`, `cargo`, `nursery`, `pedantic` are `deny` at workspace level;
   narrow, per-crate `#[allow(...)]`s are used only where the lint's intent
-  doesn't apply (e.g. `too_many_lines` allowed workspace-wide;
-  `unused_async` allowed in `mcp-cli` for uniformly-dispatched handlers).
+  doesn't apply (e.g. `too_many_lines` allowed item-level on two
+  concurrency-test functions whose length is inherent to the scenario they
+  cover; `unused_async` allowed in `mcp-cli` for uniformly-dispatched
+  handlers).
 - `#![deny(unsafe_code)]` in every crate except `mcp-server`/`mcp-cli` (which
   don't need it) — no crate in this workspace uses `unsafe`.
 - `#![warn(missing_docs, missing_debug_implementations)]` everywhere: every

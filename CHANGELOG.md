@@ -73,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-codegen`**: split `ProgressiveGenerator::generate_with_categories` into the
+  public method plus three private helpers (`emit_tool_files`, `emit_index_file`,
+  `emit_scaffolding_files`), bringing it under clippy's `too_many_lines` threshold with no change
+  to behavior, output ordering, or error conditions. The workspace-wide `too_many_lines` allow is
+  removed from the root `Cargo.toml`; the two test functions that still legitimately exceed the
+  threshold now carry a narrow, rationale-commented item-level allow instead (#443).
 - **`mcp-execution-core`**: added `validate_server_id_slug`, `ServerIdSlugError`, and
   `MAX_SERVER_ID_LENGTH` — the authoritative, core-owned invariant for a slug-shaped server id
   (1-64 lowercase ASCII letters, digits, or hyphens), distinct from `ServerId::new()`'s own
