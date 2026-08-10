@@ -6,6 +6,7 @@
 use std::sync::LazyLock;
 
 use handlebars::Handlebars;
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::types::GenerateSkillResult;
@@ -45,18 +46,58 @@ static HANDLEBARS: LazyLock<Handlebars<'static>> = LazyLock::new(|| {
     hb
 });
 
-/// Wraps a string in YAML double-quote scalars, escaping `\`, `"`, and newlines.
+/// Whole shape of `SKILL.md`'s YAML frontmatter, serialized as a single unit so both
+/// fields go through one `serde_norway` emitter pass (see [`render_skill_md`]).
 ///
-/// Produces a value that can be embedded directly after a YAML key as a
-/// quoted scalar — safe against `:` in the middle, leading `-`, and
-/// newline injection.
-fn yaml_quote(s: &str) -> String {
-    let escaped = s
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "");
-    format!("\"{escaped}\"")
+/// Field declaration order is emission order — `serde`'s struct serialization streams
+/// fields in the order declared, unlike a `BTreeMap` (which would sort them
+/// alphabetically) — so `name` is written before `description`, matching the
+/// frontmatter's conventional layout.
+#[derive(Serialize)]
+struct Frontmatter<'a> {
+    name: &'a str,
+    description: &'a str,
+}
+
+impl Frontmatter<'_> {
+    /// Renders this frontmatter as the raw text to splice between the `SKILL.md`
+    /// template's `---` delimiters, delegating all escaping to `serde_norway`'s YAML
+    /// emitter instead of a hand-maintained escape table — so it covers `:`, a
+    /// leading `-`, embedded newlines, and C0 control characters (NUL, BEL, ESC, ...)
+    /// that a narrower hand-rolled escaper would miss. `serde_norway` (via
+    /// `unsafe-libyaml-norway`) targets YAML 1.1 emission, not 1.2. That distinction is
+    /// immaterial for [`crate::parser::extract_skill_metadata`], which parses with the
+    /// same library, but SKILL.md's primary consumer is Claude Code's own (YAML
+    /// 1.2-ish) frontmatter parser, not this crate's: for the extremely rare case of a
+    /// `U+2028`/`U+2029` line/paragraph separator in the input, `unsafe-libyaml-norway`
+    /// emits it as a literal line break with a 2-space fold indent, which a strict YAML
+    /// 1.2 reader parses back with two spurious leading spaces — a narrow regression
+    /// against the old hand-rolled escaper for that one external consumer. Our own
+    /// round-trip is unaffected.
+    ///
+    /// `serde_norway::to_string` always ends the document in exactly one `\n`. When
+    /// `description` (the last-declared, and so last-emitted, field) itself ends in
+    /// `\n`, that final `\n` is not a plain document terminator but part of the
+    /// scalar's semantic content — a multi-line value emitted as a YAML block literal
+    /// (`|`, `|-`, `|+`, ...) uses a trailing newline to signal "clip"/"keep"
+    /// chomping. [`crate::parser::extract_skill_metadata`] locates the frontmatter
+    /// block with a regex that greps for the literal text `\n---` and treats that
+    /// `\n` as a pure separator, consuming it out of the captured block — so if the
+    /// emitter's own trailing `\n` were left to double as that separator, a
+    /// content-significant newline would be silently swallowed by the extraction
+    /// step. Appending one extra `\n` here whenever `description` ends in `\n` gives
+    /// the regex a spare, non-semantic newline to consume as the separator while
+    /// leaving the content-significant one inside the captured block.
+    fn to_yaml_block(&self) -> String {
+        // PANIC: serializing two `&str` fields to YAML has no fallible step (no
+        // recursion, no I/O) — this cannot fail.
+        let mut rendered =
+            serde_norway::to_string(self).expect("YAML serialization of Frontmatter is infallible");
+        if self.description.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered
+    }
 }
 
 /// Render the skill generation prompt.
@@ -101,9 +142,11 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 /// Tool descriptions are rendered with triple-stash (`{{{...}}}`) to avoid
 /// HTML-escaping characters such as `<`, `>`, and `&`.
 ///
-/// YAML frontmatter scalars (`description`) are pre-quoted so that special
-/// characters in MCP server metadata (`:`, newlines, leading `-`) cannot
-/// corrupt the frontmatter or inject additional YAML keys (S3).
+/// The YAML frontmatter (`name`, `description`) is rendered separately from the rest
+/// of the template as one [`Frontmatter`] block via `Frontmatter::to_yaml_block`, so
+/// that special characters in either field — both are attacker-controlled MCP server
+/// metadata (`skill_name` from the caller, `server_description` inferred from the
+/// server) — cannot corrupt the frontmatter or inject additional YAML keys (S3).
 ///
 /// # Arguments
 ///
@@ -117,7 +160,8 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 ///
 /// Does not panic in practice: `serde_json::to_value` is infallible for
 /// `GenerateSkillResult` because all fields are standard Rust types with
-/// derived `Serialize` implementations.
+/// derived `Serialize` implementations, and `Frontmatter::to_yaml_block` is
+/// likewise infallible for the same reason.
 ///
 /// # Errors
 ///
@@ -136,20 +180,23 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 /// assert!(md.starts_with("---\n"));
 /// ```
 pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, TemplateError> {
-    // SAFETY: `GenerateSkillResult` derives `Serialize` with only primitive and
-    // standard-library types — `to_value` is infallible for this type.
+    // PANIC: `GenerateSkillResult` derives `Serialize` with only primitive and
+    // standard-library types — `to_value` cannot fail for this type.
     let mut value =
         serde_json::to_value(context).expect("GenerateSkillResult serialization is infallible");
 
-    // YAML-quote server_description so that `:`, newlines, and leading `-` in
-    // MCP server metadata cannot corrupt the frontmatter or inject keys (S3).
-    if let Some(desc) = value
-        .get("server_description")
-        .and_then(|v| v.as_str())
-        .map(yaml_quote)
-    {
-        value["server_description"] = serde_json::Value::String(desc);
-    }
+    let default_description = format!(
+        "{} MCP server tools ({} tools)",
+        context.server_id, context.tool_count
+    );
+    let frontmatter = Frontmatter {
+        name: &context.skill_name,
+        description: context
+            .server_description
+            .as_deref()
+            .unwrap_or(&default_description),
+    };
+    value["frontmatter_yaml"] = serde_json::Value::String(frontmatter.to_yaml_block());
 
     let rendered = HANDLEBARS.render("skill-md", &value)?;
     // Normalize CRLF → LF so output is consistent across platforms (Windows CI).
@@ -244,20 +291,15 @@ mod tests {
         assert!(md.contains('<'), "< must not be HTML-escaped");
     }
 
-    #[test]
-    fn test_render_skill_md_yaml_frontmatter_safe() {
-        // S3: malicious server_description must not inject YAML keys or corrupt frontmatter.
-        let mut context = create_test_context();
-        context.server_description = Some("GitHub: issues & CI\nname: injected".to_string());
-
-        let md = render_skill_md(&context).unwrap();
-
-        // Extract frontmatter block (between the two "---" markers).
+    /// Counts frontmatter `name:` lines and cross-checks against the project's own
+    /// [`crate::parser::extract_skill_metadata`] parser (not a hand-rolled
+    /// `strip_prefix`/`find` split) — belt-and-suspenders: the line count catches key
+    /// injection even if it happened to still parse, and the real-parser round-trip
+    /// catches any other structural corruption the line count would miss.
+    fn assert_frontmatter_safe(md: &str, expected_name: &str, expected_description: &str) {
         let after_open = md.strip_prefix("---\n").expect("must start with ---");
         let fm_end = after_open.find("\n---").expect("must have closing ---");
         let frontmatter = &after_open[..fm_end];
-
-        // There must be exactly one `name:` key — no injected sibling.
         let name_count = frontmatter
             .lines()
             .filter(|l| l.starts_with("name:"))
@@ -267,15 +309,84 @@ mod tests {
             "YAML key injection detected in: {frontmatter}"
         );
 
-        // The description value must be quoted (YAML double-quoted scalar).
-        let desc_line = frontmatter
-            .lines()
-            .find(|l| l.starts_with("description:"))
-            .expect("description key must be present");
-        assert!(
-            desc_line.contains('"'),
-            "description must be YAML-quoted: {desc_line}"
+        let metadata = crate::parser::extract_skill_metadata(md)
+            .unwrap_or_else(|e| panic!("SKILL.md must have valid frontmatter: {e}\n{md}"));
+        assert_eq!(metadata.name, expected_name);
+        assert_eq!(metadata.description, expected_description);
+    }
+
+    #[test]
+    fn test_render_skill_md_yaml_frontmatter_safe() {
+        // S3: malicious server_description must not inject YAML keys or corrupt frontmatter.
+        let mut context = create_test_context();
+        context.server_description = Some("GitHub: issues & CI\nname: injected".to_string());
+
+        let md = render_skill_md(&context).unwrap();
+
+        assert_frontmatter_safe(
+            &md,
+            "test-progressive",
+            "GitHub: issues & CI\nname: injected",
         );
+    }
+
+    #[test]
+    fn test_render_skill_md_yaml_frontmatter_control_chars_safe() {
+        // Issue #398: the old hand-rolled escaper only covered `\`, `"`, `\n`, and `\r` —
+        // it left other C0 control characters unescaped, which a spec-compliant YAML
+        // double-quoted scalar must escape. Delegating to `serde_norway` must close
+        // that gap.
+        let mut context = create_test_context();
+        context.server_description = Some("NUL:\u{0} BEL:\u{7} ESC:\u{1b} desc".to_string());
+
+        let md = render_skill_md(&context).unwrap();
+
+        assert_frontmatter_safe(
+            &md,
+            "test-progressive",
+            "NUL:\u{0} BEL:\u{7} ESC:\u{1b} desc",
+        );
+    }
+
+    #[test]
+    fn test_render_skill_md_yaml_frontmatter_trailing_newline_preserved() {
+        // S2 regression: a description ending in a semantically significant '\n' must
+        // round-trip exactly. `serde_norway` renders it as a YAML block literal whose
+        // own trailing '\n' is real content (clip chomping), not just a document
+        // terminator; naively stripping "the" trailing newline from the emitter's
+        // output silently drops it instead.
+        let mut context = create_test_context();
+        context.server_description = Some("ends with newline\n".to_string());
+        let md = render_skill_md(&context).unwrap();
+        assert_frontmatter_safe(&md, "test-progressive", "ends with newline\n");
+
+        // Also covers "keep" chomping, where multiple trailing newlines are all
+        // semantically significant.
+        let mut context = create_test_context();
+        context.server_description = Some("multiple trailing\n\n\n".to_string());
+        let md = render_skill_md(&context).unwrap();
+        assert_frontmatter_safe(&md, "test-progressive", "multiple trailing\n\n\n");
+    }
+
+    #[test]
+    fn test_render_skill_md_yaml_frontmatter_skill_name_injection_safe() {
+        // S1: `skill_name` is exactly as attacker-controlled as `server_description`
+        // (it comes from the CLI's `--skill-name` flag / an MCP tool call argument) but
+        // was not encoded at all before this fix — the old `yaml_quote` covered only
+        // `server_description`, leaving `name:` fully injectable.
+        let attacks = [
+            "evil\ninjected: true",
+            "evil: value",
+            "x\n---\nbody",
+            "-leading dash",
+        ];
+
+        for attack in attacks {
+            let mut context = create_test_context();
+            context.skill_name = attack.to_string();
+            let md = render_skill_md(&context).unwrap();
+            assert_frontmatter_safe(&md, attack, "Test server");
+        }
     }
 
     /// Issue #298 (end-to-end): a tool description containing embedded line breaks
@@ -416,11 +527,39 @@ mod tests {
     }
 
     #[test]
-    fn test_yaml_quote() {
-        assert_eq!(yaml_quote("simple"), "\"simple\"");
-        assert_eq!(yaml_quote("GitHub: issues"), "\"GitHub: issues\"");
-        assert_eq!(yaml_quote("line1\nline2"), "\"line1\\nline2\"");
-        assert_eq!(yaml_quote(r#"has "quotes""#), r#""has \"quotes\"""#);
-        assert_eq!(yaml_quote("has \\backslash"), "\"has \\\\backslash\"");
+    fn test_frontmatter_to_yaml_block_round_trips_through_extract_skill_metadata() {
+        // The exact quoting style (plain/single/double/block literal) is an
+        // implementation detail of `serde_norway`'s emitter; what matters is that
+        // `name` and `description` round-trip exactly through the project's own
+        // frontmatter parser, and that no case yields a second top-level key.
+        let cases = [
+            "simple",
+            "GitHub: issues",
+            "line1\nline2",
+            r#"has "quotes""#,
+            "has \\backslash",
+            "-leading dash",
+            "GitHub: issues & CI\nname: injected",
+            "has\u{0}nul has\u{7}bel has\u{1b}esc",
+            "trailing newline\n",
+            "multiple trailing\n\n\n",
+            "before\n---\nafter",
+        ];
+
+        for description in cases {
+            let frontmatter = Frontmatter {
+                name: "test-progressive",
+                description,
+            };
+            let md = format!("---\n{}---\n\n# heading\n", frontmatter.to_yaml_block());
+            let metadata = crate::parser::extract_skill_metadata(&md).unwrap_or_else(|e| {
+                panic!("extract_skill_metadata failed for {description:?}: {e}\n{md}")
+            });
+            assert_eq!(metadata.name, "test-progressive");
+            assert_eq!(
+                metadata.description, description,
+                "round-trip mismatch for {description:?}, rendered: {md}"
+            );
+        }
     }
 }
