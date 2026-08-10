@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`mcp-execution-server`**: dropped the unused `regex` direct dependency — not referenced in
+  the crate's own source; `schemars_derive`'s `regex(pattern = ...)` attribute expands to a
+  plain string literal, not a path into the crate (#373).
 - **`mcp-execution-core`**: dropped the unused `async-trait`, `chrono`, `tracing`, and `uuid`
   direct dependencies — none were referenced in the crate's own source. Side effect: `uuid`'s
   `fast-rng` feature (declared only by `mcp-execution-core`, not by `mcp-execution-server`, which
