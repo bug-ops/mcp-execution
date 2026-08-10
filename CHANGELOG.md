@@ -29,6 +29,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under its original `expires_at` rather than granting it a fresh TTL, and
   `test_concurrent_take_if_same_session_exactly_one_succeeds` proves exactly one of several
   callers racing `take_if` on the same `session_id` succeeds (#387).
+- **`mcp-execution-server`**: `list_generated_servers` now observes client-issued
+  `notifications/cancelled`, racing its directory-scan `spawn_blocking` task against
+  `ct.cancelled()` the same way `introspect_server` and `generate_skill` already do (#389).
+  Unlike `save_categorized_tools`'s export or `save_skill`'s write, the scan has no externally
+  visible side effect, so racing it carries none of the data-loss or lying-response risk that
+  applies to those two handlers. Also added `#[tracing::instrument]` to `list_generated_servers`,
+  the one `#[tool]` handler that previously had no span (#388).
+- **`mcp-execution-server`**: `save_categorized_tools` and `save_skill` now also observe
+  client-issued `notifications/cancelled` (#389), but via cooperative `ct.is_cancelled()`
+  checkpoints rather than racing an operation already in flight — neither handler's irreversible
+  work (the export, the file write) can safely be raced without reopening a documented bug: the
+  #169 data-loss race for the export lock, or a response that lies about whether the write
+  happened. `save_categorized_tools` checks at three points - handler entry, after the VFS is
+  built but before the export lock is requested, and after the lock is held but before the export
+  starts - so a cancellation is caught during the codegen/VFS-build stretch without ever touching
+  the per-`output_dir` lock map on the cancelled path. `save_skill` checks at handler entry and
+  again immediately before the write. A checkpoint firing after the session was already consumed
+  restores it via the existing `StateManager::restore` path, so a cancelled
+  `save_categorized_tools` call remains retriable under the same `session_id`.
 
 ### Changed
 

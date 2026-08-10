@@ -495,20 +495,31 @@ impl GeneratorService {
     /// "the session is also gone, run `introspect_server` again" instead of only discovering the
     /// difference on a second failed attempt (issue #387 gap 3).
     ///
-    /// Does not observe request cancellation, unlike `introspect_server` and
-    /// `generate_skill`. An earlier version raced the wait for the
-    /// per-`output_dir` export lock against `ct.cancelled()`, but that
-    /// produced two correctness bugs in succession: cancelling while another
-    /// caller held the lock either leaked the `exports` map entry, or (once
-    /// that leak was fixed by evicting unconditionally) evicted the entry out
-    /// from under the still-running holder, handing the *next* caller a fresh
-    /// lock that no longer serializes against it - reopening the #169
-    /// data-loss race for the whole duration of the in-flight export, not
-    /// just a narrow timing window. The export itself was already
-    /// deliberately excluded from cancellation (see `export_lock_for`), so
-    /// cancelling only the lock *wait* bought little for two rounds of bugs;
-    /// removing it entirely, the same call S1 made for `save_skill`, removes
-    /// the whole class of problems.
+    /// Observes client-issued cancellation at checkpoints only, never by racing an operation already in
+    /// flight. `ct.is_cancelled()` is polled three times: on entry, before the session is consumed; after
+    /// the VFS is built, before the per-`output_dir` export lock is requested; and after that lock is
+    /// held, before the export's `spawn_blocking` task is created. A checkpoint that fires returns
+    /// `McpError::internal_error("save_categorized_tools cancelled by client", None)` with no generated
+    /// files written, though the confinement directories created by `resolve_output_dir` may remain - as
+    /// on any other error return from this stage - and leaves the session retriable under the same
+    /// `session_id` - the first checkpoint runs before the session is taken at all, and the later two
+    /// return through the same `Err` path that calls
+    /// [`StateManager::restore`](crate::state::StateManager::restore).
+    ///
+    /// Nothing already started is interrupted. Once `tokio::task::spawn_blocking` has been handed the
+    /// export it runs to completion on the blocking pool regardless, so no cancelled response can claim an
+    /// export did not happen; in practice these checkpoints only help when the cancellation arrives while
+    /// the request is still queued or during codegen, not once the export is in flight.
+    ///
+    /// The wait for the export lock is likewise not raced against cancellation. An earlier version did
+    /// exactly that, and it produced two correctness bugs in succession: cancelling while another caller
+    /// held the lock either leaked the `exports` map entry, or (once that leak was fixed by evicting
+    /// unconditionally) evicted the entry out from under the still-running holder, handing the *next*
+    /// caller a fresh lock that no longer serializes against it - reopening the #169 data-loss race for
+    /// the whole duration of the in-flight export, not just a narrow timing window. The third checkpoint
+    /// runs while this call is itself the lock holder, and releases by ordinary drop before running the
+    /// same identity-checked [`Self::evict_export_lock`] the success path runs, so it can never evict a
+    /// lock another call is holding.
     #[tool(
         description = "Generate progressive loading TypeScript files using Claude's categorization. Requires session_id from a previous introspect_server call."
     )]
@@ -516,7 +527,18 @@ impl GeneratorService {
     async fn save_categorized_tools(
         &self,
         Parameters(params): Parameters<SaveCategorizedToolsParams>,
+        ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
+        // C1: nothing has been consumed yet, so this leaves the session untouched at its
+        // original expiry - identical to a failed validation, fully retriable. Covers a
+        // cancellation that arrived while the request sat in the dispatch queue.
+        if ct.is_cancelled() {
+            return Err(McpError::internal_error(
+                "save_categorized_tools cancelled by client",
+                None,
+            ));
+        }
+
         // Validate in place and consume only on success, via `StateManager::take_if`: a failed
         // validation (typo'd tool name, duplicate, too many entries) leaves the session
         // untouched at its original expiry instead of burning it (issue #371), and - unlike an
@@ -546,7 +568,7 @@ impl GeneratorService {
         // and already-known `size_bytes`, leaving it retriable exactly as a pre-consume
         // validation failure already is.
         match self
-            .generate_and_export(&pending, &categorization, categories)
+            .generate_and_export(&pending, &categorization, categories, &ct)
             .await
         {
             Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -600,11 +622,16 @@ impl GeneratorService {
     /// already removed the session from [`StateManager`](crate::state::StateManager) can restore
     /// it on failure without needing to reconstruct or re-clone it - see
     /// [`Self::save_categorized_tools`], the only caller.
+    ///
+    /// `ct` is polled at two checkpoints (C2, C3) documented on [`Self::save_categorized_tools`] -
+    /// see that doc comment for the cancellation contract; this function does not race any
+    /// operation against it.
     async fn generate_and_export(
         &self,
         pending: &PendingGeneration,
         categorization: &HashMap<String, &CategorizedTool>,
         categories: HashMap<String, usize>,
+        ct: &CancellationToken,
     ) -> Result<SaveCategorizedToolsResult, McpError> {
         // Resolve and confine the output directory: this - not the preview stored on
         // `pending.output_dir` - is what creates the confinement chain's directories and rejects
@@ -661,12 +688,37 @@ impl GeneratorService {
         // Capture file count before moving vfs
         let files_generated = vfs.file_count();
 
+        // C2: everything above (output_dir resolution, codegen, VFS build) is real work a
+        // cancellation can arrive during. Checking here, before the per-output_dir export lock
+        // is even requested, means a cancelled path never inserts into the `exports` map and
+        // never waits on the lock, so there is no eviction question to reason about.
+        if ct.is_cancelled() {
+            return Err(McpError::internal_error(
+                "save_categorized_tools cancelled by client",
+                None,
+            ));
+        }
+
         // Export to filesystem (blocking operation wrapped in spawn_blocking).
         // Held across the export so a second concurrent call for the same
         // output_dir blocks until the first finishes, rather than racing on
         // the underlying staging/swap (see `export_lock_for`).
         let export_lock = self.export_lock_for(&output_dir).await;
         let export_guard = export_lock.lock().await;
+
+        // C3: covers a cancellation that arrived while waiting behind a concurrent export to the
+        // same output_dir. We are the lock holder at this point, so releasing by ordinary `drop`
+        // before running the same identity-checked `evict_export_lock` the success path runs
+        // below is safe - this is not the "evict while someone else holds it" shape that
+        // reopened #169 (see this function's and `save_categorized_tools`'s doc comments).
+        if ct.is_cancelled() {
+            drop(export_guard);
+            self.evict_export_lock(&output_dir, &export_lock).await;
+            return Err(McpError::internal_error(
+                "save_categorized_tools cancelled by client",
+                None,
+            ));
+        }
 
         let export_target = output_dir.clone();
         let export_result =
@@ -698,21 +750,30 @@ impl GeneratorService {
     /// path, a `..` component, or a path that escapes via a symlink is rejected outright rather
     /// than silently falling back to the default (issue #236).
     ///
-    /// Does not observe request cancellation, unlike `introspect_server` and
-    /// `generate_skill`. The scan runs inside a
-    /// single `spawn_blocking` task with no subprocess, network I/O, or
-    /// long-held lock, so it isn't worth the added complexity - but it is
-    /// *not* a small bounded read: it is a nested directory walk (one
-    /// `read_dir` over `base_dir`, plus a second `read_dir` per
-    /// subdirectory), so a large directory tree can still make this call slow
-    /// and its result `Vec` large. That surface is unrelated to cancellation
-    /// and out of scope here.
+    /// Observes client-issued cancellation: the directory scan runs inside a `spawn_blocking`
+    /// task raced against `ct.cancelled()` via `tokio::select!`, mirroring `introspect_server`
+    /// and `generate_skill` (issue #389). This only cancels the *wait* for the scan - once the
+    /// task has started running on the blocking-thread pool it keeps running to completion in
+    /// the background even if the cancelled branch is picked first - but that's harmless here
+    /// specifically because the scan is a plain, side-effect-free directory read (never a
+    /// subprocess, network I/O, or a lock shared with another call). That's the opposite of
+    /// `save_categorized_tools`'s export or `save_skill`'s write, where racing the operation
+    /// itself (rather than just a wait for a resource) would let a write outlive - and
+    /// contradict - a response that already told the client it was cancelled, which is why
+    /// neither of those two races its operation - both poll `ct.is_cancelled()` at checkpoints
+    /// before their irreversible section instead.
+    ///
+    /// It is still *not* a small bounded read: it is a nested directory walk (one `read_dir`
+    /// over `base_dir`, plus a second `read_dir` per subdirectory), so a large directory tree
+    /// can make it slow enough for cancellation to matter.
     #[tool(
         description = "List all MCP servers that have generated progressive loading files in ~/.claude/servers/"
     )]
+    #[tracing::instrument(skip_all, fields(base_dir = tracing::field::Empty))]
     async fn list_generated_servers(
         &self,
         Parameters(params): Parameters<ListGeneratedServersParams>,
+        ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
         let base_dir = resolve_list_base_dir(
             &self.servers_base_dir(),
@@ -737,52 +798,64 @@ impl GeneratorService {
                 McpError::internal_error(format!("Failed to resolve base_dir: {e}"), None)
             }
         })?;
+        tracing::Span::current().record("base_dir", tracing::field::display(base_dir.display()));
 
-        // Scan directories (blocking operation wrapped in spawn_blocking)
-        let servers = tokio::task::spawn_blocking(move || {
-            let mut servers = Vec::new();
+        // Scan directories (blocking operation wrapped in spawn_blocking), raced against
+        // cancellation. `biased;` prefers noticing cancellation over starting/continuing the
+        // scan, so the cancelled path is deterministic rather than depending on
+        // `tokio::select!`'s (default-randomised) poll order.
+        let servers_outcome = tokio::select! {
+            biased;
+            () = ct.cancelled() => None,
+            result = tokio::task::spawn_blocking(move || {
+                let mut servers = Vec::new();
 
-            if base_dir.exists()
-                && base_dir.is_dir()
-                && let Ok(entries) = std::fs::read_dir(&base_dir)
-            {
-                for entry in entries.flatten() {
-                    if entry.path().is_dir() {
-                        let id = entry.file_name().to_string_lossy().to_string();
+                if base_dir.exists()
+                    && base_dir.is_dir()
+                    && let Ok(entries) = std::fs::read_dir(&base_dir)
+                {
+                    for entry in entries.flatten() {
+                        if entry.path().is_dir() {
+                            let id = entry.file_name().to_string_lossy().to_string();
 
-                        // Count .ts files (excluding _runtime and starting with _)
-                        let tool_count = std::fs::read_dir(entry.path()).map_or(0, |e| {
-                            e.flatten()
-                                .filter(|f| {
-                                    let name = f.file_name();
-                                    let name = name.to_string_lossy();
-                                    name.ends_with(".ts") && !name.starts_with('_')
-                                })
-                                .count()
-                        });
+                            // Count .ts files (excluding _runtime and starting with _)
+                            let tool_count = std::fs::read_dir(entry.path()).map_or(0, |e| {
+                                e.flatten()
+                                    .filter(|f| {
+                                        let name = f.file_name();
+                                        let name = name.to_string_lossy();
+                                        name.ends_with(".ts") && !name.starts_with('_')
+                                    })
+                                    .count()
+                            });
 
-                        // Get modification time
-                        let generated_at = entry
-                            .metadata()
-                            .and_then(|m| m.modified())
-                            .ok()
-                            .map(chrono::DateTime::<chrono::Utc>::from);
+                            // Get modification time
+                            let generated_at = entry
+                                .metadata()
+                                .and_then(|m| m.modified())
+                                .ok()
+                                .map(chrono::DateTime::<chrono::Utc>::from);
 
-                        servers.push(GeneratedServerInfo {
-                            id,
-                            tool_count,
-                            generated_at,
-                            output_dir: entry.path().display().to_string(),
-                        });
+                            servers.push(GeneratedServerInfo {
+                                id,
+                                tool_count,
+                                generated_at,
+                                output_dir: entry.path().display().to_string(),
+                            });
+                        }
                     }
                 }
-            }
 
-            servers.sort_by(|a, b| a.id.cmp(&b.id));
-            servers
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+                servers.sort_by(|a, b| a.id.cmp(&b.id));
+                servers
+            }) => Some(result),
+        };
+
+        let servers = servers_outcome
+            .ok_or_else(|| {
+                McpError::internal_error("list_generated_servers cancelled by client", None)
+            })?
+            .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
 
         let result = ListGeneratedServersResult {
             total_servers: servers.len(),
@@ -920,16 +993,23 @@ impl GeneratorService {
     /// directory. Validates that the content contains required YAML
     /// frontmatter.
     ///
-    /// Does not observe request cancellation: `tokio::fs::write` runs on the
-    /// blocking-task pool and, once started, cannot be interrupted - dropping
-    /// its `JoinHandle` does not stop the queued write, it only stops this
-    /// handler from waiting for it. Racing it against `ct.cancelled()` would
-    /// therefore make the response lie (telling a cancelled client the write
-    /// never happened while it still lands on disk moments later), which is
-    /// worse than not attempting cancellation at all. The write is also
-    /// bounded by [`MAX_SKILL_CONTENT_SIZE`] (100KB), so it is not worth
-    /// pursuing genuine interruptibility (e.g. a hand-rolled chunked write)
-    /// for the marginal benefit.
+    /// Observes client-issued cancellation at checkpoints only. `ct.is_cancelled()` is polled twice: on
+    /// entry, before any validation and before the parent-directory creation performed by
+    /// [`resolve_skill_output_path`](mcp_execution_skill::resolve_skill_output_path); and again
+    /// immediately before `tokio::fs::write` is invoked. Either firing returns
+    /// `McpError::internal_error("save_skill cancelled by client", None)` with no file written - though a
+    /// cancellation caught at the second checkpoint may still leave the confined parent directory behind,
+    /// exactly as the existing `overwrite`-refused path does.
+    ///
+    /// The write itself is never raced against cancellation: `tokio::fs::write` runs on the blocking-task
+    /// pool and, once started, cannot be interrupted - dropping its `JoinHandle` does not stop the queued
+    /// write, it only stops this handler from waiting for it. Racing it would make the response lie
+    /// (telling a cancelled client the write never happened while it still lands on disk moments later),
+    /// which is worse than not attempting cancellation at all. The write is also bounded by
+    /// [`MAX_SKILL_CONTENT_SIZE`] (100KB), so genuine interruptibility (e.g. a hand-rolled chunked write)
+    /// is not worth pursuing for the marginal benefit. The checkpoints are correspondingly narrow: the
+    /// pre-write work is a bounded frontmatter parse and one path-resolution walk, so in practice they
+    /// only fire for a request that was already cancelled when this handler reached it.
     ///
     /// The synchronous YAML frontmatter parse that runs before the write
     /// (`extract_skill_metadata`) is a separate concern: `serde_norway` is not
@@ -946,7 +1026,18 @@ impl GeneratorService {
     async fn save_skill(
         &self,
         Parameters(params): Parameters<SaveSkillParams>,
+        ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
+        // S1: nothing has been validated, parsed, or created on disk yet - notably this is
+        // before resolve_skill_output_path, which creates the confined parent directory, so a
+        // request already cancelled on arrival leaves nothing behind.
+        if ct.is_cancelled() {
+            return Err(McpError::internal_error(
+                "save_skill cancelled by client",
+                None,
+            ));
+        }
+
         // Validate server_id format and length. As in `introspect_server`, the span
         // field is only recorded once validation succeeds (see the comment there).
         validate_server_id(&params.server_id)
@@ -1016,6 +1107,17 @@ impl GeneratorService {
                     "Skill file already exists: {}. Use overwrite=true to replace.",
                     sanitize_path_for_error(&output_path)
                 ),
+                None,
+            ));
+        }
+
+        // S2: last point at which nothing irreversible has started. Covers a cancellation
+        // arriving during extract_skill_metadata and during resolve_skill_output_path's
+        // filesystem walk. A cancellation caught here can still leave the confined parent
+        // directory behind, exactly as the overwrite-refused path above already does.
+        if ct.is_cancelled() {
+            return Err(McpError::internal_error(
+                "save_skill cancelled by client",
                 None,
             ));
         }
@@ -2804,7 +2906,9 @@ mod tests {
             categorized_tools: vec![],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -2859,7 +2963,9 @@ mod tests {
             }],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -2955,7 +3061,9 @@ mod tests {
             ],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("more entries than introspected tools must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -2984,7 +3092,9 @@ mod tests {
             categorized_tools,
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("entry count above MAX_TOOL_FILES must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3008,7 +3118,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool0")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("a repeated tool name must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3042,7 +3154,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("does-not-exist")],
         };
         let failing_result = service
-            .save_categorized_tools(Parameters(failing_params))
+            .save_categorized_tools(Parameters(failing_params), CancellationToken::new())
             .await;
         let err = failing_result.expect_err("an unknown tool name must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3053,7 +3165,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool1")],
         };
         let retry_result = service
-            .save_categorized_tools(Parameters(retry_params))
+            .save_categorized_tools(Parameters(retry_params), CancellationToken::new())
             .await;
         assert!(
             retry_result.is_ok(),
@@ -3083,7 +3195,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool0")],
         };
         let failing_result = service
-            .save_categorized_tools(Parameters(failing_params))
+            .save_categorized_tools(Parameters(failing_params), CancellationToken::new())
             .await;
         let err = failing_result.expect_err("a repeated tool name must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3094,7 +3206,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool1")],
         };
         let retry_result = service
-            .save_categorized_tools(Parameters(retry_params))
+            .save_categorized_tools(Parameters(retry_params), CancellationToken::new())
             .await;
         assert!(
             retry_result.is_ok(),
@@ -3123,7 +3235,9 @@ mod tests {
             session_id,
             categorized_tools: vec![categorized_tool("tool0")],
         };
-        let first_result = service.save_categorized_tools(Parameters(params)).await;
+        let first_result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
         assert!(
             first_result.is_ok(),
             "the first call with a valid payload must succeed: {:?}",
@@ -3135,7 +3249,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0")],
         };
         let repeat_result = service
-            .save_categorized_tools(Parameters(repeat_params))
+            .save_categorized_tools(Parameters(repeat_params), CancellationToken::new())
             .await;
         let err = repeat_result
             .expect_err("a session consumed by a successful call must not be reusable");
@@ -3181,7 +3295,9 @@ mod tests {
             categorized_tools: vec![categorized_tool(&long_name)],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("an oversized tool name must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3206,7 +3322,9 @@ mod tests {
             }],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("an oversized category must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3230,7 +3348,9 @@ mod tests {
             }],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("oversized keywords must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3254,7 +3374,9 @@ mod tests {
             }],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("an oversized short_description must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3276,7 +3398,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0"), categorized_tool("tool1")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(
             result.is_ok(),
@@ -3331,7 +3455,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("evil tool")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(
             result.is_ok(),
@@ -3392,7 +3518,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("evil tool")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
         let content = result.expect("the display name Claude saw must be accepted");
         let text = content.content[0].as_text().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
@@ -3462,7 +3590,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool&amp;name")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
         let content = result.expect("the escaped display name Claude saw must be accepted");
         let text = content.content[0].as_text().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
@@ -3530,7 +3660,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool&lt;name&gt;end")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
         let content = result.expect("the escaped display name Claude saw must be accepted");
         let text = content.content[0].as_text().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
@@ -3600,7 +3732,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("a<b")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
         let content =
             result.expect("the decoded literal form must be accepted, not just the escaped form");
         let text = content.content[0].as_text().unwrap();
@@ -3668,7 +3802,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("evil tool")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err(
             "an ambiguous display name shared by two distinct raw tools must be rejected, \
@@ -3736,7 +3872,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("a&lt;b"), categorized_tool("a<b")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err(
             "two entries resolving to the same raw tool via different display forms must be \
@@ -3800,7 +3938,9 @@ mod tests {
             }],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(
             result.is_ok(),
@@ -3842,7 +3982,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         let err = result.expect_err("a symlinked server_id directory must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3886,7 +4028,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0")],
         };
         let failing_result = service
-            .save_categorized_tools(Parameters(failing_params))
+            .save_categorized_tools(Parameters(failing_params), CancellationToken::new())
             .await;
         let err = failing_result.expect_err("a symlinked server_id directory must be rejected");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
@@ -3901,7 +4043,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0")],
         };
         let retry_result = service
-            .save_categorized_tools(Parameters(retry_params))
+            .save_categorized_tools(Parameters(retry_params), CancellationToken::new())
             .await;
         assert!(
             retry_result.is_ok(),
@@ -3949,7 +4091,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0")],
         };
         let failing_result = service
-            .save_categorized_tools(Parameters(failing_params))
+            .save_categorized_tools(Parameters(failing_params), CancellationToken::new())
             .await;
 
         // Restore permissions before any assertion can early-return/panic and leak a
@@ -3974,7 +4116,7 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0")],
         };
         let retry_result = service
-            .save_categorized_tools(Parameters(retry_params))
+            .save_categorized_tools(Parameters(retry_params), CancellationToken::new())
             .await;
         assert!(
             retry_result.is_ok(),
@@ -4125,7 +4267,9 @@ mod tests {
             categorized_tools: vec![categorized_tool("tool0")],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
         let content = result.expect("a legitimate output_dir override must be accepted");
         let text = content.content[0].as_text().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&text.text).unwrap();
@@ -4186,7 +4330,9 @@ mod tests {
             categorized_tools: vec![],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4244,11 +4390,129 @@ mod tests {
             categorized_tools: vec![],
         };
 
-        let result = service.save_categorized_tools(Parameters(params)).await;
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    // ========================================================================
+    // save_categorized_tools / generate_and_export Cancellation Tests (issue #389)
+    // ========================================================================
+
+    /// A token cancelled before the call returns a cancelled error with the session left
+    /// retriable under the same `session_id`.
+    ///
+    /// Deliberately does *not* claim which of `save_categorized_tools`'s three checkpoints
+    /// (C1/C2/C3) produced this outcome: `restore_or_log` re-inserts the session with its
+    /// original `expires_at` preserved (see `StateManager::restore`'s docs), so a cancellation
+    /// caught at C1 (session never taken) and one caught at C2/C3 (session taken, then restored)
+    /// are externally indistinguishable through this test's observation point. What this test
+    /// does prove, and would catch a regression on, is that *some* checkpoint fires: if all three
+    /// were deleted, the call would proceed and either succeed or fail for an unrelated reason,
+    /// never returning a "cancelled" error.
+    #[tokio::test]
+    async fn test_save_categorized_tools_honors_pre_cancelled_token_before_export() {
+        let service = GeneratorService::new();
+
+        let pending = pending_with_server_id_and_tool_count("cancel-c1-server", 1);
+        let session_id = service.state.store(pending).await.unwrap();
+
+        let ct = CancellationToken::new();
+        ct.cancel();
+
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0")],
+        };
+
+        let result = service.save_categorized_tools(Parameters(params), ct).await;
+
+        let err = result.expect_err("a cancelled request must return an error");
+        assert!(err.message.contains("cancelled"));
+        assert!(
+            service.state.get(session_id).await.is_some(),
+            "the session must remain retriable under the same session_id, whether because it was \
+             never taken (C1) or was taken then restored (C2/C3)"
+        );
+    }
+
+    /// A pre-cancelled token must short-circuit `generate_and_export` at C2 specifically, before
+    /// the per-`output_dir` export lock is ever requested. `generate_and_export` is private, so
+    /// this calls it directly (mirroring `save_categorized_tools`'s own call) rather than going
+    /// through the pre-cancelled public handler, which would only ever reach C1 and give this no
+    /// real coverage.
+    ///
+    /// A pre-cancelled token also satisfies C3 (same shared token), and C3's `drop` +
+    /// `evict_export_lock` leaves the `exports` map empty too - so an assertion that only checks
+    /// "the map ends up empty" cannot tell C2 from C3 firing. To discriminate them, a sentinel
+    /// `Arc<Mutex<()>>` is pre-inserted into `exports` under the exact `output_dir`
+    /// `generate_and_export` will resolve to, before the call. If C2 fires, `export_lock_for` is
+    /// never reached and the sentinel survives untouched. If C2 is deleted and only C3 fires,
+    /// `export_lock_for` returns that same pre-inserted `Arc` (same key, so no fresh one is
+    /// created) and `evict_export_lock`'s identity check (`Arc::ptr_eq`) matches and removes it -
+    /// so the sentinel's absence afterward proves C2 did not fire.
+    #[tokio::test]
+    async fn test_generate_and_export_honors_pre_cancelled_token_at_c2() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let pending = pending_with_server_id_and_tool_count("cancel-c2-server", 1);
+        let cat_tool = categorized_tool("tool0");
+        let categorization: HashMap<String, &CategorizedTool> =
+            HashMap::from([("tool0".to_string(), &cat_tool)]);
+        let categories: HashMap<String, usize> = HashMap::from([("cat".to_string(), 1)]);
+
+        // Resolve the exact same output_dir generate_and_export will compute internally, so the
+        // sentinel is inserted under the key export_lock_for would actually look up.
+        let output_dir = resolve_output_dir(
+            &service.servers_base_dir(),
+            pending.server_id.as_str(),
+            pending.output_dir_override.as_deref(),
+        )
+        .await
+        .unwrap();
+        let sentinel = Arc::new(Mutex::new(()));
+        service
+            .exports
+            .lock()
+            .await
+            .insert(output_dir.clone(), Arc::clone(&sentinel));
+
+        let ct = CancellationToken::new();
+        ct.cancel();
+
+        let result = service
+            .generate_and_export(&pending, &categorization, categories, &ct)
+            .await;
+
+        let err = result.expect_err("a cancelled request must return an error");
+        assert!(err.message.contains("cancelled"));
+        assert!(
+            service
+                .exports
+                .lock()
+                .await
+                .get(&output_dir)
+                .is_some_and(|handle| Arc::ptr_eq(handle, &sentinel)),
+            "C2 must fire before export_lock_for is ever called, so the pre-inserted sentinel \
+             lock handle must survive untouched - if only C3 fired instead, evict_export_lock \
+             would have removed this exact entry"
+        );
+        assert!(
+            !temp_dir
+                .path()
+                .join("cancel-c2-server")
+                .join("index.ts")
+                .exists(),
+            "C2 must fire before the export writes any generated files"
+        );
     }
 
     // ========================================================================
@@ -4267,7 +4531,9 @@ mod tests {
             base_dir: Some("nonexistent/nested".to_string()),
         };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -4284,7 +4550,9 @@ mod tests {
 
         let params = ListGeneratedServersParams { base_dir: None };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         // Should succeed even if directory doesn't exist
         assert!(result.is_ok());
@@ -4309,7 +4577,9 @@ mod tests {
             base_dir: Some(absolute.to_string()),
         };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4328,7 +4598,9 @@ mod tests {
             base_dir: Some("../../etc".to_string()),
         };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4353,7 +4625,9 @@ mod tests {
             base_dir: Some("nested".to_string()),
         };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -4385,7 +4659,9 @@ mod tests {
             base_dir: Some("escape".to_string()),
         };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4425,7 +4701,9 @@ mod tests {
             base_dir: Some("alias".to_string()),
         };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -4434,6 +4712,28 @@ mod tests {
 
         assert_eq!(parsed.total_servers, 1);
         assert_eq!(parsed.servers[0].id, "my-server");
+    }
+
+    /// A pre-cancelled token must short-circuit the directory scan rather than always running it
+    /// to completion. The token is cancelled before the call, and the `spawn_blocking` scan task
+    /// (scheduled onto a separate blocking-pool thread) can never resolve on its first poll, so
+    /// `tokio::select!` deterministically picks the cancellation branch.
+    #[tokio::test]
+    async fn test_list_generated_servers_honors_pre_cancelled_token() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+        let ct = CancellationToken::new();
+        ct.cancel();
+
+        let params = ListGeneratedServersParams { base_dir: None };
+
+        let result = service.list_generated_servers(Parameters(params), ct).await;
+
+        let err = result.expect_err("a cancelled request must return an error");
+        assert!(err.message.contains("cancelled"));
     }
 
     /// Windows path semantics differ enough from Unix (root-without-prefix components) that the
@@ -4456,7 +4756,9 @@ mod tests {
             base_dir: Some(r"\pwn\evil".to_string()),
         };
 
-        let result = service.list_generated_servers(Parameters(params)).await;
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4745,6 +5047,36 @@ mod tests {
     // save_skill Error Tests
     // ========================================================================
 
+    /// A pre-cancelled token must short-circuit `save_skill` at S1, before any validation,
+    /// parsing, or the parent-directory creation performed by `resolve_skill_output_path` -
+    /// proving a request already cancelled on arrival leaves nothing behind.
+    #[tokio::test]
+    async fn test_save_skill_honors_pre_cancelled_token() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
+        let ct = CancellationToken::new();
+        ct.cancel();
+
+        let params = SaveSkillParams {
+            server_id: "cancel-test".to_string(),
+            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
+            output_path: None,
+            overwrite: false,
+        };
+
+        let result = service.save_skill(Parameters(params), ct).await;
+
+        let err = result.expect_err("a cancelled request must return an error");
+        assert!(err.message.contains("cancelled"));
+        assert!(
+            !temp_dir.path().join("cancel-test").exists(),
+            "S1 must fire before resolve_skill_output_path creates the parent directory"
+        );
+    }
+
     #[tokio::test]
     async fn test_save_skill_invalid_server_id() {
         let service = GeneratorService::new();
@@ -4756,7 +5088,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4775,7 +5109,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4794,7 +5130,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4813,7 +5151,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4844,7 +5184,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -4876,7 +5218,9 @@ mod tests {
             overwrite: true,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -4905,7 +5249,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -4943,7 +5289,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -4971,7 +5319,9 @@ mod tests {
             overwrite: false,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -5010,7 +5360,9 @@ mod tests {
             overwrite: true,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -5035,7 +5387,9 @@ mod tests {
             overwrite: true,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -5068,7 +5422,9 @@ mod tests {
             overwrite: true,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -5098,7 +5454,9 @@ mod tests {
             overwrite: true,
         };
 
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -5121,7 +5479,9 @@ mod tests {
                 output_path: None,
                 overwrite: false,
             };
-            let result = service.save_skill(Parameters(params)).await;
+            let result = service
+                .save_skill(Parameters(params), CancellationToken::new())
+                .await;
             assert!(result.is_ok());
         }
 
@@ -5137,7 +5497,9 @@ mod tests {
             output_path: Some(PathBuf::from("../server-a/SKILL.md")),
             overwrite: true,
         };
-        let cross_server_result = service.save_skill(Parameters(cross_server_params)).await;
+        let cross_server_result = service
+            .save_skill(Parameters(cross_server_params), CancellationToken::new())
+            .await;
         assert!(cross_server_result.is_err());
         assert_eq!(
             cross_server_result.unwrap_err().code,
@@ -5189,7 +5551,9 @@ mod tests {
             output_path: None,
             overwrite: true,
         };
-        let result = service.save_skill(Parameters(params)).await;
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code, ErrorCode::INVALID_PARAMS);
