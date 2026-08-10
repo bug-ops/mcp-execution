@@ -782,27 +782,38 @@ identifying keys, while leaving `Serialize` unredacted for that same type.
      `format!("{:?}", ...)` output for any of these types.
 - *Dependencies*: none
 
-**FR-028**: The system shall sanitize control characters out of, and where
-the destination is LLM-facing, wrap in an explicit and unforgeable
-untrusted-data boundary, any text originating from an introspected MCP
-server before it is embedded in a document or shown to an LLM.
+**FR-028**: The system shall sanitize control characters and Unicode
+bidirectional-formatting characters out of, and where the destination is
+LLM-facing, wrap in an explicit and unforgeable untrusted-data boundary, any
+text originating from an introspected MCP server before it is embedded in a
+document or shown to an LLM.
 
 - *Rationale*: an introspected server's self-reported tool
   names/descriptions/keywords are attacker-controlled from this project's
   perspective; both a rendered document (SKILL.md) and an LLM-facing prompt
-  (introspection summaries, skill generation prompt) embed this data.
+  (introspection summaries, skill generation prompt) embed this data. Bidi
+  formatting characters (issue #422) let such a value visually reorder or
+  relabel surrounding text for a human reader without changing its logical
+  byte order — the "Trojan Source" class of attack — even though they are
+  not control characters.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-028
 - *Priority*: Must
 - *Acceptance criteria*:
   1. `sanitize_untrusted_text` flattens all control characters (and U+2028/
-     U+2029) to spaces and truncates by character count before any
-     server-reported field is used.
+     U+2029) to spaces, replaces the bidi embedding/override controls
+     (U+202A-U+202E) and isolate controls (U+2066-U+2069) with a space, and
+     removes the weaker bidi directional marks (U+200E/U+200F/U+061C)
+     entirely, then truncates by character count before any server-reported
+     field is used.
   2. `wrap_untrusted_block` escapes `&`/`<`/`>` in the body and wraps it in
      `<untrusted-data>...</untrusted-data>`, applied by both `mcp-skill`'s
      generation prompt and `mcp-server`'s `introspect_server` tool
      summaries.
   3. A description crafted to forge the boundary's own delimiters is
      regression-tested to fail to do so.
+  4. A description containing U+202E (RIGHT-TO-LEFT OVERRIDE) or a bidi
+     isolate control is regression-tested to no longer contain it after
+     sanitization.
 - *Dependencies*: none
 
 **FR-029**: The system shall confine every filesystem write whose target

@@ -233,6 +233,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `build_generation_prompt` — once in the trusted preamble, once inside the
   `wrap_untrusted_block`-wrapped section. Dropped the preamble copy; the wrapped one is the
   correct placement, since the content it heads is untrusted (#419).
+- **`mcp-execution-core`**: `sanitize_path_for_error`'s home-directory redaction on Windows/macOS
+  missed usernames that differed only by Unicode composition form: `components_match` and
+  `replace_case_aware`'s case-fold comparison (#406) compared components/windows as-is, so a
+  precomposed (NFC) username and its decomposed (NFD) equivalent — the same rendered text, e.g.
+  "José" as "e" + U+00E9 vs. "e" + "e" + U+0301 combining acute accent — were not recognized as
+  the same value and could skip redaction. Both functions now NFC-normalize (new
+  `unicode-normalization` dependency, scoped to the Windows/macOS target so other platforms don't
+  link it) alongside the existing case fold. `replace_case_aware` normalizes `haystack` and
+  `needle` as whole strings before windowing (not per-window, which left a raw-char-count
+  mismatch between an already-normalized needle and a differently-sized normalized haystack span);
+  every slice point used to build the output is still that normalized `haystack`'s own char
+  boundary, so it cannot panic or mis-slice even though normalization can change a character's
+  encoded byte length. The shared fold-then-normalize helper also re-normalizes *after* folding,
+  not just before, since `str::to_lowercase` can turn an already-NFC string into a non-NFC one for
+  a character whose lowercase has a precomposed form but whose uppercase does not (#416).
+- **`mcp-execution-core`**: `sanitize_untrusted_text` did not neutralize Unicode
+  bidirectional-formatting characters — the explicit embedding/override controls U+202A-U+202E
+  (including U+202E RIGHT-TO-LEFT OVERRIDE), the isolate controls U+2066-U+2069, and the
+  directional marks U+200E/U+200F/U+061C. None of these are covered by `char::is_control` (they
+  are Unicode `Cf` format characters), so an attacker-controlled tool name or description could
+  use them to visually reorder or relabel surrounding text for a human reviewer without changing
+  its logical byte order — the "Trojan Source" class of attack. The embedding/override and
+  isolate controls are now flattened to a space, alongside the control characters and line
+  separators this function already neutralized; the weaker directional marks (which cannot
+  reorder or join text on their own) are removed entirely rather than replaced with a space, so
+  legitimate RTL text containing one isn't split with a spurious word break (#422).
 
 ### Testing
 

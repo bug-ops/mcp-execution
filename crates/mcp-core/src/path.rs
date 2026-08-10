@@ -20,16 +20,23 @@ use std::path::{Component, Path};
 /// The comparison walks path components rather than matching raw strings, so a `/`-separated
 /// input matches a backslash-separated home directory (and vice versa) on platforms where both
 /// separators are valid. On Windows and macOS, components are also compared
-/// Unicode-case-insensitively (via [`str::to_lowercase`]), matching those platforms'
-/// case-insensitive-but-case-preserving filesystem semantics; elsewhere the comparison stays
-/// case-sensitive.
+/// Unicode-case-insensitively (via [`str::to_lowercase`]) and Unicode-normalization-insensitively
+/// (via NFC normalization), matching those platforms' case-insensitive-but-case-preserving
+/// filesystem semantics and the fact that the same visible username can arrive pre-composed
+/// (NFC, e.g. `"Jos\u{e9}"`) from one source and decomposed (NFD, e.g. `"Jose\u{301}"`) from
+/// another; elsewhere the comparison stays case-sensitive and normalization-sensitive.
 ///
 /// When `path` does not begin with `home` — e.g. it reaches this function through a different
 /// mount point, or (on Windows) as a `\\?\`-verbatim canonicalized path whose prefix shape the
 /// component walk does not recognize as equivalent to `home`'s — this falls back to scrubbing
 /// the bare username (`home`'s final component) wherever it appears in the path, so the
 /// username itself is never disclosed verbatim even when the fuller `~`-collapse of the whole
-/// home directory isn't achieved.
+/// home directory isn't achieved. On Windows/macOS, that fallback also returns the *whole* path
+/// NFC-normalized (not just the redacted span), since the underlying comparison it uses
+/// normalizes `path` up front — a segment outside the redacted username that happens to be
+/// NFD-spelled comes back precomposed. This is harmless for display, but on Windows, where NTFS
+/// treats an NFC- and an NFD-spelled filename as different files on disk, the rendered path is
+/// not guaranteed to name a file that literally exists under that exact spelling.
 ///
 /// # Examples
 ///
@@ -96,10 +103,12 @@ fn scrub_username(path: &Path, home: &Path) -> String {
 #[cfg(any(windows, target_os = "macos"))]
 fn components_match(home: Component<'_>, path: Component<'_>) -> bool {
     // Unicode-aware case folding (not `eq_ignore_ascii_case`, which only folds ASCII bytes and
-    // misses non-ASCII usernames such as Cyrillic). This compares whole components, so there is
-    // no byte-offset slicing to keep valid across the fold, unlike `replace_case_aware` below.
-    home.as_os_str().to_string_lossy().to_lowercase()
-        == path.as_os_str().to_string_lossy().to_lowercase()
+    // misses non-ASCII usernames such as Cyrillic), plus NFC normalization so a component that
+    // differs from the other only by composition form (e.g. precomposed "é" vs. "e" + combining
+    // acute) still compares equal. This compares whole components, so there is no byte-offset
+    // slicing to keep valid across either transform, unlike `replace_case_aware` below.
+    normalize_and_fold(&home.as_os_str().to_string_lossy())
+        == normalize_and_fold(&path.as_os_str().to_string_lossy())
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -107,23 +116,60 @@ fn components_match(home: Component<'_>, path: Component<'_>) -> bool {
     home == path
 }
 
+/// NFC-normalizes, Unicode-case-folds, then NFC-normalizes `s` again, so two strings that differ
+/// only by composition form (NFC vs. NFD) or by case compare equal after this transform.
+///
+/// The trailing re-normalization is required, not cosmetic: `str::to_lowercase` can turn an
+/// already-NFC string back into a non-NFC one. For example, `"J\u{30C}"` (capital J + combining
+/// caron) has no precomposed uppercase form, so it is already NFC; lowering it maps `J` to `j`
+/// character-by-character and leaves the combining caron untouched, producing `"j\u{30C}"` —
+/// which is *not* NFC, because the precomposed lowercase `"\u{1F0}"` (LATIN SMALL LETTER J WITH
+/// CARON) exists. Without the second `nfc()` pass, that decomposed fold would compare unequal to
+/// an already-precomposed `"\u{1F0}"` on the other side, even though they render identically.
+#[cfg(any(windows, target_os = "macos"))]
+fn normalize_and_fold(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.nfc().collect::<String>().to_lowercase().nfc().collect()
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 fn replace_case_aware(haystack: &str, needle: &str, replacement: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
     // Case-folds each candidate window with whole-string `str::to_lowercase` (not a per-char
     // fold), so this agrees with `components_match`'s folding on Unicode's context-sensitive
     // rules — e.g. Greek final sigma: "ΣΑΣ".to_lowercase() == "σας", which a char-by-char fold
-    // would render "σασ" and so fail to match. `str::to_lowercase` can also change a character's
-    // encoded length (Turkish "İ" folds to two chars: "i" + a combining dot above), so byte
-    // offsets found by searching a fully-lowered copy of `haystack` are not valid slice points
-    // back into the original. Instead, this walks `haystack`'s own (never-lowered) char
-    // boundaries and, at each candidate start, lowers only that `needle`-char-count-long window
-    // to compare against the lowered needle — only `haystack`'s own char boundaries are ever
-    // used as slice points, so byte-length drift introduced by folding never invalidates a slice.
+    // would render "σασ" and so fail to match.
+    //
+    // `haystack` and `needle` are each NFC-normalized as a whole *before* windowing starts,
+    // rather than only inside each candidate window. This matters because the window is sized
+    // from `needle`'s char count: normalizing only inside the window (as an earlier version of
+    // this function did) left the *raw*, pre-normalization char counts of `needle` and of a
+    // decomposed (NFD) matching span in `haystack` mismatched — e.g. NFC needle `"Jos\u{e9}"`
+    // (4 raw chars) against an NFD-spelled `"Jose\u{301}"` span in `haystack` (5 raw chars) never
+    // lined up a window of the right size, so `scrub_username`'s fallback silently failed to
+    // redact the username (issue #416). Normalizing both operands whole, up front, resolves this
+    // for any composition-form mismatch between them, because the same composed form is reached
+    // by both sides before their lengths are ever compared.
+    //
+    // The window is still sized from `needle`'s (now-normalized) char count, so `haystack`'s own
+    // char boundaries — computed from this same normalized string via `char_indices` — are always
+    // valid slice points for the output. The comparison itself, though, runs on the *folded* form
+    // (`normalize_and_fold`, which case-folds and re-normalizes), whose char count can differ from
+    // the window's normalized-but-unfolded char count. So a residual, accepted limitation remains:
+    // a needle/haystack pair whose folded forms only line up at a different char count than their
+    // normalized forms is missed. This covers both the original case (Turkish "İ" folding to two
+    // chars, or German "ß" needle against a haystack spelled "ss") and a normalization-adjacent one
+    // introduced by `normalize_and_fold`'s own post-fold re-normalization: a needle like
+    // `"J\u{30C}an"` (whose first char folds-and-recomposes to the 1-char "\u{1F0}", shortening the
+    // folded form relative to the normalized one) is not matched — see
+    // `replace_case_aware_preserves_byte_offsets_when_fold_changes_length`.
     if needle.is_empty() {
         return haystack.to_owned();
     }
+    let haystack: String = haystack.nfc().collect();
+    let needle: String = needle.nfc().collect();
     let needle_len = needle.chars().count();
-    let needle_lower = needle.to_lowercase();
+    let needle_folded = normalize_and_fold(&needle);
     let boundaries: Vec<usize> = haystack
         .char_indices()
         .map(|(i, _)| i)
@@ -136,7 +182,7 @@ fn replace_case_aware(haystack: &str, needle: &str, replacement: &str) -> String
     while i + needle_len < boundaries.len() {
         let start = boundaries[i];
         let end = boundaries[i + needle_len];
-        if haystack[start..end].to_lowercase() == needle_lower {
+        if normalize_and_fold(&haystack[start..end]) == needle_folded {
             result.push_str(&haystack[last_end..start]);
             result.push_str(replacement);
             last_end = end;
@@ -337,11 +383,16 @@ mod tests {
     // replaces correctly instead of panicking or corrupting output, even though the window's
     // folded form is longer than its raw form.
     //
-    // Known limitation, not exercised here: because the window is sized to `needle`'s *raw* char
-    // count, this can't match a needle/haystack pair whose folded forms only line up at a
-    // different raw char count (e.g. German "ß" needle against a haystack spelled "ss" — 1 raw
-    // char vs 2). Accepted per the original design: the fallback's over-redaction bias makes a
-    // missed match here a false negative, not an information leak on its own, since the primary
+    // Known limitation, not exercised here: the window is sized to `needle`'s *normalized* char
+    // count, but the comparison itself runs on the further *folded* form, whose char count can
+    // differ from the normalized-but-unfolded one — so a needle/haystack pair whose folded forms
+    // only line up at a different char count than their normalized forms is missed. This covers
+    // German "ß" needle against a haystack spelled "ss" (1 char vs. 2) and a normalization-adjacent
+    // case introduced by `normalize_and_fold`'s own post-fold re-normalization, e.g. needle
+    // `"J\u{30C}an"` against haystack `"\u{1F0}an"` (4-char normalized needle vs. 3-char folded
+    // form). Not a regression: the pre-S1/S3 code missed this identical input too. Accepted per the
+    // original design: the fallback's over-redaction bias makes a missed match here a false
+    // negative, not an information leak on its own, since the primary
     // `strip_home_prefix`/`components_match` path (whole-component comparison, not a windowed
     // substring search) still catches the common case.
     #[cfg(any(windows, target_os = "macos"))]
@@ -351,6 +402,82 @@ mod tests {
         // A plain ASCII "i" is not a case variant of "İ" under this fold, so no match — the
         // differing fold length must not cause a panic or a false match.
         assert_eq!(replace_case_aware("aİb", "i", "~"), "aİb");
+    }
+
+    // Regression test for #416: two components that render identically ("José") but differ in
+    // Unicode composition form — one precomposed (NFC: "e" + U+00E9 "é"), one decomposed (NFD:
+    // "e" + "e" + U+0301 combining acute accent) — must still be recognized as the same
+    // component once both sides are NFC-normalized before folding.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn components_match_is_unicode_normalization_insensitive() {
+        let home_path = Path::new("Jos\u{e9}");
+        let path_path = Path::new("Jose\u{301}");
+        let home = home_path.components().next().unwrap();
+        let path = path_path.components().next().unwrap();
+        assert!(components_match(home, path));
+    }
+
+    // Regression test for critic finding S3: "J\u{30C}" (capital J + combining caron) has no
+    // precomposed uppercase form, so it is already NFC; its lowercase, "\u{1F0}" (LATIN SMALL
+    // LETTER J WITH CARON), *does* have a precomposed form. A fold that does not re-normalize
+    // after lowering emits "j" + combining caron (not NFC) for the first operand while the second
+    // stays precomposed, comparing unequal even though both render as "ǰ". `replace_case_aware`
+    // does not have a matching test for this exact pair: the same fold-driven shortening it fixes
+    // here also *shrinks* the folded form relative to the window's normalized size there, which is
+    // exactly the residual limitation documented on
+    // `replace_case_aware_preserves_byte_offsets_when_fold_changes_length` above.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn components_match_handles_fold_without_precomposed_uppercase() {
+        let home_path = Path::new("J\u{30C}");
+        let path_path = Path::new("\u{1F0}");
+        let home = home_path.components().next().unwrap();
+        let path = path_path.components().next().unwrap();
+        assert!(components_match(home, path));
+    }
+
+    // Regression test for critic finding S1: prior to NFC-normalizing `haystack` and `needle` as
+    // whole strings before windowing, a window sized from the *raw* (already-NFC) needle's char
+    // count did not line up with a longer, NFD-decomposed matching span in `haystack`, so
+    // `scrub_username`'s fallback path left the username visible verbatim in the redacted output.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn replace_case_aware_matches_nfc_needle_against_nfd_haystack_span() {
+        let needle = "Jos\u{e9}"; // NFC, 4 raw chars
+        let haystack = "/Volumes/Data/Users/Jose\u{301}/notes.md"; // NFD "Jose" + combining acute
+        assert_eq!(
+            replace_case_aware(haystack, needle, "~"),
+            "/Volumes/Data/Users/~/notes.md"
+        );
+    }
+
+    // Reverse direction of the same #416/S1 gap: an NFD-decomposed needle against an
+    // NFC-precomposed haystack span.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn replace_case_aware_matches_nfd_needle_against_nfc_haystack_span() {
+        let needle = "Jose\u{301}"; // NFD, 5 raw chars
+        let haystack = "/Volumes/Data/Users/Jos\u{e9}/notes.md"; // NFC "José"
+        assert_eq!(
+            replace_case_aware(haystack, needle, "~"),
+            "/Volumes/Data/Users/~/notes.md"
+        );
+    }
+
+    // Regression test for critic finding S2: the previous version of this test used OHM SIGN
+    // (U+2126), which `str::to_lowercase` alone already folds to the same value as GREEK CAPITAL
+    // LETTER OMEGA (U+03A9) — so it passed even without any normalization fix and proved nothing
+    // about normalization specifically. U+0387 GREEK ANO TELEIA NFC-normalizes to U+00B7 MIDDLE
+    // DOT (a canonical singleton mapping); neither character has a case, so `to_lowercase` alone
+    // cannot merge them — only NFC normalization does, making this a genuine test of the
+    // normalization path. Note this does *not* exercise `normalize_and_fold`'s post-fold
+    // re-normalization (S3): both operands are caseless, so folding is a no-op here — see
+    // `components_match_handles_fold_without_precomposed_uppercase` above for that case instead.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn replace_case_aware_matches_caseless_singleton_normalization() {
+        assert_eq!(replace_case_aware("a \u{387} b", "\u{b7}", "~"), "a ~ b");
     }
 
     #[cfg(any(windows, target_os = "macos"))]

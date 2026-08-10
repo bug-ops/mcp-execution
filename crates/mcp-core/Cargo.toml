@@ -21,6 +21,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 
+# Only `path.rs`'s Windows/macOS-specific `#[cfg(any(windows, target_os = "macos"))]` comparison
+# helpers use this; scoped here so Linux builds don't compile/link its Unicode tables for nothing.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+unicode-normalization = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
