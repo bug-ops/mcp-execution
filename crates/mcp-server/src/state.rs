@@ -118,6 +118,31 @@ impl PendingTable {
             keep
         });
     }
+
+    /// Checks whether adding `size_bytes` worth of new entry data would stay within
+    /// [`MAX_PENDING_SESSIONS`]/[`MAX_TOTAL_PENDING_BYTES`], without mutating anything.
+    ///
+    /// Shared by [`StateManager::store`] and [`StateManager::restore`] so both insertion paths
+    /// enforce the exact same CWE-400 bounds — `restore` re-inserting a session it previously
+    /// removed must not be able to silently bypass the caps a fresh `store` would be held to
+    /// (issue #379 S1: without this, a caller could free up budget with concurrent `store`s
+    /// during another session's checkout window, then have that session's `restore` land on top
+    /// of the refilled budget).
+    fn check_capacity(&self, size_bytes: usize) -> Result<(), StateError> {
+        if self.entries.len() >= MAX_PENDING_SESSIONS {
+            return Err(StateError::AtCapacity {
+                limit: MAX_PENDING_SESSIONS,
+            });
+        }
+
+        if self.total_bytes.saturating_add(size_bytes) > MAX_TOTAL_PENDING_BYTES {
+            return Err(StateError::MemoryBudgetExceeded {
+                limit: MAX_TOTAL_PENDING_BYTES,
+            });
+        }
+
+        Ok(())
+    }
 }
 
 /// State manager for pending generation sessions.
@@ -227,18 +252,7 @@ impl StateManager {
         {
             let mut table = self.pending.write().await;
             table.sweep_expired(self.clock.as_ref());
-
-            if table.entries.len() >= MAX_PENDING_SESSIONS {
-                return Err(StateError::AtCapacity {
-                    limit: MAX_PENDING_SESSIONS,
-                });
-            }
-
-            if table.total_bytes.saturating_add(size_bytes) > MAX_TOTAL_PENDING_BYTES {
-                return Err(StateError::MemoryBudgetExceeded {
-                    limit: MAX_TOTAL_PENDING_BYTES,
-                });
-            }
+            table.check_capacity(size_bytes)?;
 
             table.entries.insert(
                 session_id,
@@ -330,6 +344,170 @@ impl StateManager {
             .get(&session_id)
             .filter(|entry| !entry.generation.is_expired(clock))
             .map(|entry| entry.generation.clone())
+    }
+
+    /// Validates a pending generation in place and consumes it only if validation succeeds.
+    ///
+    /// `validate` runs against the live entry while the write lock is held, so a failed
+    /// validation (e.g. a retried call with a bad tool name) never pays [`PendingGeneration`]'s
+    /// clone cost the way a `get`-then-`take` pattern would (issue #378) — [`Self::get`] deep
+    /// clones the entire session, including every introspected tool's schema, up to
+    /// `MAX_SINGLE_SESSION_BYTES` worth of data per call.
+    ///
+    /// Returns `None` if the session is not found or has expired — the same miss reported by
+    /// [`Self::get`]/[`Self::take`]. Returns `Some(Err(e))` if `validate` rejected the entry,
+    /// leaving the session in place at its original expiry so the caller can retry with the same
+    /// `session_id`. Returns `Some(Ok((generation, size_bytes, value)))` if `validate` accepted
+    /// it: the entry is removed from the table and its owned [`PendingGeneration`] is handed back
+    /// alongside its already-known `size_bytes` (the exact value this call's own removal just
+    /// subtracted from the table's running total — nothing is re-derived) and `validate`'s
+    /// output, so a caller that needs the session's data for further (fallible) work downstream
+    /// of validation can restore both to `Self::restore` without re-fetching, re-cloning, or
+    /// re-serializing anything.
+    ///
+    /// `validate` must be synchronous and touch only its `&PendingGeneration` argument — it runs
+    /// while the table's write lock is held, so anything slower (I/O, another lock) would block
+    /// every other session in the table for its duration.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the internal `expect` on the successful-validation path removes the
+    /// same entry that was just looked up moments earlier under the same continuously-held write
+    /// lock, so it cannot have disappeared in between.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_server::state::StateManager;
+    /// # use mcp_execution_server::types::PendingGeneration;
+    /// # use mcp_execution_core::{ServerId, ServerConfig};
+    /// # use mcp_execution_introspector::ServerInfo;
+    ///
+    /// # async fn example(pending: PendingGeneration) {
+    /// let state = StateManager::new();
+    /// let session_id = state.store(pending).await.unwrap();
+    ///
+    /// // A failed validation leaves the session in place.
+    /// let rejected = state
+    ///     .take_if(session_id, |_generation| Err::<(), _>("bad input"))
+    ///     .await;
+    /// assert!(matches!(rejected, Some(Err("bad input"))));
+    /// assert!(state.get(session_id).await.is_some());
+    ///
+    /// // A successful validation consumes the session and hands back all three parts.
+    /// let accepted = state
+    ///     .take_if(session_id, |generation| Ok::<_, &str>(generation.server_id.clone()))
+    ///     .await;
+    /// assert!(accepted.is_some());
+    /// let (generation, _size_bytes, server_id) = accepted.unwrap().unwrap();
+    /// assert_eq!(generation.server_id, server_id);
+    /// assert!(state.get(session_id).await.is_none());
+    /// # }
+    /// ```
+    pub async fn take_if<T, E>(
+        &self,
+        session_id: Uuid,
+        validate: impl FnOnce(&PendingGeneration) -> Result<T, E>,
+    ) -> Option<Result<(PendingGeneration, usize, T), E>> {
+        let mut table = self.pending.write().await;
+        table.sweep_expired(self.clock.as_ref());
+
+        let entry = table.entries.get(&session_id)?;
+        if entry.generation.is_expired(self.clock.as_ref()) {
+            return None;
+        }
+
+        let outcome = match validate(&entry.generation) {
+            Ok(value) => {
+                let entry = table
+                    .entries
+                    .remove(&session_id)
+                    .expect("entry was just looked up above under the same held write lock");
+                table.total_bytes -= entry.size_bytes;
+                Ok((entry.generation, entry.size_bytes, value))
+            }
+            Err(e) => Err(e),
+        };
+        drop(table);
+        Some(outcome)
+    }
+
+    /// Re-inserts a previously-[`Self::take`]n or [`Self::take_if`]-consumed session under its
+    /// original `session_id`, preserving its original `expires_at` rather than granting a fresh
+    /// TTL.
+    ///
+    /// Used to undo a consuming removal when the work the caller intended to do with the session
+    /// afterward fails for a transient, retriable reason (e.g. a downstream I/O error during
+    /// export) — so the caller isn't forced back to re-establishing the session from scratch for
+    /// a failure that has nothing to do with the session's own validity (issue #379). `size_bytes`
+    /// must be the value [`Self::take_if`] (or [`estimate_size_bytes`]) previously computed for
+    /// `generation`, so re-inserting it never re-serializes the session to re-derive a size this
+    /// call's caller already had (issue #378 S2).
+    ///
+    /// Enforces the exact same [`MAX_PENDING_SESSIONS`]/[`MAX_TOTAL_PENDING_BYTES`] bounds as
+    /// [`Self::store`] (issue #379 S1): without this, a session checked out via `take_if` is
+    /// briefly unaccounted for while its caller's own pipeline runs, and a client could exploit
+    /// that window — filling the freed budget with fresh `store`s, then having this call land on
+    /// top of it — to park the table above its configured caps for the remainder of the original
+    /// session's TTL. A caller whose `restore` fails this way has no better option than the
+    /// session genuinely being lost: silently dropping the cap instead would defeat the exact
+    /// protection [`StateError`] exists to provide.
+    ///
+    /// `pub(crate)`, not `pub`: unlike `store`/`take`/`get`, nothing outside this crate can call
+    /// it correctly — a caller needs `size_bytes` to already be the exact value this same
+    /// `generation` was measured at, a value [`estimate_size_bytes`] (private) is the only way to
+    /// produce, and passing an arbitrary `session_id` bypasses `store`'s minted-`Uuid` invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StateError::AtCapacity`] or [`StateError::MemoryBudgetExceeded`] under the same
+    /// conditions as [`Self::store`], in which case `generation` is dropped rather than
+    /// re-inserted — the session is genuinely lost, exactly as a fresh `store` under the same
+    /// pressure would be rejected rather than silently exceeding the configured caps.
+    ///
+    /// # Examples
+    ///
+    /// Illustrative only (`ignore`d, not compiled): `restore` is `pub(crate)`, so it cannot be
+    /// called from a doc-test, which compiles as a separate external crate.
+    ///
+    /// ```ignore
+    /// let state = StateManager::new();
+    /// let session_id = state.store(pending).await.unwrap();
+    ///
+    /// let (taken, size_bytes, ()) = state
+    ///     .take_if(session_id, |_generation| Ok::<_, &str>(()))
+    ///     .await
+    ///     .unwrap()
+    ///     .unwrap();
+    /// assert!(state.get(session_id).await.is_none());
+    ///
+    /// // Simulated downstream failure: hand the session back.
+    /// state.restore(session_id, taken, size_bytes).await.unwrap();
+    /// assert!(state.get(session_id).await.is_some());
+    /// ```
+    pub(crate) async fn restore(
+        &self,
+        session_id: Uuid,
+        generation: PendingGeneration,
+        size_bytes: usize,
+    ) -> Result<(), StateError> {
+        let mut table = self.pending.write().await;
+        table.sweep_expired(self.clock.as_ref());
+        table.check_capacity(size_bytes)?;
+
+        if let Some(previous) = table.entries.insert(
+            session_id,
+            PendingEntry {
+                generation,
+                size_bytes,
+            },
+        ) {
+            table.total_bytes -= previous.size_bytes;
+        }
+        table.total_bytes += size_bytes;
+        drop(table);
+
+        Ok(())
     }
 
     /// Returns the current pending session count (excluding expired).
@@ -691,5 +869,169 @@ mod tests {
         // ...and swept back out once `cleanup_expired` runs.
         state.cleanup_expired().await;
         assert_eq!(state.pending.read().await.total_bytes, 0);
+    }
+
+    // ── take_if / restore (issues #378, #379) ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_take_if_success_consumes_session_and_returns_value() {
+        let state = StateManager::new();
+        let pending = create_test_pending();
+        let session_id = state.store(pending.clone()).await.unwrap();
+
+        let result = state
+            .take_if(session_id, |generation| {
+                Ok::<_, &str>(generation.server_id.clone())
+            })
+            .await;
+
+        let (generation, size_bytes, server_id) =
+            result.expect("session was present").expect("Ok result");
+        assert_eq!(generation.server_id, pending.server_id);
+        assert_eq!(server_id, pending.server_id);
+        assert_eq!(size_bytes, estimate_size_bytes(&pending));
+
+        // Consumed: no longer retrievable.
+        assert!(state.get(session_id).await.is_none());
+        assert_eq!(state.pending.read().await.total_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn test_take_if_validation_failure_retains_session_without_cloning() {
+        let state = StateManager::new();
+        let pending = create_test_pending();
+        let session_id = state.store(pending).await.unwrap();
+        let total_bytes_before = state.pending.read().await.total_bytes;
+
+        let first = state
+            .take_if(session_id, |_generation| Err::<(), _>("bad input"))
+            .await;
+        assert!(matches!(first, Some(Err("bad input"))));
+
+        // Session is still present, at the same accounted size, for a repeated
+        // clone-free retry against the same live entry.
+        assert!(state.get(session_id).await.is_some());
+        assert_eq!(state.pending.read().await.total_bytes, total_bytes_before);
+
+        let second = state
+            .take_if(session_id, |_generation| Err::<(), _>("bad input again"))
+            .await;
+        assert!(matches!(second, Some(Err("bad input again"))));
+        assert!(state.get(session_id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_take_if_missing_session_returns_none() {
+        let state = StateManager::new();
+        let result = state
+            .take_if(Uuid::new_v4(), |_generation| Ok::<_, &str>(()))
+            .await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_take_if_expired_session_returns_none_and_does_not_call_validate() {
+        let state = StateManager::new();
+        let session_id = state.store(create_expired_pending()).await.unwrap();
+
+        let mut validate_called = false;
+        let result = state
+            .take_if(session_id, |_generation| {
+                validate_called = true;
+                Ok::<_, &str>(())
+            })
+            .await;
+
+        assert!(result.is_none());
+        assert!(!validate_called);
+    }
+
+    #[tokio::test]
+    async fn test_restore_reinserts_under_same_session_id_and_is_retryable() {
+        let state = StateManager::new();
+        let pending = create_test_pending();
+        let session_id = state.store(pending.clone()).await.unwrap();
+
+        // Simulate `save_categorized_tools` consuming the session via `take_if`
+        // and then hitting a transient downstream failure (codegen/export).
+        let (generation, size_bytes, ()) = state
+            .take_if(session_id, |_generation| Ok::<_, &str>(()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(state.get(session_id).await.is_none());
+
+        state
+            .restore(session_id, generation, size_bytes)
+            .await
+            .unwrap();
+
+        // Retryable: the same session_id is usable again, with its original data intact.
+        let retried = state.get(session_id).await;
+        assert!(retried.is_some());
+        assert_eq!(retried.unwrap().server_id, pending.server_id);
+        assert_eq!(
+            state.pending.read().await.total_bytes,
+            estimate_size_bytes(&pending)
+        );
+    }
+
+    /// Issue #379 S1 — `restore` must not be able to push the table above the same
+    /// `MAX_TOTAL_PENDING_BYTES` budget a fresh `store` is held to, even though the session being
+    /// restored was briefly unaccounted for during its checkout window. Simulates the exploit the
+    /// critic flagged: another session fills the budget back up while this one is checked out via
+    /// `take_if`, so by the time `restore` runs there is no room left for it.
+    #[tokio::test]
+    async fn test_restore_rejects_when_would_exceed_memory_budget() {
+        let state = StateManager::new();
+        let pending = create_test_pending();
+        let session_id = state.store(pending).await.unwrap();
+
+        let (generation, size_bytes, ()) = state
+            .take_if(session_id, |_generation| Ok::<_, &str>(()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.pending.read().await.total_bytes, 0);
+
+        // Another concurrent session refills the entire budget while this one is checked out.
+        {
+            let mut table = state.pending.write().await;
+            table.total_bytes = MAX_TOTAL_PENDING_BYTES;
+        }
+
+        let result = state.restore(session_id, generation, size_bytes).await;
+
+        assert!(
+            matches!(result, Err(StateError::MemoryBudgetExceeded { limit }) if limit == MAX_TOTAL_PENDING_BYTES)
+        );
+        // The rejected session must not have been silently inserted anyway.
+        assert!(state.get(session_id).await.is_none());
+    }
+
+    /// Same invariant as the byte-budget test above, but for the session-count cap.
+    #[tokio::test]
+    async fn test_restore_rejects_when_at_capacity() {
+        let state = StateManager::new();
+        let pending = create_test_pending();
+        let session_id = state.store(pending).await.unwrap();
+
+        let (generation, size_bytes, ()) = state
+            .take_if(session_id, |_generation| Ok::<_, &str>(()))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Fill the table to capacity while this session is checked out.
+        for _ in 0..MAX_PENDING_SESSIONS {
+            state.store(create_test_pending()).await.unwrap();
+        }
+
+        let result = state.restore(session_id, generation, size_bytes).await;
+
+        assert!(
+            matches!(result, Err(StateError::AtCapacity { limit }) if limit == MAX_PENDING_SESSIONS)
+        );
+        assert!(state.get(session_id).await.is_none());
     }
 }

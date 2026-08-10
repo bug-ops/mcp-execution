@@ -470,12 +470,27 @@ impl GeneratorService {
     /// categorization. Requires `session_id` from a previous `introspect_server`
     /// call.
     ///
-    /// The session named by `session_id` is only consumed once `categorized_tools` passes
-    /// every validation check (entry-count cap, tool-not-found, duplicate entry, field-length
-    /// limits) and `output_dir` resolves successfully. A failure in either leaves the session
-    /// intact at its original expiry, so the caller can fix the payload (or, for a resolution
-    /// failure caused by something in the filesystem, the environment) and retry with the same
-    /// `session_id` before that expiry is reached (issue #371).
+    /// The session named by `session_id` is only permanently discarded once the whole
+    /// pipeline - `categorized_tools` validation (entry-count cap, tool-not-found, duplicate
+    /// entry, field-length limits), `output_dir` resolution, codegen, VFS build, and export -
+    /// has fully succeeded. `categorized_tools` validation runs via
+    /// [`crate::state::StateManager::take_if`], which removes the session from
+    /// [`crate::state::StateManager`] only once that (fast, in-memory, lock-held) validation
+    /// passes; any failure there leaves the session untouched at its original expiry (issue
+    /// #371). Every later pipeline stage - `output_dir` resolution, codegen, VFS build, export -
+    /// runs against the already-removed, now solely-owned session, and an `Err` returned from any
+    /// of those stages re-inserts it into `StateManager` under its original `session_id`, expiry,
+    /// and byte-size accounting via [`crate::state::StateManager::restore`] before returning the
+    /// error, so a transient failure there (e.g. a momentary I/O error during export) is
+    /// retriable with the same `session_id` too, instead of permanently burning the session the
+    /// way any post-consume failure did before this fix (issue #379). This covers every ordinary
+    /// error return, not every conceivable way the session could be lost: a panic inside
+    /// `generate_and_export`, or this future being dropped mid-await (e.g. process shutdown), still
+    /// loses it with no restore, the same as any pre-#379 code path would - restore only runs on a
+    /// value actually returned from that call. `restore` can also itself decline to re-insert the
+    /// session if the pending-session table is already back at capacity by the time this call's
+    /// checkout window ends; that failure is logged, not propagated to the client, since the
+    /// pipeline's own error is always the more relevant one to report.
     ///
     /// Does not observe request cancellation, unlike `introspect_server` and
     /// `generate_skill`. An earlier version raced the wait for the
@@ -499,171 +514,94 @@ impl GeneratorService {
         &self,
         Parameters(params): Parameters<SaveCategorizedToolsParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Peek (not consume) the pending session so a validation failure below can't destroy
-        // it: every earlier version of this handler called `take` here, which meant a single
-        // bad entry in `categorized_tools` (typo'd tool name, duplicate, too many entries)
-        // permanently burned the session even though nothing was ever exported and the
-        // session's TTL hadn't elapsed, forcing the caller to re-run `introspect_server` just
-        // to retry (issue #371). The session is only actually consumed, via `take` below,
-        // once every validation check in this function has passed.
-        let pending = self
+        // Validate in place and consume only on success, via `StateManager::take_if`: a failed
+        // validation (typo'd tool name, duplicate, too many entries) leaves the session
+        // untouched at its original expiry instead of burning it (issue #371), and - unlike an
+        // earlier `get`-then-`take` version of this fix - does so without deep-cloning the whole
+        // session (every introspected tool's schema) on every failed attempt (issue #378).
+        // `validate_categorized_tools` runs synchronously while `take_if` holds the state
+        // table's write lock, so it must stay limited to fast, in-memory checks - no I/O.
+        let take_result = self
             .state
-            .get(params.session_id)
-            .await
-            .ok_or_else(session_not_found_error)?;
-        tracing::Span::current().record("server_id", tracing::field::display(&pending.server_id));
-
-        // Validate categorized tools match introspected tools.
-        //
-        // #307: `pending.server_info.tools[].name` is raw — it's the actual introspection
-        // data, kept unsanitized because it's also used to build the `.ts` files themselves.
-        // Claude never sees these raw names directly: it only ever saw a *display* form of
-        // each one, produced by `build_introspected_summaries` + `wrap_introspect_result`
-        // from `introspect_server` (issues #292, #307). Matching a `categorized_tools` entry
-        // against what was introspected must key off that display form, while codegen
-        // (`generate_with_categorization`, below) must key off the raw name it actually looks
-        // tools up by — conflating the two by using the echoed name as both the match key and
-        // the codegen key desynced categorization from any tool name containing a control
-        // character, line terminator, or `&`/`<`/`>`.
-        //
-        // S2: a raw name can legitimately be echoed back in either of [`display_forms`]'s two
-        // forms (the literal escaped text, or the same text with entities decoded), so both are
-        // accepted as keys for the same raw tool.
-        //
-        // S3: if two DISTINCT raw tool names ever produce the same display key (via either
-        // form), which raw tool a caller meant by that key is genuinely ambiguous. A plain
-        // `HashMap::collect` would silently keep only the last one, misattributing one tool's
-        // categorization to a different tool's `_meta.json` entry with no error surfaced.
-        // Instead, `owners` tracks every raw name that could produce each key, and any key with
-        // more than one distinct owner is dropped from `display_to_raw` entirely, so a caller
-        // trying to use it hits the "not found" branch below explicitly.
-        let mut display_key_owners: HashMap<String, HashSet<&str>> = HashMap::new();
-        for tool in &pending.server_info.tools {
-            let raw = tool.name.as_str();
-            for key in display_forms(raw) {
-                display_key_owners.entry(key).or_default().insert(raw);
-            }
-        }
-        let display_to_raw: HashMap<String, &str> = display_key_owners
-            .into_iter()
-            .filter_map(|(key, owners)| {
-                if owners.len() == 1 {
-                    owners.into_iter().next().map(|raw| (key, raw))
-                } else {
-                    None
-                }
+            .take_if(params.session_id, |pending| {
+                validate_categorized_tools(pending, &params.categorized_tools)
             })
-            .collect();
+            .await;
 
-        // A legitimate call can never submit more entries than there are introspected tools.
-        // Reject early, before any per-entry validation, HashMap insertion, or codegen work
-        // (CWE-400 - see issue #197).
-        //
-        // Bounded by the true introspected tool count (`pending.server_info.tools.len()`), not
-        // `display_to_raw.len()`: S2 means a single raw tool can legitimately own two display
-        // keys, and S3 means an ambiguous key is excluded from the map entirely — neither of
-        // those should shrink or inflate this bound. `MAX_TOOL_FILES` is the same per-server
-        // tool-count ceiling `generate_skill` already enforces (via
-        // `mcp_execution_skill::scan_tools_directory`), so reusing it here keeps the two stages
-        // consistent - otherwise this call could happily generate more tool files than
-        // `generate_skill` will later accept.
-        let introspected_tool_count = pending.server_info.tools.len();
-        let max_allowed_tools = introspected_tool_count.min(MAX_TOOL_FILES);
-        if params.categorized_tools.len() > max_allowed_tools {
-            return Err(McpError::invalid_params(
-                format!(
-                    "categorized_tools has {} entries but at most {} are allowed \
-                     (min of {} introspected tools and the {} tool-file cap; \
-                     duplicates are not allowed)",
-                    params.categorized_tools.len(),
-                    max_allowed_tools,
-                    introspected_tool_count,
-                    MAX_TOOL_FILES,
-                ),
-                None,
-            ));
-        }
+        let (pending, size_bytes, (categorization, categories)) = match take_result {
+            None => return Err(session_not_found_error()),
+            Some(Err(e)) => return Err(e),
+            Some(Ok(validated)) => validated,
+        };
 
-        // Validate each entry and build the codegen categorization map in a single pass,
-        // resolving `cat_tool.name` to its raw tool name once via `display_to_raw` (issue #307
-        // M3) — a prior version re-derived the same lookup in a second pass, relying on an
-        // `expect()` to justify why it couldn't fail there; doing it once removes that panic
-        // path by construction instead of just asserting it unreachable.
-        let tool_count = params.categorized_tools.len();
-        // Keyed by RESOLVED RAW NAME, not by `cat_tool.name` (the submitted display key):
-        // `display_forms` (S2) deliberately lets one raw tool own two distinct display keys
-        // (its escaped and unescaped forms), so two entries with different `name` strings can
-        // still resolve to the same introspected tool. Deduping on the submitted string would
-        // miss that case entirely, letting the second entry silently overwrite the first's
-        // categorization in the map below with no error surfaced (issue #307 N1).
-        let mut seen_raw_names: HashSet<&str> = HashSet::with_capacity(tool_count);
-        let mut categorization: HashMap<String, &CategorizedTool> =
-            HashMap::with_capacity(tool_count);
-        let mut categories: HashMap<String, usize> = HashMap::with_capacity(tool_count);
-
-        for cat_tool in &params.categorized_tools {
-            let Some(&raw_name) = display_to_raw.get(cat_tool.name.as_str()) else {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "Tool '{}' not found in introspected tools (or its sanitized display \
-                         name is ambiguous between two or more introspected tools)",
-                        cat_tool.name
-                    ),
-                    None,
-                ));
-            };
-
-            if !seen_raw_names.insert(raw_name) {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "Tool '{}' appears more than once in categorized_tools (resolves to \
-                         the same introspected tool as an earlier entry)",
-                        cat_tool.name
-                    ),
-                    None,
-                ));
+        // From here on the session has been removed from `StateManager`: this call is its sole
+        // owner. Everything below - `output_dir` resolution, codegen, VFS build, export - is
+        // fallible I/O/CPU work that used to run after an unconditional `take`, so any failure
+        // here previously discarded the session permanently even for a transient cause (issue
+        // #379). `generate_and_export` borrows `pending` rather than consuming it so a failure
+        // can hand it back to `StateManager::restore` under its original `session_id`, expiry,
+        // and already-known `size_bytes`, leaving it retriable exactly as a pre-consume
+        // validation failure already is.
+        match self
+            .generate_and_export(&pending, &categorization, categories)
+            .await
+        {
+            Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&result).map_err(|e| {
+                    McpError::internal_error(format!("Failed to serialize result: {e}"), None)
+                })?,
+            )])),
+            Err(e) => {
+                self.restore_or_log(params.session_id, pending, size_bytes)
+                    .await;
+                Err(e)
             }
-
-            check_categorized_field_length(
-                &cat_tool.name,
-                "name",
-                &cat_tool.name,
-                MAX_CATEGORIZED_TOOL_NAME_LEN,
-            )?;
-            check_categorized_field_length(
-                &cat_tool.name,
-                "category",
-                &cat_tool.category,
-                MAX_CATEGORY_LEN,
-            )?;
-            check_categorized_field_length(
-                &cat_tool.name,
-                "keywords",
-                &cat_tool.keywords,
-                MAX_KEYWORDS_LEN,
-            )?;
-            check_categorized_field_length(
-                &cat_tool.name,
-                "short_description",
-                &cat_tool.short_description,
-                MAX_SHORT_DESCRIPTION_LEN,
-            )?;
-
-            categorization.insert(raw_name.to_string(), cat_tool);
-            *categories.entry(cat_tool.category.clone()).or_default() += 1;
         }
+    }
 
-        // Resolve and confine the output directory before consuming the session (moved ahead
-        // of `take`, rather than run afterward as in an earlier version of this fix): this -
-        // not the preview stored on `pending.output_dir` - is what creates the confinement
-        // chain's directories and rejects a symlink planted anywhere along it, including at
-        // `server_id`'s own directory. Running this here rather than once at `introspect_server`
-        // time closes the TOCTOU window a cached, pre-resolved path would leave open for the
-        // session's full lifetime (issue #216). Running it before `take` extends the same
-        // retry-with-the-same-session_id guarantee #371 gives `categorized_tools` validation to
-        // `ServerDirIsSymlink`/`NotADirectory`/`Escape`, which are environment-dependent and
-        // otherwise fixable between retries — a stale confinement violation shouldn't force a
-        // caller back to `introspect_server` any more than a stale tool name should.
+    /// Hands a session back to [`StateManager::restore`](crate::state::StateManager::restore)
+    /// after a post-consume pipeline failure, logging rather than propagating the rare case where
+    /// `restore` itself can't (the pending-session table's `MAX_PENDING_SESSIONS`/
+    /// `MAX_TOTAL_PENDING_BYTES` caps - the same ones `store` is held to - are already full by the
+    /// time this session's checkout window ends). The caller's own pipeline error is always what
+    /// gets returned to the client either way; this only affects whether a retry with the same
+    /// `session_id` will still find the session.
+    async fn restore_or_log(
+        &self,
+        session_id: uuid::Uuid,
+        pending: PendingGeneration,
+        size_bytes: usize,
+    ) {
+        if let Err(e) = self.state.restore(session_id, pending, size_bytes).await {
+            tracing::error!(
+                %session_id,
+                error = %e,
+                "failed to restore session after a post-consume pipeline failure; \
+                 the session is now permanently lost and a retry will need introspect_server again"
+            );
+        }
+    }
+
+    /// Runs `save_categorized_tools`'s post-validation pipeline: resolves and confines
+    /// `output_dir`, generates TypeScript code for `categorization`, builds the in-memory VFS,
+    /// and exports it to disk.
+    ///
+    /// Takes `pending` by reference (rather than consuming it) specifically so a caller that
+    /// already removed the session from [`StateManager`](crate::state::StateManager) can restore
+    /// it on failure without needing to reconstruct or re-clone it - see
+    /// [`Self::save_categorized_tools`], the only caller.
+    async fn generate_and_export(
+        &self,
+        pending: &PendingGeneration,
+        categorization: &HashMap<String, &CategorizedTool>,
+        categories: HashMap<String, usize>,
+    ) -> Result<SaveCategorizedToolsResult, McpError> {
+        // Resolve and confine the output directory: this - not the preview stored on
+        // `pending.output_dir` - is what creates the confinement chain's directories and rejects
+        // a symlink planted anywhere along it, including at `server_id`'s own directory. Running
+        // this here rather than once at `introspect_server` time closes the TOCTOU window a
+        // cached, pre-resolved path would leave open for the session's full lifetime (issue
+        // #216).
         let output_dir = resolve_output_dir(
             &self.servers_base_dir(),
             pending.server_id.as_str(),
@@ -684,32 +622,6 @@ impl GeneratorService {
             }
         })?;
 
-        // Release the peeked clone before consuming the session: `StateManager::get` deep-clones
-        // the entire session, including every introspected tool's schema, and holding that clone
-        // alive alongside the copy `take` returns below would double peak memory (up to ~140MB
-        // for a maximum-sized session, per `MAX_SINGLE_SESSION_BYTES`) across codegen, VFS build,
-        // and the export that follow. `display_to_raw`/`seen_raw_names` both borrow `pending`, so
-        // they're dropped first to end those borrows before `pending` itself is dropped.
-        drop(display_to_raw);
-        drop(seen_raw_names);
-        drop(pending);
-
-        // All validation above has passed: only now consume the session. `pending` is
-        // re-fetched (rather than reusing the peeked clone) so a session removed by a
-        // concurrent call for the same `session_id` between the peek above and this `take`
-        // is caught here and reported the same way a first-time miss would be, instead of
-        // this call proceeding to export with a copy of the session that's no longer the
-        // authoritative, still-owned one. `output_dir` and `categorization` above were derived
-        // from the dropped peek, not this re-fetch, but that's sound: `StateManager` exposes no
-        // method that mutates a stored session in place (only `store`/`take`/`get`), so a
-        // session's contents cannot change between a successful peek and a successful `take` of
-        // the same `session_id` - only disappear entirely, which the `ok_or_else` below catches.
-        let pending = self
-            .state
-            .take(params.session_id)
-            .await
-            .ok_or_else(session_not_found_error)?;
-
         // Generate code with categorization
         let generator = ProgressiveGenerator::new().map_err(|e| {
             McpError::internal_error(
@@ -718,13 +630,13 @@ impl GeneratorService {
             )
         })?;
 
-        let code = generate_with_categorization(&generator, &pending.server_info, &categorization)
+        let code = generate_with_categorization(&generator, &pending.server_info, categorization)
             .map_err(|e| {
-                McpError::internal_error(
-                    format!("Failed to generate code: {}", describe_with_causes(&e)),
-                    None,
-                )
-            })?;
+            McpError::internal_error(
+                format!("Failed to generate code: {}", describe_with_causes(&e)),
+                None,
+            )
+        })?;
 
         // Build virtual filesystem
         let vfs = FilesBuilder::from_generated_code(code, "/")
@@ -757,19 +669,13 @@ impl GeneratorService {
             .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?
             .map_err(|e| McpError::internal_error(format!("Failed to export files: {e}"), None))?;
 
-        let result = SaveCategorizedToolsResult {
+        Ok(SaveCategorizedToolsResult {
             success: true,
             files_generated,
             output_dir: output_dir.display().to_string(),
             categories,
             errors: vec![],
-        };
-
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            serde_json::to_string_pretty(&result).map_err(|e| {
-                McpError::internal_error(format!("Failed to serialize result: {e}"), None)
-            })?,
-        )]))
+        })
     }
 
     /// List all servers with generated progressive loading files.
@@ -1243,6 +1149,163 @@ fn caller_or_internal_error(err: &mcp_execution_core::Error, internal_prefix: &s
     }
 }
 
+/// The codegen categorization map (`raw_tool_name -> submitted CategorizedTool`) plus a
+/// per-category tally, both produced by [`validate_categorized_tools`].
+type CategorizedToolsValidation<'p> =
+    (HashMap<String, &'p CategorizedTool>, HashMap<String, usize>);
+
+/// Validates `categorized_tools` against `pending`'s introspected tools and builds the codegen
+/// categorization map, without consuming `pending`.
+///
+/// Runs as the `validate` closure passed to [`crate::state::StateManager::take_if`] by
+/// [`GeneratorService::save_categorized_tools`] - synchronous and I/O-free by construction, since
+/// `take_if` runs it while holding the state table's write lock.
+///
+/// #307: `pending.server_info.tools[].name` is raw — it's the actual introspection data, kept
+/// unsanitized because it's also used to build the `.ts` files themselves. Claude never sees
+/// these raw names directly: it only ever saw a *display* form of each one, produced by
+/// `build_introspected_summaries` + `wrap_introspect_result` from `introspect_server` (issues
+/// #292, #307). Matching a `categorized_tools` entry against what was introspected must key off
+/// that display form, while codegen (`generate_with_categorization`) must key off the raw name it
+/// actually looks tools up by — conflating the two by using the echoed name as both the match key
+/// and the codegen key desynced categorization from any tool name containing a control character,
+/// line terminator, or `&`/`<`/`>`.
+///
+/// S2: a raw name can legitimately be echoed back in either of [`display_forms`]'s two forms (the
+/// literal escaped text, or the same text with entities decoded), so both are accepted as keys
+/// for the same raw tool.
+///
+/// S3: if two DISTINCT raw tool names ever produce the same display key (via either form), which
+/// raw tool a caller meant by that key is genuinely ambiguous. A plain `HashMap::collect` would
+/// silently keep only the last one, misattributing one tool's categorization to a different
+/// tool's `_meta.json` entry with no error surfaced. Instead, `owners` tracks every raw name that
+/// could produce each key, and any key with more than one distinct owner is dropped from
+/// `display_to_raw` entirely, so a caller trying to use it hits the "not found" branch below
+/// explicitly.
+fn validate_categorized_tools<'p>(
+    pending: &PendingGeneration,
+    categorized_tools: &'p [CategorizedTool],
+) -> Result<CategorizedToolsValidation<'p>, McpError> {
+    tracing::Span::current().record("server_id", tracing::field::display(&pending.server_id));
+
+    let mut display_key_owners: HashMap<String, HashSet<&str>> = HashMap::new();
+    for tool in &pending.server_info.tools {
+        let raw = tool.name.as_str();
+        for key in display_forms(raw) {
+            display_key_owners.entry(key).or_default().insert(raw);
+        }
+    }
+    let display_to_raw: HashMap<String, &str> = display_key_owners
+        .into_iter()
+        .filter_map(|(key, owners)| {
+            if owners.len() == 1 {
+                owners.into_iter().next().map(|raw| (key, raw))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // A legitimate call can never submit more entries than there are introspected tools.
+    // Reject early, before any per-entry validation, HashMap insertion, or codegen work
+    // (CWE-400 - see issue #197).
+    //
+    // Bounded by the true introspected tool count (`pending.server_info.tools.len()`), not
+    // `display_to_raw.len()`: S2 means a single raw tool can legitimately own two display
+    // keys, and S3 means an ambiguous key is excluded from the map entirely — neither of
+    // those should shrink or inflate this bound. `MAX_TOOL_FILES` is the same per-server
+    // tool-count ceiling `generate_skill` already enforces (via
+    // `mcp_execution_skill::scan_tools_directory`), so reusing it here keeps the two stages
+    // consistent - otherwise this call could happily generate more tool files than
+    // `generate_skill` will later accept.
+    let introspected_tool_count = pending.server_info.tools.len();
+    let max_allowed_tools = introspected_tool_count.min(MAX_TOOL_FILES);
+    if categorized_tools.len() > max_allowed_tools {
+        return Err(McpError::invalid_params(
+            format!(
+                "categorized_tools has {} entries but at most {} are allowed \
+                 (min of {} introspected tools and the {} tool-file cap; \
+                 duplicates are not allowed)",
+                categorized_tools.len(),
+                max_allowed_tools,
+                introspected_tool_count,
+                MAX_TOOL_FILES,
+            ),
+            None,
+        ));
+    }
+
+    // Validate each entry and build the codegen categorization map in a single pass,
+    // resolving `cat_tool.name` to its raw tool name once via `display_to_raw` (issue #307
+    // M3) — a prior version re-derived the same lookup in a second pass, relying on an
+    // `expect()` to justify why it couldn't fail there; doing it once removes that panic
+    // path by construction instead of just asserting it unreachable.
+    let tool_count = categorized_tools.len();
+    // Keyed by RESOLVED RAW NAME, not by `cat_tool.name` (the submitted display key):
+    // `display_forms` (S2) deliberately lets one raw tool own two distinct display keys
+    // (its escaped and unescaped forms), so two entries with different `name` strings can
+    // still resolve to the same introspected tool. Deduping on the submitted string would
+    // miss that case entirely, letting the second entry silently overwrite the first's
+    // categorization in the map below with no error surfaced (issue #307 N1).
+    let mut seen_raw_names: HashSet<&str> = HashSet::with_capacity(tool_count);
+    let mut categorization: HashMap<String, &CategorizedTool> = HashMap::with_capacity(tool_count);
+    let mut categories: HashMap<String, usize> = HashMap::with_capacity(tool_count);
+
+    for cat_tool in categorized_tools {
+        let Some(&raw_name) = display_to_raw.get(cat_tool.name.as_str()) else {
+            return Err(McpError::invalid_params(
+                format!(
+                    "Tool '{}' not found in introspected tools (or its sanitized display \
+                     name is ambiguous between two or more introspected tools)",
+                    cat_tool.name
+                ),
+                None,
+            ));
+        };
+
+        if !seen_raw_names.insert(raw_name) {
+            return Err(McpError::invalid_params(
+                format!(
+                    "Tool '{}' appears more than once in categorized_tools (resolves to \
+                     the same introspected tool as an earlier entry)",
+                    cat_tool.name
+                ),
+                None,
+            ));
+        }
+
+        check_categorized_field_length(
+            &cat_tool.name,
+            "name",
+            &cat_tool.name,
+            MAX_CATEGORIZED_TOOL_NAME_LEN,
+        )?;
+        check_categorized_field_length(
+            &cat_tool.name,
+            "category",
+            &cat_tool.category,
+            MAX_CATEGORY_LEN,
+        )?;
+        check_categorized_field_length(
+            &cat_tool.name,
+            "keywords",
+            &cat_tool.keywords,
+            MAX_KEYWORDS_LEN,
+        )?;
+        check_categorized_field_length(
+            &cat_tool.name,
+            "short_description",
+            &cat_tool.short_description,
+            MAX_SHORT_DESCRIPTION_LEN,
+        )?;
+
+        categorization.insert(raw_name.to_string(), cat_tool);
+        *categories.entry(cat_tool.category.clone()).or_default() += 1;
+    }
+
+    Ok((categorization, categories))
+}
+
 /// Validates one [`CategorizedTool`] field against its byte-length limit, matching the
 /// wording each check used before this helper existed: the tool's own `name` field
 /// renders as `Tool name '<name>'`, every other field as `<field_label> for tool
@@ -1388,12 +1451,17 @@ fn capacity_error(message: String) -> McpError {
 }
 
 /// Builds the [`McpError`] `save_categorized_tools` returns when `session_id` names no live
-/// pending session, whether from [`crate::state::StateManager::get`] (the initial peek) or
-/// [`crate::state::StateManager::take`] (the final consume). Shared so both call sites report
-/// the identical message a caller can match on, regardless of which lookup missed.
+/// pending session, i.e. [`crate::state::StateManager::take_if`] returned `None`.
+///
+/// This is also what a *concurrent* call for the same `session_id` sees while an in-flight call
+/// has it checked out (removed from `StateManager` for the duration of its own codegen/export
+/// pipeline, restored only if that pipeline fails) — the wording below covers that case too
+/// rather than asserting the session is definitely gone for good.
 fn session_not_found_error() -> McpError {
     McpError::invalid_params(
-        "Session not found or expired. Please run introspect_server again.",
+        "Session not found, expired, or already in use by another in-flight request for the \
+         same session_id. If a concurrent request is in flight, wait for it to finish and retry; \
+         otherwise, run introspect_server again.",
         None,
     )
 }
@@ -2902,7 +2970,7 @@ mod tests {
     /// introspected must fail validation without destroying the session, so the caller can
     /// retry with a corrected payload and the same `session_id`. Before the fix, the first
     /// (failing) call already consumed the session via `take`, so this retry would fail with
-    /// "Session not found or expired" instead of succeeding.
+    /// "Session not found" instead of succeeding.
     #[tokio::test]
     async fn test_save_categorized_tools_retries_after_tool_mismatch_with_same_session() {
         use tempfile::TempDir;
@@ -3019,7 +3087,7 @@ mod tests {
         let err = repeat_result
             .expect_err("a session consumed by a successful call must not be reusable");
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
-        assert!(err.message.contains("Session not found or expired"));
+        assert!(err.message.contains("Session not found"));
     }
 
     #[tokio::test]
@@ -3786,6 +3854,79 @@ mod tests {
             retry_result.is_ok(),
             "retry with the same session_id after an output_dir resolution failure must \
              succeed once the confinement violation is fixed: {:?}",
+            retry_result.err()
+        );
+    }
+
+    /// Issue #379 core scenario: a *post-consume* failure that has nothing to do with
+    /// `output_dir` resolution - here, `export_to_filesystem` itself failing because its sibling
+    /// staging directory can't be created - must not permanently discard the session either.
+    /// `server_id`'s own directory is pre-created while `servers_base_dir` is still writable so
+    /// `resolve_output_dir` succeeds without needing to create anything; only then is
+    /// `servers_base_dir` made read-only, so the failure is forced specifically inside
+    /// `generate_and_export`'s export step, after `StateManager::take_if` has already removed
+    /// the session from the table - proving `StateManager::restore` is reached from that stage
+    /// of the pipeline too, not just from `output_dir` resolution.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_save_categorized_tools_retries_after_export_io_failure_with_same_session() {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        tokio::fs::create_dir_all(temp_dir.path().join("server-a"))
+            .await
+            .unwrap();
+
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let pending = pending_with_server_id_and_tool_count("server-a", 1);
+        let session_id = service.state.store(pending).await.unwrap();
+
+        // Make `servers_base_dir` read-only so `export_to_filesystem`'s sibling staging
+        // directory (created next to `servers_base_dir/server-a`, i.e. inside
+        // `servers_base_dir` itself) cannot be created, without preventing
+        // `resolve_output_dir` from resolving the already-existing `server-a` directory.
+        let original_permissions = std::fs::metadata(temp_dir.path()).unwrap().permissions();
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let failing_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0")],
+        };
+        let failing_result = service
+            .save_categorized_tools(Parameters(failing_params))
+            .await;
+
+        // Restore permissions before any assertion can early-return/panic and leak a
+        // read-only temp directory that `TempDir`'s own drop cleanup can't remove.
+        std::fs::set_permissions(temp_dir.path(), original_permissions).unwrap();
+
+        let err = failing_result.expect_err("export must fail while servers_base_dir is read-only");
+        assert_eq!(err.code, ErrorCode::INTERNAL_ERROR);
+        assert!(err.message.contains("Failed to export files"));
+
+        // The session must still be present - not just for a second attempt via
+        // `save_categorized_tools`, but observably still in `StateManager` - proving the
+        // pipeline failure was handled via `restore`, not merely a coincidentally-successful
+        // retry through some other path.
+        assert!(
+            service.state.get(session_id).await.is_some(),
+            "a transient export failure must not discard the session"
+        );
+
+        let retry_params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool("tool0")],
+        };
+        let retry_result = service
+            .save_categorized_tools(Parameters(retry_params))
+            .await;
+        assert!(
+            retry_result.is_ok(),
+            "retry with the same session_id after a transient export failure must succeed \
+             once the underlying I/O condition clears: {:?}",
             retry_result.err()
         );
     }
