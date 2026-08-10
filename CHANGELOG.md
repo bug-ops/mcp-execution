@@ -217,6 +217,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-core`**: `validate_env_name` now rejects any environment variable name that
+  does not match the conventional POSIX/Windows identifier charset `[A-Za-z_][A-Za-z0-9_]*`,
+  before the forbidden-name comparison runs. The prior ASCII-case-insensitive comparison (#428)
+  only folds ASCII letters, but Windows' own environment-name comparison folds case using the
+  OS's Unicode uppercase table, which is broader — e.g. `ı` (U+0131, Turkish dotless i)
+  uppercases to `I` and `ſ` (U+017F, long s) uppercases to `S` on Windows. A forbidden name
+  spelled with one of these in place of the ASCII letter (e.g. `NODE_OPTıONS`) previously passed
+  the ASCII-only comparison in this validator, yet would still resolve as the forbidden name once
+  handed to the OS environment block on a real Windows host. Closing this via an input-charset
+  invariant avoids having to chase every such Unicode case-confusable individually (#438). As a
+  behavior change, this now rejects outright any environment variable name that was never a
+  valid identifier to begin with — including legitimate-looking names that fall outside
+  `[A-Za-z_][A-Za-z0-9_]*`, such as Windows' `ProgramFiles(x86)` or a bash `BASH_FUNC_x%%`
+  function-export name. This is acceptable pre-1.0.0 per this project's compatibility policy.
 - **`mcp-execution-core`**: `validate_env_name` now compares environment variable names against
   `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` (`DYLD_`) with an ASCII-case-insensitive match
   instead of an exact byte comparison. Windows treats environment variable names as
