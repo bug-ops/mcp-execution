@@ -58,12 +58,12 @@ unused_lifetimes = "warn"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-cargo_common_metadata = { level = "allow", priority = 10 }
-multiple_crate_versions = { level = "allow", priority = 10 }
-needless_borrows_for_generic_args = { level = "allow", priority = 10 }
+cargo_common_metadata = { level = "allow", priority = 10 }             # All crates already carry complete metadata; kept as a guard for newly added crates
+multiple_crate_versions = { level = "allow", priority = 10 }           # Transitive-only; mostly rmcp and the proc-macro stack (syn, darling, base64)
+needless_borrows_for_generic_args = { level = "allow", priority = 10 } # Only trivial hits in test fixtures (e.g. `&format!(...)`), not worth the churn
 nursery = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
-too_many_lines = { level = "allow", priority = 10 }
+too_many_lines = { level = "allow", priority = 10 }                    # Generator and test functions legitimately exceed the line threshold
 
 [profile.release]
 opt-level = 3
