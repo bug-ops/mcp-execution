@@ -159,6 +159,13 @@ server-supplied metadata cannot corrupt the frontmatter or inject a sibling
 YAML key (issue's S3 fix). Output is CRLF-normalized to LF for
 cross-platform (Windows CI) consistency.
 
+The shared `HANDLEBARS` instance (both this and `render_generation_prompt`
+render through it) enables `strict_mode(true)`, matching
+`mcp_execution_codegen::TemplateEngine::new` (`specs/codegen/spec.md`, §2).
+A template referencing a field absent from the render context now hard-fails
+with `TemplateError::RenderFailed` instead of silently rendering an empty
+string — the failure mode that regression-tests pin in `template.rs`.
+
 ## 7. `extract_skill_metadata` — Frontmatter Parsing
 
 Extracts the `---`-delimited YAML block via a pre-compiled regex, then
