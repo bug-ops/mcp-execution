@@ -493,6 +493,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tracing::info!(?notification, ...)`), which it does not and cannot suppress; that site is
   mitigated by `Debug`-escaping control characters, not eliminated, and fires under the server's
   default filter with no `RUST_LOG` at all (#421).
+- **`mcp-execution-core`**: `ServerId::new`/`ToolName::new` no longer echo a rejected input's raw
+  `&`/`<`/`>`/control/bidi-reordering characters into `ServerIdError`/`ToolNameError`. The stored
+  `id`/`name` field is now sanitized (`untrusted::sanitize_untrusted_inline`, capped at
+  `MAX_UNTRUSTED_FIELD_LEN`) and `&`/`<`/`>` entity-escaped before the error variant is
+  constructed, closing both the `Display` and `Debug` paths in one change. Previously an
+  attacker-controlled tool name or server id that failed validation could carry the raw offending
+  characters — including an unbounded length, since `ServerId::new` has no length cap of its own
+  — straight into LLM-facing error text or a `tracing`-logged error, letting a malicious MCP
+  server attempt to forge Markdown/HTML-like structure or a boundary delimiter such as
+  `wrap_untrusted_block`'s `</untrusted-data>`. The offending `code_point` reported alongside
+  `DisallowedCharacter` is unaffected — it is computed from the raw input before sanitization.
+  Same sanitization path applies uniformly to both the LLM- and human-facing surfaces: an
+  `mcp-execution-cli` user rejecting an id/name containing `&`/`<`/`>` now sees the entity-escaped
+  form in their terminal too (e.g. `invalid server id "my&amp;server"` rather than
+  `"my&server"`) — an accepted, intentional trade-off rather than a regression (#446).
 - **`mcp-execution-cli`**: `runner::init_logging` now applies the same `cap_rmcp_log_level`
   treatment to both the non-verbose (`RUST_LOG`-driven) and `--verbose` branches. The `--verbose`
   branch previously set a bare `EnvFilter::new("debug")` with no `RUST_LOG` involved at all —
@@ -576,6 +591,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: dropped clap's `env` and `cargo` features — neither an
   `#[arg(env = ...)]` attribute nor any `crate_version!`/`crate_name!`/`crate_authors!`/
   `crate_description!` macro is used anywhere in the crate (#414).
+- **`mcp-execution-core`**: removed `Error::is_duplicate_generated_file_path` — it had no
+  production call site anywhere in the workspace, only test call sites (its own doc-test and
+  unit test, plus `mcp-execution-codegen`'s `GeneratedCode::add_file` tests, which now match
+  `Error::DuplicateGeneratedFilePath` directly instead) (#445).
 
 ## [0.9.0] - 2026-07-27
 

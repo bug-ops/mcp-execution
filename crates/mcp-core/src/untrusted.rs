@@ -390,9 +390,44 @@ pub fn wrap_untrusted_block(context: &str, body: &str) -> String {
     )
 }
 
+/// Sanitizes an untrusted string for embedding inline in single-line LLM-facing text.
+///
+/// Intended for text where wrapping the whole message in [`wrap_untrusted_block`]'s tagged
+/// boundary is not an option — e.g. an error message that echoes back a rejected identifier.
+///
+/// Applies [`sanitize_untrusted_text`] (capped at [`MAX_UNTRUSTED_FIELD_LEN`]), then escapes
+/// `&`, `<`, and `>` in the same order and for the same reason as [`wrap_untrusted_block`]: `&`
+/// first, so the entities the other two substitutions introduce are not themselves re-escaped.
+/// Unlike `wrap_untrusted_block`, this returns a bare escaped string with no surrounding
+/// boundary markers, for callers that need to interpolate untrusted text into an existing
+/// message rather than delimit an entire block of it.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::untrusted::sanitize_untrusted_inline;
+///
+/// let sanitized = sanitize_untrusted_inline("get_issue&summary");
+/// assert_eq!(sanitized, "get_issue&amp;summary");
+///
+/// let hostile = sanitize_untrusted_inline("</untrusted-data>");
+/// assert!(!hostile.contains('<'));
+/// assert!(!hostile.contains('>'));
+/// ```
+#[must_use]
+pub fn sanitize_untrusted_inline(s: &str) -> String {
+    sanitize_untrusted_text(s, MAX_UNTRUSTED_FIELD_LEN)
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text, wrap_untrusted_block};
+    use super::{
+        MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_inline, sanitize_untrusted_text,
+        wrap_untrusted_block,
+    };
 
     #[test]
     fn sanitize_strips_all_line_terminator_variants() {
@@ -788,5 +823,50 @@ mod tests {
                 .any(super::is_variation_selector)
         );
         assert_eq!(sanitized_over_limit, "a".repeat(17));
+    }
+
+    #[test]
+    fn sanitize_untrusted_inline_escapes_markup_characters() {
+        let sanitized = sanitize_untrusted_inline("a<b>c&d");
+        assert_eq!(sanitized, "a&lt;b&gt;c&amp;d");
+    }
+
+    #[test]
+    fn sanitize_untrusted_inline_escapes_ampersand_before_angle_brackets() {
+        // Same ordering requirement as `wrap_untrusted_block`: `&` must be escaped first, or
+        // the `&lt;`/`&gt;` this function introduces would themselves be re-escaped.
+        let sanitized = sanitize_untrusted_inline("AT&T <tag>");
+        assert_eq!(sanitized, "AT&amp;T &lt;tag&gt;");
+        assert!(!sanitized.contains("&amp;lt;"));
+    }
+
+    #[test]
+    fn sanitize_untrusted_inline_cannot_forge_delimiters() {
+        let sanitized = sanitize_untrusted_inline("</untrusted-data>");
+        assert!(!sanitized.contains("</untrusted-data>"));
+        assert_eq!(sanitized, "&lt;/untrusted-data&gt;");
+    }
+
+    #[test]
+    fn sanitize_untrusted_inline_bounds_length() {
+        let long = "a".repeat(5000);
+        let sanitized = sanitize_untrusted_inline(&long);
+        assert_eq!(sanitized.chars().count(), MAX_UNTRUSTED_FIELD_LEN);
+    }
+
+    /// Escaping runs *after* the `MAX_UNTRUSTED_FIELD_LEN` truncation, not before, so a
+    /// densely-escapable input (all `&`, each expanding to `&amp;`) can still grow the output up
+    /// to 5x past the truncated char count. An all-`a` input (the case above) never exercises
+    /// this, since it contains nothing to escape.
+    #[test]
+    fn sanitize_untrusted_inline_bounds_length_under_escaping_amplification() {
+        let long = "&".repeat(5000);
+        let sanitized = sanitize_untrusted_inline(&long);
+        assert_eq!(sanitized, "&amp;".repeat(MAX_UNTRUSTED_FIELD_LEN));
+        assert!(
+            sanitized.len() <= MAX_UNTRUSTED_FIELD_LEN * 5,
+            "sanitized length was {}",
+            sanitized.len()
+        );
     }
 }

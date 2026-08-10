@@ -185,17 +185,20 @@ issue #381).
    (`display_to_raw`) before validating any entry, since a caller can only ever echo
    back the *display* form of a tool name `introspect_server` showed it, never the
    raw one. For each introspected tool, its display key is computed
-   (`display_tool_name`): `sanitize_untrusted_text` followed by `&`/`<`/`>` →
-   `&amp;`/`&lt;`/`&gt;` entity-escaping, mirroring `wrap_untrusted_block`'s own
-   escaping. Since issue #433, `ToolName::new`'s Unicode-identifier allowlist
-   rejects every character this transform would otherwise change, so for any valid
-   `ToolName` under `sanitize_untrusted_text`'s truncation point,
-   `display_tool_name` is the identity function — raw and display keys coincide. If
-   two **distinct** raw tool names still collide on the same display key (reachable
-   today only via truncation past `MAX_UNTRUSTED_FIELD_LEN`), that key is dropped
-   from the lookup entirely — genuinely ambiguous, so a caller using it hits "not
-   found" rather than silently having one raw tool's categorization misattributed
-   to another's. Each `categorized_tools` entry's `name` is resolved through this
+   (`display_tool_name`, which since issue #446 delegates to
+   `mcp-execution-core`'s `untrusted::sanitize_untrusted_inline` — sanitization
+   followed by `&`/`<`/`>` → `&amp;`/`&lt;`/`&gt;` entity-escaping, byte-identical
+   to what it did before delegating — see [[../core/spec#`untrusted` module
+   (`src/untrusted.rs`)]]), mirroring `wrap_untrusted_block`'s own escaping. Since
+   issue #433, `ToolName::new`'s Unicode-identifier allowlist rejects every
+   character this transform would otherwise change, so for any valid `ToolName`
+   under `sanitize_untrusted_text`'s truncation point, `display_tool_name` is the
+   identity function — raw and display keys coincide. If two **distinct** raw
+   tool names still collide on the same display key (reachable today only via
+   truncation past `MAX_UNTRUSTED_FIELD_LEN`), that key is dropped from the
+   lookup entirely — genuinely ambiguous, so a caller using it hits "not found"
+   rather than silently having one raw tool's categorization misattributed to
+   another's. Each `categorized_tools` entry's `name` is resolved through this
    lookup to a raw tool name once; both the duplicate check and the codegen
    categorization map are keyed by that **resolved raw name**, not the submitted
    string. This fixes a categorization-lookup desync (issue #307): an earlier
