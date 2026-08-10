@@ -483,6 +483,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and does not neutralize this. Both branches now add an `rmcp=info` directive on top of their
   base filter; the same `RUST_LOG=rmcp::transport=debug` escape hatch and `rmcp=debug`
   replace-not-merge caveat noted above apply here too (#421).
+- **`mcp-execution-core`/`mcp-execution-codegen`**: closed a gap where a tool name (or server
+  id) carrying a Unicode-Tags-block-smuggled invisible payload could reach a generated
+  `callMCPTool('...')` string literal unsanitized. `sanitize_ts_string_literal` runs
+  `sanitize_untrusted_text`'s neutralization (invisible-payload characters plus the
+  variation-selector thresholds below) over both `ToolName`/`ServerId` and any hand-built
+  string reaching that function, and truncates its **raw** input to `MAX_UNTRUSTED_FIELD_LEN`
+  before escaping (neither newtype enforces a length bound itself), so the defense holds
+  regardless of which code path produced the string (#432). Truncating the raw input, not the
+  escaped output, is itself a fix for a regression an earlier draft of this change introduced
+  (critic finding C3): escaping can expand one input character into a multi-character output
+  sequence, so truncating the already-escaped string could cut such a sequence in half and leave
+  a dangling, odd-length run of trailing backslashes that escaped the generated template's own
+  closing quote, leaving the `callMCPTool('...')` string literal unterminated — invalid
+  generated TypeScript, not code injection (every quote in the escaped output is still
+  backslash-preceded). An earlier draft of this change also added a `ToolName::new`
+  construction-time denylist gate (`ToolNameError::InvisiblePayloadChar`, backed by new
+  `untrusted::contains_invisible_payload_char`/`contains_variation_selector` predicates) that
+  rejected the same character classes outright; this was superseded before merge by #444's UTS
+  #39 `Identifier_Status=Allowed` allowlist landing on the same constructor, which independently
+  rejects every character either predicate flagged (none of them carry
+  `Identifier_Status=Allowed`) via `ToolNameError`/`ServerIdError::DisallowedCharacter` — so the
+  denylist call was dropped from `ToolName::new` rather than kept redundantly alongside the
+  allowlist gate. Both predicates remain in `untrusted` as independently tested, standalone
+  denylist-style checks available to any future construction-time boundary that needs one.
+- **`mcp-execution-core`**: `sanitize_untrusted_text` now mitigates the variation-selector
+  invisible-payload channel (U+FE00-U+FE0F, U+E0100-U+E01EF), adjacent to the Unicode Tags
+  block and left unaddressed by the prior hardening since these characters carry genuine
+  rendering semantics (emoji-presentation selection, CJK Ideographic Variation Sequences). Two
+  checks now run, in order, on the *already-filtered* text (running before the existing
+  character filter, as an earlier draft of this fix did, let an attacker interleave a
+  removed-entirely character — e.g. a Tags-block byte — between selectors to split one long
+  run into sub-threshold pieces that silently re-joined once the filter deleted the
+  separators): a whole-value total (more than 16 variation selectors anywhere in the value, in
+  however many runs, drops every variation selector in it) and, only if the value stays under
+  that total, a per-run threshold (a run of more than 2 consecutive selectors is dropped in
+  full). The whole-value total specifically closes the case a per-run-only check cannot: a
+  payload distributed as many short runs across many different base characters, each
+  individually under the per-run threshold — measured during review at higher payload density
+  than the Tags-block channel this complements. The total threshold (16, raised from an initial
+  8 after critic review found 8 false-positived on a realistic 9-emoji tool description) trades
+  a small, fixed amount of smuggling capacity for tolerance of ordinary emoji-decorated text.
+  Documented residual limitations remain: the total is a count, not a semantic check, so it
+  cannot distinguish several independent legitimate emoji from an equal count of
+  payload-carrying selectors once crossed; and the allowance is per sanitized field, so a
+  response with many fields (tool names, descriptions, keywords, parameter descriptions) can
+  aggregate a larger surviving total across the whole introspection response — see
+  `specs/core/spec.md`'s "Known limitation" notes (#431).
+- **`mcp-execution-skill`**: `build_generation_prompt` now sanitizes and boundary-wraps
+  `use_case_hints` the same way every sibling field (tool metadata, `skill_name`) already is,
+  including the section's own "### Use Case Hints" heading inside the wrapped block (mirroring
+  how "### Categories and Tools" keeps its heading inside its block). Each hint previously
+  reached the LLM-facing prompt via a bare `format!("- {hint}\n")` loop, with no
+  `sanitize_untrusted_text` call and no `wrap_untrusted_block` boundary separating it from the
+  trusted `## Instructions` section that follows — allowing a hint to forge Markdown structure
+  or embed raw bidi-override characters. `GenerateSkillParams::use_case_hints` also gained a
+  per-entry `#[schemars(inner(length(max = ..)))]` bound (`MAX_USE_CASE_HINT_LENGTH`,
+  re-exported from `mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`) mirroring
+  `skill_name`'s existing declared-schema bound, plus a `#[schemars(length(max = ..))]` bound
+  on the collection itself (`MAX_USE_CASE_HINTS`, 20 entries — a per-entry length cap alone
+  does not stop an unbounded *number* of entries), enforced at runtime in
+  `build_generation_prompt` by truncating rather than erroring (#429).
 
 ### Removed
 

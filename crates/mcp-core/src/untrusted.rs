@@ -98,6 +98,19 @@ pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 ///   validation boundary with no legitimate-content concern to weigh
 ///   against; this general-purpose sanitizer accepts the trade-off the other
 ///   direction.
+/// - Unicode variation selectors (U+FE00-U+FE0F, U+E0100-U+E01EF) are mitigated by two checks,
+///   run *after* every character above has already been filtered (see the ordering note at
+///   this function's call site for why applying this before the filter is unsound): first, if
+///   the value's *total* variation-selector count exceeds a small whole-value bound, every
+///   variation selector in it is dropped, closing a payload spread thin across many base
+///   characters that a per-run check alone would miss; otherwise, a run of at most two
+///   consecutive selectors is left untouched — legitimate emoji-presentation and Ideographic
+///   Variation Sequence (IVS) use is normally one selector immediately after its base
+///   character, which is a run of one — and a longer run is dropped in full. The run check
+///   itself does not require or detect a preceding base character; it only counts consecutive
+///   variation selectors, wherever they appear. See this module's private
+///   `MAX_TOTAL_VARIATION_SELECTORS` and `MAX_VARIATION_SELECTOR_RUN` constants for the
+///   threshold rationale and what residual gap remains.
 ///
 /// The removed-entirely characters above (bidi marks, Tags block, U+FEFF,
 /// and the U+2060-U+2064 invisible-operator run) are mapped to nothing
@@ -154,7 +167,7 @@ pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 /// ```
 #[must_use]
 pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
-    let sanitized: String = s
+    let filtered: String = s
         .chars()
         .filter_map(|c| {
             if is_bidi_mark(c) || is_invisible_char(c) {
@@ -169,11 +182,205 @@ pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
             }
         })
         .collect();
+    // Runs *after* the filter above, not before: every character the filter removes entirely
+    // (bidi marks, the Tags block, U+FEFF, the U+2060-U+2064 run) is itself invisible, so an
+    // attacker can interleave those characters between variation selectors to split one long
+    // run into several sub-threshold runs with zero visual cost — the filter then deletes the
+    // separators and the runs collapse back together in the *input* order (issue #431, critic
+    // finding C1). Detecting runs on the post-filter string means detection sees exactly the
+    // adjacency the filter's removals produce, closing that gap.
+    let sanitized = strip_variation_selector_smuggling(&filtered);
     if sanitized.chars().count() > max_len {
         sanitized.chars().take(max_len).collect()
     } else {
         sanitized
     }
+}
+
+/// Returns `true` if `s` contains an invisible-payload smuggling character.
+///
+/// Flags any character [`sanitize_untrusted_text`] treats as an invisible-payload smuggling
+/// vector: the bidi embedding/override/isolate controls, the weaker bidi directional marks,
+/// the Unicode Tags block, U+FEFF, the U+2060-U+2064 invisible-operator run, or U+200B.
+///
+/// Unlike [`sanitize_untrusted_text`], which repairs text meant for straight-through display
+/// by neutralizing these characters in place, this is a reject/accept predicate for
+/// construction-time validation boundaries that have no rendering context to fall back on and
+/// therefore refuse a hostile value outright rather than silently repairing it. `ToolName::new`
+/// and `ServerId::new` cover this need today via a UTS #39 `Identifier_Status=Allowed`
+/// allowlist (issue #433) instead of this denylist, since every character class flagged here is
+/// already outside that allowed set; this predicate remains available as an independent,
+/// denylist-based check for any future construction-time boundary that needs one without
+/// adopting the full UTS #39 identifier charset.
+///
+/// Does not flag variation selectors (U+FE00-U+FE0F, U+E0100-U+E01EF): unlike the characters
+/// above, a single variation selector is legitimate emoji-presentation/IVS content in *display
+/// text*, not a smuggling vector, so a general-purpose predicate used for that case leaves them
+/// to [`sanitize_untrusted_text`]'s run-length/total-count heuristics rather than rejecting
+/// outright. That rationale does not transfer to every caller, though — see
+/// [`contains_variation_selector`] for the stricter check a construction-time *identifier* gate
+/// (which has no legitimate use for an emoji presentation selector at all) should combine this
+/// predicate with instead of relying on this one alone (issue #431, critic finding S1).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::untrusted::contains_invisible_payload_char;
+///
+/// assert!(!contains_invisible_payload_char("safe_tool_name"));
+/// assert!(contains_invisible_payload_char("safe\u{E0001}\u{E0073}\u{E007F}"));
+/// assert!(contains_invisible_payload_char("safe\u{202E}evil"));
+/// ```
+#[must_use]
+pub fn contains_invisible_payload_char(s: &str) -> bool {
+    s.chars()
+        .any(|c| is_bidi_mark(c) || is_bidi_control(c) || is_invisible_char(c) || c == '\u{200B}')
+}
+
+/// Returns `true` if `s` contains any Unicode variation selector (U+FE00-U+FE0F "VS1-VS16" or
+/// U+E0100-U+E01EF "Variation Selectors Supplement").
+///
+/// Deliberately stricter than [`contains_invisible_payload_char`]: that predicate leaves
+/// variation selectors unflagged because a single one is legitimate in *display text* (emoji
+/// presentation selection, CJK IVS). A construction-time *identifier* gate has no equivalent
+/// legitimate use to protect — the same reasoning [`crate::cli::ServerConnectionString::new`]
+/// already applies to reject U+200C/U+200D outright rather than accommodate their orthographic
+/// role, since an identifier is not display prose — so such a gate should reject *any*
+/// variation selector rather than only runs over this module's private per-run/whole-value
+/// thresholds, which are display-text heuristics tuned to avoid false positives on legitimate
+/// rendering, not identifier-safe thresholds (issue #431, critic finding S1). `ToolName::new`
+/// and `ServerId::new` meet this need today via a UTS #39 identifier allowlist (issue #433)
+/// instead, which rejects every variation selector as a side effect of not being in the
+/// `Identifier_Status=Allowed` set; this predicate remains available as a standalone check for
+/// any future identifier-shaped boundary.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::untrusted::contains_variation_selector;
+///
+/// assert!(!contains_variation_selector("safe_tool_name"));
+/// assert!(contains_variation_selector("safe\u{FE0F}"));
+/// ```
+#[must_use]
+pub fn contains_variation_selector(s: &str) -> bool {
+    s.chars().any(is_variation_selector)
+}
+
+/// Maximum number of consecutive Unicode variation selectors (U+FE00-U+FE0F "VS1-VS16" and
+/// U+E0100-U+E01EF "Variation Selectors Supplement") [`sanitize_untrusted_text`] leaves
+/// untouched after a single base character before treating the run as payload smuggling.
+///
+/// Unlike the Tags block, zero-width characters, and bidi controls
+/// [`sanitize_untrusted_text`] strips unconditionally, variation selectors carry genuine
+/// rendering semantics: emoji presentation selection (`\u{2764}\u{FE0F}` = red heart emoji
+/// rather than the text glyph) and Ideographic Variation Sequences (IVS) that pick a specific
+/// glyph variant for a CJK ideograph. Both apply at most one variation selector per base
+/// character, with a second occasionally seen in the wild; a run of many consecutive
+/// selectors after one base character has no legitimate rendering meaning; each of the ~256
+/// codepoints in the two ranges (256 = 16 + 240) can only encode one value per position, so a
+/// payload needs many consecutive selectors after a single base character to smuggle anything
+/// worth carrying, which is exactly the shape this threshold is set below. This value is
+/// deliberately set one above the common single-selector case to avoid false-positives on the
+/// occasional legitimate second selector, while still catching any run long enough to encode a
+/// meaningful payload.
+///
+/// This per-run threshold alone is **not** sufficient — see [`MAX_TOTAL_VARIATION_SELECTORS`],
+/// which closes the gap a per-run-only check leaves open (issue #431, critic finding C2): a
+/// payload distributed as many short runs, each at or below this threshold but each after a
+/// different base character, defeats a per-run check entirely while still carrying a
+/// meaningful payload (measured: 2 selectors per base character over 59 characters of ordinary
+/// prose smuggled 96 payload characters, denser than the Tags-block channel this complements).
+///
+/// The rationale above is phrased in terms of a base character since that is what motivates
+/// the threshold value, but the run check itself has no such precondition (critic finding M2):
+/// it counts consecutive variation-selector characters wherever they occur, including a run at
+/// the very start of a value with no preceding base character at all — fail-safe, not
+/// fail-open, since a baseless run is treated the same as any other run and is still capped.
+const MAX_VARIATION_SELECTOR_RUN: usize = 2;
+
+/// Maximum total number of variation selectors [`sanitize_untrusted_text`] leaves in a value,
+/// summed across every run, regardless of how the attacker distributes them across base
+/// characters.
+///
+/// [`MAX_VARIATION_SELECTOR_RUN`] alone only bounds a *single* run; an attacker who instead
+/// attaches a short (at-or-below-threshold) run to *many different* base characters can still
+/// carry an arbitrarily large payload while never tripping the per-run check, since each
+/// individual run is indistinguishable from ordinary emoji-presentation/IVS use in isolation
+/// (issue #431, critic finding C2). This whole-field cap closes that gap: once the total count
+/// exceeds this bound, every variation selector in the value is dropped — not just the excess —
+/// since at that point the value's overall variation-selector density is itself the signal,
+/// and there is no way to identify which individual selectors are "the legitimate ones" to
+/// keep. Legitimate emoji-heavy content (a handful of presentation-selected emoji or IVS
+/// sequences in one field) stays comfortably under this bound; smuggling a payload large enough
+/// to matter does not.
+///
+/// Set to 16, not a tighter value such as 8: critic review (issue #431, finding M6) found an
+/// 8-selector bound false-positives on ordinary emoji-decorated prose — a description with 9
+/// presentation-selected emoji (a realistic count for a tool description listing several
+/// capabilities, each with its own leading icon) lost every selector under that bound. Doubling
+/// the bound does not meaningfully help an attacker: each variation selector can only encode a
+/// value from a small, fixed set of code points, so the payload capacity 16 selectors carry is
+/// still far too small to smuggle a meaningful instruction (on the order of a few bytes at
+/// most) — the security delta between 8 and 16 is negligible, while the false-positive rate on
+/// legitimate multi-emoji content differs substantially. The residual limitation this value
+/// trades against (a payload distributed across many *different* fields, each individually
+/// under this per-field bound, can still accumulate) is documented in `specs/core/spec.md`'s
+/// "Known limitation" note and does not get worse as this constant grows — only the per-field
+/// contribution does.
+const MAX_TOTAL_VARIATION_SELECTORS: usize = 16;
+
+/// Returns `true` for the Unicode variation selectors [`MAX_VARIATION_SELECTOR_RUN`] and
+/// [`MAX_TOTAL_VARIATION_SELECTORS`] rate-limit: VS1-VS16 (U+FE00-U+FE0F) and the Variation
+/// Selectors Supplement (U+E0100-U+E01EF).
+const fn is_variation_selector(c: char) -> bool {
+    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// Mitigates variation-selector payload smuggling with two checks, in order: a whole-value
+/// total ([`MAX_TOTAL_VARIATION_SELECTORS`]) and, if the value stays under that total, a
+/// per-run threshold ([`MAX_VARIATION_SELECTOR_RUN`]). See each constant's doc comment for the
+/// rationale a single one of these checks alone does not close (issue #431, critic findings
+/// C1/C2).
+///
+/// Must run on text the invisible/removed-entirely characters ([`is_bidi_mark`],
+/// [`is_invisible_char`]) have already been filtered out of — see
+/// [`sanitize_untrusted_text`]'s call site comment for why running this before that filter is
+/// unsound.
+fn strip_variation_selector_smuggling(s: &str) -> String {
+    let total = s.chars().filter(|&c| is_variation_selector(c)).count();
+    if total == 0 {
+        return s.to_string();
+    }
+    if total > MAX_TOTAL_VARIATION_SELECTORS {
+        return s.chars().filter(|&c| !is_variation_selector(c)).collect();
+    }
+
+    // The entire run is dropped, not just the characters past the threshold: a smuggled
+    // payload's meaning depends on the whole sequence, so keeping a truncated prefix would
+    // still leak some of the payload while gaining nothing (the prefix alone is exactly as
+    // non-rendering as the rest of the run).
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if !is_variation_selector(c) {
+            result.push(c);
+            continue;
+        }
+        let mut run = vec![c];
+        while let Some(&next) = chars.peek() {
+            if is_variation_selector(next) {
+                run.push(next);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if run.len() <= MAX_VARIATION_SELECTOR_RUN {
+            result.extend(run);
+        }
+    }
+    result
 }
 
 /// Returns `true` for the Unicode bidi embedding/override/isolate controls
@@ -255,7 +462,10 @@ pub fn wrap_untrusted_block(context: &str, body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text, wrap_untrusted_block};
+    use super::{
+        MAX_UNTRUSTED_FIELD_LEN, contains_invisible_payload_char, contains_variation_selector,
+        sanitize_untrusted_text, wrap_untrusted_block,
+    };
 
     #[test]
     fn sanitize_strips_all_line_terminator_variants() {
@@ -496,5 +706,195 @@ mod tests {
         let block = wrap_untrusted_block("ctx", "AT&T <tag>");
         assert!(block.contains("AT&amp;T &lt;tag&gt;"));
         assert!(!block.contains("&amp;lt;"));
+    }
+
+    /// Regression test for #431 (a): a single variation selector, the standard
+    /// emoji-presentation case, passes through unmodified.
+    #[test]
+    fn sanitize_preserves_single_emoji_variation_selector() {
+        // U+2764 HEAVY BLACK HEART + U+FE0F VARIATION SELECTOR-16 (emoji presentation).
+        let heart_emoji = "\u{2764}\u{FE0F}";
+        let sanitized = sanitize_untrusted_text(heart_emoji, 100);
+        assert_eq!(sanitized, heart_emoji);
+    }
+
+    /// Regression test for #431 (b): a long run of variation selectors has no legitimate
+    /// rendering meaning past the second one and is stripped entirely, closing the
+    /// smuggling channel adjacent to the Tags block (#425).
+    #[test]
+    fn sanitize_strips_long_variation_selector_run() {
+        let payload: String = ('\u{E0100}'..='\u{E0113}').collect();
+        let hostile = format!("safe\u{4E00}{payload}visible");
+        let sanitized = sanitize_untrusted_text(&hostile, 200);
+        assert_eq!(sanitized, "safe\u{4E00}visible");
+        assert!(
+            sanitized
+                .chars()
+                .all(|c| !('\u{E0100}'..='\u{E01EF}').contains(&c))
+        );
+    }
+
+    /// Regression test for #431 (c): a short Ideographic Variation Sequence (base ideograph
+    /// plus one Variation Selectors Supplement selector) is preserved, matching real-world
+    /// CJK IVS usage.
+    #[test]
+    fn sanitize_preserves_short_ivs_sequence() {
+        // U+8FBB + U+E0100: a real IVS pair (base ideograph + first supplement selector).
+        let ivs = "\u{8FBB}\u{E0100}";
+        let sanitized = sanitize_untrusted_text(ivs, 100);
+        assert_eq!(sanitized, ivs);
+    }
+
+    /// The documented "rarely 2" legitimate case: two consecutive selectors after one base
+    /// character must still pass through, not just the single-selector case.
+    #[test]
+    fn sanitize_preserves_two_consecutive_variation_selectors() {
+        let two_selectors = "\u{2764}\u{FE0F}\u{FE0E}";
+        let sanitized = sanitize_untrusted_text(two_selectors, 100);
+        assert_eq!(sanitized, two_selectors);
+    }
+
+    /// Regression test for #431 critic finding C1: interleaving an invisible,
+    /// removed-entirely character (here, a Tags-block byte) between variation selectors must
+    /// not let a long run survive by splitting it into sub-threshold pieces before detection.
+    /// The old (buggy) order ran run-detection *before* the character filter, so each
+    /// sub-threshold piece passed, then the filter deleted the separators and the run
+    /// re-joined to its full, un-stripped length in the output.
+    #[test]
+    fn sanitize_interleaved_invisible_separators_cannot_hide_a_long_variation_selector_run() {
+        let mut hostile = String::from("safe\u{4E00}");
+        for _ in 0..20 {
+            hostile.push('\u{FE0F}');
+            hostile.push('\u{E0020}'); // Tags-block separator: invisible, removed entirely.
+        }
+        hostile.push_str("visible");
+
+        let sanitized = sanitize_untrusted_text(&hostile, 200);
+
+        assert!(
+            !sanitized.chars().any(super::is_variation_selector),
+            "the reassembled run must still be stripped, not survive via separator removal: \
+             {sanitized:?}"
+        );
+        assert_eq!(sanitized, "safe\u{4E00}visible");
+    }
+
+    /// Regression test for #431 critic finding C1, with a bidi mark (also removed entirely
+    /// by the character filter) as the separator instead of a Tags-block character, to cover
+    /// more than one removed-entirely character class.
+    #[test]
+    fn sanitize_interleaved_bidi_mark_separators_cannot_hide_a_long_variation_selector_run() {
+        let mut hostile = String::from("safe\u{4E00}");
+        for _ in 0..20 {
+            hostile.push('\u{FE0F}');
+            hostile.push('\u{200E}'); // LRM: a bidi mark, removed entirely.
+        }
+        hostile.push_str("visible");
+
+        let sanitized = sanitize_untrusted_text(&hostile, 200);
+
+        assert!(!sanitized.chars().any(super::is_variation_selector));
+        assert_eq!(sanitized, "safe\u{4E00}visible");
+    }
+
+    /// Regression test for #431 critic finding C2: a payload distributed as many short runs
+    /// (each at or below `MAX_VARIATION_SELECTOR_RUN`, each after a different base character)
+    /// must still be caught by the whole-value total, not just the per-run threshold — this is
+    /// exactly the shape the critic's `PoC` used (2 selectors per base character over ordinary
+    /// prose) to smuggle a payload denser than the Tags-block channel while never tripping a
+    /// per-run-only check.
+    #[test]
+    fn sanitize_strips_all_variation_selectors_when_distributed_across_many_base_chars() {
+        let mut hostile = String::new();
+        for base in 'a'..='z' {
+            hostile.push(base);
+            hostile.push('\u{FE00}');
+            hostile.push('\u{FE01}');
+        }
+
+        let sanitized = sanitize_untrusted_text(&hostile, 200);
+
+        assert!(
+            !sanitized.chars().any(super::is_variation_selector),
+            "a payload spread across many base characters, each under the per-run threshold, \
+             must still be caught by the whole-value total: {sanitized:?}"
+        );
+        assert_eq!(sanitized, "abcdefghijklmnopqrstuvwxyz");
+    }
+
+    /// A handful of legitimate, independent emoji-presentation selectors (well under
+    /// `MAX_TOTAL_VARIATION_SELECTORS`) must not be wiped out by the whole-value total check —
+    /// only a count that itself looks like smuggling should trigger it.
+    #[test]
+    fn sanitize_preserves_a_few_independent_legitimate_variation_selectors() {
+        let hostile = "\u{2764}\u{FE0F} and \u{2B50}\u{FE0F} and \u{2705}\u{FE0F}";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, hostile);
+    }
+
+    /// Regression test for #431 critic finding M6: an earlier, tighter total threshold (8)
+    /// false-positived on ordinary emoji-decorated prose — a realistic tool-description style
+    /// string listing several capabilities, each with its own leading presentation-selected
+    /// emoji, lost every selector. The current threshold must tolerate this.
+    #[test]
+    fn sanitize_preserves_nine_independent_legitimate_emoji_in_ordinary_prose() {
+        let hostile = "Supports \u{2764}\u{FE0F} \u{2B50}\u{FE0F} \u{2600}\u{FE0F} \u{2714}\u{FE0F} \
+                        \u{2709}\u{FE0F} \u{260E}\u{FE0F} \u{270F}\u{FE0F} \u{26A0}\u{FE0F} \u{1F17F}\u{FE0F}";
+        let sanitized = sanitize_untrusted_text(hostile, 200);
+        assert_eq!(sanitized, hostile);
+    }
+
+    /// Exact-boundary check on the whole-value total: exactly `MAX_TOTAL_VARIATION_SELECTORS`
+    /// selectors (as independent single-selector runs, each individually legitimate-shaped)
+    /// survive; one more anywhere in the same value drops all of them.
+    #[test]
+    fn sanitize_total_variation_selector_boundary_is_exact() {
+        let at_limit: String = (0..16).map(|_| "a\u{FE0F}").collect();
+        let sanitized_at_limit = sanitize_untrusted_text(&at_limit, 200);
+        assert_eq!(sanitized_at_limit, at_limit);
+
+        let over_limit: String = (0..17).map(|_| "a\u{FE0F}").collect();
+        let sanitized_over_limit = sanitize_untrusted_text(&over_limit, 200);
+        assert!(
+            !sanitized_over_limit
+                .chars()
+                .any(super::is_variation_selector)
+        );
+        assert_eq!(sanitized_over_limit, "a".repeat(17));
+    }
+
+    #[test]
+    fn contains_variation_selector_flags_single_selector() {
+        assert!(contains_variation_selector("safe\u{FE0F}"));
+        assert!(contains_variation_selector("safe\u{E0100}"));
+    }
+
+    #[test]
+    fn contains_variation_selector_ignores_clean_text() {
+        assert!(!contains_variation_selector("perfectly_safe_tool_name"));
+    }
+
+    #[test]
+    fn contains_invisible_payload_char_flags_tags_block() {
+        assert!(contains_invisible_payload_char(
+            "safe\u{E0001}\u{E0073}\u{E007F}"
+        ));
+    }
+
+    #[test]
+    fn contains_invisible_payload_char_flags_bidi_override() {
+        assert!(contains_invisible_payload_char("safe\u{202E}evil"));
+    }
+
+    #[test]
+    fn contains_invisible_payload_char_ignores_clean_text() {
+        assert!(!contains_invisible_payload_char("perfectly_safe_tool_name"));
+    }
+
+    /// Variation selectors are not flagged by this predicate — they are left to
+    /// `sanitize_untrusted_text`'s run-length heuristic since a single one is legitimate.
+    #[test]
+    fn contains_invisible_payload_char_ignores_single_variation_selector() {
+        assert!(!contains_invisible_payload_char("\u{2764}\u{FE0F}"));
     }
 }

@@ -339,6 +339,13 @@ impl ToolName {
     /// with no `..` or path separator, and that every character in it is UTS #39
     /// `Identifier_Status=Allowed` (issue #433).
     ///
+    /// The UTS #39 allowlist rejects the same hostile inputs the project's earlier
+    /// denylist-based invisible-payload check targeted — the Unicode Tags block, bidi
+    /// embedding/override/isolate controls, zero-width/invisible-operator characters, and
+    /// variation selectors (issues #432, #431, critic finding S1) — because none of those
+    /// characters carry `Identifier_Status=Allowed`, so an allowlist gate closes the same gap
+    /// without needing a parallel, hand-maintained denylist of forbidden character classes.
+    ///
     /// # Errors
     ///
     /// Returns [`ToolNameError::InvalidFormat`] if `name` is empty, or contains a `..`, a
@@ -350,12 +357,20 @@ impl ToolName {
     /// # Examples
     ///
     /// ```
-    /// use mcp_execution_core::ToolName;
+    /// use mcp_execution_core::{ToolName, ToolNameError};
     ///
     /// let name = ToolName::new("my_tool").unwrap();
     /// assert_eq!(name.as_str(), "my_tool");
     /// assert!(ToolName::new("a/b").is_err());
     /// assert!(ToolName::new("evil\u{200D}tool").is_err());
+    ///
+    /// // A Unicode-Tags-block-smuggled invisible payload is rejected, not silently accepted.
+    /// let err = ToolName::new("safe\u{E0001}\u{E0073}\u{E007F}").unwrap_err();
+    /// assert!(matches!(err, ToolNameError::DisallowedCharacter { .. }));
+    ///
+    /// // A single variation selector is also rejected outright, unlike in display text.
+    /// let err = ToolName::new("safe\u{FE0F}").unwrap_err();
+    /// assert!(matches!(err, ToolNameError::DisallowedCharacter { .. }));
     /// ```
     #[inline]
     pub fn new(name: impl Into<String>) -> Result<Self, ToolNameError> {
@@ -639,6 +654,25 @@ mod tests {
     fn test_validate_path_segment_unaffected_by_identifier_allowlist() {
         assert!(validate_path_segment("my notes").is_some());
         assert!(validate_path_segment("a\u{200D}b").is_some());
+    }
+
+    /// Issues #432/#431 (critic finding S1): the UTS #39 allowlist gate added for #433 must
+    /// independently close the same gap the project's earlier denylist-based invisible-payload
+    /// check targeted — a 20-character run of variation selectors distributed across many base
+    /// characters, each individually under `sanitize_untrusted_text`'s display-text thresholds,
+    /// must still be rejected here since a tool name is an identifier, not display prose.
+    #[test]
+    fn test_tool_name_rejects_variation_selectors_distributed_across_many_base_chars() {
+        let mut hostile = String::from("safe");
+        for base in 'a'..='j' {
+            hostile.push(base);
+            hostile.push('\u{FE00}');
+            hostile.push('\u{FE01}');
+        }
+        assert!(matches!(
+            ToolName::new(hostile),
+            Err(ToolNameError::DisallowedCharacter { .. })
+        ));
     }
 
     /// Mirrors `test_server_id_deserialize_rejects_invalid_value`: `ToolName`'s `Deserialize`

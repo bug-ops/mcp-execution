@@ -53,9 +53,9 @@ pub use parser::{MAX_FILE_SIZE, MAX_FRONTMATTER_SIZE, MAX_TOOL_FILES,
     extract_skill_metadata, scan_tools_directory};
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH,
-    MAX_SKILL_NAME_LENGTH, SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata,
-    SkillNameError, SkillServerIdError, SkillTool, ToolExample, validate_server_id,
-    validate_skill_name};
+    MAX_SKILL_NAME_LENGTH, MAX_USE_CASE_HINT_LENGTH, MAX_USE_CASE_HINTS, SaveSkillParams,
+    SaveSkillResult, SkillCategory, SkillMetadata, SkillNameError, SkillServerIdError, SkillTool,
+    ToolExample, validate_server_id, validate_skill_name};
 
 pub use mcp_execution_core::MAX_SERVER_ID_LENGTH; // = 64, re-exported (issue #401)
 pub use mcp_execution_core::ServerIdSlugError as SkillServerIdError; // re-exported, not a separate mirror type
@@ -73,6 +73,17 @@ pub fn validate_skill_name(name: &str) -> Result<(), SkillNameError>;
 // `skill` command and mcp-server's `generate_skill` tool before a custom skill_name override is
 // applied (issue #413; the emptiness check is S3, added because extract_skill_metadata rejects
 // a blank name unconditionally and the length check alone would have let one through).
+
+pub const MAX_USE_CASE_HINT_LENGTH: usize = mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN;
+// = 500 chars, re-exported (not a new independent cap) so GenerateSkillParams::use_case_hints's
+// schemars maxLength (per-entry, via #[schemars(inner(length(max = ..)))]) agrees with the
+// truncation `sanitize_untrusted_text` actually applies to each hint in
+// `build_generation_prompt` (issue #429).
+
+pub const MAX_USE_CASE_HINTS: usize = 20; // entry-count bound (schemars maxItems, via
+// #[schemars(length(max = ..))] on the Vec itself) — a per-entry length cap alone does not
+// stop an unbounded number of entries; build_generation_prompt truncates to this many, dropping
+// the excess rather than erroring (critic finding M1 on #429).
 
 pub const MAX_TOOL_FILES: usize = 500;
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;       // 1 MiB, _meta.json size cap
@@ -210,6 +221,37 @@ double-quoted": that stopped being true once §6's `render_skill_md` started
 delegating quoting style to `serde-saphyr` (issue #398), so the instructions
 now state the actual requirement — quote when the value contains `:`, `#`,
 a leading `-`, or a line break (issue #411, S2).
+
+`use_case_hints` (`GenerateSkillParams::use_case_hints` — the CLI's
+`--use-case-hints` flag or an MCP tool call argument) is exactly as
+attacker-controlled as `skill_name` above, but until issue #429 it received
+neither defense: `build_generation_prompt` spliced each hint straight into
+the prompt via a bare `format!("- {hint}\n")` loop, with no
+`sanitize_untrusted_text` call and no boundary separating the "### Use Case
+Hints" section from the trusted `## Instructions` section immediately
+following it — the same structural-breakout-plus-instruction-reading gap
+`skill_name` had before #411, and the same fix: the "### Use Case Hints"
+heading plus each hint (sanitized with `sanitize_untrusted_text`,
+`MAX_UNTRUSTED_FIELD_LEN` cap, matching every sibling field) are accumulated
+together and the whole section — heading included, mirroring how "### Categories
+and Tools" keeps its own heading inside its block — is passed through its own
+`wrap_untrusted_block` call, a boundary separate from the tool-metadata one
+above it, not merged into it, so the two sections stay independently
+forgeable-boundary-tested (critic finding S2 caught an earlier draft of this
+fix dropping the heading entirely rather than moving it inside the boundary).
+`GenerateSkillParams::use_case_hints` also gained a
+`#[schemars(inner(length(max = ..)))]` per-entry bound (`MAX_USE_CASE_HINT_LENGTH`,
+re-exported from `mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`)
+mirroring `skill_name`'s own declared-schema bound, plus a
+`#[schemars(length(max = ..))]` bound on the collection itself
+(`MAX_USE_CASE_HINTS`, currently 20 — a per-entry cap alone does not stop an
+unbounded entry *count*, critic finding M1), asserted against the real
+constants by a drift-guard test the same way `skill_name`'s is (issue #198
+S3's pattern). `build_generation_prompt` enforces the count bound at
+runtime by truncating (`hints.iter().take(MAX_USE_CASE_HINTS)`), not
+erroring — an over-long hint list is not attacker behavior worth failing
+the whole request over, the same truncate-not-reject treatment every other
+untrusted field in this prompt gets.
 
 `render_generation_prompt` — a second, separate prompt-rendering path
 through the embedded `skill-generation.hbs` template, exported alongside
@@ -450,9 +492,13 @@ crate's error messages drift from `mcp-core`'s/`mcp-server`'s for identical inpu
   [[../server/spec#save_skill]]).
 - **Schema shape checks**: `types.rs`'s own tests assert the `schemars`-
   derived JSON Schema for `GenerateSkillParams`/`SaveSkillParams` declares
-  bounds matching the real runtime constants (`MAX_SERVER_ID_LENGTH`) — a
-  drift-guard, since `schemars` attributes cannot reference a Rust `const`
-  directly and must mirror it as a literal.
+  bounds matching the real runtime constants (`MAX_SERVER_ID_LENGTH`,
+  `MAX_SKILL_NAME_LENGTH`, and — issue #429 — `MAX_USE_CASE_HINT_LENGTH`
+  applied per-entry via `#[schemars(inner(length(max = ..)))]` and
+  `MAX_USE_CASE_HINTS` applied to the collection via
+  `#[schemars(length(max = ..))]`) — a drift-guard, since `schemars`
+  attributes cannot reference a Rust `const` directly and must mirror it as
+  a literal.
 
 ## 11. Edge Cases & Notable Behaviors
 

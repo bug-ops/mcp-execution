@@ -36,6 +36,30 @@ pub use mcp_execution_core::MAX_SERVER_ID_LENGTH;
 /// with `description` in `SKILL.md`'s YAML frontmatter.
 pub const MAX_SKILL_NAME_LENGTH: usize = 200;
 
+/// Maximum length, in `char`s, of a single `use_case_hints` entry.
+///
+/// Re-exported from [`mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`], the same cap
+/// every hint is truncated to by `sanitize_untrusted_text` in `context::build_generation_prompt`
+/// before it reaches the LLM-facing prompt, so the declared JSON Schema bound and the runtime
+/// truncation agree. The `#[schemars(inner(length(max = ..)))]` literal below mirrors this
+/// value (schemars attributes cannot reference a `const`) — see
+/// `test_generate_skill_params_schema_declares_use_case_hint_bound` for the drift guard
+/// (issue #429).
+pub const MAX_USE_CASE_HINT_LENGTH: usize = mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN;
+
+/// Maximum number of `use_case_hints` entries.
+///
+/// A per-entry length bound alone does not stop a caller from supplying an unbounded number of
+/// entries (e.g. 10,000 hints at [`MAX_USE_CASE_HINT_LENGTH`] chars each is a ~5 MB prompt) —
+/// this bounds the collection itself, mirroring `MAX_TOOL_FILES`'s role as this crate's
+/// existing precedent for a resource-exhaustion (CWE-400) bound on a caller-controlled
+/// collection (critic finding M1). `context::build_generation_prompt` truncates to this many
+/// entries at runtime (dropping the excess, not erroring, since a caller supplying too many
+/// hints is not attacker behavior worth failing the whole request over) and the
+/// `#[schemars(length(max = ..)))]` literal on `GenerateSkillParams::use_case_hints` mirrors
+/// this value for the declared schema.
+pub const MAX_USE_CASE_HINTS: usize = 20;
+
 // ============================================================================
 // generate_skill types
 // ============================================================================
@@ -86,7 +110,11 @@ pub struct GenerateSkillParams {
 
     /// Additional context about intended use cases.
     ///
-    /// Helps generate more relevant documentation.
+    /// Helps generate more relevant documentation. Each hint is capped at
+    /// [`MAX_USE_CASE_HINT_LENGTH`] characters and the collection itself at
+    /// [`MAX_USE_CASE_HINTS`] entries, both mirrored below as literals since schemars
+    /// attributes cannot reference a `const`.
+    #[schemars(length(max = 20), inner(length(max = 500)))]
     pub use_case_hints: Option<Vec<String>>,
 }
 
@@ -531,6 +559,26 @@ mod tests {
         // above fails this test instead of leaving the declared schema silently stale
         // (mirrors `test_generate_skill_params_schema_declares_server_id_bounds`, issue #413).
         assert_eq!(props["skill_name"]["maxLength"], MAX_SKILL_NAME_LENGTH);
+    }
+
+    #[test]
+    fn test_generate_skill_params_schema_declares_use_case_hint_bound() {
+        let schema = schemars::schema_for!(GenerateSkillParams);
+        let props = schema.get("properties").unwrap().as_object().unwrap();
+
+        // Asserted against the real runtime constant, not a hardcoded literal, so bumping
+        // `MAX_USE_CASE_HINT_LENGTH` without updating the `#[schemars(inner(length(max =
+        // ..)))]` literal above fails this test instead of leaving the declared schema
+        // silently stale (mirrors `test_generate_skill_params_schema_declares_skill_name_bound`,
+        // issue #429).
+        assert_eq!(
+            props["use_case_hints"]["items"]["maxLength"],
+            MAX_USE_CASE_HINT_LENGTH
+        );
+        // Same drift guard for the collection-size bound (critic finding M1): an unbounded
+        // entry count defeats a per-entry length bound just as easily as an unbounded
+        // per-entry length would.
+        assert_eq!(props["use_case_hints"]["maxItems"], MAX_USE_CASE_HINTS);
     }
 
     #[test]
