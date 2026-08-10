@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its original `session_id`, `expires_at`, and `size_bytes`, enforcing the same
   `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` bounds `store` does rather than silently
   bypassing them (#379).
+- **`mcp-execution-server`**: two regression tests closing gaps left by #378/#379 —
+  `test_restore_does_not_extend_ttl_past_original_expiry` proves `restore` re-inserts a session
+  under its original `expires_at` rather than granting it a fresh TTL, and
+  `test_concurrent_take_if_same_session_exactly_one_succeeds` proves exactly one of several
+  callers racing `take_if` on the same `session_id` succeeds (#387).
 
 ### Changed
 
