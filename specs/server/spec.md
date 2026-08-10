@@ -184,30 +184,32 @@ issue #381).
 2. `validate_categorized_tools` builds a display-name→raw-name lookup
    (`display_to_raw`) before validating any entry, since a caller can only ever echo
    back the *display* form of a tool name `introspect_server` showed it, never the
-   raw one. For each introspected tool, both plausible display forms are computed
-   (`display_forms`): the fully escaped form actually shown (`sanitize_untrusted_text`
-   followed by `&`/`<`/`>` → `&amp;`/`&lt;`/`&gt;` entity-escaping, mirroring
-   `wrap_untrusted_block`'s own escaping) and the same text with those entities
-   decoded back, since `wrap_untrusted_block`'s preamble explicitly invites the
-   reader to do so. If two **distinct** raw tool names collide on the same
-   display key under either form, that key is dropped from the lookup
-   entirely — genuinely ambiguous, so a caller using it hits "not found" rather
-   than silently having one raw tool's categorization misattributed to another's.
-   Each `categorized_tools` entry's `name` is resolved through this lookup to a
-   raw tool name once; both the duplicate check and the codegen categorization
-   map are keyed by that **resolved raw name**, not the submitted string. This
-   fixes a categorization-lookup desync (issue #307): an earlier version built
-   the categorization map keyed by the submitted display string while codegen
-   looked up tools by their raw name, silently dropping category/keywords/
-   description for any tool name containing a control character, line
-   terminator, or `&`/`<`/`>`. Rejects: more entries than `min(introspected
-   count, MAX_TOOL_FILES)` (reusing `mcp_execution_skill::MAX_TOOL_FILES` so this
-   stage can never generate more tool files than `generate_skill` will later
-   accept — bounded by the true introspected tool count, not by the lookup's
-   size, since one raw tool can legitimately own two display keys and an
-   ambiguous key is excluded from the map); a name that doesn't resolve to any
-   raw tool (unknown, or an ambiguous display key); a name that resolves to a
-   raw tool a previous entry in the same call already claimed; any field
+   raw one. For each introspected tool, its display key is computed
+   (`display_tool_name`): `sanitize_untrusted_text` followed by `&`/`<`/`>` →
+   `&amp;`/`&lt;`/`&gt;` entity-escaping, mirroring `wrap_untrusted_block`'s own
+   escaping. Since issue #433, `ToolName::new`'s Unicode-identifier allowlist
+   rejects every character this transform would otherwise change, so for any valid
+   `ToolName` under `sanitize_untrusted_text`'s truncation point,
+   `display_tool_name` is the identity function — raw and display keys coincide. If
+   two **distinct** raw tool names still collide on the same display key (reachable
+   today only via truncation past `MAX_UNTRUSTED_FIELD_LEN`), that key is dropped
+   from the lookup entirely — genuinely ambiguous, so a caller using it hits "not
+   found" rather than silently having one raw tool's categorization misattributed
+   to another's. Each `categorized_tools` entry's `name` is resolved through this
+   lookup to a raw tool name once; both the duplicate check and the codegen
+   categorization map are keyed by that **resolved raw name**, not the submitted
+   string. This fixes a categorization-lookup desync (issue #307): an earlier
+   version built the categorization map keyed by the submitted display string
+   while codegen looked up tools by their raw name, silently dropping
+   category/keywords/description for any tool name containing a control
+   character, line terminator, or `&`/`<`/`>`. Rejects: more entries than
+   `min(introspected count, MAX_TOOL_FILES)` (reusing
+   `mcp_execution_skill::MAX_TOOL_FILES` so this stage can never generate more
+   tool files than `generate_skill` will later accept — bounded by the true
+   introspected tool count, not by the lookup's size, since an ambiguous key is
+   excluded from the map); a name that doesn't resolve to any raw tool (unknown,
+   or an ambiguous display key); a name that resolves to a raw tool a previous
+   entry in the same call already claimed; any field
    (`name`/`category`/`keywords`/`short_description`) over its own byte cap
    (`MAX_CATEGORIZED_TOOL_NAME_LEN`=128, `MAX_CATEGORY_LEN`=100,
    `MAX_KEYWORDS_LEN`=500, `MAX_SHORT_DESCRIPTION_LEN`=320 — each checked via a

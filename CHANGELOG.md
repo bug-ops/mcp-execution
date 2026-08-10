@@ -159,6 +159,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cause (`AtCapacity` vs `MemoryBudgetExceeded`) instead of a single hardcoded wording, and
   `data` carries a machine-checkable `session_restore_failure_reason` field so a programmatic
   client doesn't have to substring-match prose (#387).
+- **`mcp-execution-server`**: simplified `validate_categorized_tools`'s display-name→raw-name
+  lookup to a single `display_tool_name` key per introspected tool, removing `display_forms`.
+  Issue #433's `ToolName::new` Unicode-identifier allowlist already rejects every character
+  `display_forms`'s second (entity-decoded) key existed to accept, making that branch
+  unreachable; the ambiguity guard for two distinct raw names colliding on one display key is
+  unchanged. Internal simplification only, no user-visible behavior change (#447, see
+  `specs/decisions/ADR-447-single-display-form-tool-name-lookup.md`).
 
 ### Breaking
 
@@ -440,6 +447,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RPC handler end to end over an in-process duplex transport, not just its default method-level
   logic. No behavior changed — these tests exist so a future rmcp version bump that substitutes
   or clamps the advertised set fails loudly instead of silently drifting (#381).
+- **`mcp-execution-server`**: collapsed five near-identical `save_categorized_tools` tests
+  (~350 lines) that had each pinned the same post-#433 behavior — display key equals raw name —
+  under different historical labels (plain name, formerly-ampersand, formerly-angle-bracket,
+  single-display-form) into one end-to-end test plus one direct `display_tool_name` unit
+  assertion, following the `display_forms` removal above (#447).
 
 ### Security
 
