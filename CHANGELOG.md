@@ -137,6 +137,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `data` carries a machine-checkable `session_restore_failure_reason` field so a programmatic
   client doesn't have to substring-match prose (#387).
 
+### Breaking
+
+- **`mcp-execution-skill`**: `SkillMetadataError` gained a new `NameTooLong { len, limit }`
+  variant, returned by `extract_skill_metadata` when the frontmatter `name` exceeds
+  `MAX_SKILL_NAME_LENGTH` (see the `### Fixed` entry below). Source-breaking for any downstream
+  consumer exhaustively matching `SkillMetadataError` without a wildcard arm (#419).
+
 ### Fixed
 
 - **`mcp-execution-skill`**: `render_skill_md`'s YAML frontmatter (`name`, `description`) is
@@ -215,6 +222,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched token absorbed and deleted the backslash `serde_json` inserts before an escaped `"`,
   leaving a bare, unescaped quote behind. The trim set now includes `\` so that backslash is
   left untouched and re-emitted verbatim (#399).
+- **`mcp-execution-skill`**: `extract_skill_metadata` now enforces `MAX_SKILL_NAME_LENGTH` (200
+  chars) on the frontmatter `name` it parses, via `validate_skill_name`. The two `generate` call
+  sites (`mcp-cli`'s `skill` command, `mcp-server`'s `generate_skill` tool) already bounded a
+  custom `skill_name` this way before rendering, but `save_skill` writes caller-supplied
+  `SKILL.md` content straight through to `extract_skill_metadata` without ever calling
+  `validate_skill_name` — so `name` was bounded only by `MAX_FRONTMATTER_SIZE` (8 KiB) on that
+  path, letting an oversized name reach the always-loaded skill index (#419).
+- **`mcp-execution-skill`**: `context.rs`'s "### Categories and Tools" heading was emitted twice
+  in `build_generation_prompt` — once in the trusted preamble, once inside the
+  `wrap_untrusted_block`-wrapped section. Dropped the preamble copy; the wrapped one is the
+  correct placement, since the content it heads is untrusted (#419).
 
 ### Testing
 
@@ -246,6 +264,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event is actually recorded, matching the laziness the surrounding code already relied on.
   `--log-format json` is unaffected either way, since `serde_json` already escapes whatever
   string ends up in the field (#415).
+- **`mcp-execution-server`**: `main`'s `EnvFilter` construction now caps `rmcp`'s own `tracing`
+  targets at `info` via a private `cap_rmcp_log_level` helper, closing the *debug-level, raw-line*
+  logging path. `rmcp` 3.1.2's transport layer logs raw, unsanitized peer input at `debug` (e.g. a
+  parse-failure line embeds the offending line verbatim), which previously fired inside this
+  binary's decode path *before* the #415 `SanitizedCodecError` mitigation could sanitize it — so a
+  broad `RUST_LOG=debug` streamed untrusted peer text into the log unfiltered. The cap is applied
+  to the *result* of `try_from_default_env().unwrap_or_else(...)`, not folded only into the
+  fallback string, which would have been dead code whenever `RUST_LOG` parsed successfully. An
+  operator who explicitly needs `rmcp` transport debug output can still get it via a target more
+  specific than the bare `rmcp` this cap sets, e.g. `RUST_LOG=rmcp::transport=debug` — directives
+  order by target specificity, so that survives the cap; an equally-specific `RUST_LOG=rmcp=debug`
+  does not; it is replaced by this cap's `rmcp=info`, not merged with it. This cap is level-based
+  only: `rmcp` also logs a `Debug`-formatted peer notification at `info`
+  (`tracing::info!(?notification, ...)`), which it does not and cannot suppress; that site is
+  mitigated by `Debug`-escaping control characters, not eliminated, and fires under the server's
+  default filter with no `RUST_LOG` at all (#421).
+- **`mcp-execution-cli`**: `runner::init_logging` now applies the same `cap_rmcp_log_level`
+  treatment to both the non-verbose (`RUST_LOG`-driven) and `--verbose` branches. The `--verbose`
+  branch previously set a bare `EnvFilter::new("debug")` with no `RUST_LOG` involved at all —
+  since this crate is a *client* of third-party MCP servers, `--verbose` alone streamed an
+  untrusted server's raw stdout lines into stderr; `RedactingWriter` only rewrites embedded URLs
+  and does not neutralize this. Both branches now add an `rmcp=info` directive on top of their
+  base filter; the same `RUST_LOG=rmcp::transport=debug` escape hatch and `rmcp=debug`
+  replace-not-merge caveat noted above apply here too (#421).
 
 ### Removed
 

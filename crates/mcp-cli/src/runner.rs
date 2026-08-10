@@ -72,6 +72,42 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
             .is_some_and(|raw| LogFormat::is_invalid_env_value(&raw))
 }
 
+/// Caps `rmcp`'s own `tracing` targets at `info`, on top of whatever base filter is already in
+/// effect.
+///
+/// `rmcp` 3.1.2's transport layer logs raw, unsanitized peer input at `debug` level. This crate is
+/// a *client* of third-party MCP servers (see `mcp_execution_introspector::Introspector`), so
+/// without this cap, `--verbose` alone -- with no `RUST_LOG` involved -- streams an untrusted
+/// server's raw stdout lines into stderr; [`RedactingWriter`] only rewrites embedded URLs, it does
+/// not neutralize this (issue #421). This closes the *debug-level, raw-line* logging specifically
+/// -- `rmcp` also logs a `Debug`-formatted peer notification at `info`, which this cap does not
+/// and cannot suppress (`rmcp=info` still allows `info`); that site is mitigated by
+/// `Debug`-escaping control characters, not eliminated.
+///
+/// Applied via [`EnvFilter::add_directive`] to the filter already selected by [`init_logging`]'s
+/// verbose/non-verbose branches, not folded into only one of them: a directive added solely to
+/// the non-verbose fallback string would never apply to `--verbose`'s `EnvFilter::new("debug")`,
+/// which does not consult `RUST_LOG` at all.
+///
+/// Directive sets order by target specificity, so this `rmcp=info` directive (more specific than
+/// a bare global `debug`) wins over it. An operator who explicitly sets a *more specific*
+/// directive, e.g. `RUST_LOG=rmcp::transport=debug`, still wins over this one -- that is
+/// intentional: this cap closes the accidental broad-`debug` case, not an operator's deliberate
+/// request for `rmcp` transport debug logs -- **this is the escape hatch**: a target under
+/// `rmcp::` (not the bare `rmcp` target this cap sets) survives the cap and can be raised back to
+/// `debug` explicitly. Note this is target *specificity*, not level: an equally-specific
+/// `RUST_LOG=rmcp=debug` (same target as this cap, different level) is *replaced* by this cap's
+/// `rmcp=info`, not merged with it -- `tracing_subscriber`'s `Directive` ordering does not compare
+/// level, so a same-target `add_directive` call overwrites the existing entry. Both behaviors are
+/// pinned by tests below rather than assumed.
+fn cap_rmcp_log_level(filter: EnvFilter) -> EnvFilter {
+    filter.add_directive(
+        "rmcp=info"
+            .parse()
+            .expect("static \"rmcp=info\" directive string is always valid"),
+    )
+}
+
 /// Initializes logging infrastructure.
 ///
 /// Sets up tracing with appropriate log levels based on verbosity flag.
@@ -85,6 +121,9 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
 /// [`LogFormat::resolve`] consults the `MCP_EXECUTION_LOG_FORMAT` environment variable; an unset
 /// or invalid environment value falls back to text with a `WARN`-level log line (never echoing
 /// the rejected raw value — see the project's log-injection hardening for this switch).
+///
+/// Both branches are passed through `cap_rmcp_log_level`, which caps `rmcp`'s own `tracing`
+/// targets at `info` regardless of the base filter -- see that function's doc comment for why.
 ///
 /// # Arguments
 ///
@@ -110,11 +149,11 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn init_logging(verbose: bool, log_format: Option<LogFormat>) -> Result<()> {
-    let filter = if verbose {
+    let filter = cap_rmcp_log_level(if verbose {
         EnvFilter::new("debug")
     } else {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
-    };
+    });
 
     let format = resolve_log_format(log_format);
 
@@ -922,6 +961,109 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(line)
                 .unwrap_or_else(|e| panic!("invalid JSON line: {e}\n{line}"));
         }
+    }
+
+    /// Shared harness for the `cap_rmcp_log_level` regression tests below: builds
+    /// `cap_rmcp_log_level(EnvFilter::new(base_filter))`, wires it into a real `fmt::layer()`
+    /// over a scoped subscriber (mirroring
+    /// `test_redacting_writer_wired_into_real_fmt_layer_redacts_full_event` above), emits one
+    /// `rmcp::transport::async_rw`-targeted `debug!` (standing in for `rmcp`'s own raw-peer-line
+    /// logging) and one `mcp_execution_cli`-targeted `debug!` (standing in for this crate's own
+    /// diagnostics), and returns `(rmcp_line_visible, own_line_visible)`. Does not mutate
+    /// `RUST_LOG` (parallel test threads share one process) -- `base_filter` plays the same role
+    /// a real `RUST_LOG` value would, but only ever reaches `EnvFilter::new` directly.
+    fn rmcp_capped_filter_captures(base_filter: &str) -> (bool, bool) {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.0.lock().unwrap().flush()
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let make_writer = {
+            let buf = buf.clone();
+            move || SharedBuf(buf.clone())
+        };
+
+        let filter = cap_rmcp_log_level(EnvFilter::new(base_filter));
+        let subscriber = tracing_subscriber::registry().with(filter).with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(make_writer)
+                .with_ansi(false),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(
+                target: "rmcp::transport::async_rw",
+                "raw untrusted peer line"
+            );
+            tracing::debug!(target: "mcp_execution_cli", "own debug event");
+        });
+
+        let written = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        (
+            written.contains("raw untrusted peer line"),
+            written.contains("own debug event"),
+        )
+    }
+
+    /// Regression coverage for issue #421: `--verbose`'s `EnvFilter::new("debug")` branch (no
+    /// `RUST_LOG` involved) must not let `rmcp`'s own `tracing` targets -- which log raw,
+    /// unsanitized peer input at `debug` -- through, while this crate's own `debug` events must
+    /// still pass.
+    #[test]
+    fn cap_rmcp_log_level_suppresses_rmcp_debug_but_keeps_own_debug() {
+        let (rmcp_visible, own_visible) = rmcp_capped_filter_captures("debug");
+        assert!(
+            !rmcp_visible,
+            "rmcp debug line was not suppressed under a global `debug` base"
+        );
+        assert!(
+            own_visible,
+            "own debug event was unexpectedly suppressed under a global `debug` base"
+        );
+    }
+
+    /// Regression coverage for critic finding S1: `tracing_subscriber`'s `Directive` ordering
+    /// does not compare level, so `EnvFilter::add_directive` *replaces* a same-target directive
+    /// rather than merging it. An operator's explicit `RUST_LOG=rmcp=debug` is therefore silently
+    /// downgraded to this cap's own `rmcp=info`, not left to coexist at `debug` -- this was named
+    /// by the original security audit as the ambiguous case to verify with a test rather than
+    /// assume. The escape hatch for an operator who needs this is a *more specific* target (see
+    /// the test below) -- documented in `cap_rmcp_log_level`'s doc comment and the CHANGELOG.
+    #[test]
+    fn cap_rmcp_log_level_replaces_a_same_target_rmcp_debug_directive() {
+        let (rmcp_visible, _) = rmcp_capped_filter_captures("rmcp=debug");
+        assert!(
+            !rmcp_visible,
+            "RUST_LOG=rmcp=debug was expected to be replaced by this cap's rmcp=info, not merged \
+             with it -- if this now fails, `tracing_subscriber`'s directive-merge behavior \
+             changed and `cap_rmcp_log_level`'s doc comment needs updating"
+        );
+    }
+
+    /// Counterpart to the test above: a target *more specific* than `rmcp` (e.g.
+    /// `RUST_LOG=rmcp::transport=debug`) is not overwritten by this cap's `rmcp=info` --
+    /// `tracing_subscriber` orders directives by target specificity, and a longer target wins.
+    /// This is the documented escape hatch for an operator who deliberately wants rmcp transport
+    /// debug output.
+    #[test]
+    fn cap_rmcp_log_level_does_not_override_a_more_specific_rmcp_target() {
+        let (rmcp_visible, _) = rmcp_capped_filter_captures("rmcp::transport=debug");
+        assert!(
+            rmcp_visible,
+            "RUST_LOG=rmcp::transport=debug should still surface rmcp debug output -- a more \
+             specific target must win over this cap's rmcp=info"
+        );
     }
 
     /// Serializes tests in this module that mutate `MCP_EXECUTION_LOG_FORMAT`, mirroring
