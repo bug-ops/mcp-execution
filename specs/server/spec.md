@@ -479,6 +479,28 @@ log-volume-amplification class already fixed for the introspector's
 symmetric decoder (#275/#282); a genuinely malformed non-blank line still
 warns.
 
+That warn's `reason` field is formatted through `SanitizedCodecError`, a
+`Display` wrapper around the `JsonRpcMessageCodecError` that routes it
+through `mcp_execution_core::untrusted::sanitize_untrusted_text` (control
+characters replaced with a space, capped at `MAX_UNTRUSTED_FIELD_LEN`)
+rather than formatting the error directly (issue #415). This is
+defense-in-depth, not a fix for a path reachable with the pinned `rmcp`
+3.1.2: `serde_json`'s `unknown variant` error interpolates the offending
+value verbatim via `Display`, not `Debug`, but `RxJsonRpcMessage`'s
+request/notification payload types are themselves `#[serde(untagged)]`, so
+a mismatched inner variant's real error — including any attacker-controlled
+text it would carry — is discarded before it can reach
+`JsonRpcMessageCodecError::Serde`. The wrapper exists anyway because that
+error-swallowing is an `rmcp` implementation detail this project does not
+control and `JsonRpcMessageCodecError` is `#[non_exhaustive]`. Implemented
+as a `Display` wrapper (not a pre-rendered `String` at the
+`DecodedFrame::Malformed` call site) so formatting — and therefore
+sanitization — only happens if the `WARN` event is actually recorded,
+preserving `DecodedFrame::Malformed`'s pre-existing formatting-laziness
+guarantee. `--log-format json` needs no equivalent guard: `serde_json`
+already escapes whatever string ends up in the field when it serializes
+the event.
+
 ## 9. Logging & CLI Surface (`main.rs`, binary only)
 
 Issue #399: the `mcp-execution` binary parses argv via a minimal
@@ -529,7 +551,10 @@ second, narrower untrusted-text-into-log path this binary does have, but
 `warn_on_rejected_log_format` never echoes the rejected raw environment
 value into its `WARN` line — only a fixed diagnostic string naming the
 environment variable is logged — so it does not need a redacting writer
-either.
+either. A third such path is §8's `DecodedFrame::Malformed` warn, guarded
+by `SanitizedCodecError` rather than by omitting the value outright, since
+that value (a codec error's `Display`) carries diagnostic content worth
+keeping, unlike the rejected-env-var case above.
 
 ## 10. Error Conditions
 

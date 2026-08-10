@@ -228,6 +228,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logic. No behavior changed — these tests exist so a future rmcp version bump that substitutes
   or clamps the advertised set fails loudly instead of silently drifting (#381).
 
+### Security
+
+- **`mcp-execution-server`**: the `tracing::warn!` logged for a dropped oversized or malformed
+  stdin line no longer formats a `JsonRpcMessageCodecError`'s raw `Display` output verbatim.
+  `serde_json`'s `unknown variant` error interpolates the offending value via `Display` rather
+  than `Debug`, so if such an error ever reached a `Serde` variant here, a crafted line could
+  carry an embedded newline (or other control characters) into the plain-text
+  (`--log-format text`) log stream and forge additional log lines. With the pinned `rmcp`
+  3.1.2, this is not reachable today — `RxJsonRpcMessage`'s request/notification payload types
+  are `#[serde(untagged)]`, so a mismatched inner variant's error is discarded before it can
+  carry attacker-controlled text this far. The reason is now sanitized as defense-in-depth
+  regardless, via `mcp-execution-core`'s existing `sanitize_untrusted_text` (control characters
+  replaced with spaces, capped at `MAX_UNTRUSTED_FIELD_LEN`) through a `Display` wrapper, since
+  `JsonRpcMessageCodecError` is `#[non_exhaustive]` and the untagged-enum error-swallowing is an
+  `rmcp` implementation detail this project does not control. Sanitization only runs if the
+  event is actually recorded, matching the laziness the surrounding code already relied on.
+  `--log-format json` is unaffected either way, since `serde_json` already escapes whatever
+  string ends up in the field (#415).
+
 ### Removed
 
 - **`mcp-execution-server`**: dropped the unused `regex` direct dependency — not referenced in

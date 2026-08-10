@@ -30,6 +30,7 @@ use clap::builder::{PossibleValuesParser, TypedValueParser as _};
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
 use mcp_execution_core::cli::{LOG_FORMAT_ENV_VAR, LogFormat};
+use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
 use mcp_execution_server::service::GeneratorService;
 use rmcp::RoleServer;
 use rmcp::ServiceExt;
@@ -38,6 +39,7 @@ use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
 use rmcp::transport::stdio;
 use std::collections::VecDeque;
+use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::Poll;
@@ -206,12 +208,64 @@ fn attach_permit(
 /// carries the original [`JsonRpcMessageCodecError`] rather than a pre-rendered
 /// `String` so logging it stays as lazy as the `Err` path it replaced (formatted only
 /// if the log level is enabled) and so it can't grow past this enum's own size — a
-/// `Serde` error's `Display` embeds the untruncated offending line, which for a
-/// pre-rendered `String` could otherwise approach [`MAX_REQUEST_LINE_SIZE`].
+/// `Serde` error's `Display` is not bounded by anything this project controls, and
+/// could in principle embed attacker-controlled text approaching
+/// [`MAX_REQUEST_LINE_SIZE`]; see [`SanitizedCodecError`]'s doc comment for why that is
+/// not currently reachable with the pinned `rmcp` version, and why this code does not
+/// rely on it staying unreachable.
 enum DecodedFrame {
     Message(Box<RxJsonRpcMessage<RoleServer>>),
     Malformed(JsonRpcMessageCodecError),
     Skipped,
+}
+
+/// Formats a [`JsonRpcMessageCodecError`] for the `tracing::warn!` that reports a
+/// dropped line, with control characters (including any embedded newline) replaced by
+/// a space and the result capped at [`MAX_UNTRUSTED_FIELD_LEN`].
+///
+/// Defense-in-depth, not a fix for a path reachable today: `serde_json`'s `unknown
+/// variant` error message interpolates the offending JSON string value verbatim via
+/// `Display`, not `Debug` -- unlike most of its other error variants, this one does
+/// *not* escape embedded control characters. If such an error ever reached a
+/// [`JsonRpcMessageCodecError::Serde`] here, a hostile stdin line could smuggle raw
+/// newlines (and other control characters) into its `Display` output and forge
+/// additional log lines in the plain-text log format. With the pinned `rmcp` 3.1.2,
+/// this is not reachable in practice: `RxJsonRpcMessage<RoleServer>`'s request and
+/// notification payload types (`ClientRequest`/`ClientNotification`) are
+/// `#[serde(untagged)]`, so a mismatched inner variant's real error -- including any
+/// attacker-controlled text it carries -- is discarded by `serde` and replaced with a
+/// fixed "data did not match any variant" message before it can reach
+/// `JsonRpcMessageCodecError`. This wrapper exists anyway because that
+/// error-swallowing is an `rmcp` implementation detail this project does not control,
+/// and `JsonRpcMessageCodecError` is `#[non_exhaustive]`: a future `rmcp` release could
+/// start propagating the inner error, or add a variant that does, without this crate's
+/// `Cargo.lock` pin changing what compiles. `--log-format json` is unaffected either
+/// way -- `serde_json` escapes whatever string this produces when it serializes the
+/// event -- so this wrapper exists for the text formatter, which has no such guarantee.
+///
+/// Implemented as a `Display` wrapper around a borrowed error, rather than
+/// pre-sanitizing into an owned `String` at the [`DecodedFrame::Malformed`] call site,
+/// so formatting only happens if the event is actually recorded -- preserving the
+/// laziness [`DecodedFrame::Malformed`]'s own doc comment calls out.
+///
+/// No test drives this through the real `bounded_request_stream` call site with a
+/// genuine `JsonRpcMessageCodecError`: given the `rmcp` behavior above, no real stdin
+/// input can currently produce a `Serde` error carrying a control character or text
+/// over [`MAX_UNTRUSTED_FIELD_LEN`], so such an assertion would pass identically with
+/// this wrapper removed -- zero regression value. The tests below instead exercise this
+/// type directly against a synthetic `serde_json::Error` from a minimal, strictly-typed
+/// local enum, which tests what `SanitizedCodecError` does with the class of `Display`
+/// output `serde_json` documents producing, without depending on whether `rmcp`'s
+/// current shapes happen to trigger it today.
+struct SanitizedCodecError<'a>(&'a JsonRpcMessageCodecError);
+
+impl fmt::Display for SanitizedCodecError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&sanitize_untrusted_text(
+            &self.0.to_string(),
+            MAX_UNTRUSTED_FIELD_LEN,
+        ))
+    }
 }
 
 /// Wraps [`JsonRpcMessageCodec`] so an outcome that would otherwise leave
@@ -474,7 +528,10 @@ where
                     Poll::Ready(Some(message))
                 }
                 Poll::Ready(Some(Ok(DecodedFrame::Malformed(reason)))) => {
-                    tracing::warn!(%reason, "dropping oversized or malformed request line");
+                    tracing::warn!(
+                        reason = %SanitizedCodecError(&reason),
+                        "dropping oversized or malformed request line"
+                    );
                     continue;
                 }
                 Poll::Ready(Some(Ok(DecodedFrame::Skipped))) => {
@@ -563,16 +620,17 @@ async fn main() -> Result<()> {
 mod tests {
     use super::{
         AsyncRead, GetExtensions, JsonRpcMessage, LOG_FORMAT_ENV_VAR, LogFormat,
-        MAX_CONCURRENT_REQUESTS, MAX_REQUEST_LINE_SIZE, OwnedSemaphorePermit, RoleServer,
-        RxJsonRpcMessage, Semaphore, ServerArgs, Stream, StreamExt, bounded_request_stream,
-        log_format_env_is_invalid, resolve_log_format, warn_on_rejected_log_format,
+        MAX_CONCURRENT_REQUESTS, MAX_REQUEST_LINE_SIZE, MAX_UNTRUSTED_FIELD_LEN,
+        OwnedSemaphorePermit, RoleServer, RxJsonRpcMessage, SanitizedCodecError, Semaphore,
+        ServerArgs, Stream, StreamExt, bounded_request_stream, log_format_env_is_invalid,
+        resolve_log_format, warn_on_rejected_log_format,
     };
     use clap::Parser as _;
     use mcp_execution_server::service::GeneratorService;
     use rmcp::ServiceExt;
     use rmcp::model::NumberOrString;
     use rmcp::service::TxJsonRpcMessage;
-    use rmcp::transport::async_rw::JsonRpcMessageCodec;
+    use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
     use std::io;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -954,6 +1012,81 @@ mod tests {
             1,
             "a genuinely malformed line must still be warned about"
         );
+    }
+
+    /// Stand-in for a strictly-typed, no-catch-all string enum embedded somewhere in a
+    /// JSON-RPC message's params (e.g. `RxJsonRpcMessage<RoleServer>`'s own
+    /// `logging/setLevel` request carries exactly this shape via `LoggingLevel`). Both
+    /// `RxJsonRpcMessage<RoleServer>`'s top-level `JsonRpcMessage` and its request/
+    /// notification payload types (`ClientRequest`/`ClientNotification`) are
+    /// `#[serde(untagged)]` in the pinned `rmcp` 3.1.2, so a mismatch inside a *known*
+    /// method's params falls through to a `Custom*` catch-all instead of surfacing the
+    /// inner variant's real error -- see [`SanitizedCodecError`]'s doc comment. That
+    /// makes it impossible to force a `Serde` error carrying attacker-controlled text
+    /// through the full type today; this narrower local type reproduces the same class
+    /// of `serde_json` error `JsonRpcMessageCodecError::Serde` wraps verbatim regardless
+    /// of which concrete type triggers it, so the test targets `SanitizedCodecError`
+    /// itself rather than depending on `rmcp`'s current shapes.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    enum StrictLevel {
+        Debug,
+        Info,
+    }
+
+    /// `serde_json`'s `unknown variant` error interpolates the offending value verbatim
+    /// via `Display`, not `Debug` -- unlike most of its other error variants, it does
+    /// not escape embedded control characters. A hostile value can therefore carry a
+    /// literal newline straight into a [`JsonRpcMessageCodecError::Serde`]'s own
+    /// `Display` output -- confirmed below on the *unsanitized* error first.
+    /// `SanitizedCodecError` strips every control character from that same text and
+    /// caps its length, as defense-in-depth against a line reported through this path
+    /// forging additional log lines in the text log format -- see its doc comment for
+    /// why the pinned `rmcp` version does not exercise this today (#415).
+    #[test]
+    fn sanitized_codec_error_neutralizes_control_characters_and_truncates() {
+        let hostile_line = "\"bogus\\nWARN forged log line\\u0007\\u001b[31mred\\u001b[0m\"";
+        let error = serde_json::from_str::<StrictLevel>(hostile_line)
+            .expect_err("an unrecognized level must fail to deserialize");
+        let raw = error.to_string();
+        assert!(
+            raw.contains('\n'),
+            "premise check: the unsanitized error must embed the raw newline verbatim, got: {raw:?}"
+        );
+
+        let reason = JsonRpcMessageCodecError::Serde(error);
+        let sanitized = SanitizedCodecError(&reason).to_string();
+
+        assert!(
+            sanitized.chars().all(|c| !c.is_control()),
+            "sanitized reason must contain no control characters, got: {sanitized:?}"
+        );
+        assert!(
+            sanitized.chars().count() <= MAX_UNTRUSTED_FIELD_LEN,
+            "sanitized reason must be capped at MAX_UNTRUSTED_FIELD_LEN chars, got {} chars",
+            sanitized.chars().count()
+        );
+        assert!(
+            sanitized.contains("WARN forged log line"),
+            "sanitization must preserve the surrounding diagnostic text, got: {sanitized:?}"
+        );
+    }
+
+    /// A hostile value long enough that the sanitized, truncated reason must actually be
+    /// shorter than the raw `Display` output -- otherwise `MAX_UNTRUSTED_FIELD_LEN` above
+    /// could pass merely because the input never exceeded it.
+    #[test]
+    fn sanitized_codec_error_truncation_actually_engages() {
+        let hostile_line = format!("\"bogus\\n{}\"", "a".repeat(MAX_UNTRUSTED_FIELD_LEN * 2));
+        let error = serde_json::from_str::<StrictLevel>(&hostile_line)
+            .expect_err("an unrecognized, oversized level must fail to deserialize");
+        let raw_len = error.to_string().chars().count();
+
+        let reason = JsonRpcMessageCodecError::Serde(error);
+        let sanitized = SanitizedCodecError(&reason).to_string();
+
+        assert!(sanitized.chars().count() < raw_len);
+        assert_eq!(sanitized.chars().count(), MAX_UNTRUSTED_FIELD_LEN);
     }
 
     #[tokio::test]
