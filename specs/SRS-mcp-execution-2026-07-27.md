@@ -782,11 +782,12 @@ identifying keys, while leaving `Serialize` unredacted for that same type.
      `format!("{:?}", ...)` output for any of these types.
 - *Dependencies*: none
 
-**FR-028**: The system shall sanitize control characters and Unicode
-bidirectional-formatting characters out of, and where the destination is
-LLM-facing, wrap in an explicit and unforgeable untrusted-data boundary, any
-text originating from an introspected MCP server before it is embedded in a
-document or shown to an LLM.
+**FR-028**: The system shall sanitize control characters, Unicode
+bidirectional-formatting characters, and the enumerated invisible-character
+smuggling channels listed in the acceptance criteria below out of, and where
+the destination is LLM-facing, wrap in an explicit and unforgeable
+untrusted-data boundary, any text originating from an introspected MCP
+server before it is embedded in a document or shown to an LLM.
 
 - *Rationale*: an introspected server's self-reported tool
   names/descriptions/keywords are attacker-controlled from this project's
@@ -795,7 +796,15 @@ document or shown to an LLM.
   formatting characters (issue #422) let such a value visually reorder or
   relabel surrounding text for a human reader without changing its logical
   byte order — the "Trojan Source" class of attack — even though they are
-  not control characters.
+  not control characters. The Unicode Tags block and a specific,
+  enumerated set of zero-width characters (issue #425) render as nothing in
+  every mainstream font, which lets such a value smuggle a payload — up to
+  and including an ASCII-mapped instruction string via the Tags block — that
+  is invisible to a human reviewer but fully present in the text an LLM
+  tokenizer reads. This is not exhaustive coverage of every invisible-payload
+  channel: variation selectors (U+FE00-U+FE0F, U+E0100-U+E01EF) are
+  deliberately out of scope for #425 — see [[core/spec]], "Known limitation"
+  in the `untrusted` module section.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-028
 - *Priority*: Must
 - *Acceptance criteria*:
@@ -805,15 +814,30 @@ document or shown to an LLM.
      removes the weaker bidi directional marks (U+200E/U+200F/U+061C)
      entirely, then truncates by character count before any server-reported
      field is used.
-  2. `wrap_untrusted_block` escapes `&`/`<`/`>` in the body and wraps it in
+  2. `sanitize_untrusted_text` also removes entirely the Unicode Tags block
+     (U+E0000-U+E007F), U+FEFF, and the invisible-operator run
+     U+2060-U+2064; it flattens U+200B (ZERO WIDTH SPACE) to a space instead
+     of removing it, since unlike the removed characters it is itself a
+     genuine line-break opportunity and word separator in some scripts; and
+     it deliberately leaves U+200C/U+200D untouched, since they are
+     orthographically load-bearing (Persian/Indic script joining, emoji ZWJ
+     sequences) rather than a purely invisible side channel.
+  3. `wrap_untrusted_block` escapes `&`/`<`/`>` in the body and wraps it in
      `<untrusted-data>...</untrusted-data>`, applied by both `mcp-skill`'s
      generation prompt and `mcp-server`'s `introspect_server` tool
      summaries.
-  3. A description crafted to forge the boundary's own delimiters is
+  4. A description crafted to forge the boundary's own delimiters is
      regression-tested to fail to do so.
-  4. A description containing U+202E (RIGHT-TO-LEFT OVERRIDE) or a bidi
+  5. A description containing U+202E (RIGHT-TO-LEFT OVERRIDE) or a bidi
      isolate control is regression-tested to no longer contain it after
      sanitization.
+  6. A description containing a Unicode Tags block character, U+FEFF, or a
+     character from the U+2060-U+2064 run is regression-tested to no longer
+     contain it after sanitization, individually and combined with a bidi
+     override in the same value; a description containing U+200B is
+     regression-tested to become a space, not disappear; a description
+     containing U+200C/U+200D is regression-tested to pass through
+     unchanged.
 - *Dependencies*: none
 
 **FR-029**: The system shall confine every filesystem write whose target

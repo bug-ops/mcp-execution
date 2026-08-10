@@ -294,6 +294,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separators this function already neutralized; the weaker directional marks (which cannot
   reorder or join text on their own) are removed entirely rather than replaced with a space, so
   legitimate RTL text containing one isn't split with a spurious word break (#422).
+- **`mcp-execution-core`**: `sanitize_untrusted_text` still did not neutralize the Unicode Tags
+  block (U+E0000-U+E007F: U+E0001 LANGUAGE TAG plus the U+E0020-U+E007F TAG characters, which
+  mirror ASCII 0x20-0x7F), U+FEFF (ZERO WIDTH NO-BREAK SPACE / BOM), the invisible-operator run
+  U+2060-U+2064 (WORD JOINER, FUNCTION APPLICATION, INVISIBLE TIMES, INVISIBLE SEPARATOR, INVISIBLE
+  PLUS), or U+200B (ZERO WIDTH SPACE). None of these are covered by `char::is_control` or by
+  #422's bidi-character handling, and all render as nothing in every mainstream font, so an
+  attacker-controlled tool name or description could use the Tags block to encode an entire ASCII
+  payload — invisible to a human reviewer, but present in the string an LLM tokenizer reads — a
+  known prompt-injection smuggling technique, or use the other characters as a simpler invisible
+  channel. The Tags block, U+FEFF, and the U+2060-U+2064 run are now removed entirely, since none
+  of them has a glyph to preserve a visible gap for or denotes a break opportunity. U+200B is
+  instead flattened to a space, not removed: unlike those characters, it is itself a genuine
+  Unicode line-break opportunity and the conventional word separator in Thai/Lao/Khmer/Japanese
+  text, so removing it outright would reproduce the exact token-joining hazard #422's bidi
+  embedding/override controls are spaced (rather than removed) to avoid. U+200C/U+200D (ZWNJ/ZWJ)
+  are deliberately left untouched, since — unlike every character above — they are
+  orthographically load-bearing in Persian/Indic scripts and in emoji ZWJ sequences (#425).
 
 ### Testing
 

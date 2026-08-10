@@ -58,13 +58,62 @@ pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 ///   neutral characters — so replacing one with a visible space would
 ///   corrupt otherwise-legitimate RTL text (e.g. splitting `abc\u{200E}def`
 ///   into two words) for no additional defensive benefit.
+/// - The Unicode Tags block U+E0000-U+E007F (U+E0001 LANGUAGE TAG plus the
+///   U+E0020-U+E007F TAG characters, which mirror ASCII 0x20-0x7F) is
+///   removed entirely. These code points render as nothing in every mainstream
+///   font, which lets an attacker encode an entire ASCII payload — invisible
+///   to a human reviewer, but present in the string an LLM tokenizer reads —
+///   by mapping each payload byte to its Tag-block counterpart, a known
+///   prompt-injection smuggling technique.
+/// - U+FEFF (ZERO WIDTH NO-BREAK SPACE, also the UTF-8 BOM) and the
+///   contiguous invisible-operator run U+2060-U+2064 (WORD JOINER, FUNCTION
+///   APPLICATION, INVISIBLE TIMES, INVISIBLE SEPARATOR, INVISIBLE PLUS) are
+///   removed entirely. Like the Tags block, these are zero-width in every
+///   mainstream font, so they carry no visible footprint; unlike U+200B
+///   below, none of them denotes a break opportunity — WORD JOINER's entire
+///   purpose is to *forbid* a break at its position, and the other four are
+///   invisible mathematical operators — so removing any of them cannot join
+///   two tokens that a renderer would otherwise have shown apart. The full
+///   contiguous run is handled, not just U+2060, since all five share this
+///   same no-break, zero-width nature.
+/// - U+200B (ZERO WIDTH SPACE), by contrast, is *replaced with a space*, not
+///   removed. Despite its name it is not purely cosmetic like the characters
+///   above: it is itself a Unicode line-break opportunity, and the
+///   conventional word separator in Thai, Lao, Khmer, and Japanese text that
+///   otherwise omits spaces. Removing it outright would reproduce, for this
+///   character, exactly the join hazard the bidi embedding/override controls
+///   above are spaced (rather than removed) to avoid — `a\u{200B}b` would
+///   collapse to `"ab"` — so it gets the same treatment as those controls
+///   instead of the Tags-block/zero-width-operator treatment.
+/// - U+200C (ZERO WIDTH NON-JOINER) and U+200D (ZERO WIDTH JOINER) are
+///   deliberately left untouched by this function. Unlike every character
+///   above, they are not purely an invisible side channel: they are
+///   orthographically load-bearing in Persian and several Indic scripts
+///   (controlling whether adjacent letterforms visually join) and in emoji
+///   ZWJ sequences (combining multiple code points into a single glyph,
+///   e.g. a family emoji), so stripping or spacing them would corrupt
+///   legitimate text rather than only closing an attacker's invisible
+///   channel. [`crate::cli::ServerConnectionString::new`]'s stricter
+///   ASCII-only allowlist rejects them outright, but that is a narrower
+///   validation boundary with no legitimate-content concern to weigh
+///   against; this general-purpose sanitizer accepts the trade-off the other
+///   direction.
+///
+/// The removed-entirely characters above (bidi marks, Tags block, U+FEFF,
+/// and the U+2060-U+2064 invisible-operator run) are mapped to nothing
+/// rather than a space because none of them denotes a break opportunity or
+/// otherwise stands in for meaning a space could preserve: removing any of
+/// them cannot join two tokens that were only visually separated by it,
+/// unlike U+200B.
 ///
 /// None of the bidi characters above are caught by `is_control` (they're
 /// Unicode `Cf` format characters), so they would otherwise pass through
 /// unmodified and let an untrusted value visually reorder or relabel
 /// surrounding text for a human reader — the "Trojan Source" class of
 /// attack — even though the underlying bytes still read left-to-right/
-/// logical order for any code that processes them.
+/// logical order for any code that processes them. The Tags-block and
+/// zero-width characters are likewise outside `is_control` and outside the
+/// bidi-control ranges, so they needed their own check.
 ///
 /// Markdown headings, fenced code blocks, and list items are only
 /// structural at the start of a line, and a prompt section header only
@@ -91,15 +140,29 @@ pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 /// let hostile_bidi = "safe\u{202E}gnisrever yllacisiv";
 /// let sanitized_bidi = sanitize_untrusted_text(hostile_bidi, 200);
 /// assert_eq!(sanitized_bidi, "safe gnisrever yllacisiv");
+///
+/// // A Unicode-Tags-block-smuggled invisible payload is stripped entirely.
+/// let hostile_tags = "safe\u{E0001}\u{E0073}\u{E0065}\u{E0065}\u{E007F}visible";
+/// let sanitized_tags = sanitize_untrusted_text(hostile_tags, 200);
+/// assert_eq!(sanitized_tags, "safevisible");
+///
+/// // U+200B (ZERO WIDTH SPACE) is a genuine break opportunity in some scripts, so — unlike
+/// // the Tags block above — it is replaced with a space rather than removed outright.
+/// let hostile_zwsp = "safe\u{200B}evil";
+/// let sanitized_zwsp = sanitize_untrusted_text(hostile_zwsp, 200);
+/// assert_eq!(sanitized_zwsp, "safe evil");
 /// ```
 #[must_use]
 pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
     let sanitized: String = s
         .chars()
         .filter_map(|c| {
-            if is_bidi_mark(c) {
+            if is_bidi_mark(c) || is_invisible_char(c) {
                 None
-            } else if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') || is_bidi_control(c) {
+            } else if c.is_control()
+                || matches!(c, '\u{2028}' | '\u{2029}' | '\u{200B}')
+                || is_bidi_control(c)
+            {
                 Some(' ')
             } else {
                 Some(c)
@@ -126,6 +189,16 @@ const fn is_bidi_control(c: char) -> bool {
 /// exact code point list.
 const fn is_bidi_mark(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}')
+}
+
+/// Returns `true` for the invisible/zero-width Unicode characters
+/// [`sanitize_untrusted_text`] removes entirely: the Unicode Tags block
+/// (U+E0000-U+E007F), U+FEFF, and the invisible-operator run U+2060-U+2064.
+/// Does **not** cover U+200B (spaced, not removed — see that function's doc
+/// comment) or U+200C/U+200D (deliberately left untouched). See that
+/// function's doc comment for the full rationale and exact code point list.
+const fn is_invisible_char(c: char) -> bool {
+    matches!(c, '\u{E0000}'..='\u{E007F}' | '\u{FEFF}' | '\u{2060}'..='\u{2064}')
 }
 
 /// Wraps untrusted content in an explicit, tagged data boundary that tells
@@ -254,6 +327,119 @@ mod tests {
         let hostile = "a\u{202A}b\u{202B}c\u{202C}d\u{202D}e";
         let sanitized = sanitize_untrusted_text(hostile, 100);
         assert_eq!(sanitized, "a b c d e");
+    }
+
+    /// Regression test for #425: the Unicode Tags block (U+E0000-U+E007F) can smuggle an
+    /// entire invisible ASCII payload — each payload byte mapped to its Tag-block
+    /// counterpart — that renders as nothing in every mainstream font but is fully legible
+    /// to an LLM tokenizer, a known prompt-injection delivery technique. Neither `is_control`
+    /// nor the bidi checks from #422 cover this block.
+    #[test]
+    fn sanitize_neutralizes_unicode_tags_block_smuggling() {
+        // U+E0001 LANGUAGE TAG, then the Tag-block encoding of "smuggled" — each ASCII byte b
+        // represented as U+E0000 + b (e.g. 's' = 0x73 -> U+E0073) — then U+E007F CANCEL TAG.
+        let hostile = "safe\u{E0001}\u{E0073}\u{E006D}\u{E0075}\u{E0067}\u{E0067}\u{E006C}\u{E0065}\u{E0064}\u{E007F}visible";
+        let sanitized = sanitize_untrusted_text(hostile, 200);
+        assert_eq!(sanitized, "safevisible");
+        assert!(
+            sanitized
+                .chars()
+                .all(|c| !('\u{E0000}'..='\u{E007F}').contains(&c))
+        );
+    }
+
+    /// M3: exact-boundary check on the Tags block range — U+E0000 (the lower bound) is
+    /// removed, U+E0080 (the first code point past the block) is left untouched.
+    #[test]
+    fn sanitize_tags_block_boundary_is_exact() {
+        let hostile = "a\u{E0000}b\u{E0080}c";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "ab\u{E0080}c");
+    }
+
+    /// Regression test for #425: U+FEFF (ZERO WIDTH NO-BREAK SPACE / BOM) is a standalone
+    /// invisible character outside `is_control` and outside every bidi range from #422.
+    #[test]
+    fn sanitize_neutralizes_zero_width_no_break_space() {
+        let hostile = "safe\u{FEFF}evil";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "safeevil");
+    }
+
+    /// Regression test for #425: U+2060 (WORD JOINER) is invisible and can suppress line
+    /// breaks between tokens without a human reviewer noticing anything was inserted.
+    #[test]
+    fn sanitize_neutralizes_word_joiner() {
+        let hostile = "safe\u{2060}evil";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "safeevil");
+    }
+
+    /// M1: the full contiguous invisible-operator run U+2060-U+2064 (WORD JOINER, FUNCTION
+    /// APPLICATION, INVISIBLE TIMES, INVISIBLE SEPARATOR, INVISIBLE PLUS) shares the same
+    /// zero-width, no-break-opportunity nature as U+2060 alone, so all five must be removed,
+    /// not just the first.
+    #[test]
+    fn sanitize_neutralizes_full_invisible_operator_run() {
+        let hostile = "a\u{2060}b\u{2061}c\u{2062}d\u{2063}e\u{2064}f";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "abcdef");
+    }
+
+    /// S1 regression: U+200B (ZERO WIDTH SPACE) is unlike the other invisible characters this
+    /// function removes — it is itself a Unicode line-break opportunity and the conventional
+    /// word separator in Thai/Lao/Khmer/Japanese text, so removing it outright would reproduce
+    /// the exact join hazard (`a\u{200B}b` -> `"ab"`) that #422's bidi embedding/override
+    /// controls are spaced, not removed, to avoid. It must therefore be replaced with a space,
+    /// the same treatment as those controls, not removed like the Tags block/U+FEFF/U+2060-64.
+    #[test]
+    fn sanitize_neutralizes_zero_width_space() {
+        let hostile = "sa\u{200B}fe\u{200B}evil";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "sa fe evil");
+    }
+
+    /// M2 regression: U+200C (ZERO WIDTH NON-JOINER) and U+200D (ZERO WIDTH JOINER) are
+    /// deliberately left untouched — they are orthographically load-bearing (Persian/Indic
+    /// script joining behavior, emoji ZWJ sequences), unlike the purely-cosmetic invisible
+    /// characters this function does neutralize.
+    #[test]
+    fn sanitize_leaves_zwnj_and_zwj_untouched() {
+        let legitimate = "a\u{200C}b\u{200D}c";
+        let sanitized = sanitize_untrusted_text(legitimate, 100);
+        assert_eq!(sanitized, legitimate);
+    }
+
+    /// Regression test for #425: the new invisible-character stripping must compose with
+    /// #422's bidi-override handling when both appear in the same value, rather than only
+    /// being exercised in isolation.
+    #[test]
+    fn sanitize_neutralizes_invisible_chars_combined_with_bidi_override() {
+        let hostile = "safe\u{202E}\u{FEFF}evil\u{200B}\u{E0001}\u{E0073}\u{E007F}payload";
+        let sanitized = sanitize_untrusted_text(hostile, 200);
+        // U+202E and U+200B are both spaced (not removed); U+FEFF and the Tags-block run are
+        // removed entirely.
+        assert_eq!(sanitized, "safe evil payload");
+    }
+
+    /// M3: a value consisting entirely of removed-entirely invisible characters must sanitize
+    /// to the empty string, not panic or leave a stray character behind.
+    #[test]
+    fn sanitize_invisible_only_value_becomes_empty() {
+        let hostile = "\u{FEFF}\u{2060}\u{E0001}\u{E0073}\u{E007F}";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "");
+    }
+
+    /// M3: removed-entirely invisible characters must not consume the `max_len` character
+    /// budget — removal happens before truncation, so a value whose *visible* content fits
+    /// within `max_len` is not truncated away just because it also carries invisible padding.
+    #[test]
+    fn sanitize_removes_invisible_chars_before_truncating() {
+        let padding: String = "\u{E0001}\u{E0073}\u{E007F}".repeat(50);
+        let hostile = format!("ok{padding}");
+        let sanitized = sanitize_untrusted_text(&hostile, 2);
+        assert_eq!(sanitized, "ok");
     }
 
     #[test]
