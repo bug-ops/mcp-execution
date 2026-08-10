@@ -117,6 +117,45 @@ jobs:
           arguments: --all-features
           command-arguments: advisories licenses bans sources
 
+  # Cross-platform build matrix, run in parallel with `test` (not sequentially
+  # before it): nextest builds whatever it needs on its own, so this job only
+  # verifies that all targets/features compile across the full OS/toolchain
+  # matrix without blocking the test job.
+  build:
+    name: Build (${{ matrix.os }}, Rust ${{ matrix.rust }})
+    needs: [changes, check]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    if: needs.changes.outputs.run-checks == 'true' && needs.check.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+        include:
+          # Test on beta channel on Linux only
+          - os: ubuntu-latest
+            rust: beta
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "build-${{ matrix.os }}-${{ matrix.rust }}"
+          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+
+      - name: Build (all targets, all features)
+        run: cargo build --all-targets --all-features --workspace
+
   # Cross-platform tests with matrix
   test:
     name: Test (${{ matrix.os }}, Rust ${{ matrix.rust }})
@@ -166,9 +205,6 @@ jobs:
 
       - name: Install TypeScript
         run: npm install -g typescript
-
-      - name: Build (all targets, all features)
-        run: cargo build --all-targets --all-features --workspace
 
       - name: Run tests (nextest)
         run: cargo nextest run --all-features --workspace --no-fail-fast
@@ -322,7 +358,7 @@ jobs:
   # All checks passed
   ci-success:
     name: CI Success
-    needs: [changes, check, security, test, coverage, msrv, benchmark]
+    needs: [changes, check, security, build, test, coverage, msrv, benchmark]
     runs-on: ubuntu-latest
     if: always()
     permissions:
@@ -330,7 +366,7 @@ jobs:
     steps:
       - name: Check all jobs
         # `skipped` is an acceptable outcome here: on docs-only diffs, the
-        # gated jobs (check/security/test/coverage/msrv/benchmark) skip
+        # gated jobs (check/security/build/test/coverage/msrv/benchmark) skip
         # themselves via the `changes` job's `run-checks` output rather than
         # failing, and this status check must still report success/neutral
         # rather than staying red or permanently pending.
@@ -339,6 +375,7 @@ jobs:
             "${{ needs.changes.result }}" \
             "${{ needs.check.result }}" \
             "${{ needs.security.result }}" \
+            "${{ needs.build.result }}" \
             "${{ needs.test.result }}" \
             "${{ needs.coverage.result }}" \
             "${{ needs.msrv.result }}" \
