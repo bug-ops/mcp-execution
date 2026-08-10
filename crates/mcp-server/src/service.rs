@@ -882,6 +882,11 @@ impl GeneratorService {
     /// 2. Claude receives context and `generation_prompt`
     /// 3. Claude generates SKILL.md content
     /// 4. Call `save_skill` with the generated content
+    ///
+    /// The result's `output_path` field is informational/display-only (the default location the
+    /// file *would* land at) and must not be passed as `save_skill`'s own `output_path`
+    /// parameter — despite the shared field name, the two have incompatible semantics; omit
+    /// `save_skill`'s `output_path` to use its default (issue #434).
     #[tool(
         description = "Analyze generated TypeScript files and return context for Claude to create a SKILL.md file. Returns tool metadata, categories, and a generation prompt."
     )]
@@ -961,27 +966,30 @@ impl GeneratorService {
             ));
         }
 
-        // Build context
+        // Validate a custom skill name up front, before `build_skill_context` renders
+        // `generation_prompt`, so an oversized/blank name fails fast here instead of being
+        // rendered and written to disk only for `extract_skill_metadata` to reject it later
+        // (issue #413). Validating before rather than after also means an invalid name never
+        // reaches `generation_prompt` at all (issue #435).
+        if let Some(name) = params.skill_name.as_deref() {
+            validate_skill_name(name).map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        }
+
+        // Build context. The validated custom name (if any) is threaded straight into
+        // `build_skill_context` so it's the name actually embedded in `generation_prompt`, not
+        // just an after-the-fact override of `result.skill_name` that leaves the prompt still
+        // instructing the stale `{server_id}-progressive` default (issue #435).
         let mut result = build_skill_context(
             &params.server_id,
             &scan_result.tools,
             params.use_case_hints.as_deref(),
+            params.skill_name.as_deref(),
         );
 
         // Surface non-fatal drift warnings (e.g. `.ts` files excluded for lacking
         // a sidecar entry) in the structured response, not just server-side
         // tracing output (issue #161).
         result.warnings = scan_result.warnings;
-
-        // Override skill name if provided. Validated up front (same pattern as
-        // `validate_server_id_slug` above) so an oversized name fails fast here instead of
-        // being rendered and written to disk only for `extract_skill_metadata` to reject it
-        // later (issue #413).
-        if let Some(name) = params.skill_name {
-            validate_skill_name(&name)
-                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-            result.skill_name = name;
-        }
 
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {
@@ -1095,6 +1103,7 @@ impl GeneratorService {
             }
             OutputPathError::AbsolutePath { .. }
             | OutputPathError::ParentTraversal { .. }
+            | OutputPathError::TildeComponent { .. }
             | OutputPathError::InvalidPath { .. }
             | OutputPathError::ServerIdIsSymlink { .. }
             | OutputPathError::Escape { .. }
@@ -5110,6 +5119,95 @@ mod tests {
         assert!(result.is_err(), "oversized skill_name must be rejected");
         let err = result.unwrap_err();
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        // Pins the rejection to `validate_skill_name`'s `TooLong` variant specifically (not some
+        // other, coincidentally-erroring path). The `Err` variant of this handler's
+        // `Result<CallToolResult, McpError>` return type structurally cannot carry a
+        // `GenerateSkillResult`/`generation_prompt` — FR-003 ("no generation_prompt is returned
+        // on rejection") holds by construction whenever this assertion holds.
+        assert!(
+            err.message.contains("too long"),
+            "must be rejected specifically for being too long: {}",
+            err.message
+        );
+    }
+
+    /// Issue #435: a valid custom `skill_name` must be honored end to end through the actual
+    /// `generate_skill` MCP handler — this is the exact layer the original bug lived in (the
+    /// handler called `build_skill_context` before threading the custom name through, so
+    /// `generation_prompt` always embedded the `{server_id}-progressive` default regardless of
+    /// what was requested). Covers FR-001/FR-005: `generation_prompt` contains the custom name,
+    /// the stale default does not appear, and `result.skill_name` matches what's in the prompt.
+    #[tokio::test]
+    async fn test_generate_skill_honors_custom_skill_name() {
+        use mcp_execution_core::metadata::{
+            METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
+            ToolMetadata as SidecarToolMetadata,
+        };
+        use mcp_execution_skill::GenerateSkillResult;
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+
+        let target_dir = base_dir.join("test-server");
+        tokio::fs::create_dir_all(&target_dir).await.unwrap();
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: ServerId::new("test-server").unwrap(),
+            server_name: "Test Server".to_string(),
+            server_version: "1.0.0".to_string(),
+            tools: vec![SidecarToolMetadata {
+                name: ToolName::new("create_issue").unwrap(),
+                typescript_name: "createIssue".to_string(),
+                category: None,
+                keywords: vec![],
+                description: None,
+                parameters: vec![ParameterMetadata {
+                    name: "title".to_string(),
+                    typescript_type: "string".to_string(),
+                    required: true,
+                    description: None,
+                }],
+            }],
+        };
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
+            .await
+            .unwrap();
+        tokio::fs::write(target_dir.join("createIssue.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let params = GenerateSkillParams {
+            server_id: "test-server".to_string(),
+            skill_name: Some("my-custom-skill".to_string()),
+            use_case_hints: None,
+            servers_dir: Some(base_dir),
+        };
+
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
+
+        assert!(result.is_ok(), "valid custom skill_name must be accepted");
+        let content = result.unwrap();
+        let text_content = content.content[0].as_text().unwrap();
+        let parsed: GenerateSkillResult = serde_json::from_str(&text_content.text).unwrap();
+
+        assert_eq!(parsed.skill_name, "my-custom-skill");
+        assert!(
+            parsed
+                .generation_prompt
+                .contains("**Skill Name**: my-custom-skill"),
+            "generation_prompt must embed the custom name: {}",
+            parsed.generation_prompt
+        );
+        assert!(
+            !parsed.generation_prompt.contains("test-server-progressive"),
+            "generation_prompt must not fall back to the default name: {}",
+            parsed.generation_prompt
+        );
     }
 
     // ========================================================================
@@ -5165,6 +5263,39 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
         assert!(err.message.contains("lowercase"));
+    }
+
+    /// Issue #434: a caller echoing `generate_skill`'s informational, display-only
+    /// `output_path` response field (`~/.claude/skills/{server_id}/SKILL.md`) straight into
+    /// `save_skill`'s `output_path` parameter must fail with a clear error naming the `~`
+    /// component, not silently succeed and create a nonsensical `~`-named directory tree.
+    #[tokio::test]
+    async fn test_save_skill_rejects_tilde_prefixed_output_path() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let service =
+            GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = SaveSkillParams {
+            server_id: "my-server".to_string(),
+            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
+            output_path: Some(PathBuf::from("~/.claude/skills/my-server/SKILL.md")),
+            overwrite: false,
+        };
+
+        let result = service
+            .save_skill(Parameters(params), CancellationToken::new())
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains('~'));
+        assert!(
+            !temp_dir.path().join("~").exists(),
+            "no garbage '~'-named directory should be created"
+        );
     }
 
     #[tokio::test]

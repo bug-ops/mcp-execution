@@ -121,8 +121,13 @@ pub async fn run(
 
     let scan_result = scan_server_tools(&tool_dir, &server).await?;
 
-    let context =
-        prepare_skill_context(&server, &scan_result.tools, hints, skill_name, output_path)?;
+    let context = prepare_skill_context(
+        &server,
+        &scan_result.tools,
+        hints,
+        skill_name.as_deref(),
+        output_path,
+    )?;
 
     // Check if output file exists and overwrite flag
     let output_path = PathBuf::from(&context.output_path);
@@ -229,23 +234,23 @@ fn prepare_skill_context(
     server: &str,
     tools: &[ParsedToolFile],
     hints: Vec<String>,
-    skill_name: Option<String>,
+    skill_name: Option<&str>,
     output_path: Option<PathBuf>,
 ) -> Result<GenerateSkillResult> {
-    // Step 6: Build skill context
+    // Step 6: Build skill context. Custom skill name is validated up front (same pattern as
+    // `validate_server_id` above) and passed into `build_skill_context` itself — not applied as
+    // a post-hoc override — so an oversized name fails fast here instead of being rendered and
+    // written to disk only for `extract_skill_metadata` to reject it later (issue #413), and so
+    // the name is consistently reflected in `generation_prompt` as well as `skill_name` (issue
+    // #435).
     let hints_ref: Option<Vec<String>> = if hints.is_empty() { None } else { Some(hints) };
 
-    let mut context = build_skill_context(server, tools, hints_ref.as_deref());
-
-    // Apply custom skill name if provided. Validated up front (same pattern as
-    // `validate_server_id` above) so an oversized name fails fast here instead of being
-    // rendered and written to disk only for `extract_skill_metadata` to reject it later
-    // (issue #413).
     if let Some(name) = skill_name {
-        validate_skill_name(&name)
+        validate_skill_name(name)
             .map_err(|e| CoreError::InvalidArgument(format!("Invalid skill name: {e}")))?;
-        context.skill_name = name;
     }
+
+    let mut context = build_skill_context(server, tools, hints_ref.as_deref(), skill_name);
 
     // Apply custom output path if provided
     if let Some(path) = output_path {
@@ -790,7 +795,7 @@ mod tests {
         let result = run(
             "github".to_string(),
             Some(temp.path().to_path_buf()),
-            Some(output_path),
+            Some(output_path.clone()),
             Some("github-advanced".to_string()),
             vec![],
             false,
@@ -802,6 +807,14 @@ mod tests {
             result.is_ok(),
             "Expected success but got: {:?}",
             result.err()
+        );
+
+        // Issue #435: confirm the custom name actually landed in the written SKILL.md, not just
+        // that the call reported success.
+        let written = std::fs::read_to_string(&output_path).unwrap();
+        assert!(
+            written.contains("name: github-advanced"),
+            "written SKILL.md must use the custom skill name: {written}"
         );
     }
 

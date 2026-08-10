@@ -17,6 +17,17 @@ use std::collections::HashMap;
 /// * `server_id` - Server identifier (e.g., "github")
 /// * `tools` - Parsed tool files from `scan_tools_directory`
 /// * `use_case_hints` - Optional hints about intended use cases
+/// * `custom_name` - Optional caller-supplied skill name. Callers MUST validate this with
+///   [`crate::validate_skill_name`] before passing it in — this function does not validate it
+///   itself, matching `server_id`, which callers likewise validate upstream. When `None`, the
+///   name defaults to `{server_id}-progressive`. Either way, the resulting name is flattened with
+///   [`sanitize_untrusted_text`] before being stored in `GenerateSkillResult::skill_name` — the
+///   same flattening `generation_prompt`'s `**Skill Name**` line applies to it — so the two never
+///   disagree on control characters, invisible Unicode, or length truncation (issue #435). The
+///   prompt's `**Skill Name**` line additionally passes through `wrap_untrusted_block`'s
+///   `<`/`>`/`&` boundary-escaping, applied to the entire untrusted-data block as an
+///   injection defense (issue #411, S1) — that escaping is a prompt-rendering concern, not part
+///   of the name's identity, so it is not applied to `GenerateSkillResult::skill_name`.
 ///
 /// # Returns
 ///
@@ -28,15 +39,21 @@ use std::collections::HashMap;
 /// use mcp_execution_skill::{build_skill_context, ParsedToolFile, ParsedParameter};
 ///
 /// let tools: Vec<ParsedToolFile> = vec![]; // Parsed from scan_tools_directory
-/// let context = build_skill_context("github", &tools, None);
+/// let context = build_skill_context("github", &tools, None, None);
 ///
 /// assert_eq!(context.server_id, "github");
+/// assert_eq!(context.skill_name, "github-progressive");
+///
+/// let custom = build_skill_context("github", &tools, None, Some("my-custom-skill"));
+/// assert_eq!(custom.skill_name, "my-custom-skill");
+/// assert!(custom.generation_prompt.contains("my-custom-skill"));
 /// ```
 #[must_use]
 pub fn build_skill_context(
     server_id: &str,
     tools: &[ParsedToolFile],
     use_case_hints: Option<&[String]>,
+    custom_name: Option<&str>,
 ) -> GenerateSkillResult {
     let tool_count = tools.len();
 
@@ -46,8 +63,17 @@ pub fn build_skill_context(
     // Select representative examples
     let example_tools = select_example_tools(tools, 5);
 
-    // Generate skill name
-    let skill_name = format!("{server_id}-progressive");
+    // Generate skill name: caller-supplied name takes precedence over the default, and — unlike
+    // the pre-#435 handler-side override — this is the name actually baked into
+    // `generation_prompt` below, not just the response's `skill_name` field. Flattened with
+    // `sanitize_untrusted_text` up front (idempotent against `build_generation_prompt`'s own
+    // identical call below) so `GenerateSkillResult::skill_name` holds exactly the same
+    // control-character-flattened, length-truncated text as the prompt's `**Skill Name**` line —
+    // not the raw, unflattened custom name (issue #435, S1).
+    let skill_name = sanitize_untrusted_text(
+        &custom_name.map_or_else(|| format!("{server_id}-progressive"), ToString::to_string),
+        MAX_UNTRUSTED_FIELD_LEN,
+    );
 
     // Build output path
     let output_path = format!("~/.claude/skills/{server_id}/SKILL.md");
@@ -476,13 +502,55 @@ mod tests {
             create_test_tool("list_repos", Some("repos")),
         ];
 
-        let context = build_skill_context("github", &tools, None);
+        let context = build_skill_context("github", &tools, None, None);
 
         assert_eq!(context.server_id, "github");
         assert_eq!(context.skill_name, "github-progressive");
         assert_eq!(context.tool_count, 2);
         assert_eq!(context.categories.len(), 2);
         assert!(!context.generation_prompt.is_empty());
+    }
+
+    /// Issue #435: a caller-supplied `custom_name` must be the name actually embedded in
+    /// `generation_prompt`'s `**Skill Name**` line, not just `GenerateSkillResult::skill_name` —
+    /// otherwise the LLM consuming the prompt writes the stale `{server_id}-progressive` default
+    /// into `SKILL.md`'s frontmatter regardless of what the caller asked for.
+    #[test]
+    fn test_build_skill_context_honors_custom_name_in_prompt() {
+        let tools = vec![create_test_tool("create_issue", Some("issues"))];
+
+        let context = build_skill_context("github", &tools, None, Some("my-custom-skill"));
+
+        assert_eq!(context.skill_name, "my-custom-skill");
+        assert!(
+            context
+                .generation_prompt
+                .contains("**Skill Name**: my-custom-skill")
+        );
+        assert!(!context.generation_prompt.contains("github-progressive"));
+    }
+
+    /// Issue #435, S1: `GenerateSkillResult::skill_name` must hold exactly the same
+    /// control-character-flattened, length-truncated text as the name embedded in
+    /// `generation_prompt`'s `**Skill Name**` line — not the raw, unflattened custom name. A
+    /// hostile name with an embedded newline is the sharpest test: the pre-fix code stored the
+    /// raw (newline-containing) name in `skill_name` while the prompt showed the flattened
+    /// (space-joined) version, so the two visibly disagreed.
+    #[test]
+    fn test_build_skill_context_skill_name_matches_flattened_prompt_name() {
+        let tools = vec![create_test_tool("create_issue", Some("issues"))];
+        let hostile_name = "evil\nname";
+
+        let context = build_skill_context("github", &tools, None, Some(hostile_name));
+
+        assert!(!context.skill_name.contains('\n'), "{}", context.skill_name);
+        assert!(
+            context
+                .generation_prompt
+                .contains(&format!("**Skill Name**: {}", context.skill_name)),
+            "the exact text stored in `skill_name` must be the text embedded in the prompt: {}",
+            context.generation_prompt
+        );
     }
 
     #[test]
@@ -622,7 +690,7 @@ mod tests {
             parameters: vec![],
         };
 
-        let context = build_skill_context("github", std::slice::from_ref(&hostile), None);
+        let context = build_skill_context("github", std::slice::from_ref(&hostile), None, None);
         let prompt = &context.generation_prompt;
 
         assert!(prompt.contains("<untrusted-data>"));

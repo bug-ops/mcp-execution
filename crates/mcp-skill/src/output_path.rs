@@ -12,7 +12,8 @@ use mcp_execution_core::{
     ConfinementError, ConfinementTarget, resolve_confined_path, sanitize_path_for_error,
     validate_server_id_slug,
 };
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 /// Errors from resolving and confining a skill output path to its base directory.
@@ -43,6 +44,23 @@ pub enum OutputPathError {
     /// The caller-supplied `output_path` contains a `..` component.
     #[error("output_path must not contain '..' components: {path}")]
     ParentTraversal {
+        /// Sanitized display form of the rejected path.
+        path: String,
+    },
+
+    /// The caller-supplied `output_path` contains a literal `~` path component (anywhere in the
+    /// path, not just as the first segment).
+    ///
+    /// `output_path` is resolved relative to `base_dir/{server_id}` with no home-directory
+    /// expansion (see [`resolve_skill_output_path`]'s doc comment), so a `~` component is never
+    /// meaningful here — it is just a directory literally named `~`. The most common way this
+    /// value shows up is a caller echoing `generate_skill`'s informational, display-only
+    /// `output_path` response field (of the shape `~/.claude/skills/{server_id}/SKILL.md`)
+    /// straight back into `save_skill`'s `output_path` parameter: that string is a valid
+    /// *relative* path with no `..` component, so without this dedicated check it would be
+    /// silently accepted and create a nonsensical `~` directory instead of failing (issue #434).
+    #[error("output_path must not contain a literal '~' path component: {path}")]
+    TildeComponent {
         /// Sanitized display form of the rejected path.
         path: String,
     },
@@ -152,6 +170,14 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
             path: sanitize_path_for_error(path),
         });
     }
+    if path
+        .components()
+        .any(|c| matches!(c, Component::Normal(segment) if segment == OsStr::new("~")))
+    {
+        return Err(OutputPathError::TildeComponent {
+            path: sanitize_path_for_error(path),
+        });
+    }
     if mcp_execution_core::contains_parent_dir(path) {
         return Err(OutputPathError::ParentTraversal {
             path: sanitize_path_for_error(path),
@@ -208,10 +234,10 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 /// # Errors
 ///
 /// Returns [`OutputPathError`] if `server_id` fails [`validate_server_id_slug`], if `output_path`
-/// is absolute, contains a `..` component, or has no file name, if the resolved path escapes
-/// `base_dir` (including via a symlink at `server_id` itself or any deeper component), if a
-/// required directory could not be created, or if a path component that must be a directory (or
-/// must hold the output file) already exists as the wrong kind of entry.
+/// is absolute, contains a `..` component, contains a literal `~` component, or has no file name,
+/// if the resolved path escapes `base_dir` (including via a symlink at `server_id` itself or any
+/// deeper component), if a required directory could not be created, or if a path component that
+/// must be a directory (or must hold the output file) already exists as the wrong kind of entry.
 ///
 /// # Examples
 ///
@@ -412,6 +438,66 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, OutputPathError::AbsolutePath { .. }));
         assert!(!base.path().join("my-server").exists());
+    }
+
+    /// Issue #434: a caller echoing `generate_skill`'s display-only `output_path` response
+    /// field (`~/.claude/skills/{server_id}/SKILL.md`) straight into `save_skill`'s
+    /// `output_path` parameter must be rejected, not silently accepted as a legitimate relative
+    /// path that creates a literal `~` directory.
+    #[tokio::test]
+    async fn tilde_prefixed_path_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_skill_output_path(
+            base.path(),
+            "my-server",
+            Some(Path::new("~/.claude/skills/my-server/SKILL.md")),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, OutputPathError::TildeComponent { .. }));
+        assert!(!base.path().join("my-server").exists());
+    }
+
+    /// Same rejection class as `tilde_prefixed_path_is_rejected`, for the shorter `~/SKILL.md`
+    /// form (tilde as the sole leading segment).
+    #[tokio::test]
+    async fn bare_tilde_leading_segment_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let err =
+            resolve_skill_output_path(base.path(), "my-server", Some(Path::new("~/SKILL.md")))
+                .await
+                .unwrap_err();
+        assert!(matches!(err, OutputPathError::TildeComponent { .. }));
+    }
+
+    /// FR-001 requires rejecting a `~` component anywhere in the path, not only when leading.
+    #[tokio::test]
+    async fn non_leading_tilde_component_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_skill_output_path(
+            base.path(),
+            "my-server",
+            Some(Path::new("notes/~/SKILL.md")),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, OutputPathError::TildeComponent { .. }));
+    }
+
+    /// A `~` character that is part of a longer segment (not a standalone path component) is not
+    /// a home-directory-expansion lookalike and must continue to be accepted.
+    #[tokio::test]
+    async fn tilde_within_a_longer_segment_is_accepted() {
+        let base = TempDir::new().unwrap();
+        let resolved = resolve_skill_output_path(
+            base.path(),
+            "my-server",
+            Some(Path::new("my~file/SKILL.md")),
+        )
+        .await
+        .unwrap();
+        let canonical_base = base.path().canonicalize().unwrap();
+        assert!(resolved.starts_with(&canonical_base));
     }
 
     #[tokio::test]

@@ -74,7 +74,13 @@ pub struct GenerateSkillParams {
     /// Default: `{server_id}-progressive`. Max 200 characters (see `validate_skill_name`'s
     /// `MAX_SKILL_NAME_LENGTH`, mirrored here as a literal since schemars attributes cannot
     /// reference a `const`; JSON Schema's `maxLength` already counts Unicode code points, the
-    /// same unit `validate_skill_name` checks at runtime).
+    /// same unit `validate_skill_name` checks at runtime). When supplied, this name is embedded
+    /// in both the response's `skill_name` field and its `generation_prompt` (the `**Skill
+    /// Name**` line the LLM is instructed to use in `SKILL.md`'s frontmatter) — both hold the
+    /// same control-character-flattened, length-truncated text (see
+    /// `mcp_execution_skill::build_skill_context`'s doc comment for the one cosmetic exception:
+    /// the prompt's surrounding untrusted-data block additionally HTML-escapes `<`/`>`/`&` as an
+    /// injection defense).
     #[schemars(length(max = 200))]
     pub skill_name: Option<String>,
 
@@ -112,7 +118,15 @@ pub struct GenerateSkillResult {
     /// Claude uses this prompt to generate SKILL.md content.
     pub generation_prompt: String,
 
-    /// Output path for the skill file.
+    /// Suggested output path for the skill file, for display purposes only.
+    ///
+    /// Shaped like `~/.claude/skills/{server_id}/SKILL.md` (with a literal, unexpanded `~`) —
+    /// this shows where the file will land under its *default* location, but is never validated
+    /// as a real filesystem path. **Do not** pass this value as `save_skill`'s `output_path`
+    /// parameter: despite sharing the same field name, that parameter has entirely different
+    /// semantics (a bare relative path with no `~`, resolved under `base_dir/{server_id}` — see
+    /// [`SaveSkillParams::output_path`]) and will reject a `~`-containing value (issue #434).
+    /// Omit `save_skill`'s `output_path` entirely to use its own default.
     pub output_path: String,
 
     /// Non-fatal drift warnings, e.g. `.ts` files on disk excluded from
@@ -215,7 +229,13 @@ pub struct SaveSkillParams {
 
     /// Custom output path.
     ///
-    /// Default: `~/.claude/skills/{server_id}/SKILL.md`
+    /// Default: `SKILL.md` under `~/.claude/skills/{server_id}/`. Must be a **bare relative
+    /// path** with no leading path separator, no `..` component, and no literal `~` component —
+    /// it is resolved relative to `base_dir/{server_id}`, not the caller's home directory, so a
+    /// `~` here is just a directory name, not a home-directory shortcut. In particular, do
+    /// **not** pass [`GenerateSkillResult::output_path`] (a display-only string of the shape
+    /// `~/.claude/skills/{server_id}/SKILL.md`) here — it is rejected (issue #434). See
+    /// [`crate::resolve_skill_output_path`] for the full resolution/confinement contract.
     pub output_path: Option<PathBuf>,
 
     /// Overwrite if exists.

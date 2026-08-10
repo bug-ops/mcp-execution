@@ -18,7 +18,7 @@
 //!
 //! # async fn example() -> Result<(), ScanError> {
 //! let result = scan_tools_directory(Path::new("~/.claude/servers/github")).await?;
-//! let context = build_skill_context("github", &result.tools, None);
+//! let context = build_skill_context("github", &result.tools, None, None);
 //! # Ok(())
 //! # }
 //! ```
