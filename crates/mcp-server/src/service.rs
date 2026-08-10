@@ -25,7 +25,7 @@ use mcp_execution_introspector::{Introspector, ToolInfo};
 use mcp_execution_skill::{
     GenerateSkillParams, MAX_TOOL_FILES, OutputPathError, SaveSkillParams, SaveSkillResult,
     ScanError, build_skill_context, extract_skill_metadata, resolve_skill_output_path,
-    scan_tools_directory,
+    scan_tools_directory, validate_skill_name,
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
@@ -973,8 +973,13 @@ impl GeneratorService {
         // tracing output (issue #161).
         result.warnings = scan_result.warnings;
 
-        // Override skill name if provided
+        // Override skill name if provided. Validated up front (same pattern as
+        // `validate_server_id_slug` above) so an oversized name fails fast here instead of
+        // being rendered and written to disk only for `extract_skill_metadata` to reject it
+        // later (issue #413).
         if let Some(name) = params.skill_name {
+            validate_skill_name(&name)
+                .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
             result.skill_name = name;
         }
 
@@ -5044,6 +5049,67 @@ mod tests {
             "warning must name the excluded file: {:?}",
             parsed.warnings[0]
         );
+    }
+
+    /// Issue #413: an oversized custom `skill_name` must be rejected with
+    /// `invalid_params`, the same way an invalid `server_id` is, rather than being
+    /// accepted into the response only for a later `save_skill`/`extract_skill_metadata`
+    /// round-trip to reject it.
+    #[tokio::test]
+    async fn test_generate_skill_rejects_oversized_skill_name() {
+        use mcp_execution_core::metadata::{
+            METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
+            ToolMetadata as SidecarToolMetadata,
+        };
+        use tempfile::TempDir;
+
+        let service = GeneratorService::new();
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+
+        let target_dir = base_dir.join("test-server");
+        tokio::fs::create_dir_all(&target_dir).await.unwrap();
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: ServerId::new("test-server").unwrap(),
+            server_name: "Test Server".to_string(),
+            server_version: "1.0.0".to_string(),
+            tools: vec![SidecarToolMetadata {
+                name: ToolName::new("create_issue").unwrap(),
+                typescript_name: "createIssue".to_string(),
+                category: None,
+                keywords: vec![],
+                description: None,
+                parameters: vec![ParameterMetadata {
+                    name: "title".to_string(),
+                    typescript_type: "string".to_string(),
+                    required: true,
+                    description: None,
+                }],
+            }],
+        };
+        let content = serde_json::to_string_pretty(&meta).unwrap();
+        tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
+            .await
+            .unwrap();
+        tokio::fs::write(target_dir.join("createIssue.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let params = GenerateSkillParams {
+            server_id: "test-server".to_string(),
+            skill_name: Some("a".repeat(mcp_execution_skill::MAX_SKILL_NAME_LENGTH + 1)),
+            use_case_hints: None,
+            servers_dir: Some(base_dir),
+        };
+
+        let result = service
+            .generate_skill(Parameters(params), CancellationToken::new())
+            .await;
+
+        assert!(result.is_err(), "oversized skill_name must be rejected");
+        let err = result.unwrap_err();
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
     }
 
     // ========================================================================

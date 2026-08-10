@@ -12,7 +12,7 @@ use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_skill::{
     GenerateSkillResult, ParsedToolFile, ScanResult, build_skill_context, render_skill_md,
-    scan_tools_directory, validate_server_id,
+    scan_tools_directory, validate_server_id, validate_skill_name,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -237,8 +237,13 @@ fn prepare_skill_context(
 
     let mut context = build_skill_context(server, tools, hints_ref.as_deref());
 
-    // Apply custom skill name if provided
+    // Apply custom skill name if provided. Validated up front (same pattern as
+    // `validate_server_id` above) so an oversized name fails fast here instead of being
+    // rendered and written to disk only for `extract_skill_metadata` to reject it later
+    // (issue #413).
     if let Some(name) = skill_name {
+        validate_skill_name(&name)
+            .map_err(|e| CoreError::InvalidArgument(format!("Invalid skill name: {e}")))?;
         context.skill_name = name;
     }
 
@@ -797,6 +802,37 @@ mod tests {
             result.is_ok(),
             "Expected success but got: {:?}",
             result.err()
+        );
+    }
+
+    /// Issue #413: an oversized `--skill-name` must be rejected up front, before anything is
+    /// rendered or written to disk — not left to fail later at `extract_skill_metadata`'s
+    /// `MAX_FRONTMATTER_SIZE` check on a file that's already been written.
+    #[tokio::test]
+    async fn test_run_rejects_oversized_skill_name() {
+        let temp = TempDir::new().unwrap();
+        let server_dir = temp.path().join("github");
+        std::fs::create_dir(&server_dir).unwrap();
+        write_meta_sidecar(&server_dir, "github", "create_issue");
+
+        let output_path = temp.path().join("SKILL.md");
+        let oversized_name = "a".repeat(mcp_execution_skill::MAX_SKILL_NAME_LENGTH + 1);
+
+        let result = run(
+            "github".to_string(),
+            Some(temp.path().to_path_buf()),
+            Some(output_path.clone()),
+            Some(oversized_name),
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(result.is_err(), "oversized skill_name must be rejected");
+        assert!(
+            !output_path.exists(),
+            "no SKILL.md should be written when skill_name validation fails"
         );
     }
 

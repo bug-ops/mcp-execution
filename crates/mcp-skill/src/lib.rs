@@ -38,7 +38,7 @@ pub use parser::{
 };
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{
-    GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH, SaveSkillParams,
-    SaveSkillResult, SkillCategory, SkillMetadata, SkillServerIdError, SkillTool, ToolExample,
-    validate_server_id,
+    GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH, MAX_SKILL_NAME_LENGTH,
+    SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata, SkillNameError,
+    SkillServerIdError, SkillTool, ToolExample, validate_server_id, validate_skill_name,
 };

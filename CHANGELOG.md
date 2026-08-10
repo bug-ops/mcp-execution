@@ -158,6 +158,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   around a windowed comparison that only ever slices at `haystack`'s own (unmodified) char
   boundaries, rather than lowering a copy and reusing its byte offsets, so it stays correct when
   `str::to_lowercase()` changes a character's encoded byte length, e.g. Turkish "İ" (#406).
+- **`mcp-execution-skill`**: `render_skill_md`'s Markdown body heading (`# {{{skill_name}}}`)
+  now sanitizes `skill_name` with the same `sanitize_untrusted_text` defense already applied to
+  tool names/descriptions/categories, before splicing it in. `skill_name` is attacker-controlled
+  (the CLI's `--skill-name` flag or an MCP tool call argument) and, while #398 made it YAML-safe
+  in the frontmatter, a value safe as a YAML scalar can still contain a newline that opens a new
+  heading, fenced code block, or list item in the body — the same class of injection #298 closed
+  for tool descriptions (#410).
+- **`mcp-execution-skill`**: `build_generation_prompt`'s "**Skill Name**: ..." line moved from
+  the prompt's trusted "Context" preamble into the same `wrap_untrusted_block` boundary tool
+  metadata already gets, instead of only being sanitized while still spliced into the trusted
+  preamble. `skill_name` is exactly as attacker-controlled as tool metadata (the CLI's
+  `--skill-name` flag or an MCP tool call argument) — `sanitize_untrusted_text` alone stops
+  structural Markdown breakout but not the text *reading* as an instruction to the LLM, which is
+  what the explicit boundary additionally guards against (issue #288's original rationale). The
+  prompt's frontmatter instructions no longer claim `description` "MUST be double-quoted" (no
+  longer true post-#398, where the direct-render path's quoting style varies by content); the
+  instructions now describe the actual requirement — quote when the value contains `:`, `#`, a
+  leading `-`, or a line break. `render_generation_prompt` (the `skill-generation.hbs`-backed
+  alternate prompt path) now sanitizes `skill_name` and renders it with triple-stash, matching
+  `render_skill_md`'s body heading, instead of splicing it in raw via plain double-stash
+  interpolation (#411).
+- **`mcp-execution-skill`**: added `validate_skill_name`/`MAX_SKILL_NAME_LENGTH` (200 `char`s,
+  not bytes — matching `GenerateSkillParams::skill_name`'s `#[schemars(length(max = ..))]`
+  annotation, which JSON Schema also counts in Unicode code points; counting bytes instead would
+  have let the declared schema and the runtime validator disagree on a multi-byte name), and
+  rejects an empty/whitespace-only name (`SkillNameError::Empty`) — `extract_skill_metadata`
+  rejects a blank `name` unconditionally, so accepting one here would have reproduced the exact
+  round-trip failure this validator exists to prevent. Mirrors `validate_server_id`'s
+  bound-checking style. `skill_name` previously had no length bound at all, so an oversized
+  custom name would render and get written to disk only for `extract_skill_metadata`'s
+  `MAX_FRONTMATTER_SIZE` (8 KiB) check to reject the resulting file on
+  the next read. Both the CLI's `skill` command and the `generate_skill` MCP tool now validate a
+  custom `skill_name` up front and fail fast with a clear error instead (#413).
 - **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
   `mcp-execution-codegen`'s `TemplateEngine`. Without it, a template referencing a typo'd or
   removed field silently rendered an empty string instead of failing at render time.
