@@ -206,7 +206,9 @@ in-repo alias-bomb fixture exactly (probe not committed).
   ADR-341 §3.1's figure exactly. `cargo tree -p mcp-execution-skill` resolves the predicted
   11-crate addition with no `base64`/`zmij`/`nohash-hasher` (confirming `default-features =
   false, features = ["deserialize"]` is doing its job — `zmij` is pulled into the workspace by
-  `serde_json` independently and is unrelated to this swap).
+  `serde_json` independently and is unrelated to this swap). This addendum describes the
+  `deserialize`-only tree at that point in time; §9 records the delta after `serialize` was
+  added for `template.rs`'s emission path.
 - **`encoding_rs_io` remains non-optional** inside `serde-saphyr`'s `deserialize` feature
   despite this crate only ever calling the `from_str`/`&str` path, never `from_reader` — an
   upstream feature-gating request, unresolved by this ADR (ADR-341 §8.1, carried forward as a
@@ -226,6 +228,39 @@ in-repo alias-bomb fixture exactly (probe not committed).
 - Zero references to `SkillMetadataError` outside `crates/mcp-skill` (re-confirmed by grep,
   see ruling 3 in §2) — the `#[non_exhaustive]` addition plus new variant is not breaking for
   any in-repo caller.
+
+## 9. Reconciliation with #409/#418: `template.rs` frontmatter serialization
+
+This ADR originally covered only the *parsing* path (`parser.rs`, §3-§6). While that work was in
+review, #409/#418 landed a *serialization* path in `crates/mcp-skill/src/template.rs` —
+`Frontmatter::to_yaml_block` — still built on the outgoing `serde_norway` (closing S3, a
+frontmatter-injection defense). This migration closed both paths onto `serde-saphyr` at once,
+requiring root `Cargo.toml`'s `serde-saphyr` dependency to add the `serialize` feature alongside
+the existing `deserialize` feature.
+
+- **Dependency delta correction.** §7's "no `base64`/`zmij`/`nohash-hasher`" addendum describes
+  the `deserialize`-only tree and no longer holds now that `serialize` is enabled too. Enabling
+  `serialize` pulls in `dep:base64`, `dep:num-traits`, `dep:zmij`, `dep:nohash-hasher`; measured
+  against this workspace's actual resolved tree, only **`nohash-hasher` 0.2.0** is new (0
+  `unsafe`, `Apache-2.0 OR MIT`, already allow-listed in `deny.toml`). `base64` and `zmij` are
+  already present via `rmcp`/`serde_json` and unify without a version bump. The earlier
+  `base64 <=0.22.1` figure quoted during design was never the real constraint — the actual
+  requirement is `>=0.21, <0.24`, and `rmcp` 3.1.2 already pins `base64` 0.23.0, above 0.22.1.
+  The `-181 unsafe fn` delta from §7 is unaffected.
+- **U+2028/U+2029 net improvement.** `serde-saphyr`'s emitter is YAML-1.2-correct: it renders
+  these separators as `\L`/`\P` escapes inside a double-quoted scalar, which round-trip exactly
+  through both `serde-saphyr` and the previous `serde_norway`/libyaml-based reader — a net
+  improvement over the previous emitter, with no new risk for either consumer.
+- **Folded-scalar (`>-`) behavior change.** With default `SerializerOptions`,
+  `prefer_block_scalars` folds any single-line scalar longer than 80 characters instead of
+  leaving it plain. Verified safe across the round-trip test suite (including a dedicated >80-char
+  case with internal whitespace); this is a cosmetic emission-style change only.
+- **Corrected lossy-family mechanism.** A `description` that is blank after trim (e.g. `"\n"` or
+  `"\n\n"`) maps to `Err(SkillMetadataError::MissingField)` on read-back — matching the
+  pre-migration behavior for blank values, so this remains non-observable at the API level. This
+  is **not** the same family as a non-blank value followed by multiple trailing newlines (e.g.
+  `"multiple trailing\n\n\n"`), which emits `|+` with matching blank body lines and round-trips
+  **exactly**.
 
 ## See Also
 

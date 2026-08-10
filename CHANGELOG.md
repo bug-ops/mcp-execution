@@ -178,13 +178,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`mcp-execution-skill`**: `render_skill_md`'s YAML frontmatter (`name`, `description`) is
-  now serialized as a whole via `serde_norway`'s emitter instead of hand-rolled escaping applied
+  now serialized as a whole via `serde-saphyr`'s emitter instead of hand-rolled escaping applied
   only to `description`. The previous escaper covered just `\`, `"`, and `\n`/`\r`, leaving other
   C0 control characters (NUL, BEL, ESC, ...) unescaped, and left `name` (`skill_name`, also
   attacker-controlled) completely unencoded and open to frontmatter key injection (#398). As a
   side effect, a generated SKILL.md's `description:` line is no longer always double-quoted — it
-  may now be plain, single-quoted, or a block literal depending on content, which changes the
-  byte size of a frontmatter block near the existing `MAX_FRONTMATTER_SIZE` (8 KiB) cap.
+  may now be plain, single-quoted, or a block literal depending on content (including a folded
+  `>-` scalar for a single-line value over 80 characters), which changes the byte size of a
+  frontmatter block near the existing `MAX_FRONTMATTER_SIZE` (8 KiB) cap. `serde-saphyr` is also
+  YAML-1.2-correct, so a `U+2028`/`U+2029` separator now round-trips exactly for strict external
+  YAML-1.2 consumers instead of being rendered as a literal line break with a 2-space fold
+  indent.
 - **`mcp-execution-core`**: `sanitize_path_for_error`'s home-directory redaction on Windows/macOS
   missed non-ASCII usernames (e.g. Cyrillic, Greek) that differed only by case: `components_match`
   compared components with `eq_ignore_ascii_case`, and `replace_case_aware`'s username-scrubbing
