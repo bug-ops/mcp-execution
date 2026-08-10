@@ -63,6 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffered fully in memory by `rmcp` with no config knob to cap either — a known upstream
   limitation this crate cannot fix without reimplementing `rmcp`'s HTTP transport client-side
   (#390).
+- **`mcp-execution-core`**: added `confinement::{ConfinementError, ConfinementTarget,
+  resolve_confined_path}`, the component-by-component resolve-and-confine filesystem walk
+  previously implemented separately (and identically, apart from the terminal-component check)
+  by `mcp-execution-server::output_dir::resolve_output_dir` and
+  `mcp-execution-skill::resolve_skill_output_path`. Both call sites now delegate to this shared
+  primitive and map its `ConfinementError` onto their own, unchanged `OutputDirError`/
+  `OutputPathError` public error enums via a total `From` impl — no observable change to either
+  crate's error surface, messages, or confinement/symlink-rejection behavior (#395). `mcp-core`
+  gains a direct (previously dev-only) `tokio` dependency (`fs` feature) as a result.
 - **CI**: extracted `cargo build --all-targets --all-features --workspace` out of the `test`
   job into a new, independent `build` job that runs on the same OS/toolchain matrix in
   parallel with `test` (nextest already builds what it needs on its own, so the two no longer

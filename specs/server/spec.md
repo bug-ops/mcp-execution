@@ -396,7 +396,11 @@ fields) but not log message text.
 ## 6. Output Directory Resolution (`output_dir.rs`)
 
 Mirrors `mcp-skill`'s `resolve_skill_output_path` for a directory target
-rather than a file:
+rather than a file. Since #395, both share the same filesystem walk —
+`mcp_execution_core::resolve_confined_path` (see
+[[../core/spec#`confinement` module (`src/confinement.rs`)]]) — with the
+absolute-path/`..` pre-check and the terminal-component choice staying local
+to each crate:
 
 - `relative_subpath` (I/O-free) is all `introspect_server` runs — reject
   fast, commit to nothing, create nothing.
@@ -413,11 +417,22 @@ rather than a file:
   already consumed (rather than before, as an earlier version of this fix
   had it) is safe specifically because a failure here now triggers
   `state.restore` (issue #379) exactly like any other post-consume pipeline
-  failure, so it costs nothing in retriability.
+  failure, so it costs nothing in retriability. Internally it calls
+  `resolve_confined_path` with `ConfinementTarget::Directory(name)` as the
+  terminal target and maps `ConfinementError` onto `OutputDirError` via a
+  total `From` impl (see §9) — `ConfinementError::WrongTargetKind` becomes
+  `OutputDirError::NotADirectory`, the only renamed variant.
 - The **final** target directory is confinement-checked but deliberately
   **not created** here — `FileSystem::export_to_filesystem` publishes it
   atomically via a staged rename, and pre-creating it would defeat that
   atomicity on a first-time `generate`.
+
+`resolve_list_base_dir` (`service.rs`) is a **third**, deliberately separate
+implementation of a related but weaker idea — it stays out of scope for #395
+(see [[../core/spec#`confinement` module (`src/confinement.rs`)]] and §11
+below): it is read-only (`read_dir`), constructs `OutputDirError` variants
+directly, and is exhaustively matched at two call sites, so `OutputDirError`
+must stay fully constructible/matchable outside the confinement module.
 
 ## 7. Prompt Injection Defense
 
@@ -481,7 +496,12 @@ environment's fault — I/O failure, task join error, serialization failure).
   `FileSystem`, `mcp-skill::{scan_tools_directory, build_skill_context,
   resolve_skill_output_path, extract_skill_metadata, validate_server_id,
   MAX_TOOL_FILES}`, `mcp-core::{ServerConfig, ServerId,
-  sanitize_path_for_error, validate_path_segment, untrusted::*}`.
+  sanitize_path_for_error, untrusted::*, confinement::{ConfinementError,
+  ConfinementTarget, resolve_confined_path}}` (the last three, since #395,
+  used only by `output_dir::resolve_output_dir`; `resolve_list_base_dir`
+  reuses `output_dir.rs`'s own `relative_subpath` and hand-rolls its own,
+  weaker confinement check rather than calling `resolve_confined_path`,
+  since it is out of scope for the confinement consolidation — see §6).
 - **Schema drift guards**: `service.rs`'s own tests assert the `schemars`-
   derived schema for `CategorizedTool`/`SaveCategorizedToolsParams`/
   `IntrospectServerParams` matches the real runtime constants

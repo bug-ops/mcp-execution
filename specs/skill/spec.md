@@ -215,10 +215,16 @@ evaluation this characteristic factored into.
 Confines `save_skill`'s optional `output_path` to `base_dir/server_id`
 (issue #184's fix — without this, an absolute path, `..`, or a
 symlink-planted-inside-`base_dir` path could write anywhere the process can
-reach):
+reach). Since #395, the filesystem walk itself is `mcp_execution_core::resolve_confined_path`
+(see [[../core/spec#`confinement` module (`src/confinement.rs`)]]) — this function is a thin
+call-through: `relative_target` rejects an absolute path, a `..` component, or a missing file
+name before any filesystem work; the rest is delegated with
+`ConfinementTarget::File(file_name)` as the terminal target, and
+`ConfinementError` is mapped onto `OutputPathError` by a total `From` impl (see §9).
 
-- `server_id` and `output_path` walk the **same** checked, one-component-
-  at-a-time loop, rooted at a once-canonicalized `base_dir`.
+- `server_id` and `output_path`'s directory components walk the **same**
+  checked, one-component-at-a-time loop, rooted at a once-canonicalized
+  `base_dir`.
 - `server_id`'s own directory is checked **first** and rejected outright if
   it already exists as a symlink, regardless of where it points — including
   at a *sibling* server's own directory, which would otherwise pass a
@@ -231,7 +237,8 @@ reach):
 - The final path component is rejected outright if it exists as a symlink,
   **dangling or not** — a dangling symlink makes `canonicalize` fail, which
   must not be treated as "safe, doesn't exist yet" (a subsequent write
-  would still follow it).
+  would still follow it). Unlike the directory components, the final file is
+  never canonicalized even when it doesn't yet exist as a symlink.
 - This is a check against **pre-existing** state at call time — not a
   concurrency guarantee against a symlink planted by a racing process
   between this check and the caller's write.
@@ -255,7 +262,9 @@ reach):
 
 - **Consumes** `mcp-core`: `metadata::{METADATA_FILE_NAME,
   METADATA_SCHEMA_VERSION, ServerMetadata}`, `sanitize_path_for_error`,
-  `validate_path_segment`, `untrusted::*`.
+  `untrusted::*`, and (since #395) `confinement::{ConfinementError,
+  ConfinementTarget, resolve_confined_path}` for `resolve_skill_output_path`'s
+  walk.
 - **Used by** `mcp-cli skill` (directly calls `scan_tools_directory` +
   `build_skill_context` + `render_skill_md`, no LLM/prompt step — see
   [[../cli/spec#skill]]).
