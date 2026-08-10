@@ -212,7 +212,7 @@ actual injection-safety mechanism given `no_escape` is set:
 | Function | Neutralizes | Applied to |
 |---|---|---|
 | `sanitize_jsdoc(s, max_len)` | Every control character (C0, DEL, C1 — everything `char::is_control` reports — plus U+2028/U+2029, which ECMAScript treats as line terminators) is *replaced with a space*; the Unicode bidi embedding/override controls (U+202A-U+202E), isolate controls (U+2066-U+2069), and U+200B (ZERO WIDTH SPACE, issue #425 — a genuine break opportunity, so spaced rather than removed) are likewise replaced with a space; the weaker bidi directional marks (U+200E/U+200F/U+061C, issue #422), the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and the U+2060-U+2064 invisible-operator run (issue #425) are removed entirely; U+200C/U+200D are deliberately left untouched (orthographically load-bearing) — all by delegating to `mcp_execution_core::untrusted::sanitize_untrusted_text`; **then** `*/` (JSDoc comment terminator) is escaped to `*\/`; truncation to `max_len` chars runs last | tool/server descriptions, categories, keywords rendered into `.ts` JSDoc comments |
-| `sanitize_ts_string_literal(s)` | backslash, single-quote, `\r`/`\n`, U+2028/U+2029 | tool name / server id embedded as single-quoted TS string literals (`callMCPTool('{{{server_id_literal}}}', ...)`) |
+| `sanitize_ts_string_literal(s)` | the **raw** input is truncated to `MAX_UNTRUSTED_FIELD_LEN` (500 chars) *first*; **then** backslash, single-quote, `\r`/`\n`, U+2028/U+2029 are escaped, in that order; **then** the escaped result is passed through `mcp_execution_core::untrusted::sanitize_untrusted_text` with no further length cap (the input is already bounded) to neutralize any remaining invisible-payload character — the Unicode Tags block, bidi embedding/override/isolate controls, bidi directional marks, and zero-width/invisible operators, plus variation-selector runs/totals over `sanitize_untrusted_text`'s own thresholds (issue #432). This also flattens any other control character (tabs, C0/C1) the escape step above doesn't specifically handle to a space, the same way `sanitize_jsdoc` does | tool name / server id embedded as single-quoted TS string literals (`callMCPTool('{{{server_id_literal}}}', ...)`) |
 | `sanitize_schema_jsdoc_descriptions(value)` | recursively applies `sanitize_jsdoc` to every `"description"` key in the input JSON Schema before it's embedded in a tool's JSDoc, up to [[#Recursion Depth Bound]] | `input_schema` field of `ToolContext` |
 
 > [!warning]
@@ -223,6 +223,46 @@ actual injection-safety mechanism given `no_escape` is set:
 > collapse the two characters back together into a live, comment-closing
 > `*/` — reopening the JSDoc block comment (issue #300). Replacing with a
 > space (not deleting) also avoids gluing adjacent words together.
+
+> [!warning]
+> `sanitize_ts_string_literal`'s ordering is also load-bearing, the mirror
+> image of `sanitize_jsdoc`'s: TS escaping (`\r`/`\n` -> `\\r`/`\\n`, etc.)
+> must run **before** the `sanitize_untrusted_text` neutralization pass,
+> not after. `sanitize_untrusted_text` maps raw `\r`/`\n` to a space, which
+> would defeat this function's own newline escaping if it ran first on the
+> unescaped input; running it second, on the already-escaped result (which
+> no longer contains a raw `\r`/`\n`), only touches characters this
+> function doesn't already handle (issue #432).
+>
+> Defense-in-depth: `ToolName::new`/`ServerId::new` (`specs/core/spec.md`,
+> issue #444) independently reject the same invisible-payload character
+> classes, and any variation selector, at construction, via the UTS #39
+> `Identifier_Status=Allowed` allowlist gate — so a hostile
+> tool name or server id from introspection never reaches this function in
+> the first place — but `sanitize_ts_string_literal` also runs this
+> neutralization itself as a length-bound/defense-in-depth layer, since it
+> is character-class-agnostic and applies uniformly regardless of whether
+> the value went through either constructor's gate. Its
+> `MAX_UNTRUSTED_FIELD_LEN` cap is likewise this call site's own defense,
+> not a delegation elsewhere: neither `ToolName` nor `ServerId` enforces a
+> length bound (`validate_path_segment` accepts any non-empty single path
+> component, however long — `ToolName::new` on a 100,000-character string
+> succeeds), and `mcp-introspector`'s `MAX_TOOL_NAME_LEN` only gates names
+> that actually arrive via `tools/list`, not a hand-built `ToolName`
+> (critic finding S3).
+>
+> The `MAX_UNTRUSTED_FIELD_LEN` cap is applied to the **raw** input, before
+> escaping runs — not to the escaped output. An earlier version of this fix
+> capped the escaped output instead (passing `MAX_UNTRUSTED_FIELD_LEN` as
+> `sanitize_untrusted_text`'s own `max_len`), which was itself a regression
+> (critic finding C3): escaping can expand one input `char` into a
+> multi-character output sequence (a lone `\` becomes `\\`), so truncating
+> post-escape could cut a sequence in half and leave a dangling, odd-length
+> run of trailing backslashes — which then escapes the generated template's
+> own closing quote and leaves the `callMCPTool('...')` string literal
+> unterminated. Truncating the raw input first guarantees every
+> multi-character escape sequence in the final output is either wholly
+> present or wholly absent, never split.
 
 > [!warning]
 > The `_meta.json` sidecar deliberately uses the **raw, unsanitized** MCP

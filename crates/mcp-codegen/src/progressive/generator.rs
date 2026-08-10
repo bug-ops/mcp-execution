@@ -925,13 +925,52 @@ fn render_keywords_for_jsdoc(keywords: &[String]) -> String {
 /// cannot terminate the literal by injecting a raw line break. U+2028/U+2029 are also
 /// escaped: legal but unescaped inside a string literal only since ES2019, so a raw
 /// occurrence would be a syntax error for consumers targeting an older ECMAScript target.
+///
+/// The **raw** input is truncated to
+/// [`mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`] `char`s *before* any escaping
+/// runs, bounding this call site's own defense (`ToolName` itself enforces no length limit —
+/// `validate_path_segment` accepts any non-empty single path component, however long — and the
+/// introspector's `MAX_TOOL_NAME_LEN` only gates names that actually arrive from `tools/list`,
+/// never a hand-built `ToolName`; `server_id` similarly has no shorter bound reaching this
+/// function). Truncating pre-escape, not post-escape, is load-bearing: escaping can expand a
+/// single input `char` into a multi-character output sequence (a lone backslash becomes two
+/// backslashes; the LINE SEPARATOR character becomes a six-character escape sequence), so
+/// truncating the *escaped* string can land the cut in the middle of such a sequence and leave a
+/// dangling, odd-length run of backslashes at the end of the output — which then escapes the
+/// generated template's own closing quote and leaves the
+/// `callMCPTool('...')` string literal unterminated (critic finding C3, a regression introduced
+/// by an earlier, post-escape-truncating version of this fix for critic finding S3). Truncating
+/// the raw input first guarantees every multi-character escape sequence in the output is either
+/// wholly present or wholly absent, never split.
+///
+/// After truncation, the result is escaped, then passed through the shared
+/// [`mcp_execution_core::untrusted::sanitize_untrusted_text`] with no further length cap
+/// (`usize::MAX` — the input is already bounded) to neutralize any remaining invisible-payload
+/// character — the Unicode Tags block, bidi embedding/override/isolate controls, bidi
+/// directional marks, and zero-width/invisible operators. This runs *after* the escape step,
+/// not before: `sanitize_untrusted_text` maps `\r`/`\n` to a space, which would defeat this
+/// function's own `\r`/`\n` -> `\\r`/`\\n` escaping if it ran first, so escaping happens first
+/// and neutralization happens on the (now `\r`/`\n`-free) escaped result. Closes the gap where
+/// a tool name or server id containing a Tags-block-smuggled payload (issue #432) would
+/// otherwise land verbatim inside the `callMCPTool('...')` string literal in generated code,
+/// regardless of whether the value originated from introspection or was hand-constructed and
+/// happened to bypass any other sanitization layer.
 pub(crate) fn sanitize_ts_string_literal(s: &str) -> String {
-    s.replace('\\', "\\\\")
+    use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
+
+    let truncated: String = if s.chars().count() > MAX_UNTRUSTED_FIELD_LEN {
+        s.chars().take(MAX_UNTRUSTED_FIELD_LEN).collect()
+    } else {
+        s.to_string()
+    };
+    let escaped = truncated
+        .replace('\\', "\\\\")
         .replace('\'', "\\'")
         .replace('\r', "\\r")
         .replace('\n', "\\n")
         .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029")
+        .replace('\u{2029}', "\\u2029");
+    sanitize_untrusted_text(&escaped, usize::MAX)
 }
 
 /// JavaScript/TypeScript reserved words that cannot be used as a function or export
@@ -2217,6 +2256,63 @@ mod tests {
         );
     }
 
+    /// Regression test for #432: a Unicode-Tags-block-smuggled invisible payload (the
+    /// technique #425 hardened `sanitize_untrusted_text` against) must not survive into a
+    /// generated `callMCPTool('...')` string literal verbatim. `ToolName::new` now also
+    /// rejects this outright (see `mcp-core`'s `test_tool_name_rejects_unicode_tags_block_payload`),
+    /// but this asserts the codegen-layer defense independently, since it applies regardless
+    /// of which validated or unvalidated source produced the string being embedded.
+    #[test]
+    fn test_sanitize_ts_string_literal_strips_unicode_tags_block_payload() {
+        let hostile = "safe\u{E0001}\u{E0073}\u{E006D}\u{E0075}\u{E0067}\u{E0067}\u{E006C}\u{E0065}\u{E0064}\u{E007F}visible";
+        let sanitized = sanitize_ts_string_literal(hostile);
+        assert_eq!(sanitized, "safevisible");
+        assert!(
+            sanitized
+                .chars()
+                .all(|c| !('\u{E0000}'..='\u{E007F}').contains(&c))
+        );
+    }
+
+    /// Regression test for #432: a bidi-override character must also be neutralized at the
+    /// codegen boundary, not just escaped for quote/backslash breakout.
+    #[test]
+    fn test_sanitize_ts_string_literal_neutralizes_bidi_override() {
+        let sanitized = sanitize_ts_string_literal("safe\u{202E}evil");
+        assert!(!sanitized.contains('\u{202E}'));
+        assert_eq!(sanitized, "safe evil");
+    }
+
+    /// Regression test for critic finding C3: an earlier version of this function's
+    /// `MAX_UNTRUSTED_FIELD_LEN` bound truncated the *escaped* string rather than the raw
+    /// input before escaping. Escaping expands a single `char` into a multi-character
+    /// sequence (a lone `\` becomes `\\`), so a post-escape cut could land mid-sequence and
+    /// leave a dangling, odd-length run of trailing backslashes — which then escapes the
+    /// generated template's own closing quote and leaves the `callMCPTool('...')` string
+    /// literal unterminated. Sweeps raw input lengths straddling the cap on both sides, for
+    /// every character whose escaping doubles it, and asserts the output never ends in an odd
+    /// backslash run.
+    #[test]
+    fn test_sanitize_ts_string_literal_never_leaves_a_dangling_odd_backslash_run_at_the_cap() {
+        let max = mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN;
+        for payload_char in ['\'', '\\', '\n', '\r'] {
+            for len in [max - 1, max, max + 1, max + 2, max * 2] {
+                let hostile: String = std::iter::once('a')
+                    .chain(std::iter::repeat_n(payload_char, len))
+                    .collect();
+                let sanitized = sanitize_ts_string_literal(&hostile);
+                let trailing_backslashes =
+                    sanitized.chars().rev().take_while(|&c| c == '\\').count();
+                assert_eq!(
+                    trailing_backslashes % 2,
+                    0,
+                    "odd trailing backslash run (payload {payload_char:?}, raw len {len}) would \
+                     leave the generated string literal unterminated: {sanitized:?}"
+                );
+            }
+        }
+    }
+
     // `sanitize_ts_identifier`'s core behavior (invalid-char replacement, leading-digit
     // and empty-string prefixing) is unit-tested in `common::typescript`, its canonical
     // home now that it's a shared `pub fn`; this test covers the passthrough case that's
@@ -2274,6 +2370,53 @@ mod tests {
         assert!(
             !call_site_line.contains(raw_name),
             "raw quote must not break out of the callMCPTool string literal: {call_site_line}"
+        );
+    }
+
+    /// End-to-end regression test for critic finding C3: a hostile tool name shaped like the
+    /// critic's `PoC` — long enough that escaping alone pushes a naive post-escape truncation
+    /// at `MAX_UNTRUSTED_FIELD_LEN` into the middle of an escape sequence — must still produce
+    /// a syntactically closed `callMCPTool(...)` call site, not an unterminated string literal
+    /// that swallows the rest of the call (uses `'`, not `\`, so the name stays a valid
+    /// `ToolName` on every platform `Path`'s separator rules run on, e.g. Windows).
+    #[test]
+    fn test_generate_never_leaves_an_unterminated_call_site_literal_near_the_escape_cap() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let mut server_info = create_test_server_info();
+        let hostile_name = format!("a{}", "'".repeat(250));
+        server_info.tools[0].name = ToolName::new(hostile_name).unwrap();
+
+        let code = generator.generate(&server_info).unwrap();
+        let tool = code
+            .files
+            .iter()
+            .find(|f| {
+                std::path::Path::new(&f.path)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("ts"))
+                    && f.path != "index.ts"
+            })
+            .unwrap();
+
+        let call_site_line = tool
+            .content
+            .lines()
+            .find(|line| line.contains("return (await callMCPTool("))
+            .expect("generated tool file must contain a callMCPTool(...) invocation");
+
+        // The call site must still be a syntactically closed invocation: `params))` and the
+        // trailing `as ...Result;` cast must survive as live code, not be swallowed into an
+        // unterminated string literal along with everything after it.
+        assert!(
+            call_site_line.contains("params))"),
+            "the params argument and closing parens must survive as live code, not be \
+             swallowed into the tool name's string literal: {call_site_line}"
+        );
+        let suffix = call_site_line.split("params))").nth(1).unwrap();
+        assert!(
+            suffix.trim_start().starts_with("as ") && suffix.trim_end().ends_with(';'),
+            "the cast-and-semicolon after the call must survive as live code, not be swallowed \
+             into the tool name's string literal: {call_site_line}"
         );
     }
 

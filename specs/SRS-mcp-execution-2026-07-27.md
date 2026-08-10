@@ -804,10 +804,21 @@ server before it is embedded in a document or shown to an LLM.
   every mainstream font, which lets such a value smuggle a payload — up to
   and including an ASCII-mapped instruction string via the Tags block — that
   is invisible to a human reviewer but fully present in the text an LLM
-  tokenizer reads. This is not exhaustive coverage of every invisible-payload
-  channel: variation selectors (U+FE00-U+FE0F, U+E0100-U+E01EF) are
-  deliberately out of scope for #425 — see [[core/spec]], "Known limitation"
-  in the `untrusted` module section.
+  tokenizer reads. Variation selectors (U+FE00-U+FE0F, U+E0100-U+E01EF),
+  adjacent to the Tags block, were deliberately out of scope for #425 (they
+  carry genuine rendering semantics — emoji-presentation selection, CJK
+  Ideographic Variation Sequences — unlike the other channels above, so
+  unconditional stripping was rejected); #431 mitigates this channel with a
+  whole-value total combined with a per-run threshold rather than a per-run
+  threshold alone, since a per-run-only check (the channel's first,
+  since-superseded implementation) is defeated simply by distributing the
+  payload across many base characters, each individually under the
+  threshold — measured during review at higher payload density than the
+  Tags-block channel this complements. The whole-value total still leaves a
+  known, documented limitation (it cannot distinguish several independent
+  legitimate emoji from an equivalent count of payload-carrying selectors)
+  — see [[core/spec]], "Known limitation" in the `untrusted` module
+  section.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-028
 - *Priority*: Must
 - *Acceptance criteria*:
@@ -841,6 +852,47 @@ server before it is embedded in a document or shown to an LLM.
      regression-tested to become a space, not disappear; a description
      containing U+200C/U+200D is regression-tested to pass through
      unchanged.
+  7. `sanitize_untrusted_text` runs its variation-selector checks (U+FE00-
+     U+FE0F, U+E0100-U+E01EF) *after* the character filter in acceptance
+     criterion 1-2 has already run, not before, so a removed-entirely
+     character (Tags block, bidi mark) interleaved between selectors to
+     split one long run into sub-threshold pieces is regression-tested to
+     not defeat detection: the run is measured on the post-filter string,
+     where the separators are already gone. If the value's total
+     variation-selector count exceeds 16, every variation selector in the
+     value is dropped, regression-tested against both a payload distributed
+     as many short (at-or-below-threshold) runs across many different base
+     characters and against the exact boundary (16 survive, 17 drops all).
+     Otherwise, a run of at most 2 consecutive selectors is left untouched
+     and a longer run is dropped in full. A single legitimate
+     emoji-presentation selector, a short Ideographic Variation Sequence,
+     and nine independent legitimate emoji in ordinary prose (a realistic
+     count that false-positived under an earlier, tighter total threshold of
+     8 — raised to 16 in response) are regression-tested to pass through
+     unchanged.
+  8. `ToolName::new` rejects a candidate name containing a Unicode Tags
+     block character, a bidi mark/control, a zero-width/invisible
+     operator, or *any* variation selector — via the UTS #39
+     `Identifier_Status=Allowed` allowlist gate (`ToolNameError::
+     DisallowedCharacter`, issue #444), since none of those characters
+     carry that status — and `sanitize_ts_string_literal` independently
+     neutralizes the same character classes (plus the same variation-
+     selector thresholds as acceptance criterion 7) out of any string (tool
+     name or server id) embedded in generated TypeScript, regression-tested
+     against a Tags-block payload reaching a `callMCPTool('...')` string
+     literal.
+  9. `sanitize_ts_string_literal` truncates its **raw** input to
+     `MAX_UNTRUSTED_FIELD_LEN` *before* escaping, not the escaped output —
+     regression-tested with a boundary sweep (multiple raw input lengths
+     straddling the cap, for every character whose TS escaping doubles it)
+     asserting the output never ends in an odd-length run of trailing
+     backslashes, plus an end-to-end test confirming the generated
+     `callMCPTool(...)` call site stays syntactically closed. Truncating the
+     escaped output instead (an earlier, since-superseded version of this
+     bound) could cut a multi-character escape sequence in half and leave a
+     dangling odd backslash that escaped the generated template's own
+     closing quote, leaving the string literal unterminated (critic finding
+     C3).
 - *Dependencies*: none
 
 **FR-029**: The system shall confine every filesystem write whose target

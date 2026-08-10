@@ -122,6 +122,29 @@ longer usable as a `ServerId` at all — `mcp-cli`'s config-key lookup
 the stricter slug rule ([[../cli/spec]]) since `ServerId::new`'s own baseline was already the
 only gate; that baseline is now the Unicode-identifier-safe one described above.
 
+Issues #432 and #431 originally closed this same gap with a second, denylist-based check in
+`ToolName::new` (a `contains_invisible_payload_char` predicate covering the Tags block, bidi
+embedding/override/isolate controls, the weaker bidi directional marks, and
+zero-width/invisible-operator characters, plus a `contains_variation_selector` predicate for any
+variation selector, stricter than `sanitize_untrusted_text`'s display-text run/total thresholds
+since an identifier has no rendering to protect). Issue #444's UTS #39 allowlist (above)
+independently closes the identical gap — none of the characters either predicate flagged carry
+`Identifier_Status=Allowed`, so `first_disallowed_identifier_char` rejects all of them as a side
+effect of accepting only the allowlisted set — so the denylist check was removed from
+`ToolName::new` rather than kept alongside the allowlist gate (avoiding an unreachable second
+`ToolNameError` variant that could never fire once the allowlist check, which runs first, had
+already rejected the same input), and both predicates were deleted outright rather than kept as
+unused public API: with the denylist call site gone, they had no in-tree caller left, the exact
+dead-capability pattern PR #444 — the same PR that added this allowlist gate — removed
+`Error::is_connection_error`/`is_timeout` for (issue #427).
+
+`ServerId::new` gets the same single UTS #39 allowlist gate as `ToolName::new` (issue #444) and
+never had the denylist check `ToolName::new` briefly carried. `sanitize_ts_string_literal` (the
+one place a `ServerId`'s raw `&str` form reaches generated code) performs its own
+length-bound/defense-in-depth pass regardless of either type's construction-time gate, since
+generated code is a sink both hand-built and introspected values can reach
+([[../codegen/spec#7. Injection Defense (Sanitization Pipeline)]]).
+
 ### `validate_server_id_slug` / `ServerIdSlugError` (`src/types.rs`, issue #401)
 
 ```rust
@@ -582,7 +605,7 @@ absorbed into the token's "scheme" and survives, exact parity with what
 
 ```rust
 pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
-pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, bidi override/isolate controls, and U+200B to spaces; removes bidi marks, the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and U+2060-U+2064 entirely; leaves U+200C/U+200D untouched; truncates by char count
+pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, bidi override/isolate controls, and U+200B to spaces; removes bidi marks, the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and U+2060-U+2064 entirely; leaves U+200C/U+200D untouched; THEN, on the filtered result, drops all variation selectors if their whole-value total exceeds 16, else drops any run of more than 2 consecutive ones; truncates by char count
 pub fn wrap_untrusted_block(context: &str, body: &str) -> String;  // escapes &, <, > in body; wraps in <untrusted-data>...</untrusted-data>
 ```
 Threat model: an introspected MCP server's tool names/descriptions/keywords
@@ -633,12 +656,78 @@ limitation note below):
   allowlist rejects them outright at a validation boundary with no legitimate-content concern to
   weigh against.
 
-**Known limitation**: variation selectors (U+FE00-U+FE0F and the supplementary block
-U+E0100-U+E01EF, adjacent to the Tags block above) are a second well-known channel for smuggling
-arbitrary bytes attached to a base character and are not yet neutralized by this function —
-deliberately out of scope for #425 rather than folded in, since removing them would also strip
-legitimate emoji-presentation and Ideographic Variation Sequence selectors, a visible rendering
-change none of #425's other additions make.
+Since issue #431, `sanitize_untrusted_text` also mitigates the variation-selector channel
+(U+FE00-U+FE0F "VS1-VS16" and the Variation Selectors Supplement U+E0100-U+E01EF), adjacent to the
+Tags block above and left out of #425's scope at the time. Unlike the Tags block and zero-width
+characters, variation selectors carry genuine rendering semantics — emoji-presentation selection
+and Ideographic Variation Sequences (IVS) for CJK text — so unconditional stripping was rejected
+as a fix: it would visibly alter legitimate content. Instead, two length-based checks run *after*
+the per-character filter above, not before (ordering matters — see below), on the filtered
+string:
+
+1. **Whole-value total** (`MAX_TOTAL_VARIATION_SELECTORS`, private, currently 16): if the value's
+   total variation-selector count, summed across every run regardless of how it's distributed
+   across base characters, exceeds this bound, every variation selector in the value is dropped.
+2. **Per-run threshold** (`MAX_VARIATION_SELECTOR_RUN`, private, currently 2), applied only when
+   the total stays under the bound above: a run of at most 2 consecutive variation selectors is
+   left untouched (covers the normal single-selector case plus the occasional legitimate second
+   selector); a longer run is dropped in full.
+
+Both constants and the "drop the whole run/value, not just the excess" choice are documented in
+code in `src/untrusted.rs`.
+
+A per-run-only check (the original #431 implementation) is not sufficient on its own: an attacker
+who distributes the payload as many short runs — each at or below the per-run threshold, each
+after a different base character — defeats a per-run check entirely, since every individual run
+is indistinguishable from ordinary emoji-presentation/IVS use in isolation. Measured during
+review: 2 selectors per base character over 59 characters of ordinary prose smuggled 96 payload
+characters this way, denser than the Tags-block channel this mitigation complements — this is not
+an edge case, it is the straightforward way to use the channel once the per-run threshold is
+known. The whole-value total closes this: it is computed independently of how the selectors are
+grouped into runs, so no distribution strategy evades it.
+
+> [!warning]
+> The two checks above must run **after** the per-character filter (bidi marks, Tags block,
+> U+FEFF, U+2060-U+2064), not before. Every character that filter removes entirely is itself
+> invisible, so an attacker can interleave one of those characters between variation selectors to
+> split what is really one long run into several separator-divided, sub-threshold pieces with
+> zero visual cost. Detecting runs *before* the filter sees each piece as independently
+> under-threshold and passes it; the filter then deletes the separators afterward and the pieces
+> silently re-join into the original, full-length run in the output. Running detection on the
+> already-filtered string means it sees the same adjacency the filter's removals actually
+> produce, so a run can't be disguised by characters that won't be there in the final output.
+
+**Known limitation**: the whole-value total is a global count, not a semantic check — it cannot
+distinguish "16 variation selectors forming 16 legitimate independent emoji" from "16 variation
+selectors carrying 16 units of an encoded payload distributed one-per-base-character," and treats
+both the same way once the bound is crossed. Raising the bound to reduce false positives on
+heavily emoji-decorated legitimate text directly raises the smuggling capacity available below
+it; the current value (16, raised from an initial 8 — see below) is chosen to keep that capacity
+small (each variation selector can only encode a value from a small, fixed code-point set, so 16
+of them carry at most a handful of bytes, not a meaningful instruction) while tolerating a
+realistic amount of independent legitimate emoji in one field. Closing this fully would require a
+semantic check (is this base character + selector combination a real, assigned emoji sequence or
+IVS?) this module deliberately does not implement.
+
+The bound was raised from 8 to 16 after critic review (issue #431, finding M6) found the tighter
+value false-positived on ordinary content: a description with 9 presentation-selected emoji (a
+realistic count for a tool description listing several capabilities, each with its own leading
+icon) lost every selector under the 8 bound. The security delta between 8 and 16 is negligible —
+neither carries a meaningful payload — while the false-positive rate on legitimate multi-emoji
+text differs substantially, so the wider bound is a strictly better trade-off, not a weaker one.
+
+**Known limitation, second channel (issue #431, critic finding M5)**: the bound above is
+per-field — each call to `sanitize_untrusted_text` gets its own independent allowance of up to
+16 surviving variation selectors. A server with many tools, each contributing a sanitized name,
+description, keyword list, and per-parameter description, therefore has many independent fields
+each capable of carrying up to that many payload-bearing selectors: 100 sanitized fields could
+carry up to 1,600 surviving selectors in aggregate across the whole introspection response, 2,000
+fields up to 32,000. This is still far weaker than the pre-#431 channel (unlimited per field) and
+is arguably inherent to any purely per-field sanitizer that has no cross-field state to consult —
+but it is the one variation-selector-smuggling shape that still survives sanitization at all, so
+it is called out here explicitly rather than left implicit in the per-field framing above. Closing
+it would require either a request-wide (not per-field) budget threaded through every
+`sanitize_untrusted_text` call site, or the semantic check already noted as out of scope.
 
 ## 3. Cross-Crate Contracts
 
@@ -688,6 +777,12 @@ and byte-preserving of each variant's existing `Display` message.
 | `sanitize_untrusted_text` on a value containing a Unicode Tags block character (U+E0000-U+E007F), U+FEFF, or a character in the U+2060-U+2064 invisible-operator run | Removed entirely, no space substituted |
 | `sanitize_untrusted_text` on a value containing U+200B (ZERO WIDTH SPACE) | Flattened to a space, same as a control character — it is a genuine break opportunity, unlike the removed-entirely characters above |
 | `sanitize_untrusted_text` on a value containing U+200C (ZERO WIDTH NON-JOINER) or U+200D (ZERO WIDTH JOINER) | Left untouched — orthographically load-bearing, deliberately out of scope |
+| `sanitize_untrusted_text` on a value whose total variation-selector count (U+FE00-U+FE0F, U+E0100-U+E01EF) is 1-2 and every run is 1-2 consecutive | Left untouched — the legitimate emoji-presentation/IVS case |
+| `sanitize_untrusted_text` on a value containing a single run of 3+ consecutive variation selectors, total under 16 | That run dropped, no space substituted — treated as smuggled payload |
+| `sanitize_untrusted_text` on a value whose variation selectors, however distributed across however many runs/base characters, total more than 16 | Every variation selector in the value dropped, regardless of individual run length |
+| `sanitize_untrusted_text` on a value with variation selectors interleaved with invisible, removed-entirely characters (Tags block, bidi marks, etc.) meant to split a long run into sub-threshold pieces | The interleaving separators are removed *before* run/total detection runs, so the pieces are seen as one contiguous run/total, not several independent short ones — the split does not help |
+| `ToolName::new`/`ServerId::new` on a name containing a Unicode Tags block character, a bidi mark/control, or a zero-width/invisible-operator character | Rejected with `ToolNameError`/`ServerIdError::DisallowedCharacter` (none of these carry UTS #39 `Identifier_Status=Allowed`), not silently constructed |
+| `ToolName::new`/`ServerId::new` on a name containing even a single variation selector | Rejected with `ToolNameError`/`ServerIdError::DisallowedCharacter` — the UTS #39 allowlist has no allowed variation selector, so this is stricter than `sanitize_untrusted_text`'s display-text thresholds without a dedicated variation-selector check |
 | `RedactedUrl` on `https://user:p/w@host/mcp` (unencoded `/` in password) | Whole URL redacted — the authority-terminator ambiguity check fires |
 | `resolve_confined_path` terminal component is a dangling symlink, under either `ConfinementTarget` | Rejected as `Escape` — checked via `symlink_metadata`, not `metadata`/`canonicalize`, so a target that can't be resolved is never mistaken for "doesn't exist yet" |
 | `resolve_confined_path` terminal component exists as the other `ConfinementTarget` kind (file where `Directory` expected, or vice versa) | `WrongTargetKind`, mapped by each caller to its own truthful variant name |
