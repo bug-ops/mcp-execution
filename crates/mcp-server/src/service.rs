@@ -1079,12 +1079,12 @@ impl GeneratorService {
         )
         .await
         .map_err(|e| match e {
-            // `server_id` was already validated above via `validate_server_id_slug`, which
-            // `resolve_skill_output_path`'s internal check now also delegates to (see
-            // `output_path::validate_server_id_segment`), so this arm is unreachable from this
-            // call site — kept distinct (rather than folded into the `output_path` arm below)
-            // because `resolve_skill_output_path` is public API other callers may reach without
-            // that upstream validation.
+            // `server_id` was already validated above via `validate_server_id_slug`, and
+            // `resolve_skill_output_path` itself gates `server_id` with the same
+            // `validate_server_id_slug` check at its own entry, so this arm is unreachable from
+            // this call site — kept distinct (rather than folded into the `output_path` arm
+            // below) because `resolve_skill_output_path` is public API other callers may reach
+            // without that upstream validation.
             OutputPathError::InvalidServerId { .. } => {
                 McpError::invalid_params(format!("Invalid server_id: {e}"), None)
             }

@@ -52,7 +52,7 @@ use uuid::Uuid;
 pub struct IntrospectServerParams {
     /// Unique identifier for the server (e.g., "github", "filesystem").
     ///
-    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id`'s
+    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id_slug`'s
     /// `MAX_SERVER_ID_LENGTH`, mirrored here as a literal since schemars attributes cannot
     /// reference a `const`).
     #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
