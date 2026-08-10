@@ -6,6 +6,7 @@
 use std::sync::LazyLock;
 
 use handlebars::Handlebars;
+use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -113,12 +114,26 @@ impl Frontmatter<'_> {
 ///
 /// Rendered prompt string for the LLM.
 ///
+/// `skill_name` is rendered with triple-stash (`{{{skill_name}}}`), matching
+/// [`render_skill_md`]'s body heading, and sanitized with
+/// [`sanitize_untrusted_text`] before rendering for the same reason: it's
+/// attacker-controlled (the caller's `--skill-name` flag or an MCP tool call
+/// argument) and appears both as this example structure's `name:` line and as
+/// its `# {{{skill_name}}}` heading — a value containing a newline could
+/// otherwise inject Markdown structure into the prompt itself (issue #411).
+///
 /// # Errors
 ///
 /// Returns `TemplateError` if template rendering fails, including when
 /// `context` is missing a field the template references — Handlebars strict
 /// mode is enabled, so a missing variable hard-fails instead of silently
 /// rendering an empty string.
+///
+/// # Panics
+///
+/// Does not panic in practice: `serde_json::to_value` is infallible for
+/// `GenerateSkillResult` because all fields are standard Rust types with
+/// derived `Serialize` implementations.
 ///
 /// # Examples
 ///
@@ -129,7 +144,16 @@ impl Frontmatter<'_> {
 /// let prompt = render_generation_prompt(&context).unwrap();
 /// ```
 pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String, TemplateError> {
-    let rendered = HANDLEBARS.render("skill", context)?;
+    // PANIC: `GenerateSkillResult` derives `Serialize` with only primitive and
+    // standard-library types — `to_value` cannot fail for this type.
+    let mut value =
+        serde_json::to_value(context).expect("GenerateSkillResult serialization is infallible");
+    value["skill_name"] = serde_json::Value::String(sanitize_untrusted_text(
+        &context.skill_name,
+        MAX_UNTRUSTED_FIELD_LEN,
+    ));
+
+    let rendered = HANDLEBARS.render("skill", &value)?;
     Ok(rendered)
 }
 
@@ -147,6 +171,14 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 /// that special characters in either field — both are attacker-controlled MCP server
 /// metadata (`skill_name` from the caller, `server_description` inferred from the
 /// server) — cannot corrupt the frontmatter or inject additional YAML keys (S3).
+///
+/// `skill_name` is rendered a second time, as the body's `# {{{skill_name}}}` heading
+/// (triple-stash, matching tool descriptions — no HTML-escaping needed/wanted). Being
+/// YAML-safe for the frontmatter above does not make a value safe as a single Markdown
+/// heading line: a value containing a newline could still open a new heading, fenced
+/// code block, or list item in the body. So the copy used for that heading is separately
+/// flattened with [`sanitize_untrusted_text`], the same defense already applied to tool
+/// names/descriptions/categories in [`crate::build_skill_context`] (issue #410).
 ///
 /// # Arguments
 ///
@@ -197,6 +229,18 @@ pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, Template
             .unwrap_or(&default_description),
     };
     value["frontmatter_yaml"] = serde_json::Value::String(frontmatter.to_yaml_block());
+
+    // The frontmatter `name:` above is YAML-safe via `to_yaml_block`, but the body's
+    // `# {{{skill_name}}}` heading is a separate splice point with a separate safety
+    // requirement: a newline that's perfectly fine inside a YAML block-literal scalar
+    // would still open a new heading/fenced-code-block/list-item line in the body
+    // (issue #410). Overriding just this key in `value` leaves the frontmatter's own
+    // `context.skill_name` reference (built above from the original, unflattened string)
+    // unaffected.
+    value["skill_name"] = serde_json::Value::String(sanitize_untrusted_text(
+        &context.skill_name,
+        MAX_UNTRUSTED_FIELD_LEN,
+    ));
 
     let rendered = HANDLEBARS.render("skill-md", &value)?;
     // Normalize CRLF → LF so output is consistent across platforms (Windows CI).
@@ -250,6 +294,27 @@ mod tests {
             }
             Err(e) => panic!("Template rendering failed: {e}"),
         }
+    }
+
+    /// Issue #411: `render_generation_prompt` (the "skill" `skill-generation.hbs` template)
+    /// must sanitize `skill_name` the same way `render_skill_md` does for its body heading —
+    /// it splices the value in twice (the example `name:` line and the `# {{{skill_name}}}`
+    /// heading), and previously did so via plain double-stash with no flattening at all.
+    #[test]
+    fn test_render_generation_prompt_sanitizes_hostile_skill_name() {
+        let mut context = create_test_context();
+        context.skill_name = "evil\n### Injected Heading\n```\ninjected block\n```".to_string();
+
+        let prompt = render_generation_prompt(&context).unwrap();
+
+        assert!(
+            !prompt.contains("\n### Injected Heading"),
+            "hostile skill_name must not introduce a new heading line: {prompt}"
+        );
+        assert!(
+            prompt.contains("Injected Heading"),
+            "sanitized content must still render, just inert"
+        );
     }
 
     #[test]
@@ -475,6 +540,57 @@ mod tests {
             md.contains("Injected Heading"),
             "sanitized content must still render, just inert"
         );
+    }
+
+    /// Issue #410 (end-to-end): `skill_name` containing embedded line breaks that mimic
+    /// Markdown structure must not be able to inject a heading, a fenced code block, or an
+    /// extra list item into the SKILL.md *body* — the same class of defense #298 applied to
+    /// tool descriptions, now applied to the value spliced into `# {{{skill_name}}}`. The
+    /// frontmatter `name:` is a distinct splice point, made YAML-safe by #398's
+    /// `Frontmatter::to_yaml_block`, and must still round-trip the *original*, unflattened
+    /// value — the body and frontmatter have different safety requirements for the same
+    /// underlying field, so they intentionally see different (sanitized vs. raw) copies of it.
+    #[test]
+    fn test_render_skill_md_body_heading_flattens_injected_markdown_structure_in_skill_name() {
+        let mut context = create_test_context();
+        let hostile = "evil\n### Injected Heading\n```\ninjected fenced block\n```\n\
+                        - fake list item";
+        context.skill_name = hostile.to_string();
+
+        let md = render_skill_md(&context).unwrap();
+
+        // Everything up to the frontmatter's closing "---" is YAML, not Markdown — a
+        // "```"-shaped line inside `name`'s YAML block-literal scalar is inert there, so
+        // only the *body* (after the frontmatter) is meaningful to scan for injected
+        // Markdown structure.
+        let body = md
+            .split("\n---\n")
+            .nth(1)
+            .expect("md must have a body after frontmatter");
+
+        // Only the static "## Usage"/"## Tools by Category" headings, the H1 title heading,
+        // and the one legitimate "### Test" category heading may start a line (4 total); the
+        // injected "### Injected Heading" must have been flattened into the H1 line instead
+        // of starting its own.
+        assert_eq!(
+            body.lines().filter(|l| l.starts_with('#')).count(),
+            4,
+            "hostile skill_name must not introduce a new heading line in the body: {body}"
+        );
+        assert_eq!(
+            body.lines()
+                .filter(|l| l.trim_start().starts_with("```"))
+                .count(),
+            8,
+            "hostile skill_name must not introduce a new fenced-code-block delimiter line in \
+             the body: {body}"
+        );
+        assert!(
+            body.contains("Injected Heading"),
+            "sanitized content must still render in the body, just inert"
+        );
+
+        assert_frontmatter_safe(&md, hostile, "Test server");
     }
 
     /// Pins that `HANDLEBARS` actually has strict mode enabled, rather than relying on

@@ -52,14 +52,26 @@ pub use parser::{MAX_FILE_SIZE, MAX_FRONTMATTER_SIZE, MAX_TOOL_FILES,
     extract_skill_metadata, scan_tools_directory};
 pub use template::{TemplateError, render_generation_prompt, render_skill_md};
 pub use types::{GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH,
-    SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata, SkillServerIdError,
-    SkillTool, ToolExample, validate_server_id};
+    MAX_SKILL_NAME_LENGTH, SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata,
+    SkillNameError, SkillServerIdError, SkillTool, ToolExample, validate_server_id,
+    validate_skill_name};
 
 pub use mcp_execution_core::MAX_SERVER_ID_LENGTH; // = 64, re-exported (issue #401)
 pub use mcp_execution_core::ServerIdSlugError as SkillServerIdError; // re-exported, not a separate mirror type
 pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError>;
 // Rules: non-empty, <= 64 bytes, only [a-z0-9-]. Delegates to
 // mcp_execution_core::validate_server_id_slug — the authoritative owner of this invariant.
+
+pub const MAX_SKILL_NAME_LENGTH: usize = 200; // chars, not bytes (own constant — skill_name has
+// no character-set restriction, so it isn't delegated to mcp-execution-core the way server_id
+// is). Counted in chars to agree with GenerateSkillParams::skill_name's schemars maxLength,
+// which JSON Schema also counts in Unicode code points (issue #413, S2).
+pub fn validate_skill_name(name: &str) -> Result<(), SkillNameError>;
+// Rules: non-empty (or non-blank) after trim, <= 200 chars (chars().count(), not str::len()).
+// No character-set restriction (free-form human-readable label). Called by both mcp-cli's
+// `skill` command and mcp-server's `generate_skill` tool before a custom skill_name override is
+// applied (issue #413; the emptiness check is S3, added because extract_skill_metadata rejects
+// a blank name unconditionally and the length check alone would have let one through).
 
 pub const MAX_TOOL_FILES: usize = 500;
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;       // 1 MiB, _meta.json size cap
@@ -139,6 +151,16 @@ without a category are grouped under `"uncategorized"`, sorted last.
 `list`, `get`, `search`, `update` (in that order), one per not-yet-seen
 category, then fills remaining slots.
 
+`skill_name` itself — unlike `ParsedToolFile`'s fields, which all flow
+through `group_by_category` — is set directly by `build_skill_context`
+(`{server_id}-progressive`, always safe: composed from `server_id`, an
+already-validated `[a-z0-9-]+` slug) or overridden afterward by a caller
+(`mcp-cli`'s `--skill-name` flag, or `generate_skill`'s `skill_name` MCP
+tool argument). Both override sites call `validate_skill_name` before
+assigning (issue #413) but do not sanitize at assignment time; sanitization
+instead happens per render surface, at the two places `skill_name` actually
+gets spliced into rendered text — see §5 and §6 below (issue #410, #411).
+
 ## 5. Prompt Injection Defense
 
 `build_generation_prompt` accumulates the categorized-tool-metadata section
@@ -150,6 +172,38 @@ forgery. Sanitization alone (flattening control characters) stops
 structural Markdown breakout; the explicit boundary additionally tells the
 LLM reader the enclosed text is inert data, not an instruction to follow —
 these are two distinct, both-necessary defenses (issue #288's fix).
+
+The prompt's trusted "Context" preamble (`**Server ID**`, `**Total Tools**`)
+sits outside the `<untrusted-data>` boundary — safe, since `server_id` is
+always a validated slug. `**Skill Name**` does *not* stay there: `skill_name`
+is exactly as attacker-controlled as tool metadata (the CLI's `--skill-name`
+flag or an MCP tool call argument), with no character-set restriction, so it
+gets the same two-layer treatment tool metadata gets rather than a weaker
+one. `build_generation_prompt` sanitizes it with `sanitize_untrusted_text`
+(stops structural Markdown breakout) and then includes the `**Skill Name**:
+...` line as the first line of `untrusted_metadata`, going through the same
+`wrap_untrusted_block` call as the categorized-tool-metadata section (stops
+the value from *reading* as an instruction to the LLM — sanitization alone
+does not). A value placed in the trusted preamble only gets the first of
+these two defenses, which is why it was moved rather than sanitized in
+place (issue #411, S1). The prompt's frontmatter instructions
+(`GENERATION_INSTRUCTIONS`) also no longer claim `description` "MUST be
+double-quoted": that stopped being true once §6's `render_skill_md` started
+delegating quoting style to `serde_norway` (issue #398), so the instructions
+now state the actual requirement — quote when the value contains `:`, `#`,
+a leading `-`, or a line break (issue #411, S2).
+
+`render_generation_prompt` — a second, separate prompt-rendering path
+through the embedded `skill-generation.hbs` template, exported alongside
+`render_skill_md` but not called from `mcp-cli` or `mcp-server` (the
+production `generate_skill` flow returns `context.generation_prompt`, built
+by `build_generation_prompt` above, not this function's output) — had the
+same gap: `skill_name` appeared twice in the template (an example `name:`
+line and a `# {{skill_name}}` heading) via plain double-stash, with no
+sanitization. It now builds a modified render context the same way
+`render_skill_md` does, overriding `skill_name` with the
+`sanitize_untrusted_text` output, and the template renders both occurrences
+with triple-stash (issue #411, S3).
 
 ## 6. `render_skill_md` — Direct Rendering (No LLM)
 
@@ -167,6 +221,18 @@ gets the same protection, closing a gap where only `description` was
 encoded. A `:`, a leading `-`, an embedded newline, or a C0 control
 character (NUL, BEL, ESC, ...) in either field cannot corrupt the
 frontmatter or inject a sibling YAML key (issue #398, S1+S3).
+
+`skill_name` is rendered a *second* time, independently of the frontmatter
+`Frontmatter` block above: as the body's `# {{{skill_name}}}` heading
+(triple-stash, same as tool descriptions). Being YAML-safe for the
+frontmatter does not make a value safe as a single Markdown heading line —
+an embedded newline that a YAML block-literal scalar carries just fine
+would still open a new heading, fenced code block, or list item once it
+lands in the body. `render_skill_md` overrides just the `skill_name` key of
+the Handlebars render context (not `context.skill_name` itself, which the
+`Frontmatter` block above is built from separately) with the output of
+`sanitize_untrusted_text`, so the frontmatter keeps the original value and
+the body gets a flattened one (issue #410).
 
 The rendered block is spliced into the template unmodified, with one
 exception: when `description` itself ends in `\n`, `to_yaml_block` appends
