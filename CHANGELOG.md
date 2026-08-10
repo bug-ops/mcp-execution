@@ -129,6 +129,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-skill`**: `render_skill_md`'s YAML frontmatter (`name`, `description`) is
+  now serialized as a whole via `serde_norway`'s emitter instead of hand-rolled escaping applied
+  only to `description`. The previous escaper covered just `\`, `"`, and `\n`/`\r`, leaving other
+  C0 control characters (NUL, BEL, ESC, ...) unescaped, and left `name` (`skill_name`, also
+  attacker-controlled) completely unencoded and open to frontmatter key injection (#398). As a
+  side effect, a generated SKILL.md's `description:` line is no longer always double-quoted — it
+  may now be plain, single-quoted, or a block literal depending on content, which changes the
+  byte size of a frontmatter block near the existing `MAX_FRONTMATTER_SIZE` (8 KiB) cap.
 - **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
   `mcp-execution-codegen`'s `TemplateEngine`. Without it, a template referencing a typo'd or
   removed field silently rendered an empty string instead of failing at render time.
