@@ -48,8 +48,13 @@ related:
      `mcp-server` for identical error-message redaction) and
      `contains_parent_dir` (used by both, plus `mcp-cli`, for identical
      `..`-traversal checks); `validate_path_segment` backs `ServerId`/
-     `ToolName` and, since #395, `confinement::resolve_confined_path`
-     internally.
+     `ToolName`'s own baseline path-segment invariant and, since #395, is
+     also used internally by `confinement::resolve_confined_path` as its
+     generic (looser) segment check. `types::validate_server_id_slug`
+     (issue #401) is the separate, stricter charset check both crates'
+     `server_id` confinement now additionally enforces *before* calling
+     into `resolve_confined_path` (see below) — `resolve_confined_path`
+     itself stays generic and does not know about the slug rule.
    - `confinement` — `resolve_confined_path` (issue #395), the shared
      component-by-component resolve-and-confine filesystem walk used by both
      `mcp-skill::resolve_skill_output_path` and
@@ -86,9 +91,33 @@ bypassed by an infallible conversion or a direct-derive deserialize. Without
 `Self(raw_string)` directly since the derived impl lives in this same module and privacy
 doesn't block it — this is exactly the gap that made `mcp_execution_introspector::ServerInfo`/
 `ToolInfo` (which derive `Deserialize` and hold a `ServerId`/`ToolName` field) deserializable
-with an unvalidated id/name before this was added. `mcp-skill::validate_server_id`
-layers a stricter `[a-z0-9-]`-charset + length check on top of this baseline for its own
-contract; it does not replace it.
+with an unvalidated id/name before this was added.
+
+### `validate_server_id_slug` / `ServerIdSlugError` (`src/types.rs`, issue #401)
+
+```rust
+pub const MAX_SERVER_ID_LENGTH: usize = 64;
+pub enum ServerIdSlugError { Empty, TooLong { len: usize, limit: usize }, InvalidCharacters }
+pub fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError>;
+// Rules: 1-64 bytes, only `[a-z0-9-]` (ASCII lowercase letters, digits, hyphen)
+```
+A stricter, opt-in invariant layered *on top of* `ServerId::new`'s baseline — not a replacement
+for it, and not enforced by `ServerId::new`/`Deserialize` itself. `ServerId::new` deliberately
+stays permissive (issue #311: a raw `mcp.json` key like `claude_ai_Gmail` is a valid `ServerId`
+but not a valid slug — callers that only need a safe path segment, e.g. `mcp-cli`'s config-key
+lookup, must keep accepting non-slug-shaped ids). Callers that need the id to become a directory
+name or generated-code identifier — where entry validation and filesystem confinement must
+agree on the exact same rule — call this function in addition to `ServerId::new`.
+
+This is the single, authoritative home for the rule previously hand-rolled independently in
+`mcp-execution-skill::validate_server_id`/`SkillServerIdError` (which now delegates to it —
+`SkillServerIdError` is a re-export of `ServerIdSlugError`, not a separate mirror type, so the
+two crates' error wording cannot drift apart) and imported piecemeal by
+`mcp-execution-server`'s tool handlers. It also now backs both crates' `server_id`
+output-confinement checks (`mcp-server::output_dir`, `mcp-skill::output_path`), which previously
+confined using the looser `validate_path_segment` even though entry validation already gated
+with the stricter rule — see [[../server/spec#Output directory resolution]] and
+[[../skill/spec]].
 
 ### `Error` / `Result<T>` (`src/error.rs`)
 
@@ -281,10 +310,22 @@ pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir to "~
 pub fn validate_path_segment(segment: &str) -> Option<Component<'_>>; // single plain component, no "..", no separator
 pub fn contains_parent_dir(path: &Path) -> bool; // true if any component is `..`
 ```
-`validate_path_segment` backs `ServerId::new`/`ToolName::new`'s own invariant (see above) and,
-since #395, is used internally by `confinement::resolve_confined_path` to validate the `segment`
-(`server_id`) it's given — `mcp-skill` and `mcp-server` no longer call it directly, since the
-confinement walk itself validates `server_id` as part of resolving it.
+`validate_path_segment` backs `ServerId::new`/`ToolName::new`'s own baseline invariant (see
+above) and, since #395, is used internally by `confinement::resolve_confined_path` as its own
+generic, looser structural check on the `segment` (`server_id`) it's given —
+`resolve_confined_path` stays a generic reusable primitive, not coupled to the `server_id`
+domain concept specifically. It is *no longer* the primary rule
+`mcp-skill::resolve_skill_output_path` and `mcp-server::output_dir::resolve_output_dir` gate
+`server_id` confinement with directly — since issue #401, both call `types::validate_server_id_slug`
+up front, before calling into `resolve_confined_path` at all (the same rule their respective
+entry-point handlers already validate with), so the domain-specific slug rule and the generic
+structural rule both apply, in that order. Neither confinement helper calls
+`validate_path_segment` directly anymore; `resolve_confined_path`'s internal re-check (and, on
+its `ConfinementError::InvalidSegment` path, each crate's `From<ConfinementError>` impl
+re-deriving a `ServerIdSlugError` by calling `validate_server_id_slug` again) exist purely as
+defense-in-depth against a `server_id` that reaches the walk some other way, or after a future
+change loosens the caller-side check — not because either helper still leans on
+`validate_path_segment` as its primary gate.
 `contains_parent_dir` (issue #289) is the shared `..`-only check used by
 `mcp-skill::output_path`, `mcp-server::output_dir`, and
 `mcp-cli::commands::skill::has_path_traversal` for the narrower "is any
@@ -427,8 +468,8 @@ data into text an LLM later reads as instructions — see
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result` |
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix` (renders them into the generated runtime bridge template) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen` |
-| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
+| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
+| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
 | `mcp-cli` | `cli::{OutputFormat, ExitCode}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth

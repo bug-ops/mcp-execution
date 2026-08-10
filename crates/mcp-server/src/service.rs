@@ -17,13 +17,15 @@ use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::untrusted::{
     MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text, wrap_untrusted_block,
 };
-use mcp_execution_core::{ServerConfig, ServerId, sanitize_path_for_error};
+use mcp_execution_core::{
+    ServerConfig, ServerId, sanitize_path_for_error, validate_server_id_slug,
+};
 use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::{Introspector, ToolInfo};
 use mcp_execution_skill::{
     GenerateSkillParams, MAX_TOOL_FILES, OutputPathError, SaveSkillParams, SaveSkillResult,
     ScanError, build_skill_context, extract_skill_metadata, resolve_skill_output_path,
-    scan_tools_directory, validate_server_id,
+    scan_tools_directory,
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
@@ -393,7 +395,7 @@ impl GeneratorService {
         // an attacker-controlled string into a structured field before it's validated risks
         // log injection, so an empty field on this path is accepted as a trade-off, not an
         // oversight.
-        validate_server_id(&params.server_id)
+        validate_server_id_slug(&params.server_id)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
 
         // Extract server_id before consuming params
@@ -891,7 +893,7 @@ impl GeneratorService {
     ) -> Result<CallToolResult, McpError> {
         // Validate server_id format and length. As in `introspect_server`, the span
         // field is only recorded once validation succeeds (see the comment there).
-        validate_server_id(&params.server_id)
+        validate_server_id_slug(&params.server_id)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         tracing::Span::current().record("server_id", tracing::field::display(&params.server_id));
 
@@ -1040,7 +1042,7 @@ impl GeneratorService {
 
         // Validate server_id format and length. As in `introspect_server`, the span
         // field is only recorded once validation succeeds (see the comment there).
-        validate_server_id(&params.server_id)
+        validate_server_id_slug(&params.server_id)
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         tracing::Span::current().record("server_id", tracing::field::display(&params.server_id));
 
@@ -1077,11 +1079,12 @@ impl GeneratorService {
         )
         .await
         .map_err(|e| match e {
-            // `server_id` was already validated above by `validate_server_id`, which is
-            // strictly tighter than `resolve_skill_output_path`'s internal check, so this
-            // arm is unreachable from this call site — kept distinct (rather than folded
-            // into the `output_path` arm below) because `resolve_skill_output_path` is
-            // public API other callers may reach without that upstream validation.
+            // `server_id` was already validated above via `validate_server_id_slug`, which
+            // `resolve_skill_output_path`'s internal check now also delegates to (see
+            // `output_path::validate_server_id_segment`), so this arm is unreachable from this
+            // call site — kept distinct (rather than folded into the `output_path` arm below)
+            // because `resolve_skill_output_path` is public API other callers may reach without
+            // that upstream validation.
             OutputPathError::InvalidServerId { .. } => {
                 McpError::invalid_params(format!("Invalid server_id: {e}"), None)
             }
@@ -2205,7 +2208,7 @@ mod tests {
 
     /// A zero timeout is a client input error, not a server-side connection
     /// failure — it must surface as `INVALID_PARAMS`, matching the sibling
-    /// `validate_server_id` behavior, not `internal_error`.
+    /// `validate_server_id_slug` behavior, not `internal_error`.
     #[tokio::test]
     async fn test_introspect_server_zero_connect_timeout_is_invalid_params() {
         use tempfile::TempDir;

@@ -47,7 +47,10 @@ pub mod untrusted;
 pub use error::{Error, ResourceKind, Result};
 
 // Re-export domain types
-pub use types::{ServerId, ServerIdError, ToolName, ToolNameError};
+pub use types::{
+    MAX_SERVER_ID_LENGTH, ServerId, ServerIdError, ServerIdSlugError, ToolName, ToolNameError,
+    validate_server_id_slug,
+};
 
 // Re-export server configuration types
 pub use server_config::{ServerConfig, ServerConfigBuilder, Transport};

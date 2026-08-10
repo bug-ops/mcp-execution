@@ -22,7 +22,7 @@
 
 use mcp_execution_core::{
     ConfinementError, ConfinementTarget, resolve_confined_path, sanitize_path_for_error,
-    validate_path_segment,
+    validate_server_id_slug,
 };
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
@@ -30,12 +30,18 @@ use thiserror::Error;
 /// Errors from resolving and confining an `introspect_server` output directory.
 #[derive(Debug, Error)]
 pub enum OutputDirError {
-    /// `server_id` is empty or is not a single plain path segment (e.g. it contains a `..`,
-    /// `/`, or is otherwise not a bare directory name).
-    #[error("server_id must be a single non-empty path segment: {server_id:?}")]
+    /// `server_id` failed [`mcp_execution_core::validate_server_id_slug`]'s slug-format check
+    /// (e.g. it is empty, too long, or contains a character other than a lowercase ASCII
+    /// letter, digit, or hyphen). `source` carries the precise reason; the message is derived
+    /// from it rather than hardcoded, so it can't independently drift from the actual rule
+    /// enforced.
+    #[error("invalid server_id {server_id:?}: {source}")]
     InvalidServerId {
         /// The rejected server id.
         server_id: String,
+        /// The specific slug-format violation.
+        #[source]
+        source: mcp_execution_core::ServerIdSlugError,
     },
 
     /// The caller supplied an absolute `output_dir`, which would override the base directory
@@ -100,11 +106,26 @@ pub enum OutputDirError {
 /// [`OutputDirError::NotADirectory`] here (the terminal component `resolve_output_dir` walks is
 /// always a directory), which is the only variant this crate names differently than
 /// `mcp-execution-skill`'s equivalent `From` impl.
+///
+/// [`ConfinementError::InvalidSegment`] doesn't carry a [`mcp_execution_core::ServerIdSlugError`]
+/// (the underlying walk only knows the looser [`mcp_execution_core::validate_path_segment`]
+/// rule), so this re-derives one by re-running [`validate_server_id_slug`] on the rejected
+/// segment. `resolve_output_dir` already validates with `validate_server_id_slug` before this
+/// path can be reached, so in practice that second call always fails the same way the first one
+/// did — `unwrap_or` never actually falls back — but doing it this way keeps this `From` impl
+/// itself panic-free instead of `expect`-ing an invariant that only holds because of a check made
+/// somewhere else.
 impl From<ConfinementError> for OutputDirError {
     fn from(err: ConfinementError) -> Self {
         match err {
             ConfinementError::InvalidSegment { segment } => {
-                Self::InvalidServerId { server_id: segment }
+                let source = validate_server_id_slug(&segment)
+                    .err()
+                    .unwrap_or(mcp_execution_core::ServerIdSlugError::InvalidCharacters);
+                Self::InvalidServerId {
+                    server_id: segment,
+                    source,
+                }
             }
             ConfinementError::SegmentIsSymlink { path } => Self::ServerDirIsSymlink { path },
             ConfinementError::Escape { path } => Self::Escape { path },
@@ -155,15 +176,18 @@ pub fn relative_subpath(output_dir: Option<&Path>) -> Result<PathBuf, OutputDirE
 
 /// Resolves an `introspect_server` output directory, confining it to `base_dir/server_id`.
 ///
-/// `server_id` is validated as a single plain path segment **before** `output_dir` is checked at
-/// all, matching this crate's pre-#395 error precedence: a caller supplying both an invalid
-/// `server_id` and an invalid `output_dir` sees [`OutputDirError::InvalidServerId`], not a
-/// relative-path error. `server_id` and `output_dir`'s directory components are then walked and
-/// confinement-checked by the shared [`resolve_confined_path`], which defensively re-validates
-/// `server_id` itself as its first step - even though it is already validated twice by the time
-/// it gets there (`service::introspect_server`'s tighter `validate_server_id` charset check, then
-/// the early check this function performs) - so `resolve_confined_path` stays self-defending
-/// against a `server_id` that reaches it some other way. `output_dir`, when supplied, is treated
+/// `server_id` is validated against the same slug rule entry validation gates with
+/// ([`validate_server_id_slug`]) **before** `output_dir` is checked at all, matching this crate's
+/// pre-#395 error precedence: a caller supplying both an invalid `server_id` and an invalid
+/// `output_dir` sees [`OutputDirError::InvalidServerId`], not a relative-path error. `server_id`
+/// and `output_dir`'s directory components are then walked and confinement-checked by the shared
+/// [`resolve_confined_path`], which defensively re-validates `server_id` itself as its first step
+/// (against the looser structural [`mcp_execution_core::validate_path_segment`] rule) - even
+/// though it is already validated twice by the time it gets there
+/// (`service::introspect_server`'s `validate_server_id_slug` charset check, then the early check
+/// this function performs) - so `resolve_confined_path` stays self-defending against a
+/// `server_id` that reaches it some other way, or after a future change loosens one of the
+/// caller-side checks. `output_dir`, when supplied, is treated
 /// as *relative* to `base_dir/server_id`: an absolute path or a path containing a `..` component
 /// is rejected by [`relative_subpath`] before any filesystem work happens. `None` resolves to
 /// `base_dir/server_id` itself.
@@ -195,11 +219,11 @@ pub fn relative_subpath(output_dir: Option<&Path>) -> Result<PathBuf, OutputDirE
 ///
 /// # Errors
 ///
-/// Returns [`OutputDirError`] if `server_id` is empty or not a single plain path segment, if
-/// `output_dir` is absolute or contains a `..` component, if `server_id`'s own directory already
-/// exists as a symlink, if the resolved path escapes `base_dir`, if a required directory could
-/// not be created, or if a path component that must be a directory already exists as the wrong
-/// kind of entry.
+/// Returns [`OutputDirError`] if `server_id` fails [`validate_server_id_slug`], if `output_dir`
+/// is absolute or contains a `..` component, if `server_id`'s own directory already exists as a
+/// symlink, if the resolved path escapes `base_dir`, if a required directory could not be
+/// created, or if a path component that must be a directory already exists as the wrong kind of
+/// entry.
 pub async fn resolve_output_dir(
     base_dir: &Path,
     server_id: &str,
@@ -207,12 +231,12 @@ pub async fn resolve_output_dir(
 ) -> Result<PathBuf, OutputDirError> {
     // Validated again, I/O-free, before `relative_subpath` so an invalid `server_id` is reported
     // even when `output_dir` is also invalid - matching this crate's pre-#395 error precedence
-    // (`resolve_confined_path` re-validates it a second time as part of its own walk).
-    if validate_path_segment(server_id).is_none() {
-        return Err(OutputDirError::InvalidServerId {
-            server_id: server_id.to_string(),
-        });
-    }
+    // (`resolve_confined_path` re-validates it a second time, against the looser structural rule,
+    // as part of its own walk).
+    validate_server_id_slug(server_id).map_err(|source| OutputDirError::InvalidServerId {
+        server_id: server_id.to_string(),
+        source,
+    })?;
 
     let relative = relative_subpath(output_dir)?;
 
@@ -372,6 +396,44 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, OutputDirError::InvalidServerId { .. }));
+    }
+
+    /// #401 regression: a `server_id` that is a valid, path-segment-safe `ServerId` but not
+    /// slug-shaped (uppercase letters) must be rejected here too, not just at
+    /// `service::introspect_server`'s entry gate — entry validation and confinement must agree
+    /// on the exact same rule.
+    #[tokio::test]
+    async fn server_id_with_uppercase_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_output_dir(base.path(), "My-Server", None)
+            .await
+            .unwrap_err();
+        // Asserts on the specific reason, not just the outer variant, so a regression that
+        // rejects "My-Server" for the wrong cause (or with stale wording) is still caught.
+        assert!(matches!(
+            err,
+            OutputDirError::InvalidServerId {
+                source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
+                ..
+            }
+        ));
+    }
+
+    /// #401 regression: same as above, for an underscore (also a valid `ServerId` character but
+    /// not a valid slug character).
+    #[tokio::test]
+    async fn server_id_with_underscore_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_output_dir(base.path(), "my_server", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            OutputDirError::InvalidServerId {
+                source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

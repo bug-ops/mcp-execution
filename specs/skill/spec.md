@@ -55,9 +55,11 @@ pub use types::{GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH,
     SaveSkillParams, SaveSkillResult, SkillCategory, SkillMetadata, SkillServerIdError,
     SkillTool, ToolExample, validate_server_id};
 
-pub const MAX_SERVER_ID_LENGTH: usize = 64;
+pub use mcp_execution_core::MAX_SERVER_ID_LENGTH; // = 64, re-exported (issue #401)
+pub use mcp_execution_core::ServerIdSlugError as SkillServerIdError; // re-exported, not a separate mirror type
 pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError>;
-// Rules: non-empty, <= 64 bytes, only [a-z0-9-]
+// Rules: non-empty, <= 64 bytes, only [a-z0-9-]. Delegates to
+// mcp_execution_core::validate_server_id_slug — the authoritative owner of this invariant.
 
 pub const MAX_TOOL_FILES: usize = 500;
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;       // 1 MiB, _meta.json size cap
@@ -252,19 +254,29 @@ name before any filesystem work; the rest is delegated with
 `SkillMetadataError`: `MissingFrontmatter`, `FrontmatterTooLarge`,
 `InvalidYaml`, `MissingField`.
 
-`OutputPathError`: `InvalidServerId`, `AbsolutePath`, `ParentTraversal`,
+`OutputPathError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
+confinement now validates `server_id` via `mcp_execution_core::validate_server_id_slug`, the
+same rule `mcp-server`'s tool handlers gate entry with, rather than the looser
+`validate_path_segment`; `source` carries the precise violation so the message can't drift from
+the actual rule enforced), `AbsolutePath`, `ParentTraversal`,
 `InvalidPath`, `ServerIdIsSymlink`, `Escape`, `NotADirectory`, `NotAFile`,
 `CreateDir`, `Io`.
 
-`SkillServerIdError`: `Empty`, `TooLong { len, limit }`, `InvalidCharacters`.
+`SkillServerIdError`: re-export of `mcp_execution_core::ServerIdSlugError` — `Empty`,
+`TooLong { len, limit }`, `InvalidCharacters` (issue #401; previously a hand-rolled,
+structurally identical mirror type with its own `#[error(...)]` wording, which had let this
+crate's error messages drift from `mcp-core`'s/`mcp-server`'s for identical input).
 
 ## 10. Cross-Crate Contracts
 
 - **Consumes** `mcp-core`: `metadata::{METADATA_FILE_NAME,
   METADATA_SCHEMA_VERSION, ServerMetadata}`, `sanitize_path_for_error`,
+  `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`,
   `untrusted::*`, and (since #395) `confinement::{ConfinementError,
   ConfinementTarget, resolve_confined_path}` for `resolve_skill_output_path`'s
-  walk.
+  walk — `validate_server_id_slug` gates `server_id` before that walk starts
+  (issue #401); `validate_path_segment` is no longer called directly by this
+  crate.
 - **Used by** `mcp-cli skill` (directly calls `scan_tools_directory` +
   `build_skill_context` + `render_skill_md`, no LLM/prompt step — see
   [[../cli/spec#skill]]).
