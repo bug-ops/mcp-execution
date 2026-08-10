@@ -12,14 +12,14 @@ keywords = ["mcp", "skill", "claude-code", "codegen"]
 categories = ["development-tools"]
 
 [dependencies]
+handlebars = { workspace = true }
 mcp-execution-core = { workspace = true }
 regex = { workspace = true }
-handlebars = { workspace = true }
-thiserror = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_norway = { workspace = true }
-schemars = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
 
