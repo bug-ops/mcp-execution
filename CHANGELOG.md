@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`,
   `introspect.rs`, and `skill.rs`'s command handlers. Behavior-preserving refactor only — no
   change to CLI output or exit codes (#368, #377).
+- **`mcp-execution-server`**: when `save_categorized_tools`'s post-consume pipeline fails *and*
+  the subsequent `StateManager::restore` also can't put the session back (the pending-session
+  table already back at its `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` caps), the error
+  returned to the client now says so explicitly, instead of reading like an ordinary transient
+  failure safe to retry with the same `session_id`. Previously this compound failure was only
+  logged server-side; the client had no way to tell it apart from a `restore` that succeeded
+  short of a second failed attempt. The message now also names the actual `restore` failure
+  cause (`AtCapacity` vs `MemoryBudgetExceeded`) instead of a single hardcoded wording, and
+  `data` carries a machine-checkable `session_restore_failure_reason` field so a programmatic
+  client doesn't have to substring-match prose (#387).
 
 ### Fixed
 
