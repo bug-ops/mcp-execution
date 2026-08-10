@@ -11,6 +11,9 @@ description = "SKILL.md generation for Claude Code integration with MCP tools"
 keywords = ["mcp", "skill", "claude-code", "codegen"]
 categories = ["development-tools"]
 
+[lints]
+workspace = true
+
 [dependencies]
 handlebars = { workspace = true }
 mcp-execution-core = { workspace = true }
@@ -26,6 +29,3 @@ tracing = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
-
-[lints]
-workspace = true

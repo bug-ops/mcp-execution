@@ -11,6 +11,9 @@ description = "MCP server for progressive loading TypeScript code generation"
 keywords = ["mcp", "server", "codegen", "progressive-loading"]
 categories = ["development-tools"]
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "mcp-execution"
 path = "src/main.rs"
@@ -46,6 +49,3 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-
-[lints]
-workspace = true

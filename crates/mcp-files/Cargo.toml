@@ -14,6 +14,10 @@ categories = ["development-tools", "filesystem"]
 [lints]
 workspace = true
 
+[features]
+dhat-heap = ["dhat"]
+parallel = ["dep:rayon"]
+
 [dependencies]
 dhat = { workspace = true, optional = true }
 dirs.workspace = true
@@ -24,10 +28,6 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
-
-[features]
-dhat-heap = ["dhat"]
-parallel = ["dep:rayon"]
 
 [[bench]]
 name = "vfs_benchmarks"

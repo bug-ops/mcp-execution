@@ -89,6 +89,14 @@ jobs:
       - name: Check formatting (nightly)
         run: cargo +nightly fmt --all -- --check
 
+      - name: Install cargo-sort
+        uses: taiki-e/install-action@v2.85.10
+        with:
+          tool: cargo-sort
+
+      - name: Check Cargo.toml dependency order
+        run: cargo sort --check --workspace --order package,lints,workspace,lib,bin,features,dependencies,build-dependencies,dev-dependencies
+
       - name: Clippy (all targets, all features)
         run: cargo +stable clippy --all-targets --all-features --workspace
 
