@@ -77,6 +77,7 @@ impl GeneratedCode {
     ///
     /// ```
     /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
+    /// use mcp_execution_core::Error;
     ///
     /// let mut code = GeneratedCode::new();
     /// code.add_file(GeneratedFile {
@@ -93,7 +94,7 @@ impl GeneratedCode {
     ///         content: "export const x = 1;".to_string(),
     ///     })
     ///     .unwrap_err();
-    /// assert!(err.is_duplicate_generated_file_path());
+    /// assert!(matches!(err, Error::DuplicateGeneratedFilePath { .. }));
     /// ```
     pub fn add_file(&mut self, file: GeneratedFile) -> Result<()> {
         if self.files.iter().any(|existing| existing.path == file.path) {
@@ -323,7 +324,7 @@ mod tests {
             })
             .unwrap_err();
 
-        assert!(err.is_duplicate_generated_file_path());
+        assert!(matches!(err, Error::DuplicateGeneratedFilePath { .. }));
         // The original file must be left untouched, not silently overwritten.
         assert_eq!(code.file_count(), 1);
         assert_eq!(code.files[0].content, "first");

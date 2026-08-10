@@ -15,7 +15,8 @@ use crate::types::{
 };
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::untrusted::{
-    MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text, wrap_untrusted_block,
+    MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_inline, sanitize_untrusted_text,
+    wrap_untrusted_block,
 };
 use mcp_execution_core::{
     ServerConfig, ServerId, sanitize_path_for_error, validate_server_id_slug,
@@ -1523,9 +1524,9 @@ fn wrap_introspect_result(json: &str) -> String {
 }
 
 /// Computes the display form of `raw_name` that `introspect_server` shows Claude for a tool's
-/// `name` field: [`sanitize_untrusted_text`] followed by the same `&`/`<`/`>` entity-escaping
-/// [`wrap_untrusted_block`] applies afterward to the whole serialized response (see its
-/// escaping-order doc comment).
+/// `name` field: [`sanitize_untrusted_inline`] (identical to [`sanitize_untrusted_text`]
+/// followed by the same `&`/`<`/`>` entity-escaping [`wrap_untrusted_block`] applies afterward to
+/// the whole serialized response — see its escaping-order doc comment).
 ///
 /// `build_introspected_summaries` deliberately does *not* apply this escaping itself — it only
 /// sanitizes control characters — because `wrap_introspect_result` escapes the entire
@@ -1547,10 +1548,7 @@ fn wrap_introspect_result(json: &str) -> String {
 /// decoded literal form instead of this escaped one gets a hard "not found" error — the exact
 /// #307 S2 symptom `display_forms` existed to avoid.
 fn display_tool_name(raw_name: &str) -> String {
-    sanitize_untrusted_text(raw_name, MAX_UNTRUSTED_FIELD_LEN)
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    sanitize_untrusted_inline(raw_name)
 }
 
 /// Extracts parameter names from a JSON Schema.

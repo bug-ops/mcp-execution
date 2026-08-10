@@ -288,23 +288,6 @@ impl Error {
     pub const fn is_resource_limit_exceeded(&self) -> bool {
         matches!(self, Self::ResourceLimitExceeded { .. })
     }
-
-    /// Returns `true` if this is a duplicate-generated-file-path error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_core::Error;
-    ///
-    /// let err = Error::DuplicateGeneratedFilePath {
-    ///     path: "index.ts".to_string(),
-    /// };
-    /// assert!(err.is_duplicate_generated_file_path());
-    /// ```
-    #[must_use]
-    pub const fn is_duplicate_generated_file_path(&self) -> bool {
-        matches!(self, Self::DuplicateGeneratedFilePath { .. })
-    }
 }
 
 /// Result type alias for MCP operations.
@@ -405,11 +388,10 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_generated_file_path_detection() {
+    fn test_duplicate_generated_file_path_display() {
         let err = Error::DuplicateGeneratedFilePath {
             path: "index.ts".to_string(),
         };
-        assert!(err.is_duplicate_generated_file_path());
         assert!(!err.is_resource_limit_exceeded());
         let display = format!("{err}");
         assert!(display.contains("index.ts"));

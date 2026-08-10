@@ -98,10 +98,11 @@ deliberately passes through by design (see its own doc comment). The Allowed set
 detect homoglyphs (e.g. Cyrillic `а` U+0430 is Allowed and renders identically to Latin `a`) —
 that is an explicitly out-of-scope, separate protection. A path-traversal attempt is still
 reported as `InvalidFormat` (checked first), not `DisallowedCharacter`. `DisallowedCharacter`'s
-`code_point` is the `u32` Unicode scalar value of the first rejected character; the `{:?}`
-`Debug` formatting used in both variants' error messages escapes control/format code points in
-the rejected string, so an attacker-controlled value can't smuggle an escape sequence into the
-rendered error. There is no `From<String>`/`From<&str>` impl, and
+`code_point` is the `u32` Unicode scalar value of the first rejected character, computed from
+the *raw* (unsanitized) input so it is not thrown off by construction-time sanitization (below).
+The `{:?}` `Debug` formatting used in both variants' error messages escapes control/format code
+points in the rejected string, so an attacker-controlled value can't smuggle an escape sequence
+into the rendered error. There is no `From<String>`/`From<&str>` impl, and
 `#[serde(try_from = "String")]` (backed by `impl TryFrom<String>` delegating to `new`) routes
 `Deserialize` through `new` too — `new` is the only construction path, including through
 deserialization, so neither invariant can be bypassed by an infallible conversion or a
@@ -152,6 +153,41 @@ one place a `ServerId`'s raw `&str` form reaches generated code) performs its ow
 length-bound/defense-in-depth pass regardless of either type's construction-time gate, since
 generated code is a sink both hand-built and introspected values can reach
 ([[../codegen/spec#7. Injection Defense (Sanitization Pipeline)]]).
+
+Since issue #446, the `id`/`name` field stored in both `InvalidFormat` and `DisallowedCharacter`
+holds a *sanitized* form of the rejected input, not the raw one: `new` runs the raw value through
+`untrusted::sanitize_untrusted_inline` (`sanitize_untrusted_text`, capped at
+`MAX_UNTRUSTED_FIELD_LEN` **chars**, then `&`/`<`/`>` entity-escaped) before constructing the
+error variant, in every branch that stores the input — the `code_point` computation above still
+reads the raw value first. This closes the same class of gap #433 closed for tool-name
+collisions: `Identifier_Status=Allowed` rejects a tool name containing `&`/`<`/`>`/control
+characters/bidi overrides, but the rejection's own error message previously echoed that same
+raw, disallowed substring back into `Display`/`Debug`-formatted text that reaches an LLM (via
+`mcp-introspector`'s `Error::ValidationError` mapping and `mcp-server`'s
+`caller_or_internal_error` — [[../server/spec]]) or a terminal (`mcp-cli`, `tracing`), letting a
+malicious server forge Markdown structure, HTML-like tags (including
+`untrusted::wrap_untrusted_block`'s own `</untrusted-data>` delimiter shape), or an unbounded
+message (`ServerId::new` has no length bound of its own).
+
+The cap is on the *pre-escaping* char count, not the final message size: escaping runs after
+truncation, and each escaped `&` expands to `&amp;` (5x), so a densely-escapable input (e.g. 5000
+`&` characters) still yields a bounded but noticeably larger message than
+`MAX_UNTRUSTED_FIELD_LEN` alone suggests — up to `MAX_UNTRUSTED_FIELD_LEN * 5` bytes of escaped
+content, observed at ~2600 bytes for the full error message in the all-`&` case, not the ~500-700
+bytes a naive reading of the cap implies.
+
+Every variant's `#[error(...)]` formats the stored field with `{:?}` (`Debug`), not `{}`
+(`Display`) — a required second layer of defense, not incidental. `sanitize_untrusted_inline`
+deliberately leaves some characters untouched (e.g. U+200C/U+200D — see
+`sanitize_untrusted_text`'s own doc comment), so `Debug`'s own escaping of those characters
+(`\u{200d}` rather than the literal) is what actually closes the invisible-payload channel
+#425/#430 closed for those residual cases; using `Display` here would silently reopen it.
+
+Emoji is a deliberate exception, not neutralized by this fix — see the edge-case table below.
+Human `mcp-cli` users now see the entity-escaped form too (e.g. `invalid server id
+"my&amp;server"` rather than `"my&server"`) when a rejected id/name contains `&`/`<`/`>` — an
+accepted trade-off of applying one sanitization path uniformly to both the LLM- and
+human-facing surfaces, rather than maintaining two different escaping rules for the same field.
 
 ### `validate_server_id_slug` / `ServerIdSlugError` (`src/types.rs`, issue #401)
 
@@ -215,8 +251,7 @@ adding variants here: `mcp-files` has no direct dependency on `mcp-core` (only a
 via `mcp-execution-codegen`), so sharing this enum would mean adding a new direct dependency on
 `mcp-core` for a single error variant — see [[../files/spec#7. Error Conditions]].
 Most variants have an `is_*` predicate (`is_security_error`, `is_validation_error`,
-`is_script_generation_error`, `is_resource_limit_exceeded`,
-`is_duplicate_generated_file_path`). No predicate exists for
+`is_script_generation_error`, `is_resource_limit_exceeded`). No predicate exists for
 `InvalidArgument`/`SerializationError` — callers match directly.
 `ConnectionFailed`/`Timeout` have no `is_connection_error`/`is_timeout` predicate either
 (removed, issue #427, mirroring #199/#202's identical dead-predicate-removal precedent): their
@@ -226,6 +261,18 @@ than through a predicate — adding a variant there is a compile error at that `
 guarantee an `if`/`else if` predicate chain would silently lose. `ScriptGenerationError.source`
 is the vehicle for preserving an inner `Error`'s own classification through wrapping (see
 `mcp-cli`'s `classify_core_error`, which recurses into it — [[../cli/spec]]).
+`DuplicateGeneratedFilePath` likewise has no `is_duplicate_generated_file_path` predicate
+(removed, issue #445): it had no production call site anywhere in the workspace, only test
+call sites (`mcp-core`'s own doc-test/unit test, and `mcp-codegen`'s `GeneratedCode::add_file`
+tests), which now match the variant directly instead. `is_security_error` and
+`is_validation_error` were both flagged as candidates by the same issue but were kept: unlike
+the removed predicate, both are used together at a single real production call site,
+`mcp-server`'s `caller_or_internal_error` ([[../server/spec]]) —
+`err.is_validation_error() || err.is_security_error()` — which classifies a `ValidationError` or
+`SecurityViolation` as a caller-facing `invalid_params` response rather than an internal error.
+The issue's premise ("zero call sites anywhere, including tests") was correct for
+`is_duplicate_generated_file_path` but factually wrong for `is_security_error`; do not re-attempt
+removing either predicate in a future cleanup pass without re-checking this call site first.
 
 `Error::DuplicateGeneratedFilePath { path: String }` (issue #312) is raised by
 `mcp-execution-codegen`'s `GeneratedCode::add_file` when a second file is added at a path
@@ -614,15 +661,23 @@ absorbed into the token's "scheme" and survives, exact parity with what
 ```rust
 pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, bidi override/isolate controls, and U+200B to spaces; removes bidi marks, the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and U+2060-U+2064 entirely; leaves U+200C/U+200D untouched; THEN, on the filtered result, drops all variation selectors if their whole-value total exceeds 16, else drops any run of more than 2 consecutive ones; truncates by char count
+pub fn sanitize_untrusted_inline(s: &str) -> String;  // sanitize_untrusted_text(s, MAX_UNTRUSTED_FIELD_LEN), then escapes &, <, > in place — same escaping as wrap_untrusted_block's body but with no surrounding boundary markers
 pub fn wrap_untrusted_block(context: &str, body: &str) -> String;  // escapes &, <, > in body; wraps in <untrusted-data>...</untrusted-data>
 ```
 Threat model: an introspected MCP server's tool names/descriptions/keywords
-are attacker-controlled from this project's perspective. Both functions
-exist because `mcp-skill` (SKILL.md + prompt generation) and
+are attacker-controlled from this project's perspective. Both `sanitize_untrusted_text`/
+`wrap_untrusted_block` exist because `mcp-skill` (SKILL.md + prompt generation) and
 `mcp-server` (introspection summaries returned to Claude) both embed this
 data into text an LLM later reads as instructions — see
 [[../server/spec#Prompt injection defense]] and
 [[../skill/spec#Prompt injection defense]].
+
+Since issue #446, `sanitize_untrusted_inline` (added because `wrap_untrusted_block`'s boundary
+markers don't fit a single-line message like an error's `Display` output) is used by
+`ServerId`/`ToolName`'s error-construction sites ([[#ServerId / ToolName (src/types.rs)]]) to
+sanitize and escape a rejected identifier before it is stored in the error, since that value is
+attacker-controlled and reaches LLM-facing text with no `wrap_untrusted_block` boundary around
+it.
 
 Since issue #422, `sanitize_untrusted_text` also neutralizes the Unicode bidirectional-formatting
 characters a "Trojan Source"-style attack relies on to visually reorder or relabel text for a
@@ -796,6 +851,8 @@ and byte-preserving of each variant's existing `Display` message.
 | `resolve_confined_path` terminal component exists as the other `ConfinementTarget` kind (file where `Directory` expected, or vice versa) | `WrongTargetKind`, mapped by each caller to its own truthful variant name |
 | `resolve_confined_path` with `target: None` | Returns the walked `relative_dirs` chain itself; nothing beyond the segment directory is created |
 | `resolve_confined_path`'s lenient intermediate walk hits a symlink loop (`ELOOP`) | Surfaces as `Io`, not `Escape` — `canonicalize`'s error propagates via `?` before any confinement comparison runs |
+| `ServerId::new`/`ToolName::new` rejects an input containing `&`, `<`, `>`, a control character, or a bidi override (issue #446) | The rejected value is sanitized (`untrusted::sanitize_untrusted_inline`) and `&`/`<`/`>` entity-escaped before being stored in `ServerIdError`/`ToolNameError`, so the raw disallowed characters never reach the `Display`/`Debug`-formatted error text an LLM or terminal renders |
+| `ServerId::new`/`ToolName::new` rejects an input containing emoji | **Not** sanitized or stripped — a deliberate accepted-risk exception, not an oversight: emoji is printable, cannot forge Markdown/HTML-like structure the way `&`/`<`/`>` can, and stripping arbitrary non-identifier printables would need a new allowlist pass that risks corrupting legitimate non-ASCII text elsewhere in the sanitizer |
 
 ## 6. See Also
 
