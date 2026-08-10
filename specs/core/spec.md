@@ -279,12 +279,22 @@ regardless of transport, before transport-specific checks):
    - `Stdio` → `validate_command_string` (forbidden shell metachars:
      `; | & > < \` $ ( ) \n \r`) on `command` and each `arg`; absolute-path
      commands additionally require existence + executable bit (Unix); env
-     names checked against `forbidden_env_names()`/`forbidden_env_prefix()`,
-     ASCII-case-insensitively (so `Path`/`path`/`PATH` are all rejected) —
-     Windows treats environment variable names as case-insensitive at the
-     OS/`CreateProcess` level, so a case-varied spelling would otherwise
-     bypass this list while still functioning as a real override at spawn
-     time.
+     names are first required to match the POSIX/Windows identifier charset
+     `^[A-Za-z_][A-Za-z0-9_]*$` (rejects empty names, names starting with a
+     digit, and any non-ASCII character), then checked against
+     `forbidden_env_names()`/`forbidden_env_prefix()`, ASCII-case-insensitively
+     (so `Path`/`path`/`PATH` are all rejected) — Windows treats environment
+     variable names as case-insensitive at the OS/`CreateProcess` level, so a
+     case-varied spelling would otherwise bypass this list while still
+     functioning as a real override at spawn time. The charset check runs
+     first because Windows' own case folding uses the OS's Unicode uppercase
+     table, which is broader than ASCII-only folding (e.g. `ı` U+0131 folds to
+     `I`, `ſ` U+017F folds to `S`); a forbidden name spelled with such a
+     confusable in place of an ASCII letter would otherwise pass the
+     ASCII-only comparison here yet still resolve as the forbidden name on a
+     real Windows host, so it is rejected outright as not being a valid
+     identifier to begin with, rather than chasing individual Unicode
+     confusables.
    - `Http`/`Sse` → `validate_network_config`: `url` required,
      `validate_url_scheme` (must be `http://`/`https://`, case-insensitive),
      header name (RFC 7230 `tchar` charset) and value (no control chars)
@@ -293,6 +303,13 @@ regardless of transport, before transport-specific checks):
    `> 0` and `<= MAX_TIMEOUT` (10 minutes); **no infinite-timeout option is
    supported by design** (an unbounded wait would let a hung server block
    this non-interactive tool forever).
+
+Env name charset (checked before the forbidden-name list below): must match
+`^[A-Za-z_][A-Za-z0-9_]*$`. A name outside this charset — including one built
+from a non-ASCII Unicode case-confusable of a forbidden name, e.g. `NODE_OPTıONS`
+using `ı` (U+0131) in place of `I` — is rejected as `Error::SecurityViolation`
+even though it is not an exact (case-insensitive ASCII) match against the list
+itself.
 
 Forbidden env names (exact match, case-insensitive): `LD_PRELOAD`,
 `LD_LIBRARY_PATH`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`,

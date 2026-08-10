@@ -211,12 +211,21 @@ function validateCommandString(value: unknown, context: string): void {
 /**
  * Validates an environment variable name against the forbidden list.
  *
- * Mirrors `validate_env_name` in `mcp-execution-core`'s `command.rs`, including its
- * case-insensitive comparison: Windows treats environment variable names as case-insensitive
- * at the OS/`CreateProcess` level, so a case-varied spelling such as `Path` or `path` must be
- * rejected exactly like the canonical `PATH`. `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` are
- * rendered from the Rust source already upper-cased, so upper-casing `name` before comparing
- * is sufficient.
+ * Mirrors the case-insensitive forbidden-name/prefix comparison in `validate_env_name`
+ * (`mcp-execution-core`'s `command.rs`): Windows treats environment variable names as
+ * case-insensitive at the OS/`CreateProcess` level, so a case-varied spelling such as `Path`
+ * or `path` must be rejected exactly like the canonical `PATH`. `FORBIDDEN_ENV_NAMES`/
+ * `FORBIDDEN_ENV_PREFIX` are rendered from the Rust source already upper-cased, so upper-casing
+ * `name` before comparing is sufficient.
+ *
+ * As of `mcp-execution-core` #438, the Rust validator is strictly stricter than this function:
+ * it additionally rejects any name outside the `[A-Za-z_][A-Za-z0-9_]*` charset outright, which
+ * closes a Unicode-case-confusable bypass (e.g. `ı` U+0131, `ſ` U+017F) that ASCII-only case
+ * folding cannot catch. This function has no equivalent explicit charset check — whatever
+ * coverage it has against such names is incidental to `String.prototype.toUpperCase()`'s own
+ * Unicode-aware case mapping, not a deliberate guarantee, and a name JavaScript's mapping does
+ * not fold onto a forbidden entry will pass through unrejected here even though the Rust side
+ * now rejects it.
  *
  * @param name - The environment variable name to validate
  * @throws {Error} If the name is forbidden (exact match or `DYLD_*` prefix, case-insensitive)

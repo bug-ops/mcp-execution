@@ -270,6 +270,10 @@ pub const fn forbidden_env_prefix() -> &'static str {
 /// # Security Rules
 ///
 /// - **Forbidden chars in command/args**: `;`, `|`, `&`, `>`, `<`, `` ` ``, `$`, `(`, `)`, `\n`, `\r`
+/// - **Env name charset**: must match `[A-Za-z_][A-Za-z0-9_]*` (POSIX/Windows environment
+///   variable identifier convention); rejects non-ASCII Unicode confusables (e.g. U+0131 `ı`,
+///   U+017F `ſ`) that could otherwise dodge the ASCII-only case-insensitive comparison below
+///   while still resolving as the forbidden name on Windows
 /// - **Forbidden env names**: dynamic-linker (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
 ///   `LD_AUDIT`, `DYLD_*`), `PATH`, and interpreter hijack vectors
 ///   (`NODE_OPTIONS`, `BASH_ENV`, `PYTHONPATH`, `PYTHONSTARTUP`, `RUBYOPT`,
@@ -295,7 +299,7 @@ pub const fn forbidden_env_prefix() -> &'static str {
 /// - Command is empty or whitespace
 /// - Command/args contain shell metacharacters
 /// - Absolute path does not exist or is not executable
-/// - Environment variable name is forbidden
+/// - Environment variable name is forbidden, or outside the `[A-Za-z_][A-Za-z0-9_]*` charset
 /// - URL scheme is not `http://`/`https://`, or a header name/value contains control characters
 ///
 /// Returns `Error::ValidationError` if:
@@ -807,7 +811,32 @@ fn validate_absolute_path(command: &str) -> Result<()> {
 /// case-insensitive at the OS/`CreateProcess` level (and so does std's `Command` environment
 /// block on that platform), so a case-varied spelling such as `Path` or `path` would otherwise
 /// bypass this list while still functioning as a real override when the subprocess is spawned.
+///
+/// Before that comparison, the name is required to match the conventional POSIX/Windows
+/// environment-variable-name charset `[A-Za-z_][A-Za-z0-9_]*`. Windows' own name comparison
+/// folds case using the OS's Unicode uppercase table, which is broader than the ASCII-only
+/// folding `eq_ignore_ascii_case` performs here — e.g. `ı` (U+0131, Turkish dotless i)
+/// uppercases to `I` and `ſ` (U+017F, long s) uppercases to `S` on Windows, so a forbidden name
+/// spelled with one of these in place of the ASCII letter (e.g. `NODE_OPTıONS`) would pass the
+/// ASCII-only comparison yet still resolve as the forbidden name once handed to the OS
+/// environment block. Rather than chase every such Unicode confusable, any name outside the
+/// conventional identifier charset is rejected outright, since it is not a valid environment
+/// variable name to begin with.
 fn validate_env_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let is_valid_charset = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !is_valid_charset {
+        return Err(Error::SecurityViolation {
+            reason: format!(
+                "environment variable name is not a valid identifier (expected \
+                 [A-Za-z_][A-Za-z0-9_]*): {name}"
+            ),
+        });
+    }
+
     // Check for forbidden env names (exact match, case-insensitive)
     if FORBIDDEN_ENV_NAMES
         .iter()
@@ -1308,12 +1337,41 @@ mod tests {
     fn test_validate_env_name_prefix_check_does_not_panic_on_utf8_boundary() {
         // "DYL€_REST": the euro sign ('\u{20AC}') is a 3-byte UTF-8 sequence occupying byte
         // indices 3..6, so byte index `FORBIDDEN_ENV_PREFIX.len()` (5) falls strictly inside
-        // it and is not a char boundary. A naive `name[..5]` slice would panic here; the
-        // byte-slice `eq_ignore_ascii_case` comparison in `validate_env_name` must not.
+        // it and is not a char boundary. A naive `name[..5]` slice would panic here. The
+        // charset check now rejects this name (non-ASCII characters are never valid identifier
+        // characters) before the byte-slice `eq_ignore_ascii_case` prefix comparison even runs,
+        // but that comparison must still not panic if reached directly.
         let name = "DYL\u{20AC}_REST";
         assert_eq!(name.len(), 3 + 3 + 5);
         assert!(!name.is_char_boundary(5));
-        assert!(validate_env_name(name).is_ok());
+        assert!(validate_env_name(name).is_err());
+    }
+
+    /// #438 — Windows' own environment-name comparison folds case using the OS's Unicode
+    /// uppercase table, which is broader than `eq_ignore_ascii_case`. A forbidden name spelled
+    /// with a Unicode confusable in place of an ASCII letter must be rejected outright by the
+    /// charset check, since it is not a valid `[A-Za-z_][A-Za-z0-9_]*` identifier to begin with.
+    #[test]
+    fn test_validate_env_name_rejects_unicode_case_confusables() {
+        // U+0131 LATIN SMALL LETTER DOTLESS I uppercases to 'I' on Windows.
+        assert!(validate_env_name("NODE_OPT\u{0131}ONS").is_err());
+        // U+017F LATIN SMALL LETTER LONG S uppercases to 'S' on Windows.
+        assert!(validate_env_name("JAVA_TOOL_OPTION\u{017F}").is_err());
+    }
+
+    #[test]
+    fn test_validate_env_name_charset_accepts_valid_ascii_identifiers() {
+        assert!(validate_env_name("MY_VAR_1").is_ok());
+        assert!(validate_env_name("_LEADING_UNDERSCORE").is_ok());
+        assert!(validate_env_name("A").is_ok());
+        assert!(validate_env_name("a1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_env_name_charset_rejects_empty_and_leading_digit() {
+        assert!(validate_env_name("").is_err());
+        assert!(validate_env_name("1FOO").is_err());
+        assert!(validate_env_name("9").is_err());
     }
 
     #[test]
