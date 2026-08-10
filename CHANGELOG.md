@@ -57,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`clap`) for the first time: it now honors `--help`/`--version` and rejects unknown
   arguments with exit code 2, instead of silently ignoring all argv as before — a low-risk
   change, since no in-repo `mcp.json` entry passes this server any arguments (#399).
+- **`mcp-execution-skill`**: `SkillMetadataError::FrontmatterTooComplex` — a new variant
+  reporting that a `SKILL.md` frontmatter block breached `serde-saphyr`'s explicit parse
+  `Budget` or an alias-replay limit, distinct from an ordinary syntax/type error
+  (`InvalidYaml`). `specs/decisions/ADR-405-adopt-serde-saphyr.md` — records the owner override
+  of ADR-341's decision to defer this swap, the corrected Evidence Ledger findings, the
+  measured Budget/latency figures, and resolutions to ADR-341's three open owner rulings
+  (#405).
 
 ### Changed
 
@@ -86,6 +93,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than closing the loop with an inaccurate mitigation claim. No behavior change (#402).
 - **workspace**: sorted `[dependencies]` alphabetically in `mcp-execution-files` and
   `mcp-execution-skill` (#391).
+- **workspace / `mcp-execution-skill`**: replaced `serde_norway` with `serde-saphyr` 1.0.1 as
+  the YAML parsing backend for `SKILL.md` frontmatter (`extract_skill_metadata`), overriding
+  ADR-341's earlier "monitor and revisit" decision — see
+  `specs/decisions/ADR-405-adopt-serde-saphyr.md` for the full rationale. Parsing is now bounded
+  by an explicit, fully-configured `serde_saphyr::Budget` in addition to the existing
+  `MAX_FRONTMATTER_SIZE` (8 KiB) pre-parse cap. `SkillMetadataError` is now `#[non_exhaustive]`.
+  Removes `unsafe-libyaml-norway` (228 `unsafe fn`) and `serde_norway`'s own (8) from the
+  dependency tree; adds `encoding_rs` (40) and `arraydeque` (15) — both `serde-saphyr` and its
+  `granit-parser` backend are themselves `#![forbid(unsafe_code)]` — a net `-181 unsafe fn`
+  (#405).
 - **`mcp-execution-introspector`**: `discover_via_http` now sets
   `StreamableHttpClientTransportConfig::max_sse_event_size` explicitly (16 MiB, matching `rmcp`
   3.1.2's own default) instead of relying on it implicitly, so a future upstream default change
@@ -143,6 +160,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant, returned by `extract_skill_metadata` when the frontmatter `name` exceeds
   `MAX_SKILL_NAME_LENGTH` (see the `### Fixed` entry below). Source-breaking for any downstream
   consumer exhaustively matching `SkillMetadataError` without a wildcard arm (#419).
+- **`mcp-execution-skill`**: block/folded YAML scalars (`description: |` / `>`) in `SKILL.md`
+  frontmatter now keep their YAML-1.2-correct trailing newline instead of having it silently
+  stripped — `serde-saphyr` is YAML-1.2-correct where `serde_norway` was not. An owner ruling
+  accepted this behavior change rather than normalizing it away; see
+  `specs/decisions/ADR-405-adopt-serde-saphyr.md` §2.
+- **`mcp-execution-skill`**: an alias-bomb-shaped YAML input placed under a key
+  `RawFrontmatter` does not declare now fails with
+  `SkillMetadataError::FrontmatterTooComplex` instead of parsing successfully — the new
+  `serde-saphyr` `Budget` is not shape-independent the way the previous parser's incidental
+  protection was (see ADR-405 §4-§5), so this specific input is now correctly rejected rather
+  than silently ignored.
+- **`mcp-execution-skill`**: `SkillMetadataError` is now `#[non_exhaustive]` and gained the new
+  `FrontmatterTooComplex` variant. An exhaustive `match` on this enum outside `mcp-execution-skill`
+  will now fail to compile (none exist in-tree today).
 
 ### Fixed
 

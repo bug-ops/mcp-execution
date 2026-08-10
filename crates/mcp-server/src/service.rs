@@ -1019,8 +1019,8 @@ impl GeneratorService {
     /// only fire for a request that was already cancelled when this handler reached it.
     ///
     /// The synchronous YAML frontmatter parse that runs before the write
-    /// (`extract_skill_metadata`) is a separate concern: `serde_norway` is not
-    /// linear-time on pathologically nested input, so bounding only the
+    /// (`extract_skill_metadata`) is a separate concern: YAML parsers are not inherently
+    /// linear-time on pathologically nested or aliased input, so bounding only the
     /// overall [`MAX_SKILL_CONTENT_SIZE`] would not bound parse latency. It is
     /// `extract_skill_metadata`'s own `MAX_FRONTMATTER_SIZE` cap (8KB) on the
     /// extracted `---`-delimited block, applied before parsing, that keeps
@@ -5342,7 +5342,7 @@ mod tests {
     async fn test_save_skill_quoted_description_with_colon_round_trips() {
         // `GENERATION_INSTRUCTIONS` (mcp-execution-skill) tells the model to always
         // double-quote `description`, since an unquoted value containing `:` is
-        // invalid YAML (`serde_norway` errors instead of the old regex, which
+        // invalid YAML (`serde-saphyr` errors instead of the old regex, which
         // captured the whole line regardless). Pin that a quoted description
         // containing a colon round-trips through `save_skill` unchanged.
         use tempfile::TempDir;

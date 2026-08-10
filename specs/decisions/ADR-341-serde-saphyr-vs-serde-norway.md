@@ -8,14 +8,28 @@ tags:
   - security
   - skill
 created: 2026-07-27
-status: accepted
+status: superseded
+superseded-by: ADR-405
 review-date: 2026-10-27
 related:
   - "[[../constitution]]"
   - "[[../skill/spec]]"
+  - "[[ADR-405-adopt-serde-saphyr]]"
 ---
 
 # ADR-341: Evaluate `serde-saphyr` as a replacement for `serde_norway`
+
+> [!warning]
+> **Superseded by [[ADR-405-adopt-serde-saphyr]] (issue #405).** This
+> record's decision (c) — monitor and revisit at the §7 gate — was
+> overridden by an explicit owner decision before the gate was met (1 of 3
+> criteria passed at override time). ADR-405 records the override, the
+> corrections later measurement made to this record's Evidence Ledger
+> (notably §3.3's "shape-independent by construction" claim, which did not
+> hold), and carries §7's identity-resolution instruction forward
+> unretired. This record's Evidence Ledger below is left as historical
+> record and is **not** rewritten to reflect those corrections — see
+> ADR-405 for the corrected figures.
 
 > [!important]
 > This is a decision record, not a feature spec. It documents a research

@@ -15,7 +15,11 @@
 use mcp_execution_core::metadata::{METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ServerMetadata};
 use regex::Regex;
 use serde::Deserialize;
+use serde_saphyr::budget::{BudgetBreach, BudgetReport};
+use serde_saphyr::options::{DuplicateKeyPolicy, MergeKeyPolicy};
+use std::cell::Cell;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::LazyLock;
 use thiserror::Error;
 
@@ -27,19 +31,21 @@ pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
 /// Maximum size of a `SKILL.md`'s extracted YAML frontmatter block, in bytes.
 ///
-/// `serde_norway` (like other libyaml-based parsers) is not linear-time on
-/// pathologically nested input (e.g. deeply nested flow sequences), so
-/// bounding only the overall `SKILL.md` content size does not bound parse
-/// latency. A real `name`/`description` frontmatter is a few hundred bytes at
-/// most, so 8KB is already generous while keeping [`extract_skill_metadata`]
-/// cheap enough to run synchronously on `save_skill`'s request-handling task.
+/// This is an independent pre-parse cap, not derived from the enclosing
+/// `SKILL.md` size limit: bounding only the whole-document size would not by
+/// itself bound this block's parse latency. A real `name`/`description`
+/// frontmatter is a few hundred bytes at most, so 8KB is already generous
+/// while keeping [`extract_skill_metadata`] cheap enough to run
+/// synchronously on `save_skill`'s request-handling task. `serde-saphyr`'s
+/// explicit parse `Budget` (see `frontmatter_options`) is a second,
+/// parser-level bound layered on top of this cap, not a replacement for it.
 ///
 /// This cap is the project-wide contract for any YAML entry point, not a local
 /// detail of this one — see the project constitution's security section.
 pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024;
 
 // Locates the raw YAML block between a SKILL.md's `---` delimiters. The
-// block's contents are handed to `serde_norway` for actual parsing, so this
+// block's contents are handed to `serde-saphyr` for actual parsing, so this
 // regex never inspects individual field values (see `extract_skill_metadata`).
 static FRONTMATTER_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---").expect("valid regex"));
@@ -407,6 +413,7 @@ async fn verify_tool_files_on_disk(
 /// Errors that can occur while extracting [`SkillMetadata`](crate::types::SkillMetadata)
 /// from a `SKILL.md`'s YAML frontmatter.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SkillMetadataError {
     /// The content did not start with a `---`-delimited YAML frontmatter block.
     #[error("YAML frontmatter not found")]
@@ -423,14 +430,21 @@ pub enum SkillMetadataError {
 
     /// The frontmatter block was not valid YAML.
     ///
-    /// The message is a rendering of the underlying `serde_norway` error
-    /// (captured eagerly rather than storing the error type itself, so this
-    /// crate's public API is not pinned to a specific `serde_norway`
-    /// version) with its line number corrected to be relative to the whole
-    /// `SKILL.md` file rather than the extracted frontmatter block — the
-    /// block starts one line after the file's opening `---` delimiter.
+    /// The message is built by this crate from `serde-saphyr`'s structured
+    /// [`serde_saphyr::Error::location`] and a small fixed vocabulary of failure kinds
+    /// (see `yaml_error_kind`) — never from the parser's own rendered `Display` text. This
+    /// keeps both frontmatter source content and internal `serde-saphyr` hints (e.g. a
+    /// duplicate-key error's config-option suggestion) out of this LLM/client-facing error.
     #[error("failed to parse YAML frontmatter: {0}")]
     InvalidYaml(String),
+
+    /// The frontmatter block breached `serde-saphyr`'s parse [`Budget`](serde_saphyr::Budget)
+    /// (see `frontmatter_options`) — e.g. an alias-bomb-shaped input placed under a key
+    /// `RawFrontmatter` does not declare. A bomb placed directly under a *declared* field
+    /// (`name`/`description`) instead short-circuits on a type mismatch and surfaces as
+    /// [`SkillMetadataError::InvalidYaml`]; see `RawFrontmatter`'s doc comment.
+    #[error("YAML frontmatter is too complex to parse")]
+    FrontmatterTooComplex,
 
     /// A required field was absent, or present but empty, in an otherwise
     /// valid frontmatter block.
@@ -456,20 +470,173 @@ pub enum SkillMetadataError {
     },
 }
 
-/// Renders a `serde_norway` deserialization error, correcting its line number
-/// to be relative to the whole `SKILL.md` file rather than the frontmatter
-/// block passed to `serde_norway::from_str` (see
-/// [`SkillMetadataError::InvalidYaml`]).
-fn describe_yaml_error(err: &serde_norway::Error) -> String {
-    let rendered = err.to_string();
+/// Fixed vocabulary of `serde-saphyr` failure kinds, keyed by [`serde_saphyr::Error`] variant.
+///
+/// Never matches on `err`'s rendered message: `serde_saphyr::Error`'s `Display`/`to_string()`
+/// can carry attacker-controlled frontmatter content (e.g. a duplicate key's name) even with
+/// [`serde_saphyr::Options::with_snippet`] disabled, which [`describe_yaml_error`] must not
+/// reproduce into an LLM/client-facing [`SkillMetadataError::InvalidYaml`].
+const fn yaml_error_kind(err: &serde_saphyr::Error) -> &'static str {
+    match err {
+        serde_saphyr::Error::DuplicateMappingKey { .. } => "duplicate key in YAML frontmatter",
+        serde_saphyr::Error::MultipleDocuments { .. } => "multiple YAML documents in frontmatter",
+        serde_saphyr::Error::UnknownAnchor { .. } | serde_saphyr::Error::Unexpected { .. } => {
+            "unexpected YAML value"
+        }
+        _ => "invalid YAML",
+    }
+}
+
+/// Renders a `serde-saphyr` deserialization error from its structured
+/// [`serde_saphyr::Error::location`] and [`yaml_error_kind`], correcting the line number to be
+/// relative to the whole `SKILL.md` file rather than the frontmatter block passed to
+/// `serde_saphyr::from_str_with_options` (see [`SkillMetadataError::InvalidYaml`]).
+///
+/// Deliberately does not touch `err`'s own `Display`/`to_string()` output — see
+/// [`yaml_error_kind`]'s doc comment for why.
+fn describe_yaml_error(err: &serde_saphyr::Error) -> String {
+    let kind = yaml_error_kind(err);
     let Some(location) = err.location() else {
-        return rendered;
+        return kind.to_string();
     };
     // The block starts one line after the file's opening `---`, so the
     // block-relative line number under-counts the file line by exactly one.
-    let block_relative = format!("line {} column {}", location.line(), location.column());
-    let file_relative = format!("line {} column {}", location.line() + 1, location.column());
-    rendered.replacen(&block_relative, &file_relative, 1)
+    format!(
+        "{kind} at line {} column {}",
+        location.line() + 1,
+        location.column()
+    )
+}
+
+/// Whether a parse failure reflects a breach of `frontmatter_options`'s
+/// [`serde_saphyr::Budget`] or alias-replay limits, as opposed to an ordinary syntax/type
+/// error.
+///
+/// `budget_breach` is the authoritative signal, threaded from `frontmatter_options`'s
+/// registered budget-report callback (`serde_saphyr::budget::BudgetReport::breached`) — it
+/// reflects the actual budget scan outcome, not a guess based on which `Error` variant the
+/// parse failure happens to surface as.
+///
+/// `err`'s own variant is consulted only as a fallback, and deliberately does **not** include
+/// `Error::AliasError`: that variant is a generic wrapper `serde-saphyr` attaches to *any*
+/// error raised while deserializing a value reached through an alias, not a budget-specific
+/// one — e.g. `base: &a [1, 2]\nname: *a` (an ordinary type mismatch under an alias) also
+/// surfaces as `AliasError`. An earlier version of this function matched `AliasError`
+/// unconditionally and misclassified that case as `FrontmatterTooComplex`
+/// (`tests::test_alias_wrapped_type_mismatch_is_not_a_budget_breach` pins the fix).
+/// `Error::Budget` is the direct (non-alias) breach path — e.g. a depth or raw-node breach with
+/// no aliases involved. The four `AliasReplay*`/`AliasExpansion*` variants are additional
+/// direct alias-limit failures ([`serde_saphyr::Options::alias_limits`]) distinct from a
+/// [`serde_saphyr::Budget`] breach. `Error::UnknownAnchor` (an alias referencing an anchor that
+/// was never defined — a typo, not amplification) deliberately falls through to `false`.
+const fn is_budget_breach(err: &serde_saphyr::Error, budget_breach: Option<&BudgetBreach>) -> bool {
+    budget_breach.is_some()
+        || matches!(
+            err,
+            serde_saphyr::Error::Budget { .. }
+                | serde_saphyr::Error::AliasReplayLimitExceeded { .. }
+                | serde_saphyr::Error::AliasExpansionLimitExceeded { .. }
+                | serde_saphyr::Error::AliasReplayStackDepthExceeded { .. }
+                | serde_saphyr::Error::AliasReplayCounterOverflow { .. }
+        )
+}
+
+/// Builds the `serde-saphyr` parse configuration for `SKILL.md` frontmatter, plus a shared
+/// handle that captures the parse's [`BudgetBreach`] (if any) once parsing completes.
+///
+/// Every field of the [`serde_saphyr::Budget`] below is set explicitly (never left to
+/// `Budget`'s own defaults) so a future upstream default change cannot silently loosen this
+/// crate's parse-time bound; `Options`' handful of other fields not named here (e.g.
+/// `legacy_octal_numbers`, `strict_booleans`) are left at their defaults deliberately — they
+/// affect scalar parsing semantics, not the parse-time bound this function exists to configure.
+/// Every numeric `Budget` limit is sized so that legitimate frontmatter which already cleared
+/// [`MAX_FRONTMATTER_SIZE`] (8 KiB) cannot be rejected by the budget — see
+/// `specs/decisions/ADR-405-adopt-serde-saphyr.md` for the measured margins behind each value.
+///
+/// Two settings named in this crate's original design table —
+/// `max_buffered_comment_events` and `simple_key_max_lookahead` — do not exist as
+/// [`serde_saphyr::Budget`]/[`serde_saphyr::Options`] fields in `serde-saphyr` 1.0.1 (verified
+/// against the published source, not assumed) and are omitted here rather than guessed at.
+///
+/// The returned handle is populated by a `budget_report` callback
+/// ([`serde_saphyr::Options::with_budget_report`]) registered on the returned `Options`, which
+/// `serde-saphyr` invokes once per parse — both on success and on a budget breach — with the
+/// scan's [`BudgetReport`]. This is what [`is_budget_breach`] uses as its authoritative signal,
+/// rather than inferring a breach from which `serde_saphyr::Error` variant a parse failure
+/// happens to surface as (see [`is_budget_breach`]'s doc comment for why that inference is
+/// unreliable). Each call to this function returns a fresh, independent handle, so a caller
+/// must call it once per parse and read the handle only after that specific `from_str_with_options`
+/// call returns.
+fn frontmatter_options() -> (serde_saphyr::Options, Rc<Cell<Option<BudgetBreach>>>) {
+    let budget_breach: Rc<Cell<Option<BudgetBreach>>> = Rc::new(Cell::new(None));
+    let budget_breach_for_callback = Rc::clone(&budget_breach);
+
+    let options = serde_saphyr::options! {
+        budget: serde_saphyr::budget! {
+            // 2 bytes/node is the densest valid construction (`[a,a,...]`); <=4096 nodes from
+            // 8 KiB. 2x margin over that ceiling.
+            max_nodes: 8_192,
+            // 2 events/node, aligned with max_nodes.
+            max_events: 16_384,
+            // `&a` is >=2 bytes; <=4096 anchors from 8 KiB, 2x margin. Must stay non-zero or
+            // `merge_keys` below becomes dead configuration (anchors alone cannot amplify
+            // without aliases).
+            max_anchors: 8_192,
+            // `*a` is >=2 bytes; <=4096 aliases from 8 KiB, 2x margin.
+            max_aliases: 8_192,
+            // 8x the input cap; bounds scalar bytes materialized by alias replay.
+            max_total_scalar_bytes: 65_536,
+            // `<<:` is >=3 bytes; <=2730 merge keys from 8 KiB, ~1.5x margin.
+            max_merge_keys: 4_096,
+            // This crate's single-document call path never lets the budget's own
+            // `max_documents` counter observe a second document: `from_str_with_options`
+            // fully parses (and budget-checks) the first document, THEN peeks for trailing
+            // content and raises `Error::MultipleDocuments` directly if any is found -- a
+            // second document's own `DocumentStart` event is never budget-checked through this
+            // entry point. Kept above the theoretical minimum of 1 anyway, matching this
+            // table's general margin convention, even though it is not reachable here.
+            max_documents: 2,
+            // Deliberate exception to the size-derived sizing rule above (see the project
+            // constitution's YAML parse-time bound section): 8 KiB of `[[[[...` nests
+            // thousands deep, so no size-derived value would be meaningful. This only matters
+            // on the unknown-key/buffering path — a bomb under a *declared* `Option<String>`
+            // field short-circuits on the same type mismatch regardless of depth (see
+            // `RawFrontmatter`'s doc comment); `max_depth` does not protect that path.
+            max_depth: 64,
+            // Built-in heuristic, kept at its default; does not fire on this crate's reference
+            // alias-bomb fixture (57 aliases < 100) — `max_nodes` is what fires first.
+            enforce_alias_anchor_ratio: true,
+            alias_anchor_min_aliases: 100,
+            alias_anchor_ratio_multiplier: 10,
+            // Default value; unreachable from an 8 KiB input, set explicitly for the record.
+            max_total_comment_bytes: 64 * 1024 * 1024,
+            // Default value; reader-only, `from_str_with_options` never consults it for a
+            // `&str` input, set explicitly for the record.
+            max_reader_input_bytes: Some(256 * 1024 * 1024),
+            // Default value; the `include` feature is not enabled, set explicitly for the
+            // record.
+            max_inclusion_depth: 24,
+        },
+        alias_limits: serde_saphyr::alias_limits! {
+            // Aligned with `max_events`; the direct billion-laughs bound.
+            max_total_replayed_events: 16_384,
+        },
+        // `<<: *anchor` must not inject fields from an anchored map into `name`/`description`;
+        // treat it as an ordinary (unrecognized) key instead.
+        merge_keys: MergeKeyPolicy::AsOrdinary,
+        // Equals the default; set explicitly so an upstream default change cannot loosen it.
+        duplicate_keys: DuplicateKeyPolicy::Error,
+        // Load-bearing: `Error::WithSnippet` is then never constructed, so even an accidental
+        // `to_string()` cannot echo frontmatter source text back to an MCP client/LLM (see the
+        // project constitution's no-untrusted-source-echo rule). `describe_yaml_error`
+        // additionally never touches `Display`/`to_string()` at all (see `yaml_error_kind`).
+        with_snippet: false,
+    }
+    .with_budget_report(move |report: BudgetReport| {
+        budget_breach_for_callback.set(report.breached);
+    });
+
+    (options, budget_breach)
 }
 
 /// Raw shape of a `SKILL.md`'s YAML frontmatter block.
@@ -479,27 +646,27 @@ fn describe_yaml_error(err: &serde_norway::Error) -> String {
 /// [`SkillMetadataError::MissingField`] variants rather than being folded
 /// into one generic deserialization failure.
 ///
-/// # Regression coverage (issue #359)
+/// # `DoS` defense (issue #405 / ADR-405)
 ///
-/// Both fields being plain `Option<String>` (no `#[serde(flatten)]`, no buffering
-/// `deserialize_with`, no untagged/`Value` retype) is why an alias bomb placed under an
-/// undeclared key or under `description` itself is discarded today without expanding nested
-/// aliases (`tests::test_extract_skill_metadata_alias_bomb_under_unknown_key_stays_ok`,
-/// `tests::test_extract_skill_metadata_alias_bomb_under_declared_field_short_circuits`). If
-/// `description` (or `name`) is ever changed to a buffering type — `serde_norway::Value`, an
-/// untagged enum, or a `#[serde(deserialize_with)]` that internally buffers through one of
-/// those while keeping the field declared as `Option<String>` — that change reopens the
-/// amplification path for a bomb placed directly under the affected key, and the
-/// declared-field test above flips loudly (its error stops being a plain type mismatch and
-/// becomes `serde_norway`'s "repetition limit exceeded"). A `Value`/untagged retype is also
-/// compile-blocked at `require_field`'s `Option<String>` parameter in the call below; a
-/// buffering `deserialize_with` is not, since the declared type is unchanged. Both underlying
-/// assumptions are additionally pinned in isolation, against local test-only structs shaped
-/// like each hypothetical retype, by
-/// `tests::test_serde_norway_buffers_alias_bomb_when_declared_field_is_value_typed` and
-/// `tests::test_serde_norway_buffers_alias_bomb_when_declared_field_uses_deserialize_with`. If
-/// this struct's field shape is ever changed in either direction, all three tests above need
-/// re-checking against the new shape.
+/// Parsing is bounded by `frontmatter_options`'s explicit [`serde_saphyr::Budget`], not by this
+/// struct's field shape — unlike this crate's previous `serde_norway`-based parser, whose
+/// alias-bomb resistance was incidental to `RawFrontmatter` having no buffering field. The
+/// budget is *not* shape-independent, though: an alias bomb placed under an *undeclared* YAML
+/// key is materialized (nothing here declares it, so it falls through to the generic visitor)
+/// and reaches the budget, surfacing as [`SkillMetadataError::FrontmatterTooComplex`]
+/// (`tests::test_extract_skill_metadata_alias_bomb_under_unknown_key_rejected_by_budget`). A
+/// bomb placed directly under a *declared* `Option<String>` field instead short-circuits on
+/// serde's type mismatch before the budget accumulates anything, exactly as the previous parser
+/// did, surfacing as [`SkillMetadataError::InvalidYaml`]
+/// (`tests::test_extract_skill_metadata_alias_bomb_under_declared_field_short_circuits`).
+///
+/// If either field is ever changed to a buffering type (e.g. `serde_json::Value`, an untagged
+/// enum) or gains a buffering `#[serde(deserialize_with)]`, a bomb placed under that field
+/// reopens the materialization path and reaches the budget instead of short-circuiting — still
+/// bounded and rejected, not silently expanded, but via `FrontmatterTooComplex` rather than a
+/// type-mismatch `InvalidYaml`. See
+/// `tests::test_alias_bomb_rejection_survives_a_buffering_field_shape`, which pins this against
+/// a local test-only struct shaped like that hypothetical retype.
 #[derive(Debug, Deserialize)]
 struct RawFrontmatter {
     name: Option<String>,
@@ -523,9 +690,11 @@ fn require_field(value: Option<String>, field: &'static str) -> Result<String, S
 ///
 /// Parses YAML frontmatter to extract name and description, and counts
 /// sections (H2 headers) and words. Frontmatter is parsed with a real YAML
-/// parser (`serde_norway`), so block scalars (`description: |` / `>`) and
+/// parser (`serde-saphyr`), so block scalars (`description: |` / `>`) and
 /// quoted scalars (`name: "my-name"`) are handled per the YAML spec rather
-/// than by a single-line regex capture.
+/// than by a single-line regex capture. Parsing is bounded by an explicit
+/// [`serde_saphyr::Budget`] (see `frontmatter_options`), not just the
+/// pre-parse `MAX_FRONTMATTER_SIZE` size cap.
 ///
 /// # Arguments
 ///
@@ -538,9 +707,9 @@ fn require_field(value: Option<String>, field: &'static str) -> Result<String, S
 /// # Errors
 ///
 /// Returns [`SkillMetadataError`] if the YAML frontmatter is missing, too
-/// large (`MAX_FRONTMATTER_SIZE`), malformed, a required field (`name`,
-/// `description`) is absent or empty, or `name` exceeds
-/// [`MAX_SKILL_NAME_LENGTH`](crate::types::MAX_SKILL_NAME_LENGTH).
+/// large (`MAX_FRONTMATTER_SIZE`), too complex to parse within its `Budget`,
+/// malformed, a required field (`name`, `description`) is absent or empty, or
+/// `name` exceeds [`MAX_SKILL_NAME_LENGTH`](crate::types::MAX_SKILL_NAME_LENGTH).
 ///
 /// # Examples
 ///
@@ -575,9 +744,10 @@ pub fn extract_skill_metadata(
         .map(|m| m.as_str())
         .ok_or(SkillMetadataError::MissingFrontmatter)?;
 
-    // Bound parse cost before handing the block to `serde_norway`: YAML parsing is not
-    // linear-time on pathologically nested input, so the overall SKILL.md size limit
-    // (`MAX_SKILL_CONTENT_SIZE` in mcp-execution-server) does not bound parse latency.
+    // Bound parse cost before handing the block to `serde-saphyr`: even with an explicit parse
+    // Budget, the overall SKILL.md size limit (`MAX_SKILL_CONTENT_SIZE` in mcp-execution-server)
+    // alone would not bound this block's parse latency — the budget's own limits are sized
+    // against this narrower 8 KiB cap (see `frontmatter_options`).
     if frontmatter_block.len() > MAX_FRONTMATTER_SIZE {
         return Err(SkillMetadataError::FrontmatterTooLarge {
             size: frontmatter_block.len(),
@@ -585,8 +755,15 @@ pub fn extract_skill_metadata(
         });
     }
 
-    let frontmatter: RawFrontmatter = serde_norway::from_str(frontmatter_block)
-        .map_err(|e| SkillMetadataError::InvalidYaml(describe_yaml_error(&e)))?;
+    let (options, budget_breach) = frontmatter_options();
+    let frontmatter: RawFrontmatter =
+        serde_saphyr::from_str_with_options(frontmatter_block, options).map_err(|e| {
+            if is_budget_breach(&e, budget_breach.take().as_ref()) {
+                SkillMetadataError::FrontmatterTooComplex
+            } else {
+                SkillMetadataError::InvalidYaml(describe_yaml_error(&e))
+            }
+        })?;
 
     let name = require_field(frontmatter.name, "name")?;
     match crate::types::validate_skill_name(&name) {
@@ -1090,7 +1267,8 @@ More content.
     #[test]
     fn test_extract_skill_metadata_invalid_yaml() {
         // Syntactically invalid YAML (an unterminated flow sequence) must surface
-        // as `SkillMetadataError::InvalidYaml`, wrapping the underlying serde_norway error.
+        // as `SkillMetadataError::InvalidYaml`, built from the underlying serde-saphyr error's
+        // structured location plus a fixed-vocabulary kind (never the parser's own message).
         let content = "---\nname: [unterminated\ndescription: test\n---\n# Test";
 
         let result = extract_skill_metadata(content);
@@ -1100,7 +1278,7 @@ More content.
         // Issue #203 follow-up (M3): the error's line number must be file-relative, not
         // relative to the extracted frontmatter block. `name: [unterminated` is file line 2
         // (after the opening `---` on line 1); the block-relative location.line() the
-        // underlying serde_norway error reports for this input is 1.
+        // underlying serde-saphyr error reports for this input is 1.
         assert!(
             message.contains("line 2"),
             "expected file-relative 'line 2', got: {message:?}"
@@ -1110,8 +1288,8 @@ More content.
     #[test]
     fn test_extract_skill_metadata_frontmatter_too_large() {
         // Issue #203 follow-up (S2): a pathologically large frontmatter block must be
-        // rejected before it reaches `serde_norway::from_str`, since YAML parsing is not
-        // linear-time on deeply nested input.
+        // rejected before it reaches `serde-saphyr::from_str_with_options`, since YAML parsing
+        // is not linear-time on deeply nested input.
         let padding = "a".repeat(MAX_FRONTMATTER_SIZE + 1);
         let content = format!("---\nname: test\ndescription: {padding}\n---\n# Test");
 
@@ -1209,40 +1387,29 @@ author: Test Author
     fn test_extract_skill_metadata_block_literal_scalar() {
         // Issue #203 regression: a `description: |` block literal scalar must have its
         // real multi-line body captured, not just the `|` marker character.
-        let content = r"---
-name: test-skill
-description: |
-  This is a block literal description
-  spanning multiple lines.
----
-
-# Test
-";
+        //
+        // Issue #405 (ADR-405 ruling 1, BREAKING): `serde-saphyr` is YAML-1.2-correct and keeps
+        // the clip-chomped trailing newline that the previous parser silently stripped. This
+        // assertion is pinned to exact equality (not `contains`) specifically to catch that
+        // trailing `\n`.
+        let content = "---\nname: test-skill\ndescription: |\n  one\n  two\n---\n\n# Test\n";
 
         let metadata = extract_skill_metadata(content).unwrap();
-        assert_ne!(metadata.description, "|");
-        assert!(metadata.description.contains("block literal description"));
-        assert!(metadata.description.contains("spanning multiple lines."));
+        assert_eq!(metadata.description, "one\ntwo\n");
     }
 
     #[test]
     fn test_extract_skill_metadata_folded_block_scalar() {
         // Issue #203 regression: a `description: >` folded block scalar must have its
         // real multi-line body captured, not just the `>` marker character.
-        let content = r"---
-name: test-skill
-description: >
-  This is a folded description
-  spanning multiple lines.
----
-
-# Test
-";
+        //
+        // Issue #405 (ADR-405 ruling 1, BREAKING): same untrimmed-trailing-newline behavior as
+        // the block-literal test above, but folding also collapses the internal line break into
+        // a space.
+        let content = "---\nname: test-skill\ndescription: >\n  one\n  two\n---\n\n# Test\n";
 
         let metadata = extract_skill_metadata(content).unwrap();
-        assert_ne!(metadata.description, ">");
-        assert!(metadata.description.contains("folded description"));
-        assert!(metadata.description.contains("spanning multiple lines."));
+        assert_eq!(metadata.description, "one two\n");
     }
 
     #[test]
@@ -1287,30 +1454,15 @@ description: 'quoted text'
     }
 
     #[test]
-    fn test_extract_skill_metadata_alias_bomb_under_unknown_key_stays_ok() {
-        // ADR-341 §3.3/§5, corrected per review: `RawFrontmatter` has no
-        // `#[serde(deny_unknown_fields)]`, so a key it does not declare is discarded via a
-        // lazy visitor that never expands nested aliases — the bomb below sits under such a
-        // key (`unknown_key`), with `name`/`description` left valid, so parsing succeeds
-        // fast today. A `#[serde(flatten)]`-style buffering field would force every unknown
-        // key to be materialized into a `Content`-like structure before per-field routing,
-        // which *does* expand aliases and trips serde_norway's own repetition-limit guard —
-        // flipping this exact fixture's outcome from `Ok` to `Err`. That deterministic
-        // outcome flip, not wall-clock timing, is the primary thing this test pins: a single
-        // cold-process call's timing noise (measured up to ~1.6ms) is not a safe
-        // discriminator against the ADR's ~4-7ms regression floor. An earlier version of
-        // this test put the bomb on the *declared* `description` field instead, where
-        // serde's derive reads it directly regardless of `flatten` — that fixture could
-        // never detect the regression it claimed to guard, at any budget.
+    fn test_extract_skill_metadata_alias_bomb_under_unknown_key_rejected_by_budget() {
+        // Issue #405 / ADR-405 C1/C2 (BREAKING vs the previous serde_norway-based parser):
+        // `frontmatter_options`'s explicit Budget is what defends this path now, not
+        // `RawFrontmatter`'s field shape. The bomb below sits under a key `RawFrontmatter`
+        // does not declare, so it is materialized by the generic visitor (unlike the previous
+        // parser's lazy, non-expanding visitor) and reaches the budget: 8 anchors x 8 refs
+        // each amplify well past `max_nodes: 8_192`.
         //
         // Fixture shape: see `alias_bomb_fixture`'s doc comment.
-        //
-        // Deliberately out of scope here: retyping `description` itself to a buffering type
-        // (`serde_norway::Value`, an untagged enum, a buffering `deserialize_with`) is a
-        // distinct regression vector this fixture does not cover — see
-        // `test_serde_norway_buffers_alias_bomb_when_declared_field_is_value_typed` and
-        // `test_serde_norway_buffers_alias_bomb_when_declared_field_uses_deserialize_with`
-        // below (issue #359).
         use std::time::{Duration, Instant};
 
         let frontmatter =
@@ -1327,16 +1479,12 @@ description: 'quoted text'
         let elapsed = start.elapsed();
 
         assert!(
-            result.is_ok(),
-            "expected Ok: an alias bomb under a key RawFrontmatter does not declare must be \
-             ignored today without expansion; if this now errors, RawFrontmatter's field shape \
-             likely changed (e.g. a #[serde(flatten)] field) and reopened the amplification path \
-             serde_norway's own repetition-limit guard then catches at ms-scale cost instead of \
-             being ignored at us-scale cost. got: {result:?}"
+            matches!(result, Err(SkillMetadataError::FrontmatterTooComplex)),
+            "expected FrontmatterTooComplex: an alias bomb under a key RawFrontmatter does not \
+             declare must be materialized and rejected by the Budget. got: {result:?}"
         );
-        // Sanity bound only, not the detection mechanism (see comment above): guards against an
-        // outright hang rather than the ms-scale regression, which the Ok/Err flip already
-        // catches deterministically regardless of timing noise.
+        // Sanity bound only: the budget already bounds the parse deterministically, this only
+        // guards against an outright hang.
         assert!(
             elapsed < Duration::from_secs(1),
             "parse took {elapsed:?}, unexpectedly long even accounting for cold-process noise"
@@ -1344,98 +1492,24 @@ description: 'quoted text'
     }
 
     #[test]
-    fn test_serde_norway_buffers_alias_bomb_when_declared_field_is_value_typed() {
-        // Issue #359 ("vector 2", sub-case A). The vector-1 test above pins the *unknown-key*
-        // amplification path, which only opens up if `RawFrontmatter` grows a
-        // `#[serde(flatten)]`-style field; it cannot detect a second, distinct regression: a
-        // *declared* field (e.g. `description`) retyped from `Option<String>` to a buffering
-        // type such as `serde_norway::Value` or an untagged enum. Buffering a declared field
-        // forces serde to materialize its value before matching it against the target type,
-        // which expands nested aliases and trips serde_norway's own repetition-limit guard.
-        // Unlike vector 1, there is no `Ok` baseline here: deserializing a YAML sequence into
-        // `Option<String>` always errs, buffering or not. The regression this pins is not
-        // presence-vs-absence of an error but *which* error: a cheap, immediate type-mismatch
-        // without buffering, versus this expensive repetition-limit trip once buffered.
-        //
-        // This is a canary on `serde_norway`'s own buffering behavior, not a regression test
-        // against production `RawFrontmatter` (see its doc comment): that struct's
-        // `description` is `Option<String>` today, so this exact retype is compile-blocked at
-        // `require_field`'s `Option<String>` parameter, its `extract_skill_metadata` call site
-        // — if attempted, the build fails before this test could ever run. It is kept to pin
-        // the assumption the sibling `deserialize_with` test below relies on, since that one is
-        // NOT compile-blocked.
-        //
-        // As in vector 1, the primary assertion is the deterministic outcome flip, not
-        // wall-clock timing. The ~5.3ms release / ~61.7ms debug degradation figures quoted when
-        // this vector was raised are from issue #359's own reproduction, not independently
-        // re-verified against vendored sources the way ADR-341 §3.1-§3.6 were — illustrative
-        // only, not a re-confirmed Evidence Ledger figure.
+    fn test_alias_bomb_rejection_survives_a_buffering_field_shape() {
+        // Issue #359 / ADR-405 C3: the budget is NOT shape-independent — a bomb under a
+        // *declared* `Option<String>` field short-circuits on a type mismatch before the
+        // budget ever accumulates anything (see the sibling
+        // `test_extract_skill_metadata_alias_bomb_under_declared_field_short_circuits` test
+        // below), so that fixture alone does not prove the budget defends a buffering field
+        // shape. This test covers the shape that DOES reach the budget: a field with a
+        // buffering `#[serde(deserialize_with)]`. `serde_saphyr::Value` does not exist under
+        // this crate's `default-features = false, features = ["deserialize"]` build (verified
+        // against the published source, not assumed), so `serde_json::Value` — already a
+        // dependency of this crate — stands in as the buffering vehicle instead.
         use std::time::{Duration, Instant};
 
-        #[derive(Debug, Deserialize)]
-        #[allow(
-            dead_code,
-            reason = "fields exist only to mirror RawFrontmatter's shape"
-        )]
-        struct RawFrontmatterBufferedDescription {
-            name: Option<String>,
-            description: serde_norway::Value,
-        }
-
-        let frontmatter = alias_bomb_fixture("name: test-skill\ndescription:\n");
-        // Unlike vector 1, this path never reaches `extract_skill_metadata`, so
-        // `MAX_FRONTMATTER_SIZE` is not enforced here; this only records that the fixture has
-        // headroom under that constant, for comparability with vector 1's fixture.
-        assert!(
-            frontmatter.len() <= MAX_FRONTMATTER_SIZE,
-            "fixture unexpectedly exceeds MAX_FRONTMATTER_SIZE; re-check alias_bomb_fixture's margin"
-        );
-
-        let start = Instant::now();
-        let result = serde_norway::from_str::<RawFrontmatterBufferedDescription>(&frontmatter);
-        let elapsed = start.elapsed();
-
-        let err = result.expect_err(
-            "expected Err: buffering a declared field into serde_norway::Value forces alias \
-             expansion before per-field routing, which should trip serde_norway's own \
-             repetition-limit guard",
-        );
-        assert!(
-            err.to_string().contains("repetition limit exceeded"),
-            "expected serde_norway's own repetition-limit guard specifically, not some \
-             unrelated error a future serde_norway version might introduce instead; got: {err}"
-        );
-        // Sanity bound only: `from_str` has already returned by the time `elapsed` is measured,
-        // so this cannot catch a genuine hang (this workspace's nextest config sets no
-        // slow-timeout/terminate-after). It only flags a completed-but-pathologically-slow
-        // parse that the deterministic `Err` assertion above would not otherwise surface.
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "parse took {elapsed:?}, unexpectedly long even accounting for cold-process noise"
-        );
-    }
-
-    #[test]
-    fn test_serde_norway_buffers_alias_bomb_when_declared_field_uses_deserialize_with() {
-        // Issue #359 ("vector 2", sub-case B — the genuinely silent one, per review). The
-        // sibling test above pins the same amplification path for a field whose *type* changes
-        // to `serde_norway::Value`, which is compile-blocked at `extract_skill_metadata`'s
-        // `require_field` call site. This test pins the sub-case that is NOT compile-blocked: a
-        // `#[serde(deserialize_with = ...)]` that buffers through `serde_norway::Value`
-        // internally while keeping the field's declared Rust type as `Option<String>` — exactly
-        // the shape `require_field` expects, so this variant would compile and could land
-        // without any type-level signal.
-        //
-        // See `RawFrontmatter`'s doc comment for which future edits this canary (and its
-        // sibling above) are meant to catch, and why both must be extended or replaced if
-        // `RawFrontmatter` itself is ever changed in either direction.
-        use std::time::{Duration, Instant};
-
-        fn buffer_via_value<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+        fn buffer_via_json_value<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
         where
             D: serde::Deserializer<'de>,
         {
-            let value = serde_norway::Value::deserialize(deserializer)?;
+            let value = serde_json::Value::deserialize(deserializer)?;
             Ok(value.as_str().map(str::to_string))
         }
 
@@ -1444,36 +1518,35 @@ description: 'quoted text'
             dead_code,
             reason = "fields exist only to mirror RawFrontmatter's shape"
         )]
-        struct RawFrontmatterDeserializeWithDescription {
+        struct RawFrontmatterBufferedDescription {
             name: Option<String>,
-            #[serde(deserialize_with = "buffer_via_value")]
+            #[serde(deserialize_with = "buffer_via_json_value")]
             description: Option<String>,
         }
 
         let frontmatter = alias_bomb_fixture("name: test-skill\ndescription:\n");
-        // See the sibling test above: this path also bypasses `extract_skill_metadata`, so
-        // this only records headroom under `MAX_FRONTMATTER_SIZE`, not a production size guard.
         assert!(
             frontmatter.len() <= MAX_FRONTMATTER_SIZE,
             "fixture unexpectedly exceeds MAX_FRONTMATTER_SIZE; re-check alias_bomb_fixture's margin"
         );
 
+        let (options, budget_breach) = frontmatter_options();
         let start = Instant::now();
-        let result =
-            serde_norway::from_str::<RawFrontmatterDeserializeWithDescription>(&frontmatter);
+        let result = serde_saphyr::from_str_with_options::<RawFrontmatterBufferedDescription>(
+            &frontmatter,
+            options,
+        );
         let elapsed = start.elapsed();
 
         let err = result.expect_err(
-            "expected Err: a buffering deserialize_with should force alias expansion before \
-             per-field routing just like an outright Value-typed field, even though the \
-             declared Rust type here stays Option<String>",
+            "expected Err: buffering a declared field forces alias expansion before per-field \
+             routing, which should breach frontmatter_options's Budget",
         );
         assert!(
-            err.to_string().contains("repetition limit exceeded"),
-            "expected serde_norway's own repetition-limit guard specifically, not some \
-             unrelated error a future serde_norway version might introduce instead; got: {err}"
+            is_budget_breach(&err, budget_breach.take().as_ref()),
+            "expected a Budget/alias-limit breach specifically, not some unrelated parse \
+             error; got: {err:?}"
         );
-        // Sanity bound only (see the sibling test above for why this cannot catch a hang).
         assert!(
             elapsed < Duration::from_secs(1),
             "parse took {elapsed:?}, unexpectedly long even accounting for cold-process noise"
@@ -1482,23 +1555,13 @@ description: 'quoted text'
 
     #[test]
     fn test_extract_skill_metadata_alias_bomb_under_declared_field_short_circuits() {
-        // Issue #359 ("vector 2", production-coupled canary). The two tests above pin the
-        // buffering assumption against local, decoupled types; this one closes that gap for
-        // real against production `RawFrontmatter` + `extract_skill_metadata`, the same way
-        // vector 1 does for the unknown-key path. `describe_yaml_error` (used by
-        // `extract_skill_metadata`) passes the underlying `serde_norway` error's `Display`
-        // through into `SkillMetadataError::InvalidYaml(String)`, only rewriting its embedded
-        // line/column offset — see `test_extract_skill_metadata_invalid_yaml` for existing
-        // precedent asserting on that message — so the error text (including the
-        // "repetition limit exceeded" substring this test checks for, untouched by that
-        // rewrite) is directly inspectable here without a local test-only struct.
-        //
-        // Today `RawFrontmatter::description` is `Option<String>`, so deserializing the bomb
-        // sequence into it short-circuits on an immediate type mismatch before any buffering
-        // can happen — the error is NOT the repetition-limit guard. If `description` is ever
-        // retyped to a buffering shape (see `RawFrontmatter`'s doc comment), this assertion
-        // flips loudly: the error becomes "repetition limit exceeded", the same string the two
-        // sibling tests above pin directly.
+        // Issue #359 / ADR-405 C3: a bomb placed directly under a *declared*
+        // `Option<String>` field short-circuits on serde's type mismatch before
+        // `frontmatter_options`'s Budget ever accumulates anything — unchanged from this
+        // crate's previous serde_norway-based parser, and NOT a complexity-budget rejection.
+        // See `RawFrontmatter`'s doc comment and the sibling
+        // `test_alias_bomb_rejection_survives_a_buffering_field_shape`, which covers the shape
+        // that DOES reach the budget.
         let content = format!(
             "---\n{}---\n# Test\n",
             alias_bomb_fixture("name: test-skill\ndescription:\n")
@@ -1509,15 +1572,230 @@ description: 'quoted text'
         );
 
         let result = extract_skill_metadata(&content);
+        assert!(
+            matches!(result, Err(SkillMetadataError::InvalidYaml(_))),
+            "expected InvalidYaml (a type-mismatch short-circuit, not a complexity-budget \
+             rejection): if this is now FrontmatterTooComplex, RawFrontmatter's field shape \
+             likely changed (e.g. a buffering deserialize_with) and reopened the amplification \
+             path this test guards against. got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_config_is_explicitly_set() {
+        // Critic M12: the primary discriminator that `frontmatter_options` configures a real
+        // budget rather than silently leaving it `None`/default — pins the configured value
+        // directly via public fields, with no coupling to serde-saphyr's Debug-rendered breach
+        // text. A dropped `budget:` line would still compile (`Budget` is itself `Default`),
+        // so this test would fail loudly rather than silently regressing to
+        // `Budget::default()`'s far looser `max_nodes: 250_000`.
+        let (options, _budget_breach) = frontmatter_options();
+        let budget = options
+            .budget
+            .expect("frontmatter_options must configure a budget");
+        assert_eq!(budget.max_nodes, 8_192);
+    }
+
+    #[test]
+    fn test_budget_breach_fires_at_configured_max_nodes_not_default() {
+        // Review moderate: critic M12 required both the config-value test above AND a
+        // behavioral test proving the breach fires at *our* configured threshold rather than
+        // some other (e.g. serde-saphyr's much looser default) budget field. Rebuilt against
+        // the authoritative `BudgetReport` (via `frontmatter_options`'s registered callback),
+        // not `Error::AliasError`'s Debug-rendered message -- the previous version of this test
+        // asserted on that message, which is what the Critical `is_budget_breach` fix above
+        // removed as a classification signal.
+        let frontmatter =
+            alias_bomb_fixture("name: test-skill\ndescription: valid description\nunknown_key:\n");
+
+        let (options, budget_breach) = frontmatter_options();
+        let result = serde_saphyr::from_str_with_options::<RawFrontmatter>(&frontmatter, options);
+        assert!(
+            result.is_err(),
+            "expected the alias bomb to be rejected, got: {result:?}"
+        );
+
+        match budget_breach.take() {
+            Some(BudgetBreach::Nodes { nodes }) => {
+                assert!(
+                    nodes <= 8_192 + 100,
+                    "breach fired at {nodes} nodes -- far past our configured max_nodes: \
+                     8_192, suggesting frontmatter_options's budget was silently dropped or \
+                     loosened to serde-saphyr's default (max_nodes: 250_000)"
+                );
+            }
+            other => panic!("expected a Nodes budget breach, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_alias_wrapped_type_mismatch_is_not_a_budget_breach() {
+        // Review Critical fix: `Error::AliasError` is a generic wrapper serde-saphyr attaches
+        // to *any* error raised while deserializing a value reached through an alias, not a
+        // budget-specific variant. An ordinary type mismatch under an alias (no amplification,
+        // no budget breach involved) must still classify as `InvalidYaml`, not
+        // `FrontmatterTooComplex` -- the previous version of `is_budget_breach` matched
+        // `Error::AliasError` unconditionally and misclassified exactly this case.
+        let content = "---\nbase: &a [1, 2]\nname: *a\ndescription: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+        assert!(
+            matches!(result, Err(SkillMetadataError::InvalidYaml(_))),
+            "expected InvalidYaml for an ordinary type mismatch under an alias, not a \
+             complexity-budget rejection; got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_rejects_deeply_nested_unknown_key_value() {
+        // Review Minor fix: `max_depth: 64` is documented as the sole nesting control and a
+        // deliberate exception to the sizing rule, but had zero direct test coverage. Pinned to
+        // a specific depth (per M10/M13: 65-70, comfortably past `max_depth: 64` so this
+        // breaches there, but nowhere near granit-parser's own internal recursion limit
+        // (~270+), which would surface as a different, unlisted error variant instead). Placed
+        // under an *undeclared* key: a declared `Option<String>` field's type mismatch
+        // short-circuits before depth accumulates (see `RawFrontmatter`'s doc comment) --
+        // `max_depth` does not protect that path.
+        let depth = 67;
+        let nested: String = "[".repeat(depth) + &"]".repeat(depth);
+        let content = format!(
+            "---\nname: test-skill\ndescription: test\nunknown_key: {nested}\n---\n# Test\n"
+        );
+
+        let result = extract_skill_metadata(&content);
+        assert!(
+            matches!(result, Err(SkillMetadataError::FrontmatterTooComplex)),
+            "expected FrontmatterTooComplex for nesting past max_depth: 64, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_accepts_500_unknown_keys() {
+        // ADR-405: legitimate frontmatter with many unrecognized keys must not be falsely
+        // rejected by the budget just for exceeding today's two declared fields.
+        use std::fmt::Write as _;
+
+        let mut frontmatter_block = String::from("name: test-skill\ndescription: test\n");
+        for i in 0..500 {
+            writeln!(frontmatter_block, "k{i}: v{i}").unwrap();
+        }
+        assert!(
+            frontmatter_block.len() <= MAX_FRONTMATTER_SIZE,
+            "fixture must stay under the frontmatter cap to exercise the budget, not the size \
+             guard: {} bytes",
+            frontmatter_block.len()
+        );
+
+        let content = format!("---\n{frontmatter_block}---\n# Test\n");
+        let result = extract_skill_metadata(&content);
+        assert!(
+            result.is_ok(),
+            "expected Ok for 500 legitimate unknown keys, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_accepts_node_dense_flow_sequence() {
+        // ADR-405 C4: the densest valid YAML construction is a flat flow sequence of
+        // single-char plain scalars (`[a,a,a,...]`, 2 bytes/node) — NOT `[,,,,]`, which is not
+        // valid YAML ("unexpected EOF while parsing an implicit flow mapping"). This fixture
+        // sits just under `MAX_FRONTMATTER_SIZE` and must clear `max_nodes: 8_192` with margin
+        // to spare.
+        let preamble = "name: test-skill\ndescription: test\nbig: [";
+        let suffix = "]\n";
+        let available = MAX_FRONTMATTER_SIZE - preamble.len() - suffix.len();
+        let mut body = "a,".repeat(available / 2);
+        body.truncate(body.len().saturating_sub(1));
+        let frontmatter_block = format!("{preamble}{body}{suffix}");
+        assert!(frontmatter_block.len() <= MAX_FRONTMATTER_SIZE);
+
+        let content = format!("---\n{frontmatter_block}---\n# Test\n");
+        let result = extract_skill_metadata(&content);
+        assert!(
+            result.is_ok(),
+            "expected Ok for a dense-but-legitimate flow sequence, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_budget_accepts_8kib_plain_scalar() {
+        // ADR-405: a legitimate, scalar-byte-heavy ~8 KiB description must not be falsely
+        // rejected by `max_total_scalar_bytes` (65_536, 8x the input cap).
+        let preamble = "name: test-skill\ndescription: ";
+        let suffix = "\n";
+        let padding_len = MAX_FRONTMATTER_SIZE - preamble.len() - suffix.len();
+        let frontmatter_block = format!("{preamble}{}{suffix}", "a".repeat(padding_len));
+        assert!(frontmatter_block.len() <= MAX_FRONTMATTER_SIZE);
+
+        let content = format!("---\n{frontmatter_block}---\n# Test\n");
+        let result = extract_skill_metadata(&content);
+        assert!(
+            result.is_ok(),
+            "expected Ok for a legitimate ~8 KiB plain scalar, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_yaml_error_does_not_echo_frontmatter_content() {
+        // Critic M9: a duplicate key named after a distinctive marker. Even with
+        // `with_snippet: false`, serde-saphyr's own rendered duplicate-key message still
+        // carries both the attacker-controlled key name and an internal "set
+        // DuplicateKeyPolicy in Options" hint. Neither must reach
+        // `SkillMetadataError::InvalidYaml`'s message, since `describe_yaml_error` never
+        // touches the parser's own `Display`/`to_string()` output (see `yaml_error_kind`).
+        let content = "---\nname: test-skill\nMARKER_TOKEN_abc123: 1\nMARKER_TOKEN_abc123: 2\n\
+                        description: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
         let Err(SkillMetadataError::InvalidYaml(message)) = &result else {
             panic!("expected InvalidYaml, got: {result:?}");
         };
         assert!(
-            !message.contains("repetition limit exceeded"),
-            "RawFrontmatter::description now trips serde_norway's repetition-limit guard on \
-             this fixture, meaning it was retyped to a buffering shape (serde_norway::Value, an \
-             untagged enum, or a buffering deserialize_with) without extending this test — see \
-             RawFrontmatter's doc comment. got: {message:?}"
+            !message.contains("MARKER_TOKEN_abc123"),
+            "error must not echo the frontmatter's key name: {message:?}"
+        );
+        assert!(
+            !message.contains("DuplicateKeyPolicy"),
+            "error must not leak serde-saphyr's internal config-option hint: {message:?}"
+        );
+    }
+
+    #[test]
+    fn test_merge_key_treated_as_ordinary_key() {
+        // `merge_keys: MergeKeyPolicy::AsOrdinary` must treat `<<` as a plain, unrecognized
+        // key rather than expanding it into the surrounding mapping — an anchored map
+        // containing `name`/`description`, referenced via `<<: *defaults`, must not inject
+        // those fields.
+        let content = r"---
+base: &defaults
+  name: INJECTED
+  description: INJECTED
+<<: *defaults
+---
+# Test
+";
+
+        let result = extract_skill_metadata(content);
+        assert!(
+            matches!(
+                result,
+                Err(SkillMetadataError::MissingField { field: "name" })
+            ),
+            "merge key must not inject `name` from the anchored map, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_key_rejected() {
+        // `duplicate_keys: DuplicateKeyPolicy::Error` (equal to serde-saphyr's own default,
+        // set explicitly so an upstream default change cannot silently loosen this) must
+        // reject a frontmatter block that redefines the same key twice.
+        let content = "---\nname: test-skill\nname: other-name\ndescription: test\n---\n# Test";
+
+        let result = extract_skill_metadata(content);
+        assert!(
+            matches!(result, Err(SkillMetadataError::InvalidYaml(_))),
+            "expected InvalidYaml for a duplicate key, got: {result:?}"
         );
     }
 }

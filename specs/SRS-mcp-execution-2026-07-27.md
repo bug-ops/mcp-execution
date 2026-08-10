@@ -165,8 +165,8 @@ graph LR
 - `thiserror` for every library-crate error type; `anyhow` only in the CLI
   binary.
 - Workspace Clippy `all`/`cargo`/`nursery`/`pedantic` set to `deny`.
-- `serde_norway` (not `serde_yaml`/`serde_yml`) for the one YAML use case
-  (SKILL.md frontmatter parsing).
+- `serde-saphyr` (not `serde_yaml`/`serde_yml`/`serde_norway`) for the one
+  YAML use case (SKILL.md frontmatter parsing).
 - Handlebars rendering with HTML-escaping explicitly disabled
   (`no_escape`), since output is TypeScript/JSDoc — injection safety is a
   separate, hand-written sanitization layer (see

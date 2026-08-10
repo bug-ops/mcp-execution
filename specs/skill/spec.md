@@ -14,6 +14,7 @@ related:
   - "[[../core/spec]]"
   - "[[../server/spec]]"
   - "[[../cli/spec]]"
+  - "[[../decisions/ADR-405-adopt-serde-saphyr]]"
 ---
 
 # Block: Skill Generation (`mcp-execution-skill`)
@@ -256,22 +257,40 @@ string — the failure mode that regression-tests pin in `template.rs`.
 ## 7. `extract_skill_metadata` — Frontmatter Parsing
 
 Extracts the `---`-delimited YAML block via a pre-compiled regex, then
-parses it with **`serde_norway`** (a real YAML parser — block/folded
-scalars, quoted scalars all handled correctly, unlike a naive single-line
-regex capture that an earlier version used). The extracted block is
-size-capped at `MAX_FRONTMATTER_SIZE` (8 KiB) **before** parsing, since
-`serde_norway` (like other libyaml-based parsers) is not linear-time on
-pathologically nested input — bounding only the overall `SKILL.md` size
-would not bound parse latency. This pre-parse cap is the project-wide
-contract for YAML input, not a local detail of this function: any future
-YAML parse entry point applies its own cap to the slice it passes to
-`serde_norway`, rather than inheriting a bound from an enclosing
-document-size limit (see [[../constitution#V. Security]]).
+parses it with **`serde-saphyr`** (a real, pure-Rust YAML parser — block/
+folded scalars, quoted scalars all handled correctly, unlike a naive
+single-line regex capture that an earlier version used). The extracted
+block is size-capped at `MAX_FRONTMATTER_SIZE` (8 KiB) **before** parsing;
+this pre-parse cap is the project-wide contract for YAML input, not a local
+detail of this function (see [[../constitution#V. Security]]).
+
+On top of that byte cap, `serde_saphyr::from_str_with_options` is called
+with an explicit `serde_saphyr::Options`/`Budget` (built by the private
+`frontmatter_options` — see [[../decisions/ADR-405-adopt-serde-saphyr]] for
+the full table and its measured margins). Every field of the `Budget` is
+set explicitly rather than left to its own defaults, sized so that
+legitimate frontmatter which already cleared the 8 KiB cap can never be
+falsely rejected; a handful of `Options` fields unrelated to this bound
+(e.g. `legacy_octal_numbers`, `strict_booleans`, two of `AliasLimits`'
+three fields) are left at their defaults deliberately. Three settings are
+policy, not just sizing:
+
+- `duplicate_keys: DuplicateKeyPolicy::Error` — a repeated `name:`/
+  `description:` key is rejected rather than silently taking the first or
+  last value.
+- `merge_keys: MergeKeyPolicy::AsOrdinary` — YAML merge keys (`<<`) are
+  treated as an ordinary, unrecognized key rather than expanded, so an
+  anchored mapping cannot inject `name`/`description` values.
+- `with_snippet: false` — `serde-saphyr`'s snippet-rendering wrapper
+  (`Error::WithSnippet`) is never constructed, so even an accidental
+  `to_string()` on the raw error cannot echo frontmatter source text.
 
 `name`/`description` are required and treated as invalid if absent,
-`null`/`~`, or blank-after-trim. A `serde_norway` deserialization error's
-line number is corrected to be file-relative (the block starts one line
-after the file's opening `---`).
+`null`/`~`, or blank-after-trim — untrimmed otherwise: a block/folded
+scalar's YAML-1.2-correct trailing newline (e.g. `description: |` ending in
+`\n`) is preserved, not stripped (see
+[[../decisions/ADR-405-adopt-serde-saphyr]] for why this is a deliberate,
+documented behavior change from this crate's previous parser).
 
 `name` is additionally passed through `crate::types::validate_skill_name` (issue #419): the two
 `generate` call sites (`mcp-cli`'s `skill` command, `mcp-server`'s `generate_skill` tool) already
@@ -286,29 +305,40 @@ chokepoint both paths share, so the bound lives here rather than being duplicate
 — unreachable via this call site today, since `require_field` already rejects a blank `name`
 first, but mapped rather than panicking so the match stays safe if that ordering ever changes.
 
-> [!note]
-> `serde_norway` remains this project's mandated YAML parser. A pure-Rust
-> replacement (`serde-saphyr`) was evaluated and **not adopted** — see
-> [[../decisions/ADR-341-serde-saphyr-vs-serde-norway]] for the full
-> evidence ledger, the reasons the swap is deferred rather than rejected,
-> and the measurable gate/review date (2026-10-27) for revisiting it.
+A parse failure is one of two `SkillMetadataError` variants:
 
-Regression tests pin an incidental parser characteristic worth preserving:
-`RawFrontmatter`'s `name`/`description` fields are declared as plain
-`Option<String>`, not a buffering type. Because of that, a YAML "alias
-bomb" (a handful of anchors each referencing the previous several times,
-expanding to millions of nodes if fully materialized) placed under an
-undeclared key — or under `description` itself, since deserializing a
-sequence into `Option<String>` short-circuits on an immediate type
-mismatch — is discarded by serde's derived visitor today without expanding
-nested aliases, so parsing stays cheap. Retyping either field to a
-buffering shape (`serde_norway::Value`, an untagged enum, or a buffering
-`#[serde(deserialize_with)]`) would force alias expansion before per-field
-routing and trip `serde_norway`'s own repetition-limit guard instead —
-still bounded, but no longer free. This is a currently-true property of
-`RawFrontmatter`'s field shape, not a designed defense in its own right;
-see [[../decisions/ADR-341-serde-saphyr-vs-serde-norway]] for the
-evaluation this characteristic factored into.
+- `FrontmatterTooComplex` — the parse's `serde_saphyr::budget::BudgetReport`
+  (observed via a registered `budget_report` callback, the authoritative
+  signal) recorded a breach, or the error is one of the four direct
+  `Error::Budget`/`AliasReplay*`/`AliasExpansion*` variants as a fallback.
+  Deliberately does **not** classify on `Error::AliasError`: that variant is
+  a generic wrapper `serde-saphyr` attaches to *any* error raised while
+  deserializing a value reached through an alias, not a budget-specific one
+  — matching it unconditionally would misclassify an ordinary type mismatch
+  that merely happens to occur under an alias.
+- `InvalidYaml(String)` — any other parse failure. The message is
+  constructed by this crate from `serde_saphyr::Error::location()` plus a
+  small fixed vocabulary of failure kinds (`yaml_error_kind`), corrected to
+  be file-relative (the block starts one line after the file's opening
+  `---`). It never touches the parser's own rendered `Display`/`to_string()`
+  text, since that text can carry attacker-controlled frontmatter content
+  (e.g. a duplicate key's name) even with `with_snippet: false` — this is
+  the project's no-untrusted-source-echo rule
+  (see [[../constitution#V. Security]]) applied to this entry point.
+
+Regression tests pin that this defense is **not** shape-independent (see
+[[../decisions/ADR-405-adopt-serde-saphyr]] §"C3"): a YAML "alias bomb" (a
+handful of anchors each referencing the previous several times, expanding
+to millions of nodes if fully materialized) placed under an *undeclared*
+key is materialized by the generic visitor and rejected as
+`FrontmatterTooComplex`. The same bomb placed directly under a *declared*
+`Option<String>` field (`name`/`description`) instead short-circuits on
+serde's type mismatch before the budget accumulates anything, surfacing as
+a plain `InvalidYaml` — unchanged from this crate's previous parser. If
+either field is ever retyped to a buffering shape (an untagged enum, a
+buffering `#[serde(deserialize_with)]`), a bomb under that field reopens
+the materialization path and is rejected as `FrontmatterTooComplex`
+instead — still bounded, never silently expanded.
 
 ## 8. `resolve_skill_output_path` — Path Confinement
 
