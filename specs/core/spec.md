@@ -513,7 +513,7 @@ absorbed into the token's "scheme" and survives, exact parity with what
 
 ```rust
 pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
-pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, and bidi override/isolate controls to spaces; removes bidi marks entirely; truncates by char count
+pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, bidi override/isolate controls, and U+200B to spaces; removes bidi marks, the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and U+2060-U+2064 entirely; leaves U+200C/U+200D untouched; truncates by char count
 pub fn wrap_untrusted_block(context: &str, body: &str) -> String;  // escapes &, <, > in body; wraps in <untrusted-data>...</untrusted-data>
 ```
 Threat model: an introspected MCP server's tool names/descriptions/keywords
@@ -536,6 +536,40 @@ anything on their own, are *removed entirely* so a legitimate mark inside otherw
 text doesn't inject a spurious word break. None of these are covered by `char::is_control` (they
 are Unicode `Cf` format characters, not control characters), so they previously passed through
 this function unmodified.
+
+Since issue #425, `sanitize_untrusted_text` also neutralizes a specific, enumerated set of
+invisible-character smuggling channels neither #422 nor `char::is_control` covers — not
+"invisible/zero-width Unicode characters" as a general class (variation selectors
+U+FE00-U+FE0F/U+E0100-U+E01EF and several other format characters remain unhandled; see the
+limitation note below):
+
+- The Unicode Tags block U+E0000-U+E007F (U+E0001 LANGUAGE TAG plus the U+E0020-U+E007F TAG
+  characters, which mirror ASCII 0x20-0x7F and can encode an entire ASCII payload invisible to a
+  human reviewer but legible to an LLM tokenizer — a known prompt-injection smuggling technique),
+  U+FEFF (ZERO WIDTH NO-BREAK SPACE / BOM), and the contiguous invisible-operator run
+  U+2060-U+2064 (WORD JOINER, FUNCTION APPLICATION, INVISIBLE TIMES, INVISIBLE SEPARATOR,
+  INVISIBLE PLUS) are *removed entirely*, the same treatment as #422's bidi marks: none of them
+  has a glyph in any mainstream font (no visible gap for a space to preserve) and none denotes a
+  break opportunity, so removing one cannot join two tokens a renderer would otherwise show apart.
+- U+200B (ZERO WIDTH SPACE) is instead *replaced with a space*, the same treatment as #422's bidi
+  embedding/override controls, not removed like the characters above: it is itself a Unicode
+  line-break opportunity and the conventional word separator in Thai/Lao/Khmer/Japanese text, so
+  removing it outright would reproduce the exact join hazard (`a\u{200B}b` -> `"ab"`) those
+  controls are spaced rather than removed to avoid.
+- U+200C (ZERO WIDTH NON-JOINER) and U+200D (ZERO WIDTH JOINER) are deliberately left untouched:
+  unlike every character above, they are orthographically load-bearing (Persian/Indic script
+  joining behavior, emoji ZWJ sequences), so stripping or spacing them would corrupt legitimate
+  text rather than only closing an attacker's invisible channel. This is a documented divergence
+  from `ServerConnectionString::new` (`crates/mcp-core/src/cli.rs`), whose stricter ASCII-only
+  allowlist rejects them outright at a validation boundary with no legitimate-content concern to
+  weigh against.
+
+**Known limitation**: variation selectors (U+FE00-U+FE0F and the supplementary block
+U+E0100-U+E01EF, adjacent to the Tags block above) are a second well-known channel for smuggling
+arbitrary bytes attached to a base character and are not yet neutralized by this function —
+deliberately out of scope for #425 rather than folded in, since removing them would also strip
+legitimate emoji-presentation and Ideographic Variation Sequence selectors, a visible rendering
+change none of #425's other additions make.
 
 ## 3. Cross-Crate Contracts
 
@@ -582,6 +616,9 @@ and byte-preserving of each variant's existing `Display` message.
 | `sanitize_path_for_error` on a mounted/bind-mounted home directory | Falls back to scrubbing the bare username substring when the leading-prefix match fails |
 | `sanitize_path_for_error` on a home directory whose username differs from the path's only by NFC-vs-NFD composition form (Windows/macOS) | Still matched and redacted on both the primary `components_match` path and the `scrub_username`/`replace_case_aware` fallback — `haystack`/`needle` are NFC-normalized as whole strings, not per-window, before comparison |
 | `sanitize_untrusted_text` on a value containing U+202E (RIGHT-TO-LEFT OVERRIDE) or an isolate control (U+2066-U+2069) | Flattened to a space, same as a control character |
+| `sanitize_untrusted_text` on a value containing a Unicode Tags block character (U+E0000-U+E007F), U+FEFF, or a character in the U+2060-U+2064 invisible-operator run | Removed entirely, no space substituted |
+| `sanitize_untrusted_text` on a value containing U+200B (ZERO WIDTH SPACE) | Flattened to a space, same as a control character — it is a genuine break opportunity, unlike the removed-entirely characters above |
+| `sanitize_untrusted_text` on a value containing U+200C (ZERO WIDTH NON-JOINER) or U+200D (ZERO WIDTH JOINER) | Left untouched — orthographically load-bearing, deliberately out of scope |
 | `RedactedUrl` on `https://user:p/w@host/mcp` (unencoded `/` in password) | Whole URL redacted — the authority-terminator ambiguity check fires |
 | `resolve_confined_path` terminal component is a dangling symlink, under either `ConfinementTarget` | Rejected as `Escape` — checked via `symlink_metadata`, not `metadata`/`canonicalize`, so a target that can't be resolved is never mistaken for "doesn't exist yet" |
 | `resolve_confined_path` terminal component exists as the other `ConfinementTarget` kind (file where `Directory` expected, or vice versa) | `WrongTargetKind`, mapped by each caller to its own truthful variant name |
