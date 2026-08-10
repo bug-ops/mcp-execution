@@ -324,7 +324,7 @@ jobs:
       - name: Build benchmarks (no run)
         run: cargo bench --no-run --profile bench-fast --workspace
 
-  # Release build check
+  # Release build check (master only — skip on PRs and other branches)
   release:
     name: Release Build
     needs: [changes, test]
@@ -332,7 +332,7 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
-    if: needs.changes.outputs.run-checks == 'true' && needs.test.result == 'success'
+    if: github.ref == 'refs/heads/master' && needs.changes.outputs.run-checks == 'true' && needs.test.result == 'success'
     steps:
       - uses: actions/checkout@v7
 
