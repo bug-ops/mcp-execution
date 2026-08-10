@@ -77,8 +77,15 @@ impl StateManager {
     pub async fn store(&self, generation: PendingGeneration) -> Result<Uuid, StateError>;
     pub async fn take(&self, session_id: Uuid) -> Option<PendingGeneration>;
     pub async fn get(&self, session_id: Uuid) -> Option<PendingGeneration>;
+    pub async fn take_if<T, E>(
+        &self,
+        session_id: Uuid,
+        validate: impl FnOnce(&PendingGeneration) -> Result<T, E>,
+    ) -> Option<Result<(PendingGeneration, usize, T), E>>; // usize = the entry's known size_bytes
     pub async fn pending_count(&self) -> usize;
     pub async fn cleanup_expired(&self) -> usize;
+    // pub(crate) async fn restore(&self, session_id: Uuid, generation: PendingGeneration,
+    //     size_bytes: usize) -> Result<(), StateError>; -- crate-internal, see below
 }
 pub const MAX_PENDING_SESSIONS: usize = 1000;
 pub const MAX_TOTAL_PENDING_BYTES: usize; // = 4 * per-session-estimate (see below)
@@ -156,21 +163,28 @@ issue #381).
 `SaveCategorizedToolsParams { session_id: Uuid, categorized_tools: Vec<CategorizedTool> }`
 → `SaveCategorizedToolsResult { success, files_generated, output_dir, categories: HashMap<String,usize>, errors: Vec<ToolGenerationError> }`.
 
-1. `state.get(session_id)` — a non-consuming peek. The session must exist and not be
-   expired, or `invalid_params`. Nothing is removed from `StateManager` yet: both
-   validation steps below (2 and 3) run against this peeked copy, so a failure in
-   either leaves the session in place, at its original expiry, for the caller
-   to retry with the same `session_id` (issue #371). Only step 4 actually consumes
-   it, via `state.take(session_id)` — which re-checks existence/expiry against the
-   live table and can itself still miss (e.g. a concurrent call for the same
-   `session_id` already consumed it between steps 1 and 4), reporting the identical
-   `invalid_params` error as step 1's miss.
-2. Builds a display-name→raw-name lookup (`display_to_raw`) before validating
-   any entry, since a caller can only ever echo back the *display* form of a
-   tool name `introspect_server` showed it, never the raw one. For each
-   introspected tool, both plausible display forms are computed (`display_forms`):
-   the fully escaped form actually shown (`sanitize_untrusted_text` followed by
-   `&`/`<`/`>` → `&amp;`/`&lt;`/`&gt;` entity-escaping, mirroring
+1. `state.take_if(session_id, validate)` — validates in place and consumes the session
+   only if `validate` succeeds, without ever deep-cloning it (issue #378; see
+   [[#State Management (StateManager)]]). `validate` is `validate_categorized_tools`
+   (step 2 below), a synchronous closure that runs while `take_if` holds the state
+   table's write lock — deliberately restricted to fast, in-memory checks with no I/O.
+   Returns `None` if the session doesn't exist, has expired, or is currently checked
+   out by another in-flight `save_categorized_tools` call for the same `session_id`
+   (`invalid_params` — wording covers all three, since a concurrent caller can't tell
+   which applies); `Some(Err(e))` if `validate` rejected the entry, leaving the
+   session in place at its original expiry for the caller to retry with the same
+   `session_id` (issue #371); `Some(Ok((pending, size_bytes, (categorization,
+   categories))))` if `validate` accepted it — the session is removed from
+   `StateManager` at this point and this call is its sole owner from here on.
+   `size_bytes` is the entry's already-known size (computed once, at `store` time),
+   threaded through so a later `restore` (step 4) never has to re-serialize the
+   session to re-derive it (issue #378 S2 follow-up).
+2. `validate_categorized_tools` builds a display-name→raw-name lookup
+   (`display_to_raw`) before validating any entry, since a caller can only ever echo
+   back the *display* form of a tool name `introspect_server` showed it, never the
+   raw one. For each introspected tool, both plausible display forms are computed
+   (`display_forms`): the fully escaped form actually shown (`sanitize_untrusted_text`
+   followed by `&`/`<`/`>` → `&amp;`/`&lt;`/`&gt;` entity-escaping, mirroring
    `wrap_untrusted_block`'s own escaping) and the same text with those entities
    decoded back, since `wrap_untrusted_block`'s preamble explicitly invites the
    reader to do so. If two **distinct** raw tool names collide on the same
@@ -196,22 +210,38 @@ issue #381).
    (`MAX_CATEGORIZED_TOOL_NAME_LEN`=128, `MAX_CATEGORY_LEN`=100,
    `MAX_KEYWORDS_LEN`=500, `MAX_SHORT_DESCRIPTION_LEN`=320 — each checked via a
    single private `check_categorized_field_length` helper called once per field).
-3. **Resolves `output_dir` fresh, right here, still before consuming the session** —
-   not from any value cached on the session — via `output_dir::resolve_output_dir`
-   (see [[#Output directory resolution]]). Moved ahead of step 4 as part of #371: a
-   `ServerDirIsSymlink`/`NotADirectory`/`Escape` failure here is environment-dependent
-   and thus retriable, so it gets the same session-preserving treatment as step 2's
-   validation instead of destroying the session the way it did before #371.
-4. Drops the peeked session (and `display_to_raw`/`seen_raw_names`, which borrow it)
-   now that steps 2-3 have both passed, then calls `state.take(session_id)` to
-   actually consume it (see step 1). Dropping first bounds peak memory to one live
-   session copy instead of two across the codegen/export work below —
-   `state.get`'s peek in step 1 is a full deep clone of the session, including every
-   introspected tool's schema.
-5. `ProgressiveGenerator::generate_with_categories` → `FilesBuilder::from_generated_code(code, "/")` → `vfs.file_count()` captured.
-6. Exports inside `spawn_blocking`, holding a **per-`output_dir`** lock for
-   the duration (see [[#Per-resource locking]]).
-7. Does **not** observe request cancellation — a documented, deliberate
+3. `generate_and_export` runs the rest of the pipeline against the now-owned
+   `pending`, **borrowed** (not consumed) so the caller can hand it back on failure:
+   resolves and confines `output_dir` fresh, right here — not from any value cached
+   on the session — via `output_dir::resolve_output_dir` (see [[#Output directory
+   resolution]]); `ProgressiveGenerator::generate_with_categories` →
+   `FilesBuilder::from_generated_code(code, "/")` → `vfs.file_count()` captured;
+   exports inside `spawn_blocking`, holding a **per-`output_dir`** lock for the
+   duration (see [[#Per-resource locking]]).
+4. **Any `Err` returned from step 3 - `output_dir` resolution, codegen, VFS build,
+   the `spawn_blocking` join, or export - calls `state.restore(session_id, pending,
+   size_bytes)` before returning that same error** (issue #379); a result-
+   serialization failure after a successful step 3 is treated as unreachable
+   (`SaveCategorizedToolsResult`'s fields cannot fail to serialize) and simply
+   propagates via `?`, matching this project's convention against handling
+   scenarios that can't happen. `restore` re-inserts the session under its original
+   `session_id`, `expires_at` (not a fresh TTL), and `size_bytes`, so a transient
+   failure anywhere in step 3 - a symlink planted after `take_if` ran, a momentary
+   disk-full or permission error during export - is retriable with the same
+   `session_id`, the same guarantee step 1 already gives a pre-consume validation
+   failure. This covers every ordinary error return, not literally everything that
+   could lose the session: a panic inside `generate_and_export`, or the request
+   future being dropped mid-await (process shutdown, transport teardown), still
+   loses it with no restore, same as any pre-#379 code path. `restore` itself
+   enforces the same `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` bounds
+   `store` does (issue #379 S1 — see [[#State Management (StateManager)]]); if the
+   table is already back at capacity by the time this call's checkout window ends,
+   `restore` returns `Err` and the session is genuinely lost — that failure is
+   logged (`GeneratorService::restore_or_log`), not surfaced to the client, since
+   the pipeline's own error is always the more relevant one to report. Only once
+   step 3 fully succeeds, or `restore` runs (successfully or not), is the session's
+   fate settled.
+5. Does **not** observe request cancellation — a documented, deliberate
    choice: an earlier version raced the *lock wait* (not the export
    itself, which was already excluded) against cancellation, but that
    produced two successive correctness bugs (a leaked lock-table entry, or
@@ -282,10 +312,47 @@ required:
   (a serialization failure is treated as `usize::MAX`, i.e. always
   exceeding any bound, rather than silently under-counting).
 
-`StateManager::store`/`take`/`get`/`pending_count`/`cleanup_expired` all
-consult the **injected** `Clock`, not `Utc::now()` directly — verified by a
-dedicated test that jumps a shared `TestClock` far past the TTL and asserts
-every one of those methods observes the same jump.
+`StateManager::store`/`take`/`get`/`take_if`/`restore`/`pending_count`/
+`cleanup_expired` all consult the **injected** `Clock`, not `Utc::now()`
+directly — verified by a dedicated test that jumps a shared `TestClock` far
+past the TTL and asserts every one of those methods observes the same jump.
+
+`take_if` (issue #378) validates a session in place and removes it from the
+table only if the caller-supplied closure returns `Ok` — run synchronously
+while the write lock is held, so it never pays `get`'s full deep-clone cost
+(up to `MAX_SINGLE_SESSION_BYTES`) on a failed attempt, the common case for a
+caller retrying a rejected `categorized_tools` payload. On success it hands
+back the removed session, its already-known `size_bytes`, and the closure's
+output; on failure the session is left untouched at its original expiry,
+identically to what a `get`-then-validate-then-`take` sequence would leave
+behind, but without ever cloning to get there.
+
+`restore` (`pub(crate)`, issue #379) re-inserts a previously-removed session
+(via `take` or a successful `take_if`) under its original `session_id` and
+`size_bytes`, preserving its original `expires_at` rather than granting a
+fresh TTL. Used by `save_categorized_tools` to undo a `take_if` consumption
+when the pipeline step that was supposed to follow it (`output_dir`
+resolution, codegen, VFS build, export) fails for a retriable reason — see
+step 4 in [[#save_categorized_tools]]. `size_bytes` must be the value
+`take_if` (or `store`) already computed for this exact session, so `restore`
+never re-serializes it to re-derive a size its caller already had (issue #378
+S2). Enforces the identical `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES`
+bounds `store` does, returning `Err` and dropping `generation` rather than
+inserting it if either would be exceeded (issue #379 S1): a session removed
+by `take_if` is briefly unaccounted for while its caller's pipeline runs
+(the data is still resident in the handler's memory, just not reflected in
+`total_bytes`), so without this check a client could refill the freed budget
+with concurrent `store`s during that window and have `restore` land on top
+of it, parking the table above its configured caps for the rest of the
+original session's TTL. `pub(crate)` rather than `pub` because no caller
+outside this crate can supply a valid `size_bytes` for an arbitrary
+`generation` — `estimate_size_bytes` (private) is the only way to produce
+one — and an external caller could otherwise pass an arbitrary `session_id`,
+bypassing `store`'s minted-`Uuid` invariant entirely. If `session_id` already
+names an entry (only possible via a colliding UUID from a concurrent
+`store`), it is silently overwritten rather than rejected, since restoring
+the caller's own already-consumed session takes priority over that
+astronomically unlikely edge case.
 
 ## 5. Per-Resource Locking
 
@@ -326,14 +393,18 @@ rather than a file:
   fast, commit to nothing, create nothing.
 - `resolve_output_dir` (filesystem-touching: creates and confinement-checks
   every intermediate directory, symlink-strict at `server_id`'s own
-  directory) is called **only from `save_categorized_tools`**, as the last
-  validation step before the session is consumed (see step 3 in
+  directory) is called **only from `save_categorized_tools`**, as the first
+  step of the post-consume pipeline (see step 3 in
   [[#save_categorized_tools]]) — not once at `introspect_server` time with
   the result cached on the session. Caching it would leave a window (up to
   the full 30-minute session lifetime) in which a symlink planted after
   resolution is never re-checked, and would create directories for any
   `introspect_server` call regardless of whether a matching
-  `save_categorized_tools` ever follows.
+  `save_categorized_tools` ever follows. Running it after the session is
+  already consumed (rather than before, as an earlier version of this fix
+  had it) is safe specifically because a failure here now triggers
+  `state.restore` (issue #379) exactly like any other post-consume pipeline
+  failure, so it costs nothing in retriability.
 - The **final** target directory is confinement-checked but deliberately
   **not created** here — `FileSystem::export_to_filesystem` publishes it
   atomically via a staged rename, and pre-creating it would defeat that

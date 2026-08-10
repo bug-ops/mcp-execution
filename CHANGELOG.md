@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which is a trigger to re-open the ADR-369 discussion on adopting rmcp's SEP-2575 stateless
   discover lifecycle — not authorization to implement it, and not a "fix the assertion" bug
   (#382).
+- **`mcp-execution-server`**: `StateManager::take_if` — a validate-then-consume primitive that
+  runs a synchronous validation closure against a session while holding the state table's write
+  lock, removing the session only if the closure succeeds, without paying `StateManager::get`'s
+  full deep-clone cost on a failed (and likely retried) attempt; it hands back the entry's
+  already-known `size_bytes` alongside the session so nothing downstream needs to re-derive it
+  (#378). A crate-internal `StateManager::restore` re-inserts a previously-removed session under
+  its original `session_id`, `expires_at`, and `size_bytes`, enforcing the same
+  `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` bounds `store` does rather than silently
+  bypassing them (#379).
 
 ### Changed
 
@@ -35,14 +44,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
   `mcp-execution-codegen`'s `TemplateEngine`. Without it, a template referencing a typo'd or
   removed field silently rendered an empty string instead of failing at render time.
+- **`mcp-execution-server`**: `save_categorized_tools` no longer discards its session on a
+  post-consume failure. `categorized_tools` validation now runs via the new
+  `StateManager::take_if`, which consumes the session only once validation passes, without the
+  full session clone the previous `get`-then-`take` pair paid on every failed retry (#378).
+  `output_dir` resolution, codegen, VFS build, and export now all run *after* that consumption,
+  against the session `save_categorized_tools` alone owns; a failure at any of those stages
+  calls `StateManager::restore` to re-insert the session under its original `session_id` and
+  `expires_at` before returning the error. Previously, any failure past the point the session was
+  consumed (codegen, VFS build, the export `spawn_blocking` join, or the export itself)
+  permanently burned the session even for a transient cause (a momentary disk-full or I/O error),
+  forcing the caller back to `introspect_server` just to retry (#379).
 - **`mcp-execution-server`**: `save_categorized_tools` no longer destroys its pending session
-  on a `categorized_tools` validation failure or an `output_dir` resolution failure. Both now
-  run against a non-consuming peek of the session (`StateManager::get`), and the session is
-  only consumed (`StateManager::take`) once every check has passed, immediately before
-  generation and export. Previously, a single bad entry (typo'd tool name, duplicate, too many
-  entries) or a transient output-directory confinement issue permanently burned the session
-  even though nothing was ever exported and the session's TTL hadn't elapsed, forcing the
-  caller back to `introspect_server` just to retry (#371).
+  on a `categorized_tools` validation failure. A failed validation leaves the session in place,
+  at its original expiry, for the caller to retry with the same `session_id` instead of a
+  single bad entry (typo'd tool name, duplicate, too many entries) permanently burning it (#371).
 
 ### Testing
 
