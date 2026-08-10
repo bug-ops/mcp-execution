@@ -497,16 +497,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dangling, odd-length run of trailing backslashes that escaped the generated template's own
   closing quote, leaving the `callMCPTool('...')` string literal unterminated — invalid
   generated TypeScript, not code injection (every quote in the escaped output is still
-  backslash-preceded). An earlier draft of this change also added a `ToolName::new`
-  construction-time denylist gate (`ToolNameError::InvisiblePayloadChar`, backed by new
-  `untrusted::contains_invisible_payload_char`/`contains_variation_selector` predicates) that
-  rejected the same character classes outright; this was superseded before merge by #444's UTS
-  #39 `Identifier_Status=Allowed` allowlist landing on the same constructor, which independently
-  rejects every character either predicate flagged (none of them carry
-  `Identifier_Status=Allowed`) via `ToolNameError`/`ServerIdError::DisallowedCharacter` — so the
-  denylist call was dropped from `ToolName::new` rather than kept redundantly alongside the
-  allowlist gate. Both predicates remain in `untrusted` as independently tested, standalone
-  denylist-style checks available to any future construction-time boundary that needs one.
+  backslash-preceded). An earlier, unreleased draft of this change also added a `ToolName::new`
+  construction-time denylist gate rejecting the same character classes outright; it never
+  shipped, since it was superseded before merge by #444's UTS #39 `Identifier_Status=Allowed`
+  allowlist landing on the same constructor, which independently rejects every character the
+  denylist flagged (none of them carry `Identifier_Status=Allowed`) via
+  `ToolNameError`/`ServerIdError::DisallowedCharacter`. The denylist gate and its two supporting
+  predicates were removed rather than kept redundantly alongside the allowlist check.
 - **`mcp-execution-core`**: `sanitize_untrusted_text` now mitigates the variation-selector
   invisible-payload channel (U+FE00-U+FE0F, U+E0100-U+E01EF), adjacent to the Unicode Tags
   block and left unaddressed by the prior hardening since these characters carry genuine

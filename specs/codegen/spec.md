@@ -236,8 +236,8 @@ actual injection-safety mechanism given `no_escape` is set:
 >
 > Defense-in-depth: `ToolName::new`/`ServerId::new` (`specs/core/spec.md`,
 > issue #444) independently reject the same invisible-payload character
-> classes (and, since #431, any variation selector) at construction, via
-> the UTS #39 `Identifier_Status=Allowed` allowlist gate — so a hostile
+> classes, and any variation selector, at construction, via the UTS #39
+> `Identifier_Status=Allowed` allowlist gate — so a hostile
 > tool name or server id from introspection never reaches this function in
 > the first place — but `sanitize_ts_string_literal` also runs this
 > neutralization itself as a length-bound/defense-in-depth layer, since it

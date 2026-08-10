@@ -197,76 +197,6 @@ pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Returns `true` if `s` contains an invisible-payload smuggling character.
-///
-/// Flags any character [`sanitize_untrusted_text`] treats as an invisible-payload smuggling
-/// vector: the bidi embedding/override/isolate controls, the weaker bidi directional marks,
-/// the Unicode Tags block, U+FEFF, the U+2060-U+2064 invisible-operator run, or U+200B.
-///
-/// Unlike [`sanitize_untrusted_text`], which repairs text meant for straight-through display
-/// by neutralizing these characters in place, this is a reject/accept predicate for
-/// construction-time validation boundaries that have no rendering context to fall back on and
-/// therefore refuse a hostile value outright rather than silently repairing it. `ToolName::new`
-/// and `ServerId::new` cover this need today via a UTS #39 `Identifier_Status=Allowed`
-/// allowlist (issue #433) instead of this denylist, since every character class flagged here is
-/// already outside that allowed set; this predicate remains available as an independent,
-/// denylist-based check for any future construction-time boundary that needs one without
-/// adopting the full UTS #39 identifier charset.
-///
-/// Does not flag variation selectors (U+FE00-U+FE0F, U+E0100-U+E01EF): unlike the characters
-/// above, a single variation selector is legitimate emoji-presentation/IVS content in *display
-/// text*, not a smuggling vector, so a general-purpose predicate used for that case leaves them
-/// to [`sanitize_untrusted_text`]'s run-length/total-count heuristics rather than rejecting
-/// outright. That rationale does not transfer to every caller, though — see
-/// [`contains_variation_selector`] for the stricter check a construction-time *identifier* gate
-/// (which has no legitimate use for an emoji presentation selector at all) should combine this
-/// predicate with instead of relying on this one alone (issue #431, critic finding S1).
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::untrusted::contains_invisible_payload_char;
-///
-/// assert!(!contains_invisible_payload_char("safe_tool_name"));
-/// assert!(contains_invisible_payload_char("safe\u{E0001}\u{E0073}\u{E007F}"));
-/// assert!(contains_invisible_payload_char("safe\u{202E}evil"));
-/// ```
-#[must_use]
-pub fn contains_invisible_payload_char(s: &str) -> bool {
-    s.chars()
-        .any(|c| is_bidi_mark(c) || is_bidi_control(c) || is_invisible_char(c) || c == '\u{200B}')
-}
-
-/// Returns `true` if `s` contains any Unicode variation selector (U+FE00-U+FE0F "VS1-VS16" or
-/// U+E0100-U+E01EF "Variation Selectors Supplement").
-///
-/// Deliberately stricter than [`contains_invisible_payload_char`]: that predicate leaves
-/// variation selectors unflagged because a single one is legitimate in *display text* (emoji
-/// presentation selection, CJK IVS). A construction-time *identifier* gate has no equivalent
-/// legitimate use to protect — the same reasoning [`crate::cli::ServerConnectionString::new`]
-/// already applies to reject U+200C/U+200D outright rather than accommodate their orthographic
-/// role, since an identifier is not display prose — so such a gate should reject *any*
-/// variation selector rather than only runs over this module's private per-run/whole-value
-/// thresholds, which are display-text heuristics tuned to avoid false positives on legitimate
-/// rendering, not identifier-safe thresholds (issue #431, critic finding S1). `ToolName::new`
-/// and `ServerId::new` meet this need today via a UTS #39 identifier allowlist (issue #433)
-/// instead, which rejects every variation selector as a side effect of not being in the
-/// `Identifier_Status=Allowed` set; this predicate remains available as a standalone check for
-/// any future identifier-shaped boundary.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::untrusted::contains_variation_selector;
-///
-/// assert!(!contains_variation_selector("safe_tool_name"));
-/// assert!(contains_variation_selector("safe\u{FE0F}"));
-/// ```
-#[must_use]
-pub fn contains_variation_selector(s: &str) -> bool {
-    s.chars().any(is_variation_selector)
-}
-
 /// Maximum number of consecutive Unicode variation selectors (U+FE00-U+FE0F "VS1-VS16" and
 /// U+E0100-U+E01EF "Variation Selectors Supplement") [`sanitize_untrusted_text`] leaves
 /// untouched after a single base character before treating the run as payload smuggling.
@@ -462,10 +392,7 @@ pub fn wrap_untrusted_block(context: &str, body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MAX_UNTRUSTED_FIELD_LEN, contains_invisible_payload_char, contains_variation_selector,
-        sanitize_untrusted_text, wrap_untrusted_block,
-    };
+    use super::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text, wrap_untrusted_block};
 
     #[test]
     fn sanitize_strips_all_line_terminator_variants() {
@@ -861,40 +788,5 @@ mod tests {
                 .any(super::is_variation_selector)
         );
         assert_eq!(sanitized_over_limit, "a".repeat(17));
-    }
-
-    #[test]
-    fn contains_variation_selector_flags_single_selector() {
-        assert!(contains_variation_selector("safe\u{FE0F}"));
-        assert!(contains_variation_selector("safe\u{E0100}"));
-    }
-
-    #[test]
-    fn contains_variation_selector_ignores_clean_text() {
-        assert!(!contains_variation_selector("perfectly_safe_tool_name"));
-    }
-
-    #[test]
-    fn contains_invisible_payload_char_flags_tags_block() {
-        assert!(contains_invisible_payload_char(
-            "safe\u{E0001}\u{E0073}\u{E007F}"
-        ));
-    }
-
-    #[test]
-    fn contains_invisible_payload_char_flags_bidi_override() {
-        assert!(contains_invisible_payload_char("safe\u{202E}evil"));
-    }
-
-    #[test]
-    fn contains_invisible_payload_char_ignores_clean_text() {
-        assert!(!contains_invisible_payload_char("perfectly_safe_tool_name"));
-    }
-
-    /// Variation selectors are not flagged by this predicate — they are left to
-    /// `sanitize_untrusted_text`'s run-length heuristic since a single one is legitimate.
-    #[test]
-    fn contains_invisible_payload_char_ignores_single_variation_selector() {
-        assert!(!contains_invisible_payload_char("\u{2764}\u{FE0F}"));
     }
 }

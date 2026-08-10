@@ -122,22 +122,21 @@ longer usable as a `ServerId` at all — `mcp-cli`'s config-key lookup
 the stricter slug rule ([[../cli/spec]]) since `ServerId::new`'s own baseline was already the
 only gate; that baseline is now the Unicode-identifier-safe one described above.
 
-Issues #432 and #431 (critic finding S1) originally closed this same gap with a second,
-denylist-based check in `ToolName::new` — `untrusted::contains_invisible_payload_char` (Tags
-block, bidi embedding/override/isolate controls, the weaker bidi directional marks, and
-zero-width/invisible-operator characters) plus `untrusted::contains_variation_selector` (any
-variation selector, stricter than `sanitize_untrusted_text`'s display-text run/total
-thresholds since an identifier has no rendering to protect). Issue #444's UTS #39 allowlist
-(above) independently closes the identical gap — none of the characters either predicate flags
-carry `Identifier_Status=Allowed`, so `first_disallowed_identifier_char` rejects all of them as
-a side effect of accepting only the allowlisted set — so the denylist call in `ToolName::new`
-was removed rather than kept alongside the allowlist gate, avoiding an unreachable second
-`ToolNameError` variant that could never fire once the allowlist check (which runs first) had
-already rejected the same input. `contains_invisible_payload_char`/`contains_variation_selector`
-remain in `untrusted` as independently tested, standalone predicates for any future
-construction-time boundary that needs a denylist-style check without adopting the full UTS #39
-identifier charset; they are not currently called by `ToolName::new`, `ServerId::new`, or any
-other in-tree call site.
+Issues #432 and #431 originally closed this same gap with a second, denylist-based check in
+`ToolName::new` (a `contains_invisible_payload_char` predicate covering the Tags block, bidi
+embedding/override/isolate controls, the weaker bidi directional marks, and
+zero-width/invisible-operator characters, plus a `contains_variation_selector` predicate for any
+variation selector, stricter than `sanitize_untrusted_text`'s display-text run/total thresholds
+since an identifier has no rendering to protect). Issue #444's UTS #39 allowlist (above)
+independently closes the identical gap — none of the characters either predicate flagged carry
+`Identifier_Status=Allowed`, so `first_disallowed_identifier_char` rejects all of them as a side
+effect of accepting only the allowlisted set — so the denylist check was removed from
+`ToolName::new` rather than kept alongside the allowlist gate (avoiding an unreachable second
+`ToolNameError` variant that could never fire once the allowlist check, which runs first, had
+already rejected the same input), and both predicates were deleted outright rather than kept as
+unused public API: with the denylist call site gone, they had no in-tree caller left, the exact
+dead-capability pattern PR #444 — the same PR that added this allowlist gate — removed
+`Error::is_connection_error`/`is_timeout` for (issue #427).
 
 `ServerId::new` gets the same single UTS #39 allowlist gate as `ToolName::new` (issue #444) and
 never had the denylist check `ToolName::new` briefly carried. `sanitize_ts_string_literal` (the
@@ -608,8 +607,6 @@ absorbed into the token's "scheme" and survives, exact parity with what
 pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, bidi override/isolate controls, and U+200B to spaces; removes bidi marks, the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and U+2060-U+2064 entirely; leaves U+200C/U+200D untouched; THEN, on the filtered result, drops all variation selectors if their whole-value total exceeds 16, else drops any run of more than 2 consecutive ones; truncates by char count
 pub fn wrap_untrusted_block(context: &str, body: &str) -> String;  // escapes &, <, > in body; wraps in <untrusted-data>...</untrusted-data>
-pub fn contains_invisible_payload_char(s: &str) -> bool; // reject/accept predicate for construction-time validation boundaries; flags the same characters sanitize_untrusted_text removes/spaces (Tags block, bidi marks/controls, zero-width operators, U+200B) but not variation selectors -- see contains_variation_selector for those. Not currently called by ToolName::new/ServerId::new (issue #444's UTS #39 allowlist covers the same gap there); kept as a standalone denylist-style predicate for any future construction-time boundary that needs one
-pub fn contains_variation_selector(s: &str) -> bool; // stricter reject/accept predicate for construction-time *identifier* gates: flags ANY variation selector, unlike sanitize_untrusted_text's display-text run/total thresholds, since an identifier has no legitimate rendering use to protect. Not currently called by ToolName::new/ServerId::new for the same reason as above
 ```
 Threat model: an introspected MCP server's tool names/descriptions/keywords
 are attacker-controlled from this project's perspective. Both functions
