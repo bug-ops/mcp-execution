@@ -272,6 +272,22 @@ header name/value) — this is enforced by tests, not just convention.
 
 ```rust
 pub enum OutputFormat { Json, Text, #[default] Pretty } // FromStr, Display
+pub enum LogFormat { #[default] Text, Json } // FromStr, Display; mirrors OutputFormat's shape
+pub const LOG_FORMAT_ENV_VAR: &str = "MCP_EXECUTION_LOG_FORMAT";
+// LogFormat::resolve(flag: Option<LogFormat>, env_value: Option<&str>) -> LogFormat: flag wins
+// unconditionally (env not even inspected on Some); empty/whitespace env is treated as unset;
+// an unrecognized env value falls back to Text. Returns only the resolved format -- no rejected
+// raw value threaded through, since no production caller logs it (see below). Pure and
+// process-env-free by design: callers pass `std::env::var(LOG_FORMAT_ENV_VAR).ok()` in
+// themselves, which keeps this testable without mutating process env.
+// LogFormat::parse_env(raw: &str) -> Option<LogFormat>: `resolve`'s env-parsing step, exposed
+// separately -- None for both an empty/whitespace value and an unrecognized one.
+// LogFormat::is_invalid_env_value(raw: &str) -> bool: true only for a non-empty value
+// `parse_env` rejects, i.e. the "should a caller warn about this" question `resolve` itself
+// doesn't answer. Lets a caller (both `mcp-cli`'s `init_logging` and `mcp-server`'s
+// `resolve_log_format`/`log_format_env_is_invalid`) decide whether to warn without `resolve`
+// carrying a second, production-dead return value -- an earlier `(LogFormat, Option<String>)`
+// shape was reworked away for exactly that reason.
 pub struct ExitCode(i32); // SUCCESS=0, ERROR=1, INVALID_INPUT=2, SERVER_ERROR=3, TIMEOUT=4
 // ExitCode::from_i32(code: i32) -> Option<ExitCode>: None outside 0..=255 (std::process::exit's
 // actual valid range), instead of accepting any i32 unchecked.
@@ -282,6 +298,18 @@ pub struct ServerConnectionString(String); // charset [A-Za-z0-9-_./:], <=256 ch
 `mcp-cli` actually uses for `--from-config`/`server` values today (those
 flow through `ServerId`/`ServerConfig` instead) — it exists as reusable,
 tested infrastructure in this crate's public surface.
+
+`LogFormat` (issue #399) lives here rather than in `mcp-cli` specifically
+because `mcp-server` needs it too and does not depend on `mcp-cli`: putting
+it here means `mcp-core` gains a second CLI-adjacent enum but no new
+dependency (it's a plain enum), and the two binaries' `--log-format`
+flag/`MCP_EXECUTION_LOG_FORMAT` fallback logic can never drift apart the
+way two independently hand-rolled copies could. Both
+`mcp-cli::runner::init_logging` and `mcp-server`'s `resolve_log_format`
+call `LogFormat::resolve` and then build the same `.boxed()`-branched
+`fmt::layer()`/`fmt::layer().json()` pair — see
+[[../cli/spec#5. runner.rs|cli spec §5]] and
+[[../server/spec#Logging & CLI Surface|server spec §9]].
 
 ### `metadata` module (`src/metadata.rs`)
 
@@ -408,7 +436,10 @@ sentence. It locates each `scheme://…` token by walking left over
 scheme-legal characters from `://`, walking right to the first whitespace,
 control character, or wrapping-punctuation character (quote, backtick,
 paren — or text's end), and trimming trailing sentence punctuation (`,` `.`
-`;` `:`); the resulting token is redacted by handing it to `RedactedUrl`'s
+`;` `:` `\`) — the backslash covers a JSON string serializer's escaping
+backslash before a closing `"` around a quoted URL, which would otherwise be
+absorbed into the token and deleted, leaving unescaped, invalid JSON; the
+resulting token is redacted by handing it to `RedactedUrl`'s
 own `Debug` impl, so the *masking* decision — what counts as
 authority/query, what gets hidden — can never drift between the two.
 
@@ -469,8 +500,8 @@ data into text an LLM later reads as instructions — see
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix` (renders them into the generated runtime bridge template) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen` |
 | `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-cli` | `cli::{OutputFormat, ExitCode}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
+| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
+| `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth
 

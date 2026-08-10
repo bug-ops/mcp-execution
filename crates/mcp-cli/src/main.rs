@@ -30,11 +30,11 @@ use mcp_execution_cli::runner;
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    runner::init_logging(cli.verbose)?;
+    runner::init_logging(cli.verbose, cli.log_format)?;
 
-    // `--format` is typed as `OutputFormat` directly (clap's `FromStr`-based
-    // auto value parser), so an invalid value (e.g. `--format xml`) is
-    // already rejected by clap itself before this point.
+    // `--format` is typed as `OutputFormat` directly (a `PossibleValuesParser`-based value
+    // parser, see `cli.rs`), so an invalid value (e.g. `--format xml`) is already rejected by
+    // clap itself before this point.
     let exit_code = runner::execute_command(cli.command, cli.format).await?;
 
     std::process::exit(exit_code.as_i32());

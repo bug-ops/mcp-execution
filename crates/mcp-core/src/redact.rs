@@ -223,8 +223,12 @@ fn is_token_terminator(c: char) -> bool {
 /// scheme-legal characters, then walking right to the first whitespace,
 /// control character, or wrapping-punctuation character (quote, backtick,
 /// paren — or the end of `text`), then trimming trailing sentence
-/// punctuation (`,` `.` `;` `:`) that a log message or `Display` impl
-/// commonly appends after a URL. That terminator set is deliberately
+/// punctuation (`,` `.` `;` `:` `\`) that a log message or `Display` impl
+/// commonly appends after a URL — the backslash covers the escaping
+/// backslash a JSON string serializer inserts before a `"` that closes a
+/// quoted URL, which the token walk otherwise absorbs as part of the URL
+/// and then deletes, leaving the quote unescaped and the JSON invalid.
+/// That terminator set is deliberately
 /// narrower than "every character invalid in a URL" — RFC 3986 IP-literal
 /// delimiters (`[`/`]`, needed verbatim for an IPv6 authority like
 /// `http://[::1]:1/path`) and every other RFC 3986 "unsafe" character are
@@ -236,6 +240,16 @@ fn is_token_terminator(c: char) -> bool {
 /// wrap one", so a token capturing a few extra characters of trailing
 /// prose is the accepted cost of never capturing too few and truncating a
 /// secret.
+///
+/// The `\` addition to the trim set (above) has its own over-capture corollary in JSON mode: a
+/// raw control character (e.g. a literal newline) immediately after a URL, once JSON-escaped to
+/// a printable two-character sequence like `\n`, is no longer a `is_token_terminator` match —
+/// neither `\` nor the following letter is whitespace, control, or wrapping punctuation — so the
+/// token walk continues past it and swallows whatever prose follows, right up to the next real
+/// terminator, into the redaction. This is the same "over-capture is the safe failure mode"
+/// contract already documented above, not a new class of gap: no secret leaks and the output
+/// stays valid JSON, the same guarantee the `\"`-preserving fix targets — it just means slightly
+/// more trailing prose than usual is swallowed on this specific input shape.
 ///
 /// The one residual gap from this heuristic: a raw, un-percent-encoded
 /// instance of *any* terminator character — whitespace and control
@@ -375,7 +389,7 @@ pub fn redact_urls_in_text(text: &str) -> String {
             }
         }
 
-        let token = text[start..end].trim_end_matches([',', '.', ';', ':']);
+        let token = text[start..end].trim_end_matches([',', '.', ';', ':', '\\']);
 
         out.push_str(&text[cursor..start]);
         // Infallible: `String`'s `fmt::Write` impl never returns `Err`.
@@ -686,5 +700,37 @@ mod tests {
         let line = "url http://127.0.0.1:1/mcp?<redacted> failed";
         let redacted = redact_urls_in_text(line);
         assert_eq!(redacted, line);
+    }
+
+    /// Regression test for the JSON-mode logging bug (`MCP_EXECUTION_LOG_FORMAT=json`): when
+    /// `redact_urls_in_text` runs on text that is itself a `serde_json`-escaped JSON string value
+    /// -- the shape `RedactingWriter` sees when it wraps a `tracing_subscriber` JSON formatter's
+    /// already-serialized output -- the backslash `serde_json` inserts before an escaped `"` must
+    /// survive redaction. Before the `'\\'` trim-set fix, the token walk absorbed that backslash
+    /// into the URL token and deleted it on replacement, leaving a bare unescaped `"` and invalid
+    /// JSON. Covers the quoted-URL shape (the one that reproduced the bug) plus four related
+    /// shapes that must keep working.
+    #[test]
+    fn redact_urls_in_text_output_stays_valid_json_after_escaping() {
+        let raw_lines = [
+            r#"failed to connect to "https://api.example.invalid/mcp?token=hunter2secret" after 3 tries"#,
+            "failed to connect to https://api.example.invalid/mcp?token=hunter2secret after 3 tries",
+            "failed to connect to (https://api.example.invalid/mcp?token=hunter2secret) after 3 tries",
+            "failed to connect to https://user:hunter2secret@api.example.invalid/mcp?x=1 after 3 tries",
+            "failed to connect to https://api.example.invalid/mcp?token=hunter2secret\\ after 3 tries",
+        ];
+
+        for raw in raw_lines {
+            let json_field = serde_json::to_string(raw).expect("string always encodes");
+            let redacted = redact_urls_in_text(&json_field);
+            assert!(
+                !redacted.contains("hunter2secret"),
+                "secret leaked for {raw:?}: {redacted}"
+            );
+
+            let json_line = format!(r#"{{"message":{redacted}}}"#);
+            serde_json::from_str::<serde_json::Value>(&json_line)
+                .unwrap_or_else(|e| panic!("invalid JSON for {raw:?}: {e}\n{json_line}"));
+        }
     }
 }

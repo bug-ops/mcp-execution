@@ -69,6 +69,21 @@ handler-level failure — see [[#5. runner.rs]]), and
 `completions`-generated shell scripts complete `--format` from the same
 three values (issue #206).
 
+`--log-format {text,json}` (issue #399) is a second, independent global
+flag: it selects the *diagnostic log* format (text vs. structured JSON,
+written to stderr via `runner::init_logging`), not the command *result*
+format `--format` controls. Typed as `Option<mcp_execution_core::cli::LogFormat>`
+via the same `PossibleValuesParser`/`ignore_case = true` pattern as
+`--format` (so `--help` lists both possible values and case-insensitivity
+comes from clap, not a manual `to_lowercase`), deliberately with **no**
+`default_value` — `None` means "flag not passed, consult the
+`MCP_EXECUTION_LOG_FORMAT` environment variable" (see
+[[#5. runner.rs|init_logging]]). An invalid `--log-format` value is
+rejected by clap itself, exactly like `--format`; an invalid
+`MCP_EXECUTION_LOG_FORMAT` value is handled leniently (falls back to text
+with a `WARN` log line) since it is consulted only after the flag, deep
+inside `init_logging`, not at clap-parse time.
+
 `introspect`/`generate` flatten a shared `ServerFlags` (`#[derive(Args)]`,
 private fields, `cli.rs`) holding `from_config`/`server`/`args`/`env`/`cwd`/
 `http`/`sse`/`headers`/`connect_timeout_secs`/`discover_timeout_secs`.
@@ -202,10 +217,73 @@ future.
 ## 5. `runner.rs` — Dispatch and Exit-Code Classification
 
 ```rust
-pub fn init_logging(verbose: bool) -> Result<()>;
+pub fn init_logging(verbose: bool, log_format: Option<LogFormat>) -> Result<()>;
 pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode>;
 pub fn report_and_classify(err: &anyhow::Error) -> ExitCode;
 ```
+
+`init_logging`'s `log_format` parameter (issue #399) is `cli.log_format`
+verbatim — `None` when `--log-format` was not passed. Two private
+module-level functions (mirroring `mcp-execution-server`'s
+`resolve_log_format`/`log_format_env_is_invalid`) are extracted out of
+`init_logging` rather than inlined, specifically so a test can assert
+`MCP_EXECUTION_LOG_FORMAT` is actually consulted — see
+`resolve_log_format_reads_env_var_when_flag_unset` — not only that the pure
+resolvers they delegate to work given a hand-built input:
+- `resolve_log_format(log_format: Option<LogFormat>) -> LogFormat` reads
+  `MCP_EXECUTION_LOG_FORMAT` itself (`std::env::var(LOG_FORMAT_ENV_VAR).ok()`)
+  and resolves the effective format via the pure, unit-tested
+  `mcp_execution_core::cli::LogFormat::resolve(log_format, env_value)`: the
+  flag wins unconditionally when set (the environment variable is not even
+  inspected in that case); otherwise an empty/whitespace env value is
+  treated as unset, a valid one (case-insensitive) is used, and an
+  unrecognized one falls back to `LogFormat::Text`. `resolve` returns only
+  the resolved format — no caller logs the rejected raw value (an earlier
+  design threading it through `resolve`'s return type as `(LogFormat,
+  Option<String>)` was reworked away: neither production call site
+  consumed it, exactly the "capability designed, caller never wired"
+  pattern issue #399 itself targets).
+- `log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool`
+  independently reads the same environment variable and answers "should
+  `init_logging` warn about it", via
+  `mcp_execution_core::cli::LogFormat::is_invalid_env_value(raw)`: `false`
+  whenever the flag was passed (matching `resolve`'s own precedence — a
+  bad env value must not warn once the flag has already decided) or the
+  env value is unset/valid, `true` only for a non-empty rejected value.
+
+`init_logging` calls both, then emits a fixed-message `tracing::warn!`
+*after* subscriber init (a warn before init would go nowhere) when
+`log_format_env_is_invalid` returns `true` — the rejected raw value is
+never interpolated into that log line, to avoid a log-injection vector
+from external process environment input.
+
+Building the layer itself: `fmt::layer()` and `fmt::layer().json()` are
+different types (`Format<Full>` vs. `Format<Json>`), so they cannot share
+one binding across an `if`/`match`. `init_logging` instead builds the
+writer-configured layer once — `fmt::layer().with_writer(|| RedactingWriter(io::stderr()))`
+— then branches only on the terminal `.json()`/no-op call, `.boxed()`-ing
+each arm to a common `Box<dyn Layer<_> + Send + Sync>`:
+
+```rust
+let fmt_layer = tracing_subscriber::fmt::layer().with_writer(|| RedactingWriter(io::stderr()));
+let layer = match format {
+    LogFormat::Json => fmt_layer.json().boxed(),
+    LogFormat::Text => fmt_layer.boxed(),
+};
+tracing_subscriber::registry().with(filter).with(layer).init();
+```
+
+This proves `RedactingWriter` is present in both arms by construction — the
+writer is configured once, before the format branch, so no copy-paste
+divergence between two full `registry()...init()` calls can silently drop
+it from one arm. `RedactingWriter` itself is formatter-independent (it
+wraps the byte sink, not the event formatter), so it applies identically to
+text and JSON output — with one caveat: `redact_urls_in_text`'s trailing-
+punctuation trim set includes `\` (backslash) specifically so a redacted
+URL sitting inside a JSON-escaped string (`serde_json` escaping `"` to
+`\"`) does not absorb and delete that escaping backslash, which would
+otherwise leave an unescaped `"` and invalid JSON — see
+[[../core/spec#redact module|redact_urls_in_text]].
 
 `execute_command` **never propagates a handler failure as `Err`** — it
 always resolves to `Ok(classified_exit_code)` (issue #195's fix, so `main`

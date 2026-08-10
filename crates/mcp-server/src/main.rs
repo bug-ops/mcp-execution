@@ -9,7 +9,7 @@
 //! Run the server via stdio transport:
 //!
 //! ```bash
-//! mcp-execution-server
+//! mcp-execution
 //! ```
 //!
 //! Or configure in `~/.config/claude/mcp.json`:
@@ -18,15 +18,18 @@
 //! {
 //!   "mcpServers": {
 //!     "mcp-execution": {
-//!       "command": "mcp-execution-server"
+//!       "command": "mcp-execution"
 //!     }
 //!   }
 //! }
 //! ```
 
 use anyhow::Result;
+use clap::Parser;
+use clap::builder::{PossibleValuesParser, TypedValueParser as _};
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
+use mcp_execution_core::cli::{LOG_FORMAT_ENV_VAR, LogFormat};
 use mcp_execution_server::service::GeneratorService;
 use rmcp::RoleServer;
 use rmcp::ServiceExt;
@@ -35,6 +38,7 @@ use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
 use rmcp::transport::stdio;
 use std::collections::VecDeque;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::io::AsyncRead;
@@ -42,7 +46,77 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder, FramedRead, FramedWrite};
 use tokio_util::sync::PollSemaphore;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Command-line arguments for the `mcp-execution` server binary.
+///
+/// Minimal by design: today, no in-repo `mcp.json` entry passes arguments to this server (see
+/// `examples/README.md`, `crates/mcp-server/README.md`), so adding `clap` here to gain
+/// `--log-format` is a deliberate, low-risk behavior change -- the binary now parses argv
+/// (gaining `--help`/`--version`, both written to stdout, harmless since the process exits
+/// immediately after) and rejects unknown arguments with exit code 2, rather than silently
+/// ignoring them as before.
+#[derive(Parser)]
+#[command(
+    name = "mcp-execution",
+    version,
+    about = "MCP server for progressive loading TypeScript code generation"
+)]
+struct ServerArgs {
+    /// Diagnostic log format: `text` (default) or `json`.
+    ///
+    /// Independent of the MCP protocol's own JSON-RPC framing on stdout; this only affects the
+    /// diagnostic logs this process writes to stderr. When unset, falls back to the
+    /// `MCP_EXECUTION_LOG_FORMAT` environment variable; when that is also unset or invalid,
+    /// defaults to `text`.
+    #[arg(
+        long = "log-format",
+        ignore_case = true,
+        value_parser = PossibleValuesParser::new(["text", "json"])
+            .map(|s| LogFormat::from_str(&s).expect("possible values are LogFormat variants"))
+    )]
+    log_format: Option<LogFormat>,
+}
+
+/// Resolves the effective log format from the parsed `--log-format` flag and the
+/// `MCP_EXECUTION_LOG_FORMAT` environment variable, mirroring `mcp-execution-cli`'s
+/// `runner::init_logging`. Kept as its own function (rather than inlined in `main`) so tests can
+/// assert the environment variable is actually consulted -- see
+/// `resolve_log_format_reads_env_var_when_flag_unset` -- rather than only exercising the pure
+/// `LogFormat::resolve` this delegates to.
+fn resolve_log_format(args: &ServerArgs) -> LogFormat {
+    let env_value = std::env::var(LOG_FORMAT_ENV_VAR).ok();
+    LogFormat::resolve(args.log_format, env_value.as_deref())
+}
+
+/// Whether `main` should warn about a rejected `MCP_EXECUTION_LOG_FORMAT` value: the flag was
+/// not passed (matching `LogFormat::resolve`'s own precedence -- a bad env value is not even
+/// inspected once the flag has decided, so it must not warn either) and the environment variable
+/// is set to a non-empty value [`LogFormat::is_invalid_env_value`] rejects. A separate function
+/// from [`resolve_log_format`] (rather than a second return value there) since production code
+/// needs only a yes/no answer, not the rejected value itself -- see [`LogFormat::resolve`]'s own
+/// doc comment on why that value isn't threaded through.
+fn log_format_env_is_invalid(args: &ServerArgs) -> bool {
+    args.log_format.is_none()
+        && std::env::var(LOG_FORMAT_ENV_VAR)
+            .ok()
+            .is_some_and(|raw| LogFormat::is_invalid_env_value(&raw))
+}
+
+/// Emits the fixed-message `WARN` log line for a rejected `MCP_EXECUTION_LOG_FORMAT` value.
+/// Deliberately takes no reference to the rejected value itself: interpolating external
+/// environment input into this line -- even truncated -- would open a log-injection vector,
+/// since this process has no `RedactingWriter` guarding its logs (see `main`'s comment on the
+/// `tracing_subscriber::registry()` setup). Extracted so a test can assert this actually fires
+/// on a rejected value, using the same `WarnCounter` subscriber pattern already established
+/// below for [`bounded_request_stream`]'s own warnings.
+fn warn_on_rejected_log_format(rejected: bool) {
+    if rejected {
+        tracing::warn!(
+            "invalid value for {LOG_FORMAT_ENV_VAR} (expected 'text' or 'json'), falling back to text"
+        );
+    }
+}
 
 /// Maximum size, in bytes, of a single newline-delimited JSON-RPC request read from
 /// stdin. Requests exceeding this are discarded rather than buffered without bound.
@@ -427,7 +501,18 @@ where
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = ServerArgs::parse();
+    let log_format = resolve_log_format(&args);
+
     // Initialize logging to stderr (stdout is for MCP protocol)
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_target(true);
+    let layer = match log_format {
+        LogFormat::Json => fmt_layer.json().boxed(),
+        LogFormat::Text => fmt_layer.boxed(),
+    };
+
     tracing_subscriber::registry()
         .with(
             EnvFilter::try_from_default_env()
@@ -441,16 +526,18 @@ async fn main() -> Result<()> {
             // error whose `Display` could embed a secret-bearing URL for this writer to reach. The
             // #209 regression test (`service.rs`) guards that invariant; if a future change adds
             // an http/sse client path to this crate, wire the same writer in at that point.
-            tracing_subscriber::fmt::layer()
-                .with_writer(std::io::stderr)
-                .with_target(true),
+            //
+            // `MCP_EXECUTION_LOG_FORMAT` (see `resolve_log_format`) is a second,
+            // narrower untrusted-text-into-log path this process does have, but the warning
+            // logged below never echoes its rejected raw value -- only a fixed diagnostic string
+            // naming the environment variable is logged -- so it does not need this writer either.
+            layer,
         )
         .init();
 
-    tracing::info!(
-        "Starting mcp-execution-server v{}",
-        env!("CARGO_PKG_VERSION")
-    );
+    warn_on_rejected_log_format(log_format_env_is_invalid(&args));
+
+    tracing::info!("Starting mcp-execution v{}", env!("CARGO_PKG_VERSION"));
 
     // Wire stdio through a size-bounded codec instead of `stdio()` directly: the
     // default transport's read path bypasses the codec's max-length check entirely.
@@ -475,10 +562,12 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AsyncRead, GetExtensions, JsonRpcMessage, MAX_CONCURRENT_REQUESTS, MAX_REQUEST_LINE_SIZE,
-        OwnedSemaphorePermit, RoleServer, RxJsonRpcMessage, Semaphore, Stream, StreamExt,
-        bounded_request_stream,
+        AsyncRead, GetExtensions, JsonRpcMessage, LOG_FORMAT_ENV_VAR, LogFormat,
+        MAX_CONCURRENT_REQUESTS, MAX_REQUEST_LINE_SIZE, OwnedSemaphorePermit, RoleServer,
+        RxJsonRpcMessage, Semaphore, ServerArgs, Stream, StreamExt, bounded_request_stream,
+        log_format_env_is_invalid, resolve_log_format, warn_on_rejected_log_format,
     };
+    use clap::Parser as _;
     use mcp_execution_server::service::GeneratorService;
     use rmcp::ServiceExt;
     use rmcp::model::NumberOrString;
@@ -492,6 +581,7 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadBuf};
     use tokio_util::codec::FramedWrite;
+    use tracing_subscriber::layer::SubscriberExt;
 
     const TEST_MAX: usize = 64;
     const TEST_CONCURRENCY: usize = 8;
@@ -1285,5 +1375,291 @@ mod tests {
         drop(client_write);
         drop(client_reader);
         let _ = tokio::time::timeout(Duration::from_secs(5), service_task).await;
+    }
+
+    // ── #399: `--log-format`/`MCP_EXECUTION_LOG_FORMAT` wiring ──
+
+    #[test]
+    fn test_server_args_log_format_default_unset() {
+        let args = ServerArgs::parse_from(["mcp-execution"]);
+        assert_eq!(args.log_format, None);
+    }
+
+    #[test]
+    fn test_server_args_log_format_json_parses() {
+        let args = ServerArgs::parse_from(["mcp-execution", "--log-format", "json"]);
+        assert_eq!(args.log_format, Some(LogFormat::Json));
+    }
+
+    #[test]
+    fn test_server_args_log_format_case_insensitive() {
+        let args = ServerArgs::parse_from(["mcp-execution", "--log-format", "JSON"]);
+        assert_eq!(args.log_format, Some(LogFormat::Json));
+    }
+
+    #[test]
+    fn test_server_args_log_format_invalid_rejected_by_clap() {
+        let result = ServerArgs::try_parse_from(["mcp-execution", "--log-format", "xml"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_server_args_help_documents_env_var() {
+        use clap::CommandFactory;
+
+        let mut command = ServerArgs::command();
+        let help = command.render_long_help().to_string();
+        assert!(
+            help.contains(LOG_FORMAT_ENV_VAR),
+            "--help must document {LOG_FORMAT_ENV_VAR} per FR-004"
+        );
+    }
+
+    #[test]
+    fn test_server_args_command_name_matches_installed_binary() {
+        use clap::CommandFactory;
+
+        // `CARGO_PKG_NAME` is `mcp-execution-server`, but the installed binary (see
+        // `crates/mcp-server/Cargo.toml`'s `[[bin]]`) is `mcp-execution` -- `#[command(name =
+        // ...)]` on `ServerArgs` must override clap's default so `--help`/error output names
+        // the binary users actually run.
+        assert_eq!(ServerArgs::command().get_name(), "mcp-execution");
+    }
+
+    /// Serializes tests in this module that mutate `MCP_EXECUTION_LOG_FORMAT`, mirroring the
+    /// `HOME_ENV_LOCK`/`BACKTRACE_ENV_LOCK` pattern `mcp-cli`'s tests already use for
+    /// env-var mutation: a safety net for plain `cargo test` (which shares one process across a
+    /// crate's tests), not required by the mandated `cargo nextest run` (which isolates every
+    /// test in its own process).
+    static LOG_FORMAT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn resolve_log_format_flag_wins_over_bad_env() {
+        let _guard = LOG_FORMAT_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os(LOG_FORMAT_ENV_VAR);
+        // SAFETY: guarded by `LOG_FORMAT_ENV_LOCK`; no other test in this process reads or
+        // writes `MCP_EXECUTION_LOG_FORMAT` while the guard is held.
+        unsafe {
+            std::env::set_var(LOG_FORMAT_ENV_VAR, "xml");
+        }
+
+        let args = ServerArgs {
+            log_format: Some(LogFormat::Json),
+        };
+        let format = resolve_log_format(&args);
+        let is_invalid = log_format_env_is_invalid(&args);
+
+        // SAFETY: see above.
+        unsafe {
+            match &original {
+                Some(v) => std::env::set_var(LOG_FORMAT_ENV_VAR, v),
+                None => std::env::remove_var(LOG_FORMAT_ENV_VAR),
+            }
+        }
+
+        assert_eq!(format, LogFormat::Json);
+        assert!(
+            !is_invalid,
+            "a bad env value must not be reported once the flag has already decided"
+        );
+    }
+
+    /// Proves the environment variable is actually consulted end to end -- not just that
+    /// `LogFormat::resolve` itself works in isolation: a `resolve_log_format` that forgot to
+    /// call `std::env::var(LOG_FORMAT_ENV_VAR)` would still pass every test that only exercises
+    /// the pure resolver directly with a hand-built `Option<&str>`.
+    #[test]
+    fn resolve_log_format_reads_env_var_when_flag_unset() {
+        let _guard = LOG_FORMAT_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os(LOG_FORMAT_ENV_VAR);
+        // SAFETY: guarded by `LOG_FORMAT_ENV_LOCK`; no other test in this process reads or
+        // writes `MCP_EXECUTION_LOG_FORMAT` while the guard is held.
+        unsafe {
+            std::env::set_var(LOG_FORMAT_ENV_VAR, "json");
+        }
+
+        let args = ServerArgs { log_format: None };
+        let format = resolve_log_format(&args);
+
+        // SAFETY: see above.
+        unsafe {
+            match &original {
+                Some(v) => std::env::set_var(LOG_FORMAT_ENV_VAR, v),
+                None => std::env::remove_var(LOG_FORMAT_ENV_VAR),
+            }
+        }
+
+        assert_eq!(format, LogFormat::Json);
+    }
+
+    #[test]
+    fn resolve_log_format_bad_env_value_falls_back_to_text() {
+        let _guard = LOG_FORMAT_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os(LOG_FORMAT_ENV_VAR);
+        // SAFETY: guarded by `LOG_FORMAT_ENV_LOCK`; no other test in this process reads or
+        // writes `MCP_EXECUTION_LOG_FORMAT` while the guard is held.
+        unsafe {
+            std::env::set_var(LOG_FORMAT_ENV_VAR, "xml");
+        }
+
+        let args = ServerArgs { log_format: None };
+        let format = resolve_log_format(&args);
+
+        // SAFETY: see above.
+        unsafe {
+            match &original {
+                Some(v) => std::env::set_var(LOG_FORMAT_ENV_VAR, v),
+                None => std::env::remove_var(LOG_FORMAT_ENV_VAR),
+            }
+        }
+
+        assert_eq!(format, LogFormat::Text);
+    }
+
+    /// Proves `log_format_env_is_invalid` -- the function that actually gates
+    /// `warn_on_rejected_log_format` in `main` -- reads the real environment variable itself,
+    /// not just that `LogFormat::is_invalid_env_value` works given a hand-built `&str`.
+    #[test]
+    fn log_format_env_is_invalid_true_for_bad_value_when_flag_unset() {
+        let _guard = LOG_FORMAT_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os(LOG_FORMAT_ENV_VAR);
+        // SAFETY: guarded by `LOG_FORMAT_ENV_LOCK`; no other test in this process reads or
+        // writes `MCP_EXECUTION_LOG_FORMAT` while the guard is held.
+        unsafe {
+            std::env::set_var(LOG_FORMAT_ENV_VAR, "xml");
+        }
+
+        let args = ServerArgs { log_format: None };
+        let is_invalid = log_format_env_is_invalid(&args);
+
+        // SAFETY: see above.
+        unsafe {
+            match &original {
+                Some(v) => std::env::set_var(LOG_FORMAT_ENV_VAR, v),
+                None => std::env::remove_var(LOG_FORMAT_ENV_VAR),
+            }
+        }
+
+        assert!(is_invalid);
+    }
+
+    #[test]
+    fn log_format_env_is_invalid_false_for_valid_value() {
+        let _guard = LOG_FORMAT_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os(LOG_FORMAT_ENV_VAR);
+        // SAFETY: guarded by `LOG_FORMAT_ENV_LOCK`; no other test in this process reads or
+        // writes `MCP_EXECUTION_LOG_FORMAT` while the guard is held.
+        unsafe {
+            std::env::set_var(LOG_FORMAT_ENV_VAR, "json");
+        }
+
+        let args = ServerArgs { log_format: None };
+        let is_invalid = log_format_env_is_invalid(&args);
+
+        // SAFETY: see above.
+        unsafe {
+            match &original {
+                Some(v) => std::env::set_var(LOG_FORMAT_ENV_VAR, v),
+                None => std::env::remove_var(LOG_FORMAT_ENV_VAR),
+            }
+        }
+
+        assert!(!is_invalid);
+    }
+
+    #[test]
+    fn log_format_env_is_invalid_false_when_unset() {
+        let _guard = LOG_FORMAT_ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os(LOG_FORMAT_ENV_VAR);
+        // SAFETY: guarded by `LOG_FORMAT_ENV_LOCK`; no other test in this process reads or
+        // writes `MCP_EXECUTION_LOG_FORMAT` while the guard is held.
+        unsafe {
+            std::env::remove_var(LOG_FORMAT_ENV_VAR);
+        }
+
+        let args = ServerArgs { log_format: None };
+        let is_invalid = log_format_env_is_invalid(&args);
+
+        // SAFETY: see above.
+        unsafe {
+            if let Some(v) = &original {
+                std::env::set_var(LOG_FORMAT_ENV_VAR, v);
+            }
+        }
+
+        assert!(!is_invalid);
+    }
+
+    #[test]
+    fn warn_on_rejected_log_format_fires_for_a_rejected_value() {
+        let warn_count = Arc::new(AtomicUsize::new(0));
+        let _tracing_guard = tracing::subscriber::set_default(WarnCounter(Arc::clone(&warn_count)));
+
+        warn_on_rejected_log_format(true);
+
+        assert_eq!(warn_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn warn_on_rejected_log_format_silent_when_nothing_was_rejected() {
+        let warn_count = Arc::new(AtomicUsize::new(0));
+        let _tracing_guard = tracing::subscriber::set_default(WarnCounter(Arc::clone(&warn_count)));
+
+        warn_on_rejected_log_format(false);
+
+        assert_eq!(warn_count.load(Ordering::SeqCst), 0);
+    }
+
+    /// JSON-mode coverage for the `.boxed()` branch `main` takes when `LogFormat::Json` is
+    /// selected: wires a real `fmt::layer().json()` into a scoped subscriber and asserts every
+    /// emitted line parses via `serde_json` -- the assertion that would have caught the C1
+    /// regression (an unescaped `"` left behind when a redacted URL sits inside a
+    /// JSON-escaped string; not exercised directly here since this binary has no
+    /// `RedactingWriter`, but the JSON-validity property must hold regardless).
+    #[test]
+    fn json_log_format_emits_serde_json_parseable_lines() {
+        use std::sync::Mutex;
+
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                std::io::Write::write(&mut *self.0.lock().unwrap(), buf)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                std::io::Write::flush(&mut *self.0.lock().unwrap())
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let make_writer = {
+            let buf = buf.clone();
+            move || SharedBuf(buf.clone())
+        };
+
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(make_writer)
+                .with_target(true)
+                .with_ansi(false),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("Starting mcp-execution v0.0.0-test");
+            tracing::warn!(
+                "invalid value for MCP_EXECUTION_LOG_FORMAT (expected 'text' or 'json'), falling back to text"
+            );
+        });
+
+        let written = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = written.lines().filter(|line| !line.is_empty()).collect();
+        assert_eq!(lines.len(), 2, "expected two emitted lines, got: {written}");
+        for line in lines {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|e| panic!("invalid JSON line: {e}\n{line}"));
+        }
     }
 }

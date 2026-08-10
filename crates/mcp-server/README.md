@@ -32,6 +32,14 @@ mcp-execution
 cargo run -p mcp-execution-server
 ```
 
+> [!NOTE]
+> The `mcp-execution` binary parses its command-line arguments: `--help`/`--version` are
+> supported, and unknown arguments now exit with code 2 instead of being silently ignored.
+> `--log-format {text,json}` selects the diagnostic log format written to stderr (default
+> `text`); it falls back to the `MCP_EXECUTION_LOG_FORMAT` environment variable when the flag
+> isn't passed. No existing `mcp.json` entry needs to change — this server takes no arguments
+> by default.
+
 ### Claude Code Configuration
 
 Add to `~/.claude/mcp.json`:
