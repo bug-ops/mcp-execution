@@ -145,7 +145,7 @@ async fn test_build_skill_context_integration() {
     ];
 
     let use_case_hints = vec!["CI/CD".to_string()];
-    let context = build_skill_context("github", &tools, Some(&use_case_hints));
+    let context = build_skill_context("github", &tools, Some(&use_case_hints), None);
 
     assert_eq!(context.server_id, "github");
     assert_eq!(context.skill_name, "github-progressive");
@@ -275,7 +275,7 @@ async fn test_build_skill_context_many_categories() {
         })
         .collect();
 
-    let context = build_skill_context("test", &tools, None);
+    let context = build_skill_context("test", &tools, None, None);
 
     assert_eq!(context.tool_count, 20);
     assert_eq!(context.categories.len(), 5);
@@ -290,7 +290,7 @@ async fn test_build_skill_context_many_categories() {
 async fn test_build_skill_context_empty_tools() {
     let tools: Vec<ParsedToolFile> = vec![];
 
-    let context = build_skill_context("test", &tools, None);
+    let context = build_skill_context("test", &tools, None, None);
 
     assert_eq!(context.tool_count, 0);
     assert_eq!(context.categories.len(), 0);

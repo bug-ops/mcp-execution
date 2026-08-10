@@ -323,6 +323,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embedding/override controls are spaced (rather than removed) to avoid. U+200C/U+200D (ZWNJ/ZWJ)
   are deliberately left untouched, since — unlike every character above — they are
   orthographically load-bearing in Persian/Indic scripts and in emoji ZWJ sequences (#425).
+- **`mcp-execution-skill`**, **`mcp-execution-server`**, **`mcp-execution-cli`**: a caller-supplied
+  `skill_name` passed to `generate_skill` (or the CLI's `--skill-name` flag) was reflected in the
+  response's `skill_name` field but never reached `generation_prompt`, which always embedded the
+  `{server_id}-progressive` default in its `**Skill Name**` line — so an LLM faithfully following
+  the prompt wrote the default name into `SKILL.md`'s frontmatter regardless of the requested
+  custom name. `build_skill_context` now takes the (validated) custom name directly, flattens it
+  with the same `sanitize_untrusted_text` treatment `generation_prompt` applies, and bakes that
+  flattened name into both the response's `skill_name` field and the prompt, so the two are always
+  textually consistent rather than the response field carrying the raw, unflattened name while the
+  prompt showed a flattened one; validation of an oversized/blank name now also happens before
+  `generation_prompt` is built, not after (#435).
+- **`mcp-execution-skill`**, **`mcp-execution-server`**: `save_skill`'s `output_path` parameter
+  silently accepted a value containing a literal `~` path component — notably
+  `generate_skill`'s own informational `output_path` response field
+  (`~/.claude/skills/{server_id}/SKILL.md`), which a client could plausibly echo straight back in
+  — treating `~` as an ordinary directory name and creating a nonsensical nested directory tree
+  with `success: true`. `resolve_skill_output_path` now rejects any `~` path component (leading
+  or not) with a dedicated `OutputPathError::TildeComponent` error, surfaced the same way as the
+  existing `AbsolutePath`/`ParentTraversal` rejections. Doc comments on both `output_path` fields
+  now cross-reference their incompatible semantics (#434).
 
 ### Testing
 

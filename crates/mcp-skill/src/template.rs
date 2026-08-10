@@ -143,7 +143,7 @@ impl Frontmatter<'_> {
 /// ```no_run
 /// use mcp_execution_skill::{build_skill_context, render_generation_prompt};
 ///
-/// let context = build_skill_context("github", &[], None);
+/// let context = build_skill_context("github", &[], None, None);
 /// let prompt = render_generation_prompt(&context).unwrap();
 /// ```
 pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String, TemplateError> {
@@ -210,7 +210,7 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 /// ```no_run
 /// use mcp_execution_skill::{build_skill_context, render_skill_md};
 ///
-/// let context = build_skill_context("github", &[], None);
+/// let context = build_skill_context("github", &[], None, None);
 /// let md = render_skill_md(&context).unwrap();
 /// assert!(md.starts_with("---\n"));
 /// ```
@@ -482,7 +482,7 @@ mod tests {
             parameters: vec![],
         };
 
-        let context = build_skill_context("test", std::slice::from_ref(&hostile), None);
+        let context = build_skill_context("test", std::slice::from_ref(&hostile), None, None);
         let md = render_skill_md(&context).unwrap();
 
         // The hostile description must be flattened to a single line before reaching
@@ -529,7 +529,7 @@ mod tests {
             parameters: vec![],
         };
 
-        let context = build_skill_context("test", std::slice::from_ref(&hostile), None);
+        let context = build_skill_context("test", std::slice::from_ref(&hostile), None, None);
         let md = render_skill_md(&context).unwrap();
 
         // Only the one legitimate category heading may start a line; the injected
