@@ -20,6 +20,7 @@ use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 use crate::path::{sanitize_path_for_error, validate_path_segment};
+use crate::untrusted::sanitize_untrusted_inline;
 
 /// The terminal path component a [`resolve_confined_path`] walk resolves and confinement-checks
 /// but deliberately does not create.
@@ -71,7 +72,22 @@ pub enum ConfinementError {
     /// a single plain path component.
     #[error("segment must be a single non-empty path segment: {segment:?}")]
     InvalidSegment {
-        /// The rejected segment.
+        /// Sanitized display form of the rejected segment (see
+        /// [`sanitize_untrusted_inline`](crate::untrusted::sanitize_untrusted_inline)): control
+        /// characters, bidi-reordering characters, and other invisible/structural characters are
+        /// neutralized, and `&`/`<`/`>` are entity-escaped, since this value is
+        /// attacker-controlled and reaches LLM-facing error text. The `{segment:?}` (`Debug`)
+        /// formatting above is a required second layer of defense on top of that sanitization,
+        /// not incidental — see [`ServerIdError`](crate::ServerIdError)'s doc comment for why it
+        /// must not be "simplified" to `{segment}` (`Display`).
+        ///
+        /// This field is `pub` only because the enum itself is; [`resolve_confined_path`] is the
+        /// sole constructor of this variant, and it always passes an already-sanitized string
+        /// here. A caller building this variant directly (there are none in this workspace) must
+        /// sanitize the value the same way, or a raw value reaches every downstream consumer that
+        /// embeds this field (see `mcp-execution-server`'s `OutputDirError::InvalidServerId` and
+        /// `mcp-execution-skill`'s `OutputPathError::InvalidServerId`, both of which move this
+        /// field verbatim into their own `server_id` without re-sanitizing).
         segment: String,
     },
 
@@ -190,7 +206,7 @@ pub async fn resolve_confined_path(
 ) -> Result<PathBuf, ConfinementError> {
     let component =
         validate_path_segment(segment).ok_or_else(|| ConfinementError::InvalidSegment {
-            segment: segment.to_string(),
+            segment: sanitize_untrusted_inline(segment),
         })?;
 
     tokio::fs::create_dir_all(base_dir)
@@ -399,6 +415,67 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ConfinementError::InvalidSegment { .. }));
+    }
+
+    /// Issue #452: a segment rejected for containing a path separator can still carry
+    /// printable-but-disallowed characters (`&`, `<`, `>`, emoji) elsewhere in it; none of those
+    /// may reach the error message unescaped.
+    #[tokio::test]
+    async fn segment_with_hostile_characters_is_escaped_in_error() {
+        let base = TempDir::new().unwrap();
+        for (candidate, escaped) in [
+            ("a/b&c", "a/b&amp;c"),
+            ("a/b<c", "a/b&lt;c"),
+            ("a/b>c", "a/b&gt;c"),
+        ] {
+            let err = resolve_confined_path(base.path(), candidate, Path::new(""), None)
+                .await
+                .unwrap_err();
+            let message = err.to_string();
+            assert!(!message.contains(candidate), "{message:?}");
+            assert!(message.contains(escaped), "{message:?}");
+        }
+    }
+
+    /// S2: an emoji carries no structural or injection risk on its own, so it must appear in the
+    /// error message unchanged rather than being mangled — unlike `&`/`<`/`>` above.
+    #[tokio::test]
+    async fn segment_with_emoji_is_left_unchanged_in_error() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_confined_path(base.path(), "a/b\u{1F600}c", Path::new(""), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("a/b\u{1F600}c"));
+    }
+
+    /// A legitimate non-ASCII segment must pass through `sanitize_untrusted_inline` unchanged;
+    /// only the separator that triggers `InvalidSegment` is the actual problem here.
+    #[tokio::test]
+    async fn segment_with_legitimate_non_ascii_is_left_unchanged_in_error() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_confined_path(base.path(), "café/menu_日本語", Path::new(""), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("café/menu_日本語"));
+    }
+
+    /// `sanitize_untrusted_inline` deliberately leaves U+200D (ZERO WIDTH JOINER) untouched (see
+    /// its own doc comment), so `InvalidSegment`'s stored `segment` field still carries a raw
+    /// ZWJ. This is only safe because `{segment:?}` (`Debug`) formatting escapes it to
+    /// `\u{200d}` rather than emitting it verbatim — this test pins that second layer of
+    /// defense, mirroring `ServerIdError`'s equivalent regression test.
+    #[tokio::test]
+    async fn segment_with_zwj_is_debug_escaped_in_error() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_confined_path(base.path(), "a/b\u{200D}c", Path::new(""), None)
+            .await
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            !message.contains('\u{200D}'),
+            "raw ZWJ leaked into: {message}"
+        );
+        assert!(message.contains("\\u{200d}"), "message was: {message}");
     }
 
     #[tokio::test]

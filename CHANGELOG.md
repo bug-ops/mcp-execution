@@ -253,6 +253,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sanitize_untrusted_text`'s truncation, per `validate_categorized_tools`'s S3 doc comment).
   Not-found remains the common case for a genuinely mistyped or stale name; distinguishing it from
   the rare ambiguous case just gives the caller a more actionable message either way (#456).
+- **`mcp-execution-core`**: `ConfinementError::InvalidSegment` (#452), `mcp-execution-server`'s
+  `OutputDirError::InvalidServerId` (#450), and `mcp-execution-skill`'s
+  `OutputPathError::InvalidServerId` (#451) now sanitize their rejected segment/`server_id` field
+  with `untrusted::sanitize_untrusted_inline` before storing it — the same helper and
+  construction-time pattern `ServerIdError`/`ToolNameError` adopted below (see the "Security"
+  section for that change), closing the same `&`/`<`/`>`-smuggling gap at the three sites that
+  change didn't already cover. Each `#[error(...)]` attribute keeps its pre-existing `{field:?}`
+  (`Debug`) formatting unchanged, for the same reason documented on `ServerIdError`.
 - **`mcp-execution-core`**: `validate_env_name` now rejects any environment variable name that
   does not match the conventional POSIX/Windows identifier charset `[A-Za-z_][A-Za-z0-9_]*`,
   before the forbidden-name comparison runs. The prior ASCII-case-insensitive comparison (#428)

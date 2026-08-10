@@ -20,6 +20,7 @@
 //! confinement check that matters runs as close to the actual write as this two-step protocol
 //! allows.
 
+use mcp_execution_core::untrusted::sanitize_untrusted_inline;
 use mcp_execution_core::{
     ConfinementError, ConfinementTarget, resolve_confined_path, sanitize_path_for_error,
     validate_server_id_slug,
@@ -37,7 +38,12 @@ pub enum OutputDirError {
     /// enforced.
     #[error("invalid server_id {server_id:?}: {source}")]
     InvalidServerId {
-        /// The rejected server id.
+        /// Sanitized display form of the rejected server id (see
+        /// [`mcp_execution_core::untrusted::sanitize_untrusted_inline`]). The `{server_id:?}`
+        /// (`Debug`) formatting above is a required second layer of defense on top of that
+        /// sanitization, not incidental — see
+        /// [`mcp_execution_core::ServerIdError`]'s doc comment for why it must not be
+        /// "simplified" to `{server_id}` (`Display`).
         server_id: String,
         /// The specific slug-format violation.
         #[source]
@@ -234,7 +240,7 @@ pub async fn resolve_output_dir(
     // (`resolve_confined_path` re-validates it a second time, against the looser structural rule,
     // as part of its own walk).
     validate_server_id_slug(server_id).map_err(|source| OutputDirError::InvalidServerId {
-        server_id: server_id.to_string(),
+        server_id: sanitize_untrusted_inline(server_id),
         source,
     })?;
 
@@ -434,6 +440,68 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// Issue #450: printable-but-disallowed characters (`&`, `<`, `>`) in a rejected `server_id`
+    /// must not reach the error message unescaped — `validate_server_id_slug` rejects every
+    /// character outside `[a-z0-9-]`, so any of these reaches `InvalidServerId` directly.
+    #[tokio::test]
+    async fn server_id_with_hostile_characters_is_escaped_in_error() {
+        let base = TempDir::new().unwrap();
+        for (candidate, escaped) in [
+            ("server&name", "server&amp;name"),
+            ("server<name", "server&lt;name"),
+            ("server>name", "server&gt;name"),
+        ] {
+            let err = resolve_output_dir(base.path(), candidate, None)
+                .await
+                .unwrap_err();
+            let message = err.to_string();
+            assert!(!message.contains(candidate), "{message:?}");
+            assert!(message.contains(escaped), "{message:?}");
+        }
+    }
+
+    /// S2: an emoji carries no structural or injection risk on its own, so it must appear in the
+    /// error message unchanged rather than being mangled — unlike `&`/`<`/`>` above.
+    #[tokio::test]
+    async fn server_id_with_emoji_is_left_unchanged_in_error() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_output_dir(base.path(), "server\u{1F600}name", None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("server\u{1F600}name"));
+    }
+
+    /// A legitimate non-ASCII script character carries no structural or injection risk either,
+    /// so — like the emoji above — it must survive `sanitize_untrusted_inline` unchanged, even
+    /// though `validate_server_id_slug`'s `[a-z0-9-]` charset still rejects it.
+    #[tokio::test]
+    async fn server_id_with_non_ascii_script_is_left_unchanged_in_error() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_output_dir(base.path(), "café_日本語", None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("café_日本語"));
+    }
+
+    /// `sanitize_untrusted_inline` deliberately leaves U+200D (ZERO WIDTH JOINER) untouched (see
+    /// its own doc comment), so `InvalidServerId`'s stored `server_id` field still carries a raw
+    /// ZWJ. This is only safe because `{server_id:?}` (`Debug`) formatting escapes it to
+    /// `\u{200d}` rather than emitting it verbatim — this test pins that second layer of
+    /// defense, mirroring `ServerIdError`'s equivalent regression test.
+    #[tokio::test]
+    async fn server_id_with_zwj_is_debug_escaped_in_error() {
+        let base = TempDir::new().unwrap();
+        let err = resolve_output_dir(base.path(), "server\u{200D}name", None)
+            .await
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            !message.contains('\u{200D}'),
+            "raw ZWJ leaked into: {message}"
+        );
+        assert!(message.contains("\\u{200d}"), "message was: {message}");
     }
 
     #[tokio::test]
