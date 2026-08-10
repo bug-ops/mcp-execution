@@ -143,7 +143,7 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 /// HTML-escaping characters such as `<`, `>`, and `&`.
 ///
 /// The YAML frontmatter (`name`, `description`) is rendered separately from the rest
-/// of the template as one [`Frontmatter`] block via `Frontmatter::to_yaml_block`, so
+/// of the template as one `Frontmatter` block via `Frontmatter::to_yaml_block`, so
 /// that special characters in either field — both are attacker-controlled MCP server
 /// metadata (`skill_name` from the caller, `server_description` inferred from the
 /// server) — cannot corrupt the frontmatter or inject additional YAML keys (S3).
