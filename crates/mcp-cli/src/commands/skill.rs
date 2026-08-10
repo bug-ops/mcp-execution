@@ -18,8 +18,6 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-use crate::formatters::format_output;
-
 /// Output of a successful `skill` command invocation.
 #[derive(Debug, Serialize)]
 struct SkillWriteResult {
@@ -157,10 +155,7 @@ pub async fn run(
         warnings: scan_result.warnings,
     };
 
-    let output = format_output(&result, output_format)?;
-    println!("{output}");
-
-    Ok(ExitCode::SUCCESS)
+    crate::formatters::emit(&result, output_format, ExitCode::SUCCESS)
 }
 
 /// Resolves and validates the server's tool directory under `servers_dir` (or its default).
@@ -430,6 +425,7 @@ fn has_path_traversal(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formatters::format_output;
     use mcp_execution_core::metadata::{
         METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
         ToolMetadata,

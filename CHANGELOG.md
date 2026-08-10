@@ -26,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch push covered by the workflow's triggers.
 - **`mcp-execution-cli`**: extracted `formatters::emit`, a shared helper that formats a value,
   prints it, and returns the given `ExitCode`, collapsing the repeated
-  format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`, and
-  `introspect.rs`'s command handlers. Behavior-preserving refactor only — no change to CLI output
-  or exit codes (#368).
+  format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`,
+  `introspect.rs`, and `skill.rs`'s command handlers. Behavior-preserving refactor only — no
+  change to CLI output or exit codes (#368, #377).
 
 ### Fixed
 
