@@ -25,7 +25,6 @@ mcp-execution-core = { workspace = true }
 mcp-execution-files = { workspace = true }
 mcp-execution-introspector = { workspace = true }
 mcp-execution-skill = { workspace = true }
-regex = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-io", "macros"] }
 schemars = { workspace = true, features = ["uuid1", "chrono04"] }
 serde = { workspace = true, features = ["derive"] }

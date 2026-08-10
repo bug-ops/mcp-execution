@@ -104,9 +104,15 @@ impl PendingGeneration {
 | [[#generate_skill]] | Scan a generated server's tools, return an LLM-facing SKILL.md generation prompt | Yes |
 | [[#save_skill]] | Write Claude-composed SKILL.md content, confined to `~/.claude/skills/{server_id}/` | No (deliberately) |
 
-`get_info()` (`ServerHandler`) advertises protocol version `2025-06-18`,
-tools capability enabled, and an `instructions` string describing the
-introspect→categorize→save workflow.
+`get_info()` (`ServerHandler`) pins `protocol_version` to `2025-06-18` as
+the fallback used for negotiation against clients requesting an
+unrecognized version, enables the tools capability, and provides an
+`instructions` string describing the introspect→categorize→save workflow.
+`supported_protocol_versions()` and `discover()` are not overridden, so
+rmcp's defaults apply: the server advertises every protocol version the
+SDK knows (`ProtocolVersion::KNOWN_VERSIONS`), not just `2025-06-18`
+(characterized by tests in `crates/mcp-server/tests/integration_tests.rs`,
+issue #381).
 
 ### `introspect_server`
 

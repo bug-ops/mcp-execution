@@ -1389,7 +1389,6 @@ dependencies = [
  "mcp-execution-files",
  "mcp-execution-introspector",
  "mcp-execution-skill",
- "regex",
  "rmcp",
  "schemars",
  "serde",

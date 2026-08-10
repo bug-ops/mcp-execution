@@ -10,8 +10,10 @@ use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use mcp_execution_server::{
     CategorizedTool, GeneratorService, PendingGeneration, StateManager, SystemClock,
 };
+use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 // ============================================================================
 // Service Initialization Tests
@@ -39,6 +41,176 @@ fn test_service_info_has_correct_capabilities() {
     assert!(instructions.contains("progressive loading"));
     assert!(instructions.contains("introspect_server"));
     assert!(instructions.contains("save_categorized_tools"));
+}
+
+/// Characterizes a currently accidental behavior (issue #381): `GeneratorService`
+/// does not override [`ServerHandler::supported_protocol_versions`], so rmcp's
+/// default advertises every protocol version the SDK knows — not just the
+/// `2025-06-18` fallback `get_info()` pins for unrecognized-version negotiation.
+/// This is a regression gate, not an endorsement: if a future rmcp release
+/// changes `KNOWN_VERSIONS` or its default `supported_protocol_versions()`
+/// implementation, this test fails loudly instead of the drift going unnoticed.
+///
+/// The expected list is written out explicitly rather than compared against
+/// `ProtocolVersion::KNOWN_VERSIONS` itself — comparing a value against the very
+/// constant it is derived from is a tautology that can't catch rmcp substituting
+/// one version for another while keeping the same count.
+#[test]
+fn test_service_advertises_all_known_protocol_versions_by_default() {
+    let service = GeneratorService::new();
+
+    let expected = [
+        rmcp::model::ProtocolVersion::V_2024_11_05,
+        rmcp::model::ProtocolVersion::V_2025_03_26,
+        rmcp::model::ProtocolVersion::V_2025_06_18,
+        rmcp::model::ProtocolVersion::V_2025_11_25,
+        rmcp::model::ProtocolVersion::V_2026_07_28,
+    ];
+
+    assert_eq!(
+        service.supported_protocol_versions().as_ref(),
+        expected.as_slice(),
+        "supported_protocol_versions() is not overridden, so it must still equal \
+         rmcp's full KNOWN_VERSIONS set; if this fails, rmcp's default changed"
+    );
+}
+
+/// Characterizes the `server/discover` response `GeneratorService` currently
+/// produces (issue #381), reproducing `ServerHandler::discover`'s default logic
+/// (`DiscoverResult::from_server_info(supported_protocol_versions(), get_info())`,
+/// see rmcp's `handler/server.rs`) directly against the service's public methods.
+/// `from_server_info` moves `supported_versions` through verbatim, so this test's
+/// value is in pinning that the *other* fields (`instructions`, `capabilities`,
+/// `server_info`) are also carried over correctly; the real wire-level `discover()`
+/// round-trip — which this reproduction cannot catch a future clamp inside
+/// `discover()` itself from breaking — is covered separately by
+/// `test_discover_rpc_round_trip_reports_all_known_versions` below.
+#[test]
+fn test_discover_result_from_server_info_reports_all_known_versions() {
+    let service = GeneratorService::new();
+    let info = service.get_info();
+    let expected_capabilities = info.capabilities.clone();
+    let expected_instructions = info.instructions.clone();
+
+    let discover_result = rmcp::model::DiscoverResult::from_server_info(
+        service.supported_protocol_versions().into_owned(),
+        info,
+    );
+
+    assert_eq!(
+        discover_result.supported_versions,
+        rmcp::model::ProtocolVersion::KNOWN_VERSIONS.to_vec()
+    );
+    assert_eq!(discover_result.capabilities, expected_capabilities);
+    assert_eq!(discover_result.instructions, expected_instructions);
+    assert_eq!(
+        discover_result.server_info(),
+        Some(rmcp::model::Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION")
+        ))
+    );
+}
+
+/// Exercises the real `server/discover` RPC handler end to end over an in-process
+/// duplex transport — not a reproduction of its default logic (see the test
+/// above) — so a future rmcp release that clamps `discover()`'s response to
+/// `get_info().protocol_version`, rather than the full `supported_protocol_versions()`
+/// set, would be caught here even if it left `ServerHandler`'s method-level
+/// defaults untouched.
+///
+/// `server/discover` always requires the SEP-2575 inline-lifecycle `_meta` pair
+/// (`io.modelcontextprotocol/protocolVersion` + `.../clientCapabilities`) on the
+/// request itself, even on a session that already completed `initialize` — rmcp's
+/// `handler/server.rs` unconditionally requires request metadata for
+/// `ClientRequest::DiscoverRequest`, regardless of the session's negotiated
+/// protocol version. Both keys live nested inside `params._meta` on the wire
+/// (rmcp's `Request<M, P>` `Deserialize` impl extracts `_meta` from `params`,
+/// not from the top-level JSON-RPC envelope).
+#[tokio::test]
+async fn test_discover_rpc_round_trip_reports_all_known_versions() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server);
+    let (client_read, mut client_write) = tokio::io::split(client);
+
+    let service_task = tokio::spawn(async move {
+        let service = GeneratorService::new()
+            .serve((server_read, server_write))
+            .await
+            .expect("initialize handshake must succeed over the duplex stream");
+        service.waiting().await
+    });
+
+    let mut client_reader = BufReader::new(client_read);
+
+    client_write
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test-client","version":"0.0.0"}}}
+"#,
+        )
+        .await
+        .expect("write initialize request");
+
+    let mut init_response = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client_reader.read_line(&mut init_response),
+    )
+    .await
+    .expect("initialize response must arrive within 5s")
+    .expect("read initialize response");
+    assert!(
+        init_response.contains(r#""id":1"#),
+        "expected an initialize response, got: {init_response}"
+    );
+
+    client_write
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":2,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-06-18","io.modelcontextprotocol/clientCapabilities":{}}}}
+"#,
+        )
+        .await
+        .expect("write server/discover request");
+
+    let mut discover_response = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client_reader.read_line(&mut discover_response),
+    )
+    .await
+    .expect("discover response must arrive within 5s")
+    .expect("read discover response");
+
+    let response: serde_json::Value =
+        serde_json::from_str(&discover_response).unwrap_or_else(|e| {
+            panic!("discover response must be valid JSON: {e}, got: {discover_response}")
+        });
+    assert!(
+        response.get("error").is_none(),
+        "expected a successful discover response, got an error: {discover_response}"
+    );
+    let supported_versions: Vec<&str> = response["result"]["supportedVersions"]
+        .as_array()
+        .unwrap_or_else(|| {
+            panic!("response must include a supportedVersions array, got: {discover_response}")
+        })
+        .iter()
+        .map(|v| {
+            v.as_str().unwrap_or_else(|| {
+                panic!("supportedVersions entries must be strings, got: {discover_response}")
+            })
+        })
+        .collect();
+
+    let expected: Vec<&str> = rmcp::model::ProtocolVersion::KNOWN_VERSIONS
+        .iter()
+        .map(rmcp::model::ProtocolVersion::as_str)
+        .collect();
+    assert_eq!(supported_versions, expected);
+
+    drop(client_write);
+    drop(client_reader);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), service_task).await;
 }
 
 #[test]
