@@ -151,7 +151,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
 
       - name: Install nextest
-        uses: taiki-e/install-action@v2.85.5
+        uses: taiki-e/install-action@v2.85.10
         with:
           tool: nextest
 
@@ -193,12 +193,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install llvm-cov
-        uses: taiki-e/install-action@v2.85.5
+        uses: taiki-e/install-action@v2.85.10
         with:
           tool: cargo-llvm-cov
 
       - name: Install nextest
-        uses: taiki-e/install-action@v2.85.5
+        uses: taiki-e/install-action@v2.85.10
         with:
           tool: nextest
 
