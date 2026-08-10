@@ -155,6 +155,18 @@ pub const MAX_SCHEMA_SIZE_BYTES: usize = 64 * 1024;
 /// (mirrors `mcp-execution-server`'s own documented behavior for the same codec).
 const MAX_RESPONSE_LINE_SIZE: usize = 4 * 1024 * 1024;
 
+/// Cap on a single SSE event's size for the HTTP/SSE transport (see
+/// [`Introspector::discover_server`]'s `# Security` docs for the JSON-body gap this
+/// does not close). Set explicitly in [`discover_via_http`] rather than left to
+/// `rmcp`'s implicit default, so a future upstream default change cannot silently
+/// loosen this crate's bound; pinned at 16 MiB to match `rmcp` 3.1.2's own
+/// `DEFAULT_MAX_SSE_EVENT_SIZE`, which is not part of `rmcp`'s public API. Kept at 16
+/// MiB rather than tightened to match the stdio path's 4 MiB [`MAX_RESPONSE_LINE_SIZE`]:
+/// this issue's goal was zero behavior change for a currently-working server, and
+/// tightening the effective bound was considered and deferred as a separate,
+/// potentially-breaking decision out of scope here.
+const HTTP_MAX_SSE_EVENT_SIZE: usize = 16 * 1024 * 1024;
+
 /// Information about an MCP server.
 ///
 /// Contains metadata about the server including its name, version,
@@ -365,17 +377,22 @@ impl Introspector {
     /// attribute a distinct error to, so the request it was answering instead runs out its
     /// configured timeout below and surfaces as [`Error::Timeout`].
     ///
-    /// The HTTP/SSE transport ([`Transport::Http`], [`Transport::Sse`], handled by
-    /// the private `discover_via_http`) has **no** such bound (issue #226): `rmcp` 2.2.0's Streamable
-    /// HTTP client transport buffers each JSON response body and each SSE event fully in
-    /// memory before this crate's own [`MAX_TOOL_COUNT`]/[`MAX_SCHEMA_SIZE_BYTES`] checks
-    /// ever run, with no size-limit config knob to bound that buffering. This is a known
-    /// upstream gap, not something fixable from this crate without re-implementing a large
-    /// part of `rmcp`'s HTTP transport. The only mitigation in place is
-    /// [`ServerConfig::discover_timeout`], which bounds how long an unbounded response can
-    /// be read for, not how large it can grow. rmcp 3.0.0-beta.2 adds the missing
-    /// `max_sse_event_size` config knob (still only for SSE events, not JSON response
-    /// bodies); revisit this gap once rmcp ships a 3.0.0 stable release with that fix.
+    /// The HTTP/SSE transport ([`Transport::Http`], [`Transport::Sse`], handled by the private
+    /// `discover_via_http`) is bounded on only one of its two response paths (issue #226,
+    /// narrowed by #390). `rmcp` 3.1.2 caps each SSE event at
+    /// `StreamableHttpClientTransportConfig::max_sse_event_size`, which `discover_via_http`
+    /// now sets explicitly to 16 MiB (matching rmcp's own default), rejecting an oversized
+    /// event instead of buffering it. The plain `application/json`
+    /// response path has no equivalent cap: rmcp deserializes that body via
+    /// `reqwest::Response::json`, buffering it fully in memory before this crate's own
+    /// [`MAX_TOOL_COUNT`]/[`MAX_SCHEMA_SIZE_BYTES`] checks ever run, and it reads a non-2xx
+    /// error body unbounded for the same reason. Neither has a config knob as of rmcp 3.1.2,
+    /// and there is no injection point below the transport: bounding them from this crate
+    /// would mean supplying a custom `StreamableHttpClient`, whose supporting helpers rmcp
+    /// keeps private, so it would trade the JSON bound for the loss of the SSE bound and of
+    /// reserved-header validation. The mitigation in place for the JSON path remains
+    /// [`ServerConfig::discover_timeout`], which bounds how long an unbounded body can be
+    /// read for, not how large it can grow.
     ///
     /// # Examples
     ///
@@ -1063,17 +1080,18 @@ async fn discover_via_stdio(
 /// Connects to an MCP server over Streamable HTTP and lists its tools, with
 /// each step bounded by `config`'s configured timeouts.
 ///
-/// Used for both [`Transport::Http`] and [`Transport::Sse`]: rmcp 2.2
+/// Used for both [`Transport::Http`] and [`Transport::Sse`]: rmcp 3.1.2
 /// has a single client transport for network MCP servers ("Streamable
 /// HTTP"), which superseded the standalone SSE transport in the 2025-03-26
 /// MCP spec revision. There is no legacy SSE-only client to fall back to.
 ///
-/// Unlike stdio discovery, this path has no response-size bound (issue #226): `rmcp`
-/// 2.2.0's Streamable HTTP client transport buffers each JSON response body and SSE
-/// event fully in memory with no config knob to cap it, and this crate has no
-/// injection point to add one without re-implementing a large part of that transport.
-/// See [`Introspector::discover_server`]'s `# Security` docs for the full rationale and
-/// the upstream condition to revisit this under.
+/// Unlike stdio discovery, this path's response-size bound is only partial (issue
+/// #226, narrowed by #390): SSE events are capped at [`HTTP_MAX_SSE_EVENT_SIZE`], set
+/// explicitly below via `max_sse_event_size` (matching `rmcp`'s own default), but the
+/// plain JSON response body — and a non-2xx error body — is still buffered fully in
+/// memory by `rmcp` with no config knob to cap it, and this crate has no injection
+/// point to add one without re-implementing a large part of that transport. See
+/// [`Introspector::discover_server`]'s `# Security` docs for the full rationale.
 ///
 /// # Errors
 ///
@@ -1111,7 +1129,9 @@ async fn discover_via_http(server_id: &ServerId, config: &ServerConfig) -> Resul
     // `StreamableHttpClientTransport<C>`, so this crate does not need to depend on `reqwest`
     // directly or name `reqwest::Client` to select it.
     let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(url).custom_headers(custom_headers),
+        StreamableHttpClientTransportConfig::with_uri(url)
+            .custom_headers(custom_headers)
+            .max_sse_event_size(HTTP_MAX_SSE_EVENT_SIZE),
     );
 
     // The client `connect_and_list_tools` builds internally is dropped when it returns, which
@@ -2603,6 +2623,25 @@ mod tests {
             "rmcp promoted ProtocolVersion::LATEST — this is the ADR-369 §5 revisit gate for \
              finding A (specs/decisions/ADR-369-rmcp-stateless-lifecycle-adoption.md): re-open \
              the ADR-369 discussion for finding A, do NOT just bump the expected constant"
+        );
+    }
+
+    // ── issue #390 HTTP_MAX_SSE_EVENT_SIZE drift gate ────────────────────────
+
+    /// Fails if `rmcp` changes `StreamableHttpClientTransportConfig`'s default
+    /// `max_sse_event_size`. A red assertion here is a signal to **re-evaluate**
+    /// [`HTTP_MAX_SSE_EVENT_SIZE`] against the new upstream default, in either
+    /// direction — it does not mean the test is wrong. Do not "fix" this
+    /// assertion by updating the expected value without first deciding whether
+    /// this crate's pinned bound should move too.
+    #[test]
+    fn test_http_max_sse_event_size_matches_rmcp_default() {
+        assert_eq!(
+            StreamableHttpClientTransportConfig::with_uri("localhost").max_sse_event_size,
+            HTTP_MAX_SSE_EVENT_SIZE,
+            "rmcp's default StreamableHttpClientTransportConfig::max_sse_event_size no longer \
+             matches this crate's HTTP_MAX_SSE_EVENT_SIZE — re-evaluate the pinned constant \
+             against the new upstream default, do NOT just bump the expected value"
         );
     }
 }

@@ -122,7 +122,7 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
                               ▼
       Introspector::discover_server()  (mcp-introspector)
         — bounded stdio response-line decoder (4 MiB, WARN+drop on overflow)
-        — OR Streamable HTTP/SSE transport (rmcp) — NO response-size bound (documented gap)
+        — OR Streamable HTTP/SSE transport (rmcp) — SSE bounded, JSON body unbounded (documented gap)
         — pages tools/list, bails out early past MAX_TOOL_COUNT (1000)
         — per-tool name/description/schema size bounds
                               │

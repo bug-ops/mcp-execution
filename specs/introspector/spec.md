@@ -87,9 +87,10 @@ concurrently-discovered servers' log output be correlated.
      instead of `rmcp`'s default unbounded `AsyncRwTransport`; always kills
      the child afterward regardless of outcome.
    - `Http`/`Sse` → `discover_via_http`: builds a `StreamableHttpClientTransport`
-     with caller headers converted to `http::HeaderValue`/`HeaderName`. **No
-     response-size bound exists on this path** — see
-     [[#Known gap HTTP response size]].
+     with caller headers converted to `http::HeaderValue`/`HeaderName`. **SSE
+     events are bounded** by `rmcp`'s `max_sse_event_size`, set explicitly to
+     match rmcp's own default; **JSON bodies (success and error) are
+     unbounded** — see [[#Known gap HTTP JSON response size]].
 
    Both branches converge on a single private `connect_and_list_tools`
    helper, generic over the connect future each transport builds (issue
@@ -153,18 +154,38 @@ bounds an already-trusted local client's requests).
   during an oversized-line attack can reach ~4x `MAX_RESPONSE_LINE_SIZE`
   before rejection — still strictly bounded, just not 1:1 with the cap.
 
-## 5. Known Gap: HTTP Response Size
+## 5. Known Gap: HTTP JSON Response Size
 
-`rmcp` 2.2.0's Streamable HTTP client transport buffers each JSON response
-body and each SSE event **fully in memory** before this crate's own
-`MAX_TOOL_COUNT`/`MAX_SCHEMA_SIZE_BYTES` checks ever run, with no
-`rmcp`-provided config knob to bound that buffering. The only mitigation is
-`ServerConfig::discover_timeout` (bounds *how long* an unbounded response
-can be read, not *how large* it can grow). This is documented as a known
-upstream limitation, not something fixable without reimplementing a large
-part of `rmcp`'s HTTP transport client-side; `rmcp` 3.0.0-beta.2 adds a
-`max_sse_event_size` knob (SSE only, not JSON bodies) — revisit once a
-3.0.0 stable ships.
+As of `rmcp` 3.1.2, SSE events are bounded: `discover_via_http` sets
+`StreamableHttpClientTransportConfig::max_sse_event_size` explicitly (16 MiB,
+matching `rmcp`'s own default, pinned locally so an upstream default change
+cannot silently loosen this crate's bound) — an oversized SSE event is
+rejected instead of buffered (issue #226, narrowed by #390).
+
+The plain JSON response path remains unbounded: `rmcp` deserializes it via
+`reqwest::Response::json`, buffering the body **fully in memory** before this
+crate's own `MAX_TOOL_COUNT`/`MAX_SCHEMA_SIZE_BYTES` checks ever run, with no
+`rmcp`-provided config knob to bound it. A non-2xx error response is read
+the same unbounded way and folded into the resulting error's message, so a
+hostile server can force a large buffer (plus a copy of it in the error
+value) by answering with an oversized error body — same root cause, no
+separate tracking needed. The only mitigation is
+`ServerConfig::discover_timeout` (bounds *how long* an unbounded body can be
+read, not *how large* it can grow).
+
+This is a known upstream limitation, not something fixable from this crate:
+the unbounded `.json()`/`.text()` calls live inside `rmcp`'s own
+`impl StreamableHttpClient for reqwest::Client`, and the only override point
+(`StreamableHttpClientTransport::with_client`) requires reimplementing
+`post_message`/`get_stream`/`delete_session` against helpers (`bounded_sse_stream`,
+`DEFAULT_MAX_SSE_EVENT_SIZE`, `validate_custom_header`, `RESERVED_HEADERS`)
+that `rmcp` keeps `pub(crate)`. Doing so would trade the JSON bound for the
+loss of the already-working SSE bound and of reserved-header validation — a
+net regression — while adding a direct `reqwest` dependency this crate
+deliberately avoids. A `Content-Length` pre-check is also unsound: the
+header is absent for chunked responses, exactly what an attacker would send.
+There is no version-gated condition left to revisit this under; it stays
+open until `rmcp` exposes a JSON-body size knob.
 
 ## 6. Error Conditions
 
