@@ -154,13 +154,17 @@ Covers `mcp-core` only. `mcp-files::FilesError::ResourceLimitExceeded` closed it
 adding variants here: `mcp-files` has no direct dependency on `mcp-core` (only a transitive one
 via `mcp-execution-codegen`), so sharing this enum would mean adding a new direct dependency on
 `mcp-core` for a single error variant — see [[../files/spec#7. Error Conditions]].
-Each variant has an `is_*` predicate (`is_connection_error`,
-`is_security_error`, `is_timeout`, `is_validation_error`,
+Most variants have an `is_*` predicate (`is_security_error`, `is_validation_error`,
 `is_script_generation_error`, `is_resource_limit_exceeded`,
 `is_duplicate_generated_file_path`). No predicate exists for
 `InvalidArgument`/`SerializationError` — callers match directly.
-`ScriptGenerationError.source` is the vehicle for preserving an inner
-`Error`'s own classification through wrapping (see
+`ConnectionFailed`/`Timeout` have no `is_connection_error`/`is_timeout` predicate either
+(removed, issue #427, mirroring #199/#202's identical dead-predicate-removal precedent): their
+only real call site, `mcp-cli`'s `classify_core_error`, is an exhaustive `match` over every
+`Error` variant with no wildcard arm, so it always matched each variant by name directly rather
+than through a predicate — adding a variant there is a compile error at that `match`, a
+guarantee an `if`/`else if` predicate chain would silently lose. `ScriptGenerationError.source`
+is the vehicle for preserving an inner `Error`'s own classification through wrapping (see
 `mcp-cli`'s `classify_core_error`, which recurses into it — [[../cli/spec]]).
 
 `Error::DuplicateGeneratedFilePath { path: String }` (issue #312) is raised by

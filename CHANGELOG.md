@@ -174,6 +174,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-skill`**: `SkillMetadataError` is now `#[non_exhaustive]` and gained the new
   `FrontmatterTooComplex` variant. An exhaustive `match` on this enum outside `mcp-execution-skill`
   will now fail to compile (none exist in-tree today).
+- **`mcp-execution-core`**: `Error::is_connection_error()` and `Error::is_timeout()` removed —
+  neither had any real (non-test/non-doctest) call site anywhere in the workspace.
+  `mcp-cli`'s `classify_core_error` (`runner.rs`) is an exhaustive `match` over every `Error`
+  variant with no wildcard arm, so it always matched `ConnectionFailed`/`Timeout` by variant
+  name directly, never through these predicates; rewriting it as an `if`/`else if` predicate
+  chain would silently give a future `Error` variant a fallthrough exit code instead of a
+  compile error, so `classify_core_error` itself is unchanged. Mirrors the identical
+  dead-predicate-removal precedent for `is_connection_error`'s siblings (#199) and
+  `mcp_files::FilesError`'s equivalents (#202) (#427).
 
 ### Fixed
 
