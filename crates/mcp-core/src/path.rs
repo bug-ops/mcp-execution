@@ -20,8 +20,9 @@ use std::path::{Component, Path};
 /// The comparison walks path components rather than matching raw strings, so a `/`-separated
 /// input matches a backslash-separated home directory (and vice versa) on platforms where both
 /// separators are valid. On Windows and macOS, components are also compared
-/// ASCII-case-insensitively, matching those platforms' case-insensitive-but-case-preserving
-/// filesystem semantics; elsewhere the comparison stays case-sensitive.
+/// Unicode-case-insensitively (via [`str::to_lowercase`]), matching those platforms'
+/// case-insensitive-but-case-preserving filesystem semantics; elsewhere the comparison stays
+/// case-sensitive.
 ///
 /// When `path` does not begin with `home` — e.g. it reaches this function through a different
 /// mount point, or (on Windows) as a `\\?\`-verbatim canonicalized path whose prefix shape the
@@ -94,17 +95,11 @@ fn scrub_username(path: &Path, home: &Path) -> String {
 
 #[cfg(any(windows, target_os = "macos"))]
 fn components_match(home: Component<'_>, path: Component<'_>) -> bool {
-    // TODO(#406): ASCII-only case folding misses a non-ASCII username that differs only by
-    // case (e.g. Cyrillic "Аня" vs "аня") — NOT mitigated by scrub_username's fallback below:
-    // replace_case_aware's Windows/macOS arm folds case the same ASCII-only way (see its own
-    // doc comment), so a case-differing non-ASCII username is redacted by neither path and
-    // survives verbatim in the sanitized output. Unaffected on other platforms, which compare
-    // path components exactly rather than case-insensitively. Accepted as a known, low-severity
-    // residual gap for now (#406): a correct fix needs Unicode-aware case folding that preserves
-    // replace_case_aware's byte-offset alignment invariant, not a naive `to_lowercase` swap.
-    home.as_os_str()
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&path.as_os_str().to_string_lossy())
+    // Unicode-aware case folding (not `eq_ignore_ascii_case`, which only folds ASCII bytes and
+    // misses non-ASCII usernames such as Cyrillic). This compares whole components, so there is
+    // no byte-offset slicing to keep valid across the fold, unlike `replace_case_aware` below.
+    home.as_os_str().to_string_lossy().to_lowercase()
+        == path.as_os_str().to_string_lossy().to_lowercase()
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -114,18 +109,41 @@ fn components_match(home: Component<'_>, path: Component<'_>) -> bool {
 
 #[cfg(any(windows, target_os = "macos"))]
 fn replace_case_aware(haystack: &str, needle: &str, replacement: &str) -> String {
-    // `to_ascii_lowercase` only remaps bytes in the ASCII range and never changes a string's
-    // byte length, so every byte offset found in the lowered copies below is also a valid slice
-    // point into the original `haystack`/`needle`. This invariant breaks if the case-folding
-    // strategy is ever changed to something Unicode-aware (e.g. `to_lowercase`).
-    let haystack_lower = haystack.to_ascii_lowercase();
-    let needle_lower = needle.to_ascii_lowercase();
+    // Case-folds each candidate window with whole-string `str::to_lowercase` (not a per-char
+    // fold), so this agrees with `components_match`'s folding on Unicode's context-sensitive
+    // rules — e.g. Greek final sigma: "ΣΑΣ".to_lowercase() == "σας", which a char-by-char fold
+    // would render "σασ" and so fail to match. `str::to_lowercase` can also change a character's
+    // encoded length (Turkish "İ" folds to two chars: "i" + a combining dot above), so byte
+    // offsets found by searching a fully-lowered copy of `haystack` are not valid slice points
+    // back into the original. Instead, this walks `haystack`'s own (never-lowered) char
+    // boundaries and, at each candidate start, lowers only that `needle`-char-count-long window
+    // to compare against the lowered needle — only `haystack`'s own char boundaries are ever
+    // used as slice points, so byte-length drift introduced by folding never invalidates a slice.
+    if needle.is_empty() {
+        return haystack.to_owned();
+    }
+    let needle_len = needle.chars().count();
+    let needle_lower = needle.to_lowercase();
+    let boundaries: Vec<usize> = haystack
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(haystack.len()))
+        .collect();
+
     let mut result = String::with_capacity(haystack.len());
     let mut last_end = 0;
-    for (start, _) in haystack_lower.match_indices(needle_lower.as_str()) {
-        result.push_str(&haystack[last_end..start]);
-        result.push_str(replacement);
-        last_end = start + needle.len();
+    let mut i = 0;
+    while i + needle_len < boundaries.len() {
+        let start = boundaries[i];
+        let end = boundaries[i + needle_len];
+        if haystack[start..end].to_lowercase() == needle_lower {
+            result.push_str(&haystack[last_end..start]);
+            result.push_str(replacement);
+            last_end = end;
+            i += needle_len;
+        } else {
+            i += 1;
+        }
     }
     result.push_str(&haystack[last_end..]);
     result
@@ -285,6 +303,80 @@ mod tests {
         assert_eq!(
             sanitize_path_for_error(Path::new(&under_home)),
             format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
+        );
+    }
+
+    // Regression test for a non-ASCII username case leak: `eq_ignore_ascii_case` only folds
+    // ASCII bytes, so a Cyrillic username differing only by case was never recognized as a
+    // match, silently defeating the case-insensitive redaction on Windows/macOS.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn components_match_is_unicode_case_insensitive() {
+        let home_path = Path::new("Аня");
+        let path_path = Path::new("аня");
+        let home = home_path.components().next().unwrap();
+        let path = path_path.components().next().unwrap();
+        assert!(components_match(home, path));
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn replace_case_aware_matches_non_ascii_case_variants() {
+        assert_eq!(
+            replace_case_aware("Аня/secret.md", "аня", "~"),
+            "~/secret.md"
+        );
+    }
+
+    // `str::to_lowercase()` can change a character's encoded length: Turkish "İ" folds to two
+    // chars, "i" + a combining dot above (verified: `"İ".to_lowercase().chars().count()` is 2).
+    // A naive port of the old byte-offset/`match_indices` approach to `to_lowercase` would slice
+    // a lowered buffer using needle-derived byte offsets that no longer line up with the
+    // original string once folding expands a character. This test proves the windowed
+    // comparison — which only ever slices at `haystack`'s own char boundaries — matches and
+    // replaces correctly instead of panicking or corrupting output, even though the window's
+    // folded form is longer than its raw form.
+    //
+    // Known limitation, not exercised here: because the window is sized to `needle`'s *raw* char
+    // count, this can't match a needle/haystack pair whose folded forms only line up at a
+    // different raw char count (e.g. German "ß" needle against a haystack spelled "ss" — 1 raw
+    // char vs 2). Accepted per the original design: the fallback's over-redaction bias makes a
+    // missed match here a false negative, not an information leak on its own, since the primary
+    // `strip_home_prefix`/`components_match` path (whole-component comparison, not a windowed
+    // substring search) still catches the common case.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn replace_case_aware_preserves_byte_offsets_when_fold_changes_length() {
+        assert_eq!(replace_case_aware("aİb", "İ", "~"), "a~b");
+        // A plain ASCII "i" is not a case variant of "İ" under this fold, so no match — the
+        // differing fold length must not cause a panic or a false match.
+        assert_eq!(replace_case_aware("aİb", "i", "~"), "aİb");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn replace_case_aware_replaces_multiple_occurrences() {
+        assert_eq!(
+            replace_case_aware("Alice/Alice/notes.md", "alice", "~"),
+            "~/~/notes.md"
+        );
+    }
+
+    // Regression test for the Greek final-sigma inconsistency the critic caught: whole-string
+    // `str::to_lowercase()` applies Unicode's context-sensitive rule ("ΣΑΣ".to_lowercase() ==
+    // "σας", using final sigma "ς"), which a naive per-char fold (`char::to_lowercase` on each
+    // char independently) would render "σασ" — disagreeing with `components_match`, which folds
+    // the same way `replace_case_aware` does here. Proves both functions now agree.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn replace_case_aware_matches_greek_final_sigma_case_variant() {
+        assert_eq!(
+            replace_case_aware("/home/ΣΑΣ/secret.md", "σας", "~"),
+            "/home/~/secret.md"
+        );
+        assert_eq!(
+            replace_case_aware("/home/σας/secret.md", "ΣΑΣ", "~"),
+            "/home/~/secret.md"
         );
     }
 

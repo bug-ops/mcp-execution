@@ -111,6 +111,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need to run sequentially). `ci-success` now also gates on `build`'s result.
 - **CI**: the `release` job now only runs on pushes to `master`, instead of on every PR and
   branch push covered by the workflow's triggers.
+- **workspace**: swapped the out-of-alphabetical-order `mcp-execution-introspector`/
+  `mcp-execution-files` dependency lines in `mcp-execution-cli`'s `Cargo.toml`, and moved the
+  `[lints]` table in `mcp-execution-server`/`mcp-execution-skill` and the `[features]`/
+  `[[bench]]`/`[[example]]` tables in `mcp-execution-files` to the position `cargo-sort` expects,
+  so the new CI gate below is clean from its first run. Purely mechanical; no semantic change
+  (#396).
+- **CI**: the `check` job now runs `cargo sort --check --workspace` after the formatting check,
+  failing the build if any crate's `Cargo.toml` has an out-of-alphabetical-order
+  `[dependencies]`/`[dev-dependencies]`/`[build-dependencies]` table, or a top-level table in
+  the wrong position (#397).
 - **`mcp-execution-cli`**: extracted `formatters::emit`, a shared helper that formats a value,
   prints it, and returns the given `ExitCode`, collapsing the repeated
   format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`,
@@ -137,6 +147,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   side effect, a generated SKILL.md's `description:` line is no longer always double-quoted — it
   may now be plain, single-quoted, or a block literal depending on content, which changes the
   byte size of a frontmatter block near the existing `MAX_FRONTMATTER_SIZE` (8 KiB) cap.
+- **`mcp-execution-core`**: `sanitize_path_for_error`'s home-directory redaction on Windows/macOS
+  missed non-ASCII usernames (e.g. Cyrillic, Greek) that differed only by case: `components_match`
+  compared components with `eq_ignore_ascii_case`, and `replace_case_aware`'s username-scrubbing
+  fallback lowercased with `to_ascii_lowercase`, both of which only fold ASCII bytes, so a
+  same-username-different-case path silently skipped redaction and leaked the username verbatim
+  in error messages. Both now case-fold with full Unicode semantics via `str::to_lowercase`, kept
+  consistent between the two functions so they agree on Unicode's context-sensitive folding rules
+  (e.g. Greek final sigma: `"ΣΑΣ".to_lowercase() == "σας"`); `replace_case_aware` was rewritten
+  around a windowed comparison that only ever slices at `haystack`'s own (unmodified) char
+  boundaries, rather than lowering a copy and reusing its byte offsets, so it stays correct when
+  `str::to_lowercase()` changes a character's encoded byte length, e.g. Turkish "İ" (#406).
 - **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
   `mcp-execution-codegen`'s `TemplateEngine`. Without it, a template referencing a typo'd or
   removed field silently rendered an empty string instead of failing at render time.
