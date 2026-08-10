@@ -433,14 +433,30 @@ string values.
 validates `server` via `mcp_execution_skill::validate_server_id`
 (mapped to `CoreError::InvalidArgument` for correct exit-code
 classification), resolves the tool directory (default
-`~/.claude/servers/{server}`), scans via `scan_tools_directory`, builds
-context via `build_skill_context`, and **renders `SKILL.md` directly**
-(`render_skill_md`) — no LLM/prompt round-trip, unlike `mcp-server`'s
-`generate_skill`/`save_skill` split. The crate's own doc comment recommends
-preferring the MCP server path for "optimal results," since it can leverage
-Claude's own summarization instead of the mechanical template-only
-rendering this command does. Refuses to overwrite an existing output file
-unless `--overwrite`.
+`~/.claude/servers/{server}`), scans via `scan_tools_directory`, then calls
+the private `prepare_skill_context(server, tools, hints, skill_name,
+output_path) -> Result<(GenerateSkillResult, PathBuf)>`, and **renders
+`SKILL.md` directly** (`render_skill_md`) — no LLM/prompt round-trip, unlike
+`mcp-server`'s `generate_skill`/`save_skill` split. The crate's own doc
+comment recommends preferring the MCP server path for "optimal results,"
+since it can leverage Claude's own summarization instead of the mechanical
+template-only rendering this command does. Refuses to overwrite an existing
+output file unless `--overwrite`.
+
+`prepare_skill_context` validates a custom `skill_name` (if any) via
+`validate_skill_name` up front, then passes it straight into
+`build_skill_context` as that function's own `custom_name: Option<&str>`
+parameter — not patched onto the result afterward — so `generation_prompt`
+reflects a custom name the same way `mcp-server`'s `generate_skill` handler
+does (issues #435, #436). It separately resolves the actual path `SKILL.md` will
+be written to (`output_path` if supplied and traversal-validated via
+`validate_output_path`, else `{skills_dir}/{server}/SKILL.md`) and returns
+it as a plain `PathBuf`, *not* by writing it into
+`GenerateSkillResult::default_output_path_hint` — that field is
+`build_skill_context`'s own non-authoritative display hint (see
+[[../skill/spec#2. Public API Surface]]), and overwriting it here would
+reintroduce the same field-reuse-across-semantics pattern issue #436
+eliminated from the MCP `generate_skill`/`save_skill` tool pair.
 
 ## 9. `server` Command (`commands/server.rs`)
 

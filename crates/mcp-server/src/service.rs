@@ -883,10 +883,10 @@ impl GeneratorService {
     /// 3. Claude generates SKILL.md content
     /// 4. Call `save_skill` with the generated content
     ///
-    /// The result's `output_path` field is informational/display-only (the default location the
-    /// file *would* land at) and must not be passed as `save_skill`'s own `output_path`
-    /// parameter — despite the shared field name, the two have incompatible semantics; omit
-    /// `save_skill`'s `output_path` to use its default (issue #434).
+    /// The result's `default_output_path_hint` field is informational/display-only (the default
+    /// location the file *would* land at) and must not be passed as `save_skill`'s own
+    /// `output_path` parameter — despite the similar name, the two have incompatible semantics;
+    /// omit `save_skill`'s `output_path` to use its default (issues #434, #436).
     #[tool(
         description = "Analyze generated TypeScript files and return context for Claude to create a SKILL.md file. Returns tool metadata, categories, and a generation prompt."
     )]

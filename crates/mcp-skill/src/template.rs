@@ -280,7 +280,7 @@ mod tests {
                 params_json: "{}".to_string(),
             }],
             generation_prompt: "Pre-built prompt".to_string(),
-            output_path: "~/.claude/skills/test/SKILL.md".to_string(),
+            default_output_path_hint: "~/.claude/skills/test/SKILL.md".to_string(),
             warnings: vec![],
         }
     }

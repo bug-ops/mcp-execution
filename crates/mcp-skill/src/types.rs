@@ -93,6 +93,26 @@ pub struct GenerateSkillParams {
 /// Result from `generate_skill` tool.
 ///
 /// Contains all context Claude needs to generate optimal SKILL.md content.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::types::GenerateSkillResult;
+///
+/// let result = GenerateSkillResult {
+///     server_id: "github".to_string(),
+///     skill_name: "github-progressive".to_string(),
+///     server_description: Some("MCP server for issue operations".to_string()),
+///     categories: vec![],
+///     tool_count: 0,
+///     example_tools: vec![],
+///     generation_prompt: "Generate a SKILL.md for github...".to_string(),
+///     default_output_path_hint: "~/.claude/skills/github/SKILL.md".to_string(),
+///     warnings: vec![],
+/// };
+///
+/// assert_eq!(result.server_id, "github");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GenerateSkillResult {
     /// Server identifier.
@@ -122,12 +142,15 @@ pub struct GenerateSkillResult {
     ///
     /// Shaped like `~/.claude/skills/{server_id}/SKILL.md` (with a literal, unexpanded `~`) —
     /// this shows where the file will land under its *default* location, but is never validated
-    /// as a real filesystem path. **Do not** pass this value as `save_skill`'s `output_path`
-    /// parameter: despite sharing the same field name, that parameter has entirely different
-    /// semantics (a bare relative path with no `~`, resolved under `base_dir/{server_id}` — see
-    /// [`SaveSkillParams::output_path`]) and will reject a `~`-containing value (issue #434).
-    /// Omit `save_skill`'s `output_path` entirely to use its own default.
-    pub output_path: String,
+    /// as a real filesystem path, and — unlike `SaveSkillParams`/`SaveSkillResult`, which share
+    /// real filesystem-path semantics and so keep the `output_path` name — this field is named
+    /// `default_output_path_hint` specifically so it cannot be mistaken for one of those (issue
+    /// #436). **Do not** pass this value as `save_skill`'s `output_path` parameter: that
+    /// parameter has entirely different semantics (a bare relative path with no `~`, resolved
+    /// under `base_dir/{server_id}` — see [`SaveSkillParams::output_path`]) and will reject a
+    /// `~`-containing value (issue #434). Omit `save_skill`'s `output_path` entirely to use its
+    /// own default.
+    pub default_output_path_hint: String,
 
     /// Non-fatal drift warnings, e.g. `.ts` files on disk excluded from
     /// `categories`/`tool_count` because `_meta.json` has no matching entry
@@ -137,6 +160,20 @@ pub struct GenerateSkillResult {
 }
 
 /// A category of tools for the skill.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::types::SkillCategory;
+///
+/// let category = SkillCategory {
+///     name: "issues".to_string(),
+///     display_name: "Issues".to_string(),
+///     tools: vec![],
+/// };
+///
+/// assert_eq!(category.display_name, "Issues");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillCategory {
     /// Category name (e.g., "issues", "repositories").
@@ -150,6 +187,23 @@ pub struct SkillCategory {
 }
 
 /// Tool information for skill generation.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::types::SkillTool;
+///
+/// let tool = SkillTool {
+///     name: "create_issue".to_string(),
+///     typescript_name: "createIssue".to_string(),
+///     description: "Create a new issue".to_string(),
+///     keywords: vec!["create".to_string(), "issue".to_string()],
+///     required_params: vec!["title".to_string()],
+///     optional_params: vec!["body".to_string()],
+/// };
+///
+/// assert_eq!(tool.name, "create_issue");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillTool {
     /// Original tool name.
@@ -172,6 +226,22 @@ pub struct SkillTool {
 }
 
 /// Example tool usage for documentation.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::types::ToolExample;
+///
+/// let example = ToolExample {
+///     tool_name: "create_issue".to_string(),
+///     description: "Create a new issue".to_string(),
+///     cli_command: "node ~/.claude/servers/github/createIssue.ts '{\"title\":\"example\"}'"
+///         .to_string(),
+///     params_json: "{\"title\": \"example\"}".to_string(),
+/// };
+///
+/// assert_eq!(example.tool_name, "create_issue");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolExample {
     /// Tool name.
@@ -233,9 +303,9 @@ pub struct SaveSkillParams {
     /// path** with no leading path separator, no `..` component, and no literal `~` component —
     /// it is resolved relative to `base_dir/{server_id}`, not the caller's home directory, so a
     /// `~` here is just a directory name, not a home-directory shortcut. In particular, do
-    /// **not** pass [`GenerateSkillResult::output_path`] (a display-only string of the shape
-    /// `~/.claude/skills/{server_id}/SKILL.md`) here — it is rejected (issue #434). See
-    /// [`crate::resolve_skill_output_path`] for the full resolution/confinement contract.
+    /// **not** pass [`GenerateSkillResult::default_output_path_hint`] (a display-only string of
+    /// the shape `~/.claude/skills/{server_id}/SKILL.md`) here — it is rejected (issue #434).
+    /// See [`crate::resolve_skill_output_path`] for the full resolution/confinement contract.
     pub output_path: Option<PathBuf>,
 
     /// Overwrite if exists.
@@ -244,6 +314,26 @@ pub struct SaveSkillParams {
 }
 
 /// Result from saving a skill.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::types::{SaveSkillResult, SkillMetadata};
+///
+/// let result = SaveSkillResult {
+///     success: true,
+///     output_path: "/home/user/.claude/skills/github/SKILL.md".to_string(),
+///     overwritten: false,
+///     metadata: SkillMetadata {
+///         name: "github-progressive".to_string(),
+///         description: "GitHub MCP skill".to_string(),
+///         section_count: 5,
+///         word_count: 320,
+///     },
+/// };
+///
+/// assert!(result.success);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SaveSkillResult {
     /// Whether save was successful.
@@ -260,6 +350,21 @@ pub struct SaveSkillResult {
 }
 
 /// Metadata extracted from saved skill.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::types::SkillMetadata;
+///
+/// let metadata = SkillMetadata {
+///     name: "github-progressive".to_string(),
+///     description: "GitHub MCP skill".to_string(),
+///     section_count: 5,
+///     word_count: 320,
+/// };
+///
+/// assert_eq!(metadata.name, "github-progressive");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillMetadata {
     /// Skill name from frontmatter.

@@ -214,6 +214,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compile error, so `classify_core_error` itself is unchanged. Mirrors the identical
   dead-predicate-removal precedent for `is_connection_error`'s siblings (#199) and
   `mcp_files::FilesError`'s equivalents (#202) (#427).
+- **`mcp-execution-skill`**: `GenerateSkillResult::output_path` is renamed to
+  `default_output_path_hint`. Three distinct concepts previously shared the `output_path`
+  identifier across the `generate_skill`/`save_skill` tool pair: `GenerateSkillResult`'s field
+  (a display-only, `~`-expanded hint with no filesystem meaning), `SaveSkillParams::output_path`
+  (a must-be-relative, confinement-checked path fragment), and `SaveSkillResult::output_path`
+  (the actual resolved, written-to path) — since `generate_skill` and `save_skill` are meant to
+  be chained, a caller could plausibly copy the first verbatim into the second, not realizing
+  the two have unrelated resolution semantics. `SaveSkillParams`/`SaveSkillResult` keep
+  `output_path`, since those two do share real filesystem-path semantics. Source-breaking for
+  any downstream consumer constructing or reading `GenerateSkillResult::output_path` directly.
+  This is also a JSON wire-format break, not just a Rust source-level one: the `generate_skill`
+  MCP tool serializes `GenerateSkillResult` directly as its response, so the `output_path` key
+  disappears from that JSON response (renamed to `default_output_path_hint`), and the tool's
+  declared `JsonSchema` output changes to match — any MCP client parsing the response by field
+  name is affected, not only Rust callers linking against this crate (#436).
 
 ### Fixed
 
@@ -397,6 +412,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or not) with a dedicated `OutputPathError::TildeComponent` error, surfaced the same way as the
   existing `AbsolutePath`/`ParentTraversal` rejections. Doc comments on both `output_path` fields
   now cross-reference their incompatible semantics (#434).
+- **`mcp-execution-cli`**: `prepare_skill_context` no longer writes the `skill` command's
+  resolved write path back into `GenerateSkillResult::default_output_path_hint`. That field is
+  a non-authoritative display hint `build_skill_context` computes and documents as "never
+  resolved or written to" — overwriting it here reproduced the exact field-reuse-across-semantics
+  pattern #436 eliminated from the MCP `generate_skill`/`save_skill` tool pair. `prepare_skill_context`
+  now returns `(GenerateSkillResult, PathBuf)`, with the resolved path returned separately
+  instead of round-tripped through the DTO (#436).
+
+### Documentation
+
+- **`mcp-execution-skill`**: added `# Examples` doc-test sections to `GenerateSkillResult`,
+  `SkillCategory`, `SkillTool`, `ToolExample`, `SaveSkillResult`, and `SkillMetadata` (#440).
+- **`mcp-execution-server`**: added `# Examples` doc-test sections to `IntrospectServerResult`,
+  `IntrospectedToolSummary`, `SaveCategorizedToolsResult`, `ToolGenerationError`,
+  `ListGeneratedServersParams`, `ListGeneratedServersResult`, `GeneratedServerInfo`, and
+  `PendingGeneration` (#440).
 
 ### Testing
 

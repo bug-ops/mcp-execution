@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tools = scan_tools_directory(Path::new("~/.claude/servers/github")).await?;
 
     // Build skill generation context
-    let context = build_skill_context("github", &tools, None);
+    let context = build_skill_context("github", &tools, None, None);
 
     // Use context.generation_prompt with LLM to generate SKILL.md
     println!("Skill: {}", context.skill_name);
@@ -95,8 +95,8 @@ assert_eq!(parsed.category, Some("issues".to_string()));
 use mcp_execution_skill::build_skill_context;
 
 // Add use-case hints for better context
-let hints = vec!["managing pull requests", "code review"];
-let context = build_skill_context("github", &tools, Some(&hints));
+let hints = vec!["managing pull requests".to_string(), "code review".to_string()];
+let context = build_skill_context("github", &tools, Some(&hints), None);
 
 println!("Categories: {:?}", context.categories.len());
 ```

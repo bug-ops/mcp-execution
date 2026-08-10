@@ -121,7 +121,7 @@ pub async fn run(
 
     let scan_result = scan_server_tools(&tool_dir, &server).await?;
 
-    let context = prepare_skill_context(
+    let (context, output_path) = prepare_skill_context(
         &server,
         &scan_result.tools,
         hints,
@@ -130,7 +130,6 @@ pub async fn run(
     )?;
 
     // Check if output file exists and overwrite flag
-    let output_path = PathBuf::from(&context.output_path);
     if output_path.exists() && !overwrite {
         bail!(
             "Output file already exists: {}\n\
@@ -224,7 +223,14 @@ async fn scan_server_tools(tool_dir: &Path, server: &str) -> Result<ScanResult> 
     Ok(scan_result)
 }
 
-/// Builds the skill generation context, applying custom skill name and output path overrides.
+/// Builds the skill generation context and resolves the actual path SKILL.md will be written
+/// to, applying custom skill name and output path overrides.
+///
+/// The resolved write path is returned separately from `GenerateSkillResult` rather than
+/// written back into its `default_output_path_hint` field: that field is a non-authoritative
+/// display hint `build_skill_context` computes (see its doc comment), not a slot for this
+/// command's actual write target — overwriting it here would resurrect the same
+/// field-reuse-across-semantics pattern issue #436 eliminated from the MCP tool pair.
 ///
 /// # Errors
 ///
@@ -236,7 +242,7 @@ fn prepare_skill_context(
     hints: Vec<String>,
     skill_name: Option<&str>,
     output_path: Option<PathBuf>,
-) -> Result<GenerateSkillResult> {
+) -> Result<(GenerateSkillResult, PathBuf)> {
     // Step 6: Build skill context. Custom skill name is validated up front (same pattern as
     // `validate_server_id` above) and passed into `build_skill_context` itself — not applied as
     // a post-hoc override — so an oversized name fails fast here instead of being rendered and
@@ -250,21 +256,20 @@ fn prepare_skill_context(
             .map_err(|e| CoreError::InvalidArgument(format!("Invalid skill name: {e}")))?;
     }
 
-    let mut context = build_skill_context(server, tools, hints_ref.as_deref(), skill_name);
+    let context = build_skill_context(server, tools, hints_ref.as_deref(), skill_name);
 
-    // Apply custom output path if provided
-    if let Some(path) = output_path {
+    // Resolve the actual output path, independent of `context.default_output_path_hint`.
+    let resolved_output_path = if let Some(path) = output_path {
         // Validate output path for path traversal
         validate_output_path(&path)?;
-        context.output_path = path.display().to_string();
+        path
     } else {
         // Use default skills directory
         let skills_dir = resolve_skills_dir()?;
-        let default_output = skills_dir.join(server).join("SKILL.md");
-        context.output_path = default_output.display().to_string();
-    }
+        skills_dir.join(server).join("SKILL.md")
+    };
 
-    Ok(context)
+    Ok((context, resolved_output_path))
 }
 
 /// Writes `rendered` SKILL.md content to `output_path` atomically (write-temp then rename).
@@ -815,6 +820,50 @@ mod tests {
         assert!(
             written.contains("name: github-advanced"),
             "written SKILL.md must use the custom skill name: {written}"
+        );
+    }
+
+    /// Issue #436: a custom `--skill-name` must be threaded into `build_skill_context` as a
+    /// constructor input, not patched onto the result afterward — so `generation_prompt`
+    /// reflects the requested name instead of the stale `{server}-progressive` default.
+    /// `test_run_with_custom_skill_name` above only inspects the rendered `SKILL.md` file (which
+    /// goes through `render_skill_md`, not `generation_prompt`); this test inspects
+    /// `prepare_skill_context`'s returned `generation_prompt` directly.
+    #[test]
+    fn test_prepare_skill_context_with_custom_skill_name_reflects_it_in_generation_prompt() {
+        let tools = vec![];
+
+        let (context, _output_path) =
+            prepare_skill_context("github", &tools, vec![], Some("github-advanced"), None).unwrap();
+
+        assert_eq!(context.skill_name, "github-advanced");
+        assert!(
+            context.generation_prompt.contains("github-advanced"),
+            "generation_prompt must reflect the custom skill_name, not the default: {}",
+            context.generation_prompt
+        );
+        assert!(!context.generation_prompt.contains("github-progressive"));
+    }
+
+    /// Issue #436 (S1 follow-up): `prepare_skill_context`'s resolved output path must never be
+    /// written back into `default_output_path_hint` — that field is a non-authoritative display
+    /// hint, not this command's actual write target. Confirms the hint keeps its
+    /// `build_skill_context`-computed default shape even when a custom `output_path` is
+    /// supplied, and that the actual resolved path is returned separately.
+    #[test]
+    fn test_prepare_skill_context_does_not_overwrite_default_output_path_hint() {
+        let tools = vec![];
+        let custom_output = PathBuf::from("/tmp/custom/SKILL.md");
+
+        let (context, resolved_output_path) =
+            prepare_skill_context("github", &tools, vec![], None, Some(custom_output.clone()))
+                .unwrap();
+
+        assert_eq!(resolved_output_path, custom_output);
+        assert_eq!(
+            context.default_output_path_hint, "~/.claude/skills/github/SKILL.md",
+            "default_output_path_hint must stay build_skill_context's own default, not be \
+             overwritten with the resolved write path"
         );
     }
 
