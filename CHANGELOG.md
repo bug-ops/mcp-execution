@@ -260,6 +260,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   faster one — a negligible, perf-only effect with no behavioral change.
 - **`mcp-execution-skill`**: dropped the unused `dirs` direct dependency — not referenced in the
   crate's own source.
+- **`mcp-execution-cli`**: dropped clap's `env` and `cargo` features — neither an
+  `#[arg(env = ...)]` attribute nor any `crate_version!`/`crate_name!`/`crate_authors!`/
+  `crate_description!` macro is used anywhere in the crate (#414).
 
 ## [0.9.0] - 2026-07-27
 
