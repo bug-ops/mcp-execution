@@ -246,7 +246,12 @@ regardless of transport, before transport-specific checks):
    - `Stdio` → `validate_command_string` (forbidden shell metachars:
      `; | & > < \` $ ( ) \n \r`) on `command` and each `arg`; absolute-path
      commands additionally require existence + executable bit (Unix); env
-     names checked against `forbidden_env_names()`/`forbidden_env_prefix()`.
+     names checked against `forbidden_env_names()`/`forbidden_env_prefix()`,
+     ASCII-case-insensitively (so `Path`/`path`/`PATH` are all rejected) —
+     Windows treats environment variable names as case-insensitive at the
+     OS/`CreateProcess` level, so a case-varied spelling would otherwise
+     bypass this list while still functioning as a real override at spawn
+     time.
    - `Http`/`Sse` → `validate_network_config`: `url` required,
      `validate_url_scheme` (must be `http://`/`https://`, case-insensitive),
      header name (RFC 7230 `tchar` charset) and value (no control chars)
@@ -256,13 +261,13 @@ regardless of transport, before transport-specific checks):
    supported by design** (an unbounded wait would let a hung server block
    this non-interactive tool forever).
 
-Forbidden env names (exact match): `LD_PRELOAD`, `LD_LIBRARY_PATH`,
-`LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`,
+Forbidden env names (exact match, case-insensitive): `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`,
 `DYLD_FRAMEWORK_PATH`, `PATH`, `NODE_OPTIONS`, `BASH_ENV`, `PYTHONPATH`,
 `PYTHONSTARTUP`, `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS`; plus any name
-with prefix `DYLD_`. This list is explicitly documented as an
-**accidental-misconfiguration guard, not a sandbox boundary** — it does not
-protect against a malicious command/binary itself.
+with prefix `DYLD_` (also case-insensitive). This list is explicitly
+documented as an **accidental-misconfiguration guard, not a sandbox
+boundary** — it does not protect against a malicious command/binary itself.
 
 Every rejection error omits the offending value from its message when that
 value could be secret-shaped (a misparsed `--api-key sk-...` argument, a

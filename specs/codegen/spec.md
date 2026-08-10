@@ -241,7 +241,16 @@ Responsibilities:
   mirroring `mcp_execution_core::validate_server_config` (command
   metacharacters, forbidden env names, URL scheme, header safety) to the
   same depth, since the config file can be hand-edited after generation to
-  add e.g. `LD_PRELOAD`.
+  add e.g. `LD_PRELOAD`. The forbidden-env-name/prefix check is
+  case-insensitive (`validateEnvName` upper-cases `name` before comparing
+  against the already-upper-cased `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX`),
+  mirroring `validate_env_name`'s `eq_ignore_ascii_case` comparison so a
+  case-varied spelling like `Path`/`path` cannot bypass either layer; note
+  that JS `String.prototype.toUpperCase` folds full Unicode case mappings
+  (a strict superset of Rust's ASCII-only fold), so the TS side never
+  matches *fewer* names than the Rust side — the "mirrors" claim holds in
+  the fail-closed direction, even where the two foldings could in principle
+  diverge on non-ASCII input.
 - `FORBIDDEN_CHARS`/`FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` are
   rendered **directly from the Rust constants** at generation time (via
   `BridgeContext`), not hand-copied, so the TS copy cannot silently drift
