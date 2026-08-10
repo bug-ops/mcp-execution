@@ -7,7 +7,7 @@
 
 use crate::clock::{Clock, SystemClock};
 use crate::output_dir::{OutputDirError, relative_subpath, resolve_output_dir};
-use crate::state::StateManager;
+use crate::state::{StateError, StateManager};
 use crate::types::{
     CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,
     IntrospectedToolSummary, ListGeneratedServersParams, ListGeneratedServersResult,
@@ -489,8 +489,11 @@ impl GeneratorService {
     /// loses it with no restore, the same as any pre-#379 code path would - restore only runs on a
     /// value actually returned from that call. `restore` can also itself decline to re-insert the
     /// session if the pending-session table is already back at capacity by the time this call's
-    /// checkout window ends; that failure is logged, not propagated to the client, since the
-    /// pipeline's own error is always the more relevant one to report.
+    /// checkout window ends; that compound failure is logged and also folded into the error
+    /// returned to the client (see [`Self::restore_after_pipeline_failure`]), so a well-behaved
+    /// caller can tell "transient pipeline failure, retry with the same `session_id`" apart from
+    /// "the session is also gone, run `introspect_server` again" instead of only discovering the
+    /// difference on a second failed attempt (issue #387 gap 3).
     ///
     /// Does not observe request cancellation, unlike `introspect_server` and
     /// `generate_skill`. An earlier version raced the wait for the
@@ -551,34 +554,41 @@ impl GeneratorService {
                     McpError::internal_error(format!("Failed to serialize result: {e}"), None)
                 })?,
             )])),
-            Err(e) => {
-                self.restore_or_log(params.session_id, pending, size_bytes)
-                    .await;
-                Err(e)
-            }
+            Err(e) => Err(self
+                .restore_after_pipeline_failure(params.session_id, pending, size_bytes, e)
+                .await),
         }
     }
 
     /// Hands a session back to [`StateManager::restore`](crate::state::StateManager::restore)
-    /// after a post-consume pipeline failure, logging rather than propagating the rare case where
-    /// `restore` itself can't (the pending-session table's `MAX_PENDING_SESSIONS`/
-    /// `MAX_TOTAL_PENDING_BYTES` caps - the same ones `store` is held to - are already full by the
-    /// time this session's checkout window ends). The caller's own pipeline error is always what
-    /// gets returned to the client either way; this only affects whether a retry with the same
-    /// `session_id` will still find the session.
-    async fn restore_or_log(
+    /// after a post-consume pipeline failure, returning the `McpError` that should be reported to
+    /// the client for `pipeline_err`.
+    ///
+    /// `restore` can itself decline to re-insert the session (the pending-session table's
+    /// `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` caps - the same ones `store` is held to -
+    /// already full by the time this session's checkout window ends). When that happens the
+    /// session is genuinely lost, not just this attempt's pipeline work, so `pipeline_err` alone
+    /// would mislead a client into retrying a `session_id` that `session_not_found_error` will
+    /// reject; [`session_lost_after_restore_failure`] folds that distinction into the returned
+    /// message instead (issue #387 gap 3). The failure is always logged either way.
+    async fn restore_after_pipeline_failure(
         &self,
         session_id: uuid::Uuid,
         pending: PendingGeneration,
         size_bytes: usize,
-    ) {
-        if let Err(e) = self.state.restore(session_id, pending, size_bytes).await {
-            tracing::error!(
-                %session_id,
-                error = %e,
-                "failed to restore session after a post-consume pipeline failure; \
-                 the session is now permanently lost and a retry will need introspect_server again"
-            );
+        pipeline_err: McpError,
+    ) -> McpError {
+        match self.state.restore(session_id, pending, size_bytes).await {
+            Ok(()) => pipeline_err,
+            Err(e) => {
+                tracing::error!(
+                    %session_id,
+                    error = %e,
+                    "failed to restore session after a post-consume pipeline failure; \
+                     the session is now permanently lost and a retry will need introspect_server again"
+                );
+                session_lost_after_restore_failure(&pipeline_err, &e)
+            }
         }
     }
 
@@ -1463,6 +1473,49 @@ fn session_not_found_error() -> McpError {
          same session_id. If a concurrent request is in flight, wait for it to finish and retry; \
          otherwise, run introspect_server again.",
         None,
+    )
+}
+
+/// Builds the [`McpError`] `save_categorized_tools` returns when its post-consume pipeline
+/// failed with `pipeline_err` *and* [`crate::state::StateManager::restore`] also failed with
+/// `restore_err` (the pending-session table's `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES`
+/// caps were already full by the time the checkout window ended).
+///
+/// Preserves `pipeline_err`'s code and appends a note that the session itself is now gone, so a
+/// retry with the same `session_id` would only hit [`session_not_found_error`] rather than
+/// re-running the pipeline - without this, the client sees only `pipeline_err`'s message, which
+/// reads exactly like an ordinary transient failure safe to retry in place. The appended text
+/// interpolates `restore_err`'s own `Display` (e.g. "too many pending generation sessions: at
+/// capacity limit of 1000" vs "...exceed the aggregate memory budget of ... bytes") rather than
+/// a single hardcoded cause, so [`StateError::AtCapacity`] and
+/// [`StateError::MemoryBudgetExceeded`] are reported accurately instead of both reading as a
+/// session-count problem.
+///
+/// The distinction is also machine-checkable, not prose-only: `data` carries a
+/// `session_restore_failure_reason` field set to `"at_capacity"` or
+/// `"memory_budget_exceeded"`. `pipeline_err`'s own `data` is dropped rather than merged in,
+/// since every `McpError` this file builds currently passes `data: None` - there is nothing to
+/// preserve today, and merging into a payload that might not always be a JSON object would be
+/// speculative machinery for a case that cannot yet occur (issue #387 gap 3).
+fn session_lost_after_restore_failure(
+    pipeline_err: &McpError,
+    restore_err: &StateError,
+) -> McpError {
+    let reason = match restore_err {
+        StateError::AtCapacity { .. } => "at_capacity",
+        StateError::MemoryBudgetExceeded { .. } => "memory_budget_exceeded",
+    };
+
+    let message = format!(
+        "{}. Additionally, the session could not be kept for retry because {restore_err}; run \
+         introspect_server again instead of retrying with the same session_id.",
+        pipeline_err.message.trim_end_matches('.'),
+    );
+
+    McpError::new(
+        pipeline_err.code,
+        message,
+        Some(serde_json::json!({ "session_restore_failure_reason": reason })),
     )
 }
 
@@ -3929,6 +3982,125 @@ mod tests {
              once the underlying I/O condition clears: {:?}",
             retry_result.err()
         );
+    }
+
+    /// Issue #387 gap 3 — when a post-consume pipeline failure coincides with `restore` itself
+    /// being rejected (the pending-session table already back at capacity), the client must be
+    /// told the session is gone, not just handed the pipeline's own error as if a same-session
+    /// retry would still work. Exercises `restore_after_pipeline_failure` directly with the table
+    /// filled to `MAX_PENDING_SESSIONS` during the session's checkout window, mirroring
+    /// `state::tests::test_restore_rejects_when_at_capacity`.
+    #[tokio::test]
+    async fn test_restore_after_pipeline_failure_folds_capacity_rejection_into_message() {
+        let service = GeneratorService::new();
+        let pending = pending_with_tool_count(1);
+        let session_id = service.state.store(pending).await.unwrap();
+
+        let (taken, size_bytes, ()) = service
+            .state
+            .take_if(session_id, |_generation| Ok::<_, &str>(()))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Fill the table to capacity while this session is checked out, so the `restore` inside
+        // `restore_after_pipeline_failure` below is rejected.
+        for _ in 0..crate::state::MAX_PENDING_SESSIONS {
+            service
+                .state
+                .store(pending_with_tool_count(1))
+                .await
+                .unwrap();
+        }
+
+        let pipeline_err = McpError::internal_error("Failed to export files: disk full", None);
+        let returned = service
+            .restore_after_pipeline_failure(session_id, taken, size_bytes, pipeline_err)
+            .await;
+
+        assert_eq!(returned.code, ErrorCode::INTERNAL_ERROR);
+        assert!(
+            returned
+                .message
+                .contains("Failed to export files: disk full"),
+            "the original pipeline error must still be present: {}",
+            returned.message
+        );
+        assert!(
+            returned.message.contains("introspect_server again"),
+            "the compound failure must tell the client a same-session retry will not work: {}",
+            returned.message
+        );
+        assert!(
+            returned.message.contains("at capacity limit of"),
+            "an AtCapacity rejection must be reported by its actual cause: {}",
+            returned.message
+        );
+        assert!(
+            !returned.message.contains("memory budget"),
+            "an AtCapacity rejection must not be reported using MemoryBudgetExceeded's wording: {}",
+            returned.message
+        );
+        assert_eq!(
+            returned.data,
+            Some(serde_json::json!({ "session_restore_failure_reason": "at_capacity" })),
+            "the cause must also be machine-checkable via `data`, not prose-only"
+        );
+        assert!(
+            service.state.get(session_id).await.is_none(),
+            "a session restore rejected as AtCapacity must not have been silently inserted anyway"
+        );
+    }
+
+    /// Issue #387 gap 3 (critic S4) — companion to the `AtCapacity` case above, proving
+    /// `restore`'s *other* capacity failure mode is reported by its own cause too, instead of
+    /// [`session_lost_after_restore_failure`] hardcoding "at capacity" regardless of which
+    /// `StateError` variant actually fired. Forces `MemoryBudgetExceeded` by seeding
+    /// `total_bytes` directly via `set_total_bytes_for_test`, mirroring
+    /// `state::tests::test_restore_rejects_when_would_exceed_memory_budget` (reaching the real
+    /// ~1GB budget organically would be a slow, wasteful allocation on every CI run).
+    #[tokio::test]
+    async fn test_restore_after_pipeline_failure_folds_memory_budget_rejection_into_message() {
+        let service = GeneratorService::new();
+        let pending = pending_with_tool_count(1);
+        let session_id = service.state.store(pending).await.unwrap();
+
+        let (taken, size_bytes, ()) = service
+            .state
+            .take_if(session_id, |_generation| Ok::<_, &str>(()))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Simulate another concurrent session refilling the entire memory budget while this
+        // one is checked out, so `restore` inside `restore_after_pipeline_failure` below is
+        // rejected as `MemoryBudgetExceeded`, not `AtCapacity`.
+        service
+            .state
+            .set_total_bytes_for_test(crate::state::MAX_TOTAL_PENDING_BYTES)
+            .await;
+
+        let pipeline_err = McpError::internal_error("Failed to export files: disk full", None);
+        let returned = service
+            .restore_after_pipeline_failure(session_id, taken, size_bytes, pipeline_err)
+            .await;
+
+        assert_eq!(returned.code, ErrorCode::INTERNAL_ERROR);
+        assert!(
+            returned.message.contains("memory budget"),
+            "a MemoryBudgetExceeded rejection must not be reported as a session-count problem: {}",
+            returned.message
+        );
+        assert!(
+            !returned.message.contains("at capacity limit of"),
+            "must not use AtCapacity's wording for a MemoryBudgetExceeded rejection: {}",
+            returned.message
+        );
+        assert_eq!(
+            returned.data,
+            Some(serde_json::json!({ "session_restore_failure_reason": "memory_budget_exceeded" }))
+        );
+        assert!(service.state.get(session_id).await.is_none());
     }
 
     /// Positive counterpart to the confinement-rejection tests above: a legitimate, relative

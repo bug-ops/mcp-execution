@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its original `session_id`, `expires_at`, and `size_bytes`, enforcing the same
   `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` bounds `store` does rather than silently
   bypassing them (#379).
+- **`mcp-execution-server`**: two regression tests closing gaps left by #378/#379 —
+  `test_restore_does_not_extend_ttl_past_original_expiry` proves `restore` re-inserts a session
+  under its original `expires_at` rather than granting it a fresh TTL, and
+  `test_concurrent_take_if_same_session_exactly_one_succeeds` proves exactly one of several
+  callers racing `take_if` on the same `session_id` succeeds (#387).
 
 ### Changed
 
@@ -38,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`,
   `introspect.rs`, and `skill.rs`'s command handlers. Behavior-preserving refactor only — no
   change to CLI output or exit codes (#368, #377).
+- **`mcp-execution-server`**: when `save_categorized_tools`'s post-consume pipeline fails *and*
+  the subsequent `StateManager::restore` also can't put the session back (the pending-session
+  table already back at its `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` caps), the error
+  returned to the client now says so explicitly, instead of reading like an ordinary transient
+  failure safe to retry with the same `session_id`. Previously this compound failure was only
+  logged server-side; the client had no way to tell it apart from a `restore` that succeeded
+  short of a second failed attempt. The message now also names the actual `restore` failure
+  cause (`AtCapacity` vs `MemoryBudgetExceeded`) instead of a single hardcoded wording, and
+  `data` carries a machine-checkable `session_restore_failure_reason` field so a programmatic
+  client doesn't have to substring-match prose (#387).
 
 ### Fixed
 

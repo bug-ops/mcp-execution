@@ -553,6 +553,16 @@ impl StateManager {
         table.sweep_expired(self.clock.as_ref());
         before - table.entries.len()
     }
+
+    /// Test-only hook to seed the table's running byte total directly, without paying for a
+    /// multi-hundred-megabyte allocation to organically reach [`MAX_TOTAL_PENDING_BYTES`] (this
+    /// module's own `test_store_rejects_when_would_exceed_memory_budget` does the same via direct
+    /// field access; `service.rs`'s tests need this instead, since `pending` is private to this
+    /// module).
+    #[cfg(test)]
+    pub(crate) async fn set_total_bytes_for_test(&self, total_bytes: usize) {
+        self.pending.write().await.total_bytes = total_bytes;
+    }
 }
 
 #[cfg(test)]
@@ -1033,5 +1043,100 @@ mod tests {
             matches!(result, Err(StateError::AtCapacity { limit }) if limit == MAX_PENDING_SESSIONS)
         );
         assert!(state.get(session_id).await.is_none());
+    }
+
+    /// Issue #387 gap 1 — `restore` re-inserts a session under its *original* `expires_at`
+    /// rather than granting a fresh TTL. Correct by construction (`restore` never touches that
+    /// field), but nothing previously exercised it: advances the shared clock past the session's
+    /// original expiry between checkout and `restore`, then proves the restored session is
+    /// immediately treated as expired by both `get` and `take_if` instead of being resurrected.
+    #[tokio::test]
+    async fn test_restore_does_not_extend_ttl_past_original_expiry() {
+        let start = chrono::Utc::now();
+        let clock = Arc::new(TestClock::new(start));
+        let state = StateManager::with_clock(Arc::clone(&clock) as Arc<dyn Clock>);
+
+        let pending = create_test_pending_with_clock(clock.as_ref());
+        let session_id = state.store(pending).await.unwrap();
+
+        let (generation, size_bytes, ()) = state
+            .take_if(session_id, |_generation| Ok::<_, &str>(()))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Advance the clock past the session's original expiry before restoring it.
+        clock.set(
+            start
+                + chrono::Duration::minutes(PendingGeneration::DEFAULT_TIMEOUT_MINUTES)
+                + chrono::Duration::seconds(1),
+        );
+
+        state
+            .restore(session_id, generation, size_bytes)
+            .await
+            .unwrap();
+
+        assert!(
+            state.get(session_id).await.is_none(),
+            "restore must not resurrect a session past its original expires_at"
+        );
+        let take_if_after_restore = state
+            .take_if(session_id, |_generation| Ok::<_, &str>(()))
+            .await;
+        assert!(
+            take_if_after_restore.is_none(),
+            "an expired restored session must not be handed to take_if's validate closure"
+        );
+    }
+
+    /// Issue #387 gap 2 - the write lock `take_if` holds across its whole validate-then-remove
+    /// sequence is what makes exactly one racing caller succeed; only `store`'s concurrency path
+    /// (`test_concurrent_access` above) had a regression test for this.
+    ///
+    /// Deliberately runs on a multi-thread runtime, an explicit, justified exception to this
+    /// project's no-`multi_thread`-by-default convention: under the default `current_thread`
+    /// runtime, spawned tasks are cooperatively scheduled on a single OS thread and can never
+    /// actually run in parallel inside `take_if`'s critical section, so a `current_thread`
+    /// version of this test is structurally incapable of detecting a broken (non-atomic)
+    /// `take_if`, no matter how many times it's repeated - only `multi_thread` gives concurrent
+    /// callers a chance to genuinely interleave there. Even under `multi_thread`, a single round
+    /// of this particular race is an unreliable detector, so it's repeated many times within the
+    /// test rather than run once; the whole test still completes in a few milliseconds, so the
+    /// extra rounds are effectively free.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_take_if_same_session_exactly_one_succeeds() {
+        let state = Arc::new(StateManager::new());
+
+        for _ in 0..200 {
+            let session_id = state.store(create_test_pending()).await.unwrap();
+
+            let mut handles = vec![];
+            for _ in 0..10 {
+                let state_clone = Arc::clone(&state);
+                handles.push(tokio::spawn(async move {
+                    state_clone
+                        .take_if(session_id, |_generation| Ok::<_, &str>(()))
+                        .await
+                }));
+            }
+
+            let mut successes = 0;
+            let mut misses = 0;
+            for handle in handles {
+                match handle.await.unwrap() {
+                    Some(Ok(_)) => successes += 1,
+                    None => misses += 1,
+                    Some(Err(e)) => panic!("validate always returns Ok in this test, got {e:?}"),
+                }
+            }
+
+            assert_eq!(successes, 1, "exactly one racing take_if must succeed");
+            assert_eq!(
+                misses, 9,
+                "every other racing take_if must observe the session as gone"
+            );
+            assert!(state.get(session_id).await.is_none());
+        }
     }
 }

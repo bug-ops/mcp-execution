@@ -236,11 +236,20 @@ issue #381).
    enforces the same `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` bounds
    `store` does (issue #379 S1 — see [[#State Management (StateManager)]]); if the
    table is already back at capacity by the time this call's checkout window ends,
-   `restore` returns `Err` and the session is genuinely lost — that failure is
-   logged (`GeneratorService::restore_or_log`), not surfaced to the client, since
-   the pipeline's own error is always the more relevant one to report. Only once
-   step 3 fully succeeds, or `restore` runs (successfully or not), is the session's
-   fate settled.
+   `restore` returns `Err` and the session is genuinely lost. That failure is
+   always logged server-side via `GeneratorService::restore_after_pipeline_failure`,
+   and — since issue #387 gap 3 — also folded into the `McpError` returned to the
+   client instead of being silently swallowed: the pipeline error's own message is
+   preserved, with `restore`'s actual `StateError` (`AtCapacity` or
+   `MemoryBudgetExceeded`, reported by its own `Display` text rather than a single
+   hardcoded cause) appended along with guidance to run `introspect_server` again
+   instead of retrying with the same `session_id`. `data` additionally carries a
+   machine-checkable `session_restore_failure_reason` field (`"at_capacity"` or
+   `"memory_budget_exceeded"`) via `session_lost_after_restore_failure`, so a
+   programmatic client doesn't have to substring-match prose to tell this compound
+   failure apart from an ordinary retriable pipeline error. Only once step 3 fully
+   succeeds, or `restore` runs (successfully or not), is the session's fate
+   settled.
 5. Does **not** observe request cancellation — a documented, deliberate
    choice: an earlier version raced the *lock wait* (not the export
    itself, which was already excluded) against cancellation, but that
