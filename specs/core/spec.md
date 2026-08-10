@@ -338,6 +338,38 @@ pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir to "~
 pub fn validate_path_segment(segment: &str) -> Option<Component<'_>>; // single plain component, no "..", no separator
 pub fn contains_parent_dir(path: &Path) -> bool; // true if any component is `..`
 ```
+On Windows/macOS, the home-directory component comparison inside `sanitize_path_for_error`
+(`components_match`/`replace_case_aware`) is both Unicode-case-insensitive (`str::to_lowercase`,
+issue #417) and Unicode-normalization-insensitive (NFC via the `unicode-normalization` crate,
+issue #416): a username that arrives pre-composed (NFC) from one source and decomposed (NFD)
+from another — the same rendered text, different byte sequence — still matches, on both the
+primary `strip_home_prefix`/`components_match` path and the `scrub_username`/`replace_case_aware`
+fallback. `replace_case_aware` NFC-normalizes `haystack` and `needle` as whole strings *before*
+windowing, not per-candidate-window: an earlier version normalized only inside each window, which
+left `needle`'s raw (pre-normalization) char count mismatched against a differently-sized
+normalized span in `haystack` (e.g. an NFC needle against an NFD-spelled haystack span), silently
+missing the match. Every slice point used to build the redacted output is still that
+already-normalized `haystack` string's own char boundary, so this cannot panic or mis-slice even
+though normalization (like the case fold) can change a character's encoded byte length. One
+observable side effect of normalizing `haystack` as a whole: the `scrub_username` fallback's
+*entire* returned string is NFC-normalized, not just the redacted span — an NFD-spelled segment
+elsewhere in the path comes back precomposed. This is harmless for display, but on Windows, where
+NTFS treats an NFC- and an NFD-spelled filename as different files, the rendered path is not
+guaranteed to name a file that exists on disk under that exact spelling. The primary
+`strip_home_prefix` path has no such effect — it emits components verbatim.
+`normalize_and_fold` (used by both functions) also re-normalizes *after* folding, not just before:
+`str::to_lowercase` can turn an already-NFC string into a non-NFC one for a character whose
+lowercase has a precomposed form but whose uppercase does not (e.g. `"J\u{30C}"`, no precomposed
+uppercase, folds to `"j\u{30C}"`, which is not NFC since precomposed `"\u{1F0}"` "ǰ" exists) — the
+trailing re-normalization catches this case too. The one residual limitation left in
+`replace_case_aware`: its window is sized to `needle`'s *normalized* char count, but the
+comparison runs on the further-*folded* form, whose char count can differ from the normalized one
+— so a needle/haystack pair whose folded forms only line up at a different char count than their
+normalized forms is missed. This covers both German "ß" needle against a haystack spelled "ss"
+and a normalization-adjacent case introduced by the post-fold re-normalization itself (e.g. needle
+`"J\u{30C}an"` against haystack `"\u{1F0}an"`) — an accepted, pre-existing limitation (see the
+module's tests), not a regression from either the #417 or #416 fix.
+
 `validate_path_segment` backs `ServerId::new`/`ToolName::new`'s own baseline invariant (see
 above) and, since #395, is used internally by `confinement::resolve_confined_path` as its own
 generic, looser structural check on the `segment` (`server_id`) it's given —
@@ -481,7 +513,7 @@ absorbed into the token's "scheme" and survives, exact parity with what
 
 ```rust
 pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
-pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens all control chars + U+2028/U+2029 to spaces, truncates by char count
+pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, and bidi override/isolate controls to spaces; removes bidi marks entirely; truncates by char count
 pub fn wrap_untrusted_block(context: &str, body: &str) -> String;  // escapes &, <, > in body; wraps in <untrusted-data>...</untrusted-data>
 ```
 Threat model: an introspected MCP server's tool names/descriptions/keywords
@@ -491,6 +523,19 @@ exist because `mcp-skill` (SKILL.md + prompt generation) and
 data into text an LLM later reads as instructions — see
 [[../server/spec#Prompt injection defense]] and
 [[../skill/spec#Prompt injection defense]].
+
+Since issue #422, `sanitize_untrusted_text` also neutralizes the Unicode bidirectional-formatting
+characters a "Trojan Source"-style attack relies on to visually reorder or relabel text for a
+human reader without changing its logical byte order, with two different treatments depending on
+whether the character alone can reorder/join text: the explicit embedding/override controls
+U+202A-U+202E (LRE, RLE, PDF, LRO, RLO) and the isolate controls U+2066-U+2069 (LRI, RLI, FSI,
+PDI) are *replaced with a space* (removing them outright could join two tokens that were only
+separated by the removed character); the weaker directional marks U+200E/U+200F (LRM/RLM) and
+U+061C (ALM), which only set direction for adjacent neutral characters and cannot reorder or join
+anything on their own, are *removed entirely* so a legitimate mark inside otherwise-correct RTL
+text doesn't inject a spurious word break. None of these are covered by `char::is_control` (they
+are Unicode `Cf` format characters, not control characters), so they previously passed through
+this function unmodified.
 
 ## 3. Cross-Crate Contracts
 
@@ -535,6 +580,8 @@ and byte-preserving of each variant's existing `Display` message.
 | Timeout of `601s` (`MAX_TIMEOUT` = 600s) | Rejected; `600s` itself is accepted |
 | Absolute-path command that exists but lacks the execute bit | Rejected (Unix only) |
 | `sanitize_path_for_error` on a mounted/bind-mounted home directory | Falls back to scrubbing the bare username substring when the leading-prefix match fails |
+| `sanitize_path_for_error` on a home directory whose username differs from the path's only by NFC-vs-NFD composition form (Windows/macOS) | Still matched and redacted on both the primary `components_match` path and the `scrub_username`/`replace_case_aware` fallback — `haystack`/`needle` are NFC-normalized as whole strings, not per-window, before comparison |
+| `sanitize_untrusted_text` on a value containing U+202E (RIGHT-TO-LEFT OVERRIDE) or an isolate control (U+2066-U+2069) | Flattened to a space, same as a control character |
 | `RedactedUrl` on `https://user:p/w@host/mcp` (unencoded `/` in password) | Whole URL redacted — the authority-terminator ambiguity check fires |
 | `resolve_confined_path` terminal component is a dangling symlink, under either `ConfinementTarget` | Rejected as `Escape` — checked via `symlink_metadata`, not `metadata`/`canonicalize`, so a target that can't be resolved is never mistaken for "doesn't exist yet" |
 | `resolve_confined_path` terminal component exists as the other `ConfinementTarget` kind (file where `Directory` expected, or vice versa) | `WrongTargetKind`, mapped by each caller to its own truthful variant name |

@@ -5,13 +5,16 @@
 //! introspected MCP server are attacker-controlled from this project's point
 //! of view: a malicious or compromised server can set them to anything,
 //! including embedded control characters and line breaks that mimic
-//! Markdown structure (headings, fenced code blocks, list items), or angle
-//! brackets crafted to forge the closing tag of [`wrap_untrusted_block`]'s
-//! own delimiter and smuggle a forged instruction outside the boundary. Both
-//! `mcp-execution-skill` (SKILL.md and prompt generation) and
-//! `mcp-execution-server` (introspection summaries returned to Claude) embed
-//! this data into text an LLM later reads as context, so the two defenses
-//! below live here once instead of being reimplemented per call site.
+//! Markdown structure (headings, fenced code blocks, list items), Unicode
+//! bidi-override/isolate characters that visually reorder text to disguise
+//! what a human reviewer is actually approving (a "Trojan Source"-style
+//! attack), or angle brackets crafted to forge the closing tag of
+//! [`wrap_untrusted_block`]'s own delimiter and smuggle a forged instruction
+//! outside the boundary. Both `mcp-execution-skill` (SKILL.md and prompt
+//! generation) and `mcp-execution-server` (introspection summaries returned
+//! to Claude) embed this data into text an LLM later reads as context, so
+//! the defenses below live here once instead of being reimplemented per
+//! call site.
 
 /// Default cap, in `char`s, on a single untrusted metadata field passed to
 /// [`sanitize_untrusted_text`].
@@ -32,19 +35,43 @@
 pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 
 /// Neutralizes characters that would let an untrusted string break out of
-/// the single-line context it's embedded into, then truncates it.
+/// the single-line context it's embedded into, or visually misrepresent
+/// itself, then truncates it.
 ///
-/// Replaces every Unicode control character (`is_control`, which covers the
-/// C0 set — `\r`, `\n`, ESC, BEL, VT, FF, etc. — and the C1 set, including
-/// U+0085 NEL) as well as the ECMAScript/Markdown-significant line
-/// terminators U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR, both
-/// outside the Unicode control-character category) with a space, then keeps
-/// at most `max_len` `char`s. Markdown headings, fenced code blocks, and
-/// list items are only structural at the start of a line, and a prompt
-/// section header only means anything after a real line break — collapsing
-/// every line-breaking or otherwise non-printable character to a space is
-/// what actually neutralizes the injection, regardless of which other
-/// characters the value contains.
+/// Applies each of the following, then keeps at most `max_len` `char`s:
+///
+/// - Every Unicode control character (`is_control`, which covers the C0 set
+///   — `\r`, `\n`, ESC, BEL, VT, FF, etc. — and the C1 set, including U+0085
+///   NEL) and the ECMAScript/Markdown-significant line terminators U+2028
+///   (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR, both outside the
+///   Unicode control-character category) are replaced with a space.
+/// - The Unicode bidi embedding/override controls U+202A–U+202E (LRE, RLE,
+///   PDF, LRO, RLO) and isolate controls U+2066–U+2069 (LRI, RLI, FSI, PDI)
+///   are likewise replaced with a space. Removing them outright, rather than
+///   substituting a space, would risk joining two tokens that were only
+///   separated by the removed character (e.g. `rm -rf\u{202E} /` losing its
+///   separating space).
+/// - The weaker bidi directional marks U+200E/U+200F (LRM/RLM) and U+061C
+///   (ALM) are removed entirely (mapped to nothing, not a space). Unlike the
+///   controls above, these marks cannot reorder or join anything on their
+///   own — they only set the implicit direction of immediately adjacent
+///   neutral characters — so replacing one with a visible space would
+///   corrupt otherwise-legitimate RTL text (e.g. splitting `abc\u{200E}def`
+///   into two words) for no additional defensive benefit.
+///
+/// None of the bidi characters above are caught by `is_control` (they're
+/// Unicode `Cf` format characters), so they would otherwise pass through
+/// unmodified and let an untrusted value visually reorder or relabel
+/// surrounding text for a human reader — the "Trojan Source" class of
+/// attack — even though the underlying bytes still read left-to-right/
+/// logical order for any code that processes them.
+///
+/// Markdown headings, fenced code blocks, and list items are only
+/// structural at the start of a line, and a prompt section header only
+/// means anything after a real line break — collapsing every
+/// line-breaking, non-printable, or bidi-reordering character to a space is
+/// what actually neutralizes both the injection and the visual-spoofing
+/// risk, regardless of which other characters the value contains.
 ///
 /// This does not neutralize `<`/`>`: a value that will be embedded inside
 /// [`wrap_untrusted_block`]'s tagged boundary does not need to, since that
@@ -59,16 +86,23 @@ pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 /// let sanitized = sanitize_untrusted_text(hostile, 200);
 /// assert!(!sanitized.contains('\n'));
 /// assert!(sanitized.starts_with("safe ### Fake Heading"));
+///
+/// // A Trojan-Source-style bidi override is replaced with a space.
+/// let hostile_bidi = "safe\u{202E}gnisrever yllacisiv";
+/// let sanitized_bidi = sanitize_untrusted_text(hostile_bidi, 200);
+/// assert_eq!(sanitized_bidi, "safe gnisrever yllacisiv");
 /// ```
 #[must_use]
 pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
     let sanitized: String = s
         .chars()
-        .map(|c| {
-            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
-                ' '
+        .filter_map(|c| {
+            if is_bidi_mark(c) {
+                None
+            } else if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') || is_bidi_control(c) {
+                Some(' ')
             } else {
-                c
+                Some(c)
             }
         })
         .collect();
@@ -77,6 +111,21 @@ pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
     } else {
         sanitized
     }
+}
+
+/// Returns `true` for the Unicode bidi embedding/override/isolate controls
+/// [`sanitize_untrusted_text`] replaces with a space. See that function's
+/// doc comment for the full rationale and exact code point list.
+const fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Returns `true` for the Unicode bidi directional marks
+/// [`sanitize_untrusted_text`] removes entirely (rather than replacing with
+/// a space). See that function's doc comment for the full rationale and
+/// exact code point list.
+const fn is_bidi_mark(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}')
 }
 
 /// Wraps untrusted content in an explicit, tagged data boundary that tells
@@ -165,6 +214,46 @@ mod tests {
     #[test]
     fn sanitize_leaves_short_safe_text_unchanged() {
         assert_eq!(sanitize_untrusted_text("safe text", 100), "safe text");
+    }
+
+    /// Regression test for #422: U+202E RIGHT-TO-LEFT OVERRIDE is a "Trojan Source"-class
+    /// character — not `is_control`, so it previously passed through unmodified and could
+    /// visually reverse the text that follows it for a human reviewing an MCP-server-supplied
+    /// tool description.
+    #[test]
+    fn sanitize_neutralizes_right_to_left_override() {
+        let hostile = "safe\u{202E}evil";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert!(!sanitized.contains('\u{202E}'));
+        assert_eq!(sanitized, "safe evil");
+    }
+
+    /// Regression test for #422: the isolate controls (U+2066-U+2069) are also Unicode `Cf`
+    /// format characters outside `is_control`, and are part of the same Trojan-Source attack
+    /// surface as the explicit override characters.
+    #[test]
+    fn sanitize_neutralizes_bidi_isolate_controls() {
+        let hostile = "a\u{2066}b\u{2067}c\u{2068}d\u{2069}e";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "a b c d e");
+    }
+
+    /// The weaker directional marks (LRM/RLM/ALM) don't reorder or join text the way the
+    /// override/isolate controls do — they only set direction for adjacent neutral characters —
+    /// so they are removed entirely rather than replaced with a space, avoiding a spurious word
+    /// break in otherwise-legitimate RTL text that happens to contain one.
+    #[test]
+    fn sanitize_neutralizes_bidi_marks() {
+        let hostile = "a\u{200E}b\u{200F}c\u{061C}d";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "abcd");
+    }
+
+    #[test]
+    fn sanitize_neutralizes_bidi_embedding_and_pop_controls() {
+        let hostile = "a\u{202A}b\u{202B}c\u{202C}d\u{202D}e";
+        let sanitized = sanitize_untrusted_text(hostile, 100);
+        assert_eq!(sanitized, "a b c d e");
     }
 
     #[test]
