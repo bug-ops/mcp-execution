@@ -15,8 +15,8 @@ categories = ["development-tools", "filesystem"]
 workspace = true
 
 [dependencies]
-dirs.workspace = true
 dhat = { workspace = true, optional = true }
+dirs.workspace = true
 mcp-execution-codegen.workspace = true
 rayon = { workspace = true, optional = true }
 tempfile.workspace = true

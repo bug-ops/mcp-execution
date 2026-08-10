@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **workspace**: sorted `[dependencies]` alphabetically in `mcp-execution-files` and
+  `mcp-execution-skill` (#391).
 - **CI**: extracted `cargo build --all-targets --all-features --workspace` out of the `test`
   job into a new, independent `build` job that runs on the same OS/toolchain matrix in
   parallel with `test` (nextest already builds what it needs on its own, so the two no longer
