@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mcp-execution-introspector`**: added `test_adr_369_protocol_version_latest_gate`, an
+  executable CI gate for ADR-369 §5 asserting `rmcp::model::ProtocolVersion::LATEST ==
+  ProtocolVersion::V_2025_11_25`. Fails the moment `rmcp` promotes `LATEST` to `V_2026_07_28`,
+  which is a trigger to re-open the ADR-369 discussion on adopting rmcp's SEP-2575 stateless
+  discover lifecycle — not authorization to implement it, and not a "fix the assertion" bug
+  (#382).
+
 ### Changed
 
 - **CI**: extracted `cargo build --all-targets --all-features --workspace` out of the `test`
@@ -17,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch push covered by the workflow's triggers.
 - **`mcp-execution-cli`**: extracted `formatters::emit`, a shared helper that formats a value,
   prints it, and returns the given `ExitCode`, collapsing the repeated
-  format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`, and
-  `introspect.rs`'s command handlers. Behavior-preserving refactor only — no change to CLI output
-  or exit codes (#368).
+  format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`,
+  `introspect.rs`, and `skill.rs`'s command handlers. Behavior-preserving refactor only — no
+  change to CLI output or exit codes (#368, #377).
 
 ### Fixed
 

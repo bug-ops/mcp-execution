@@ -222,9 +222,8 @@ yields no `server_info` so risk 1 above is observable instead of silent.
 
 The gate must be an **executable, CI-failing assertion**, not an inferred
 or manually-tracked condition: `rmcp` version bumps arrive via dependabot
-with zero source changes to this workspace, and no workspace code
-currently references `ProtocolVersion::LATEST` or `KNOWN_VERSIONS`, so a
-protocol promotion would land green and go unnoticed without one.
+with zero source changes to this workspace, so without one a protocol
+promotion would land green and go unnoticed.
 
 **Gate condition** (lives in `mcp-introspector`, A's concern): a test
 asserting
@@ -233,7 +232,11 @@ asserting
 assert_eq!(rmcp::model::ProtocolVersion::LATEST, rmcp::model::ProtocolVersion::V_2025_11_25);
 ```
 
-fails the moment `rmcp` promotes `LATEST` to `V_2026_07_28`.
+fails the moment `rmcp` promotes `LATEST` to `V_2026_07_28`. Implemented as
+`test_adr_369_protocol_version_latest_gate` in
+`crates/mcp-introspector/src/lib.rs` (`#[cfg(test)] mod tests`, ADR-369 §5
+section), the only workspace reference to `ProtocolVersion::LATEST` or
+`KNOWN_VERSIONS`.
 
 **What a failing assertion means — and does not mean.** A red assertion is
 a **trigger to re-open the adoption discussion for A**, nothing more. It

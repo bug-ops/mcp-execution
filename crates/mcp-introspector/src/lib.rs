@@ -2581,4 +2581,28 @@ mod tests {
         assert!(meta.has_resources);
         assert!(meta.has_prompts);
     }
+
+    // ── ADR-369 §5 revisit gate (finding A) ──────────────────────────────────
+
+    /// Fails the moment `rmcp` promotes `ProtocolVersion::LATEST` to
+    /// `V_2026_07_28`, per ADR-369 §5 (`specs/decisions/ADR-369-rmcp-stateless-lifecycle-adoption.md`).
+    ///
+    /// A red assertion here is a trigger to **re-open** the deferred decision
+    /// on adopting rmcp's SEP-2575 stateless discover lifecycle (finding A) —
+    /// it does not authorize implementing it, and the benefit side of that
+    /// decision (whether servers in the actual population answer
+    /// `server/discover`) must still be re-assessed at that point, not
+    /// assumed. Do not "fix" this assertion by updating the expected version;
+    /// update it only after the ADR-369 discussion has been re-opened and a
+    /// new decision recorded.
+    #[test]
+    fn test_adr_369_protocol_version_latest_gate() {
+        assert_eq!(
+            rmcp::model::ProtocolVersion::LATEST,
+            rmcp::model::ProtocolVersion::V_2025_11_25,
+            "rmcp promoted ProtocolVersion::LATEST — this is the ADR-369 §5 revisit gate for \
+             finding A (specs/decisions/ADR-369-rmcp-stateless-lifecycle-adoption.md): re-open \
+             the ADR-369 discussion for finding A, do NOT just bump the expected constant"
+        );
+    }
 }
