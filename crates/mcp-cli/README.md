@@ -102,6 +102,8 @@ mcp-execution-cli generate <SERVER> [OPTIONS]
 - `--progressive-output <PATH>`: Custom output directory
 - `--dry-run`: Preview files that would be generated without writing to disk
 - `--format <FORMAT>`: Output format (json, text, pretty)
+- `--log-format <FORMAT>`: Diagnostic log format (text, json); falls back to
+  `MCP_EXECUTION_LOG_FORMAT` when unset
 
 **Examples**:
 
@@ -147,6 +149,8 @@ mcp-execution-cli introspect <SERVER> [OPTIONS]
 - `--env <KEY=VALUE>`: Environment variable (repeatable)
 - `--detailed`: Show full input/output schemas
 - `--format <FORMAT>`: Output format (json, text, pretty)
+- `--log-format <FORMAT>`: Diagnostic log format (text, json); falls back to
+  `MCP_EXECUTION_LOG_FORMAT` when unset
 - `--http <URL>`: Use HTTP transport
 - `--sse <URL>`: Use SSE transport
 

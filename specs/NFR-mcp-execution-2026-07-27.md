@@ -314,7 +314,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | ID | Requirement | Details |
 |----|------------|---------|
 | NFR-POR-010 | Installation methods | `cargo install mcp-execution-cli` (crates.io, recommended); pre-built release binaries (GitHub Releases, per-platform archives); build from source (`cargo install --path crates/mcp-cli`); individual library crates via `cargo add` |
-| NFR-POR-011 | Configuration management | A single JSON file, `~/.claude/mcp.json`, read directly from the filesystem; no environment-variable-based or secrets-manager-based configuration path exists for this project's *own* configuration (as opposed to the *target* MCP servers it introspects, whose env vars it explicitly validates — see [[#4.1 Confidentiality]]) |
+| NFR-POR-011 | Configuration management | A single JSON file, `~/.claude/mcp.json`, read directly from the filesystem, plus one narrow environment-variable exception: `MCP_EXECUTION_LOG_FORMAT` (issue #399) selects diagnostic log format (`text`/`json`) for `mcp-execution-cli` and the `mcp-execution` server binary — an operational logging-output switch, not a secrets-manager-style configuration path, with no secret-shaped value ever accepted or echoed. No other environment-variable-based or secrets-manager-based configuration path exists for this project's *own* configuration (as opposed to the *target* MCP servers it introspects, whose env vars it explicitly validates — see [[#4.1 Confidentiality]]) |
 | NFR-POR-012 | MSRV policy | Rust 1.91 minimum, enforced by a dedicated CI job (`msrv`); README states MSRV increases are treated as minor version bumps |
 
 ## 9. Verification Matrix

@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
 dirs = { workspace = true }
 futures-util = { workspace = true }
 mcp-execution-codegen = { workspace = true }
@@ -39,7 +40,7 @@ tokio = { workspace = true, features = [
 ] }
 tokio-util = { workspace = true, features = ["codec"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]

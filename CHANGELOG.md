@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again immediately before the write. A checkpoint firing after the session was already consumed
   restores it via the existing `StateManager::restore` path, so a cancelled
   `save_categorized_tools` call remains retriable under the same `session_id`.
+- **`mcp-execution-cli`**, **`mcp-execution-server`**: a new `--log-format {text,json}` flag
+  (and its `MCP_EXECUTION_LOG_FORMAT` environment-variable fallback, consulted only when the
+  flag is not passed) selects structured JSON diagnostic logging instead of the previous
+  text-only output, for log shippers/aggregators that expect JSON. `mcp-cli`'s `--format`
+  (command *result* output) is unaffected — the two are independent. Adding this to
+  `mcp-execution-server` required giving that binary a real argv parser
+  (`clap`) for the first time: it now honors `--help`/`--version` and rejects unknown
+  arguments with exit code 2, instead of silently ignoring all argv as before — a low-risk
+  change, since no in-repo `mcp.json` entry passes this server any arguments (#399).
 
 ### Changed
 
@@ -138,6 +147,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a `categorized_tools` validation failure. A failed validation leaves the session in place,
   at its original expiry, for the caller to retry with the same `session_id` instead of a
   single bad entry (typo'd tool name, duplicate, too many entries) permanently burning it (#371).
+- **`mcp-execution-core`**: `redact_urls_in_text` could produce invalid JSON in structured
+  (`--log-format json`) logging mode when a redacted URL appeared inside a `serde_json`-escaped
+  string (e.g. a quoted URL in error prose): the trailing-punctuation trim applied to the
+  matched token absorbed and deleted the backslash `serde_json` inserts before an escaped `"`,
+  leaving a bare, unescaped quote behind. The trim set now includes `\` so that backslash is
+  left untouched and re-emitted verbatim (#399).
 
 ### Testing
 

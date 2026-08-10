@@ -479,7 +479,59 @@ log-volume-amplification class already fixed for the introspector's
 symmetric decoder (#275/#282); a genuinely malformed non-blank line still
 warns.
 
-## 9. Error Conditions
+## 9. Logging & CLI Surface (`main.rs`, binary only)
+
+Issue #399: the `mcp-execution` binary parses argv via a minimal
+`#[derive(Parser)]` struct (`ServerArgs`), where before it ignored argv
+entirely. `#[command(name = "mcp-execution")]` overrides clap's
+`CARGO_PKG_NAME`-derived default (`mcp-execution-server`, the crate name,
+not the installed binary — see `crates/mcp-server/Cargo.toml`'s `[[bin]]`),
+so `--help`/error output names the binary users actually run. This is a
+deliberate, low-risk behavior change: no in-repo `mcp.json` entry passes
+this server any arguments today, but the binary now honors `--help`/
+`--version` (both written to stdout, harmless since the process exits
+immediately after) and rejects unknown arguments with exit code 2, rather
+than silently ignoring them.
+
+`ServerArgs` carries one flag, `--log-format {text,json}` — typed as
+`Option<mcp_execution_core::cli::LogFormat>` via the same
+`PossibleValuesParser`/`ignore_case = true` pattern `mcp-cli`'s `--format`
+uses (`--help` lists both possible values; case-insensitivity comes from
+clap, not manual lowercasing). `None` means "flag not passed, consult
+`MCP_EXECUTION_LOG_FORMAT`". Two functions extracted out of `main` (rather
+than inlined) so tests can assert the environment variable is actually
+consulted, not only that the pure `mcp-core` helpers work given a
+hand-built input:
+- `resolve_log_format(&ServerArgs) -> LogFormat` reads
+  `MCP_EXECUTION_LOG_FORMAT` itself (`std::env::var(LOG_FORMAT_ENV_VAR).ok()`)
+  and delegates precedence/fallback to the same pure `LogFormat::resolve`
+  `mcp-core`'s `cli` module exposes to `mcp-cli`.
+- `log_format_env_is_invalid(&ServerArgs) -> bool` independently reads the
+  same environment variable and answers "should `main` warn about it" —
+  `false` whenever the flag was passed (matching `resolve`'s own
+  precedence) or the env value is unset/valid, `true` only for a non-empty
+  value `LogFormat::is_invalid_env_value` rejects. Kept separate from
+  `resolve_log_format`'s return value rather than folded into a tuple,
+  since an earlier `(LogFormat, Option<String>)` shape carried a value no
+  production caller ever logged.
+
+Logging setup mirrors `mcp-cli`'s `runner::init_logging` `.boxed()`
+pattern: the writer-configured `fmt::layer().with_writer(std::io::stderr).with_target(true)`
+is built once, then branched only on `.json()` vs. no-op, `.boxed()`-ing
+both arms to a common `Box<dyn Layer<_> + Send + Sync>` so no copy-paste
+divergence between two full `registry()...init()` calls can drop the
+writer configuration from one arm. Unlike `mcp-cli`, this binary's fmt
+layer is **not** wrapped in a `RedactingWriter` — see `main.rs`'s own
+comment on why (no path here ever constructs an http/sse client config, so
+there is no `reqwest`/`rmcp` transport error whose `Display` could embed a
+secret-bearing URL for one to reach). `MCP_EXECUTION_LOG_FORMAT` is a
+second, narrower untrusted-text-into-log path this binary does have, but
+`warn_on_rejected_log_format` never echoes the rejected raw environment
+value into its `WARN` line — only a fixed diagnostic string naming the
+environment variable is logged — so it does not need a redacting writer
+either.
+
+## 10. Error Conditions
 
 `StateError`: `AtCapacity { limit }`, `MemoryBudgetExceeded { limit }`.
 
@@ -493,7 +545,7 @@ Every tool method maps its internal errors to `rmcp::ErrorData` via either
 confinement violation) or `McpError::internal_error` (this project's/the
 environment's fault — I/O failure, task join error, serialization failure).
 
-## 10. Cross-Crate Contracts
+## 11. Cross-Crate Contracts
 
 - **Consumes**: `mcp-introspector::Introspector`/`ServerInfo`,
   `mcp-codegen::ProgressiveGenerator`, `mcp-files::FilesBuilder`/
@@ -519,7 +571,7 @@ environment's fault — I/O failure, task join error, serialization failure).
   (`MAX_CATEGORIZED_TOOL_NAME_LEN` etc., `mcp_execution_skill::MAX_TOOL_FILES`,
   `mcp_execution_core::MAX_ARG_COUNT`/`MAX_ARG_LEN`) byte-for-byte.
 
-## 11. Edge Cases & Notable Behaviors
+## 12. Edge Cases & Notable Behaviors
 
 - `test_introspect_server_concurrent_calls_do_not_cross_contaminate_server_id`
   guards a subtle interaction between rmcp's async-fn span-instrumentation
@@ -533,7 +585,7 @@ environment's fault — I/O failure, task join error, serialization failure).
   confinement check in this crate rather than being the one path that
   skips it.
 
-## 12. See Also
+## 13. See Also
 
 - [[../introspector/spec]] — wrapped by `introspect_server`
 - [[../codegen/spec]] / [[../files/spec]] — wrapped by `save_categorized_tools`

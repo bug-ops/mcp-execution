@@ -13,7 +13,7 @@ use std::str::FromStr;
 
 use crate::actions::ServerAction;
 use crate::commands::common::{ServerSource, TransportArgs};
-use mcp_execution_core::cli::OutputFormat;
+use mcp_execution_core::cli::{LogFormat, OutputFormat};
 use mcp_execution_core::{Error as CoreError, RedactedItems, RedactedUrl, sanitize_path_for_error};
 
 /// MCP Code Execution - Secure WASM-based MCP tool execution.
@@ -54,6 +54,20 @@ pub struct Cli {
             .map(|s| OutputFormat::from_str(&s).expect("possible values are OutputFormat variants"))
     )]
     pub format: OutputFormat,
+
+    /// Diagnostic log format: `text` (default) or `json`.
+    ///
+    /// Independent of `--format`, which controls command *result* output, not diagnostic
+    /// logging. When unset, falls back to the `MCP_EXECUTION_LOG_FORMAT` environment variable;
+    /// when that is also unset or invalid, defaults to `text`.
+    #[arg(
+        long = "log-format",
+        global = true,
+        ignore_case = true,
+        value_parser = PossibleValuesParser::new(["text", "json"])
+            .map(|s| LogFormat::from_str(&s).expect("possible values are LogFormat variants"))
+    )]
+    pub log_format: Option<LogFormat>,
 }
 
 // Hand-written to redact `Commands::Introspect`'s `env`/`headers`/`http`/`sse`
@@ -73,11 +87,13 @@ impl fmt::Debug for Cli {
             command,
             verbose,
             format,
+            log_format,
         } = self;
         f.debug_struct("Cli")
             .field("command", command)
             .field("verbose", verbose)
             .field("format", format)
+            .field("log_format", log_format)
             .finish()
     }
 }
@@ -849,6 +865,68 @@ mod tests {
     fn test_output_format_parsing_invalid() {
         use mcp_execution_core::cli::OutputFormat;
         assert!("invalid".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn test_cli_log_format_default_unset() {
+        let cli = Cli::parse_from(["mcp-cli", "introspect", "github"]);
+        assert_eq!(cli.log_format, None);
+    }
+
+    #[test]
+    fn test_cli_log_format_json() {
+        let cli = Cli::parse_from(["mcp-cli", "--log-format", "json", "introspect", "github"]);
+        assert_eq!(cli.log_format, Some(LogFormat::Json));
+    }
+
+    #[test]
+    fn test_cli_log_format_case_insensitive() {
+        let cli = Cli::parse_from(["mcp-cli", "--log-format", "JSON", "introspect", "github"]);
+        assert_eq!(cli.log_format, Some(LogFormat::Json));
+    }
+
+    #[test]
+    fn test_cli_log_format_invalid_rejected_by_clap() {
+        let result =
+            Cli::try_parse_from(["mcp-cli", "--log-format", "xml", "introspect", "github"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_log_format_global_flag_accepted_after_subcommand() {
+        let cli = Cli::parse_from(["mcp-cli", "introspect", "github", "--log-format", "json"]);
+        assert_eq!(cli.log_format, Some(LogFormat::Json));
+    }
+
+    #[test]
+    fn test_cli_log_format_possible_values_parse_via_from_str() {
+        let cmd = Cli::command();
+        let arg = cmd
+            .get_arguments()
+            .find(|a| a.get_id() == "log_format")
+            .expect("--log-format argument must exist");
+        let values = arg.get_possible_values();
+        assert!(
+            !values.is_empty(),
+            "--log-format must declare possible values"
+        );
+        for possible_value in values {
+            let name = possible_value.get_name();
+            assert!(
+                LogFormat::from_str(name).is_ok(),
+                "{name} must parse via LogFormat::from_str to match the --log-format value parser"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cli_log_format_help_documents_env_var() {
+        let mut command = Cli::command();
+        let help = command.render_long_help().to_string();
+        assert!(
+            help.contains("MCP_EXECUTION_LOG_FORMAT"),
+            "--help must document the MCP_EXECUTION_LOG_FORMAT environment variable per FR-004"
+        );
     }
 
     #[test]
