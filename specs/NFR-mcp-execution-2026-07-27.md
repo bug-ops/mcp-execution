@@ -257,7 +257,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 
 | ID | Requirement | Standard/Protocol |
 |----|------------|-------------------|
-| NFR-COM-001 | MCP protocol compliance | Model Context Protocol, version `2025-06-18` (advertised by `mcp-execution-server`'s `get_info()`), via the official `rmcp` SDK (both client and server roles) |
+| NFR-COM-001 | MCP protocol compliance | Model Context Protocol via the official `rmcp` SDK (both client and server roles); `mcp-execution-server`'s `get_info()` pins `2025-06-18` as the negotiation fallback, but the server advertises and can negotiate up to every protocol version the SDK knows (`ProtocolVersion::KNOWN_VERSIONS`, currently through `2026-07-28`) since `supported_protocol_versions()`/`discover()` are not overridden — see `specs/server/spec.md` and issue #381 |
 | NFR-COM-002 | Generated output executes without depending on this project's own runtime | Generated TypeScript is a self-contained package (own `package.json`/`tsconfig.json`) runnable via `tsx`, `deno`, or Node's native TypeScript stripping — not merged into a consumer's own TypeScript build |
 
 ### 6.2 Co-existence

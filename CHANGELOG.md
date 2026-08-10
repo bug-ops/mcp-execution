@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   even though nothing was ever exported and the session's TTL hadn't elapsed, forcing the
   caller back to `introspect_server` just to retry (#371).
 
+### Testing
+
+- **`mcp-execution-server`**: added characterization tests pinning `GeneratorService`'s
+  protocol-version advertisement. `supported_protocol_versions()` and `discover()` are not
+  overridden, so rmcp's defaults apply: the server currently advertises every protocol version
+  the SDK knows (`ProtocolVersion::KNOWN_VERSIONS`, all five entries, checked against an
+  explicit expected list rather than the constant itself), not just the `2025-06-18` fallback
+  `get_info()` pins for unrecognized-version negotiation. One test drives the real `server/discover`
+  RPC handler end to end over an in-process duplex transport, not just its default method-level
+  logic. No behavior changed — these tests exist so a future rmcp version bump that substitutes
+  or clamps the advertised set fails loudly instead of silently drifting (#381).
+
 ### Removed
 
 - **`mcp-execution-core`**: dropped the unused `async-trait`, `chrono`, `tracing`, and `uuid`
