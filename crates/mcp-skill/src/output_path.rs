@@ -8,8 +8,11 @@
 //! confinement already used by [`crate::scan_tools_directory`], adapted for
 //! a target that may not exist yet.
 
-use mcp_execution_core::sanitize_path_for_error;
-use std::path::{Component, Path, PathBuf};
+use mcp_execution_core::{
+    ConfinementError, ConfinementTarget, resolve_confined_path, sanitize_path_for_error,
+    validate_path_segment,
+};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Errors from resolving and confining a skill output path to its base directory.
@@ -94,31 +97,26 @@ pub enum OutputPathError {
     Io(#[from] std::io::Error),
 }
 
-/// Validates `server_id` is a single plain path segment: non-empty, and
-/// with no `..`, path separator, or root/prefix component.
+/// Maps the shared [`ConfinementError`] onto [`OutputPathError`]'s own, pre-existing variant set.
 ///
-/// `server_id` is walked through the same confinement loop as
-/// `output_path`'s directory components (see [`resolve_skill_output_path`]),
-/// so a `..` or absolute `server_id` would eventually be caught there too —
-/// this check rejects it earlier, before any filesystem work, and gives a
-/// precise error rather than relying on the generic `Escape` path.
-///
-/// Returns the validated [`Component`] itself (borrowed from `server_id`),
-/// rather than just `Ok(())`, so the caller pushes the exact component this
-/// function parsed and approved instead of re-deriving one from the raw
-/// string — which could diverge from this validation on an input like
-/// `"a/."`, where `Path::components()` normalizes away the trailing `.` and
-/// this function sees a single `Normal("a")`, but a fresh
-/// `Component::Normal(OsStr::new("a/."))` would still carry the embedded
-/// separator. Delegates to `mcp_execution_core::validate_path_segment`, shared
-/// with `mcp-execution-server`'s equivalent check for `introspect_server`'s
-/// `output_dir`, so both crates reject the same malformed `server_id` shapes.
-fn validate_server_id_segment(server_id: &str) -> Result<Component<'_>, OutputPathError> {
-    mcp_execution_core::validate_path_segment(server_id).ok_or_else(|| {
-        OutputPathError::InvalidServerId {
-            server_id: server_id.to_string(),
+/// This is a 1:1 rename, not a lossy union: [`ConfinementError::WrongTargetKind`] becomes
+/// [`OutputPathError::NotAFile`] here (the terminal component `resolve_skill_output_path` walks
+/// is always a file), which is the only variant this crate names differently than
+/// `mcp-execution-server`'s equivalent `From` impl.
+impl From<ConfinementError> for OutputPathError {
+    fn from(err: ConfinementError) -> Self {
+        match err {
+            ConfinementError::InvalidSegment { segment } => {
+                Self::InvalidServerId { server_id: segment }
+            }
+            ConfinementError::SegmentIsSymlink { path } => Self::ServerIdIsSymlink { path },
+            ConfinementError::Escape { path } => Self::Escape { path },
+            ConfinementError::NotADirectory { path } => Self::NotADirectory { path },
+            ConfinementError::WrongTargetKind { path } => Self::NotAFile { path },
+            ConfinementError::CreateDir { path, source } => Self::CreateDir { path, source },
+            ConfinementError::Io(source) => Self::Io(source),
         }
-    })
+    }
 }
 
 /// Validates a caller-supplied `output_path` and returns it as a safe,
@@ -149,40 +147,41 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 
 /// Resolves a `save_skill` output path, confining it to `base_dir/server_id`.
 ///
-/// `server_id` and `output_path` are both attacker-influenced, so both are
-/// walked through the *same* checked component loop, rooted at `base_dir`
-/// (canonicalized once, since `base_dir` itself is trusted, first-party
-/// configuration rather than caller input): `server_id` is pushed as the
-/// first component, followed by `output_path`'s directory components, if
-/// any. `output_path`, when supplied, is treated as *relative* to
-/// `base_dir/server_id`: an absolute path or a path containing a `..`
-/// component is rejected before any filesystem work happens. `None`
-/// resolves to the default `SKILL.md`. Confining to `base_dir/server_id`
-/// (rather than just `base_dir`) matches the documented `save_skill`
-/// contract, in the sense that both the default path and every accepted
+/// `server_id` is validated as a single plain path segment **before** `output_path` is checked
+/// at all, matching this crate's pre-#395 error precedence: a caller supplying both an invalid
+/// `server_id` and an invalid `output_path` sees [`OutputPathError::InvalidServerId`], not a
+/// relative-path error - `mcp_execution_server`'s `save_skill` handler keeps `InvalidServerId` in
+/// its own error-classification arm specifically for external callers of this public function
+/// that skip its own upstream `validate_server_id` check, so masking it behind a relative-path
+/// error would defeat that.
+///
+/// `server_id` and `output_path` are both attacker-influenced, so both are walked and
+/// confinement-checked by the shared [`resolve_confined_path`], rooted at `base_dir`: `server_id`
+/// is resolved as the confined segment, followed by `output_path`'s directory components, if
+/// any. `output_path`, when supplied, is treated as *relative* to `base_dir/server_id`: an
+/// absolute path, a path containing a `..` component, or a path with no file name is rejected by
+/// `relative_target` before any filesystem work happens. `None` resolves to the default
+/// `SKILL.md`. Confining to `base_dir/server_id` (rather than just `base_dir`) matches the
+/// documented `save_skill` contract, in the sense that both the default path and every accepted
 /// `output_path` land under `server_id`'s own directory.
 ///
-/// `server_id`'s own directory is resolved before anything else and is
-/// rejected outright if it already exists as a symlink, regardless of where
-/// it points: a resolve-and-confine check alone would accept a symlink from
-/// `base_dir/server-b` to `base_dir/server-a`, since the target still
-/// resolves under `base_dir` (issue #217). Every subsequent `output_path`
-/// directory component is then confined to that resolved `server_id`
-/// directory specifically, not merely to `base_dir` as a whole, so no
-/// deeper component can reach a different server's directory either.
+/// `server_id`'s own directory is resolved before anything else and is rejected outright if it
+/// already exists as a symlink, regardless of where it points: a resolve-and-confine check alone
+/// would accept a symlink from `base_dir/server-b` to `base_dir/server-a`, since the target still
+/// resolves under `base_dir` (issue #217). Every subsequent `output_path` directory component is
+/// then confined to that resolved `server_id` directory specifically, not merely to `base_dir` as
+/// a whole, so no deeper component can reach a different server's directory either.
 ///
-/// Each component is created and confinement-checked one at a time (rather
-/// than via a single recursive create-and-canonicalize), so that a symlink
-/// already present under `base_dir` when this call starts — whether *at*
-/// `server_id` or at any deeper `output_path` directory component — is
-/// resolved and rejected *before* this function creates anything under it
-/// or descends into it. This is a check against pre-existing state, not a
-/// concurrency guarantee — it does not defend against a symlink planted by
-/// a racing process between this function's checks and the caller's
-/// subsequent write. The final path component is rejected outright if it
-/// already exists as a symlink, dangling or not: a dangling symlink can't
-/// be resolved by `canonicalize`, but would still be followed by a
-/// subsequent write, so it is checked with `symlink_metadata` instead.
+/// Each component is created and confinement-checked one at a time (rather than via a single
+/// recursive create-and-canonicalize), so that a symlink already present under `base_dir` when
+/// this call starts — whether *at* `server_id` or at any deeper `output_path` directory component
+/// — is resolved and rejected *before* this function creates anything under it or descends into
+/// it. This is a check against pre-existing state, not a concurrency guarantee — it does not
+/// defend against a symlink planted by a racing process between this function's checks and the
+/// caller's subsequent write. The final path component is rejected outright if it already exists
+/// as a symlink, dangling or not: a dangling symlink can't be resolved by `canonicalize`, but
+/// would still be followed by a subsequent write, so it is checked with `symlink_metadata`
+/// instead.
 ///
 /// # Errors
 ///
@@ -212,97 +211,16 @@ pub async fn resolve_skill_output_path(
     server_id: &str,
     output_path: Option<&Path>,
 ) -> Result<PathBuf, OutputPathError> {
-    let server_component = validate_server_id_segment(server_id)?;
-    let relative = relative_target(output_path)?;
-
-    tokio::fs::create_dir_all(base_dir)
-        .await
-        .map_err(|source| OutputPathError::CreateDir {
-            path: sanitize_path_for_error(base_dir),
-            source,
-        })?;
-    let canonical_root = tokio::fs::canonicalize(base_dir).await?;
-
-    // Resolve server_id's own directory first, rejecting it outright if it already exists as
-    // a symlink - regardless of where it points - rather than resolving and re-checking it as
-    // the loop below does for deeper components. A symlink here could point at a *sibling*
-    // server's own directory, which still resolves under `canonical_root` and would therefore
-    // pass a resolve-and-confine check; only an unconditional rejection closes that gap
-    // (issue #217). Every subsequent component is then confined to `server_dir` specifically,
-    // not just to `canonical_root` as a whole, so a caller scoped to this `server_id` can never
-    // reach another server's directory through a deeper `output_path` component either.
-    let mut server_dir = canonical_root.clone();
-    server_dir.push(server_component);
-    if !server_dir.starts_with(&canonical_root) {
-        return Err(OutputPathError::Escape {
-            path: sanitize_path_for_error(&server_dir),
+    // Validated again, I/O-free, before `relative_target` so an invalid `server_id` is reported
+    // even when `output_path` is also invalid - matching this crate's pre-#395 error precedence
+    // (`resolve_confined_path` re-validates it a second time as part of its own walk).
+    if validate_path_segment(server_id).is_none() {
+        return Err(OutputPathError::InvalidServerId {
+            server_id: server_id.to_string(),
         });
     }
-    match tokio::fs::symlink_metadata(&server_dir).await {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() {
-                return Err(OutputPathError::ServerIdIsSymlink {
-                    path: sanitize_path_for_error(&server_dir),
-                });
-            }
-            if !meta.is_dir() {
-                return Err(OutputPathError::NotADirectory {
-                    path: sanitize_path_for_error(&server_dir),
-                });
-            }
-        }
-        Err(_) => {
-            tokio::fs::create_dir(&server_dir).await.map_err(|source| {
-                OutputPathError::CreateDir {
-                    path: sanitize_path_for_error(&server_dir),
-                    source,
-                }
-            })?;
-        }
-    }
 
-    let output_dir_components = relative
-        .parent()
-        .map(|parent| parent.components().collect::<Vec<_>>())
-        .unwrap_or_default();
-
-    let mut current = server_dir.clone();
-    for component in output_dir_components {
-        current.push(component);
-        // Cheap for a `..`-free relative path pushed onto an absolute root (a
-        // named component can't leave it), but load-bearing on Windows: a
-        // root-without-prefix component like `\pwn` is not caught by
-        // `Path::is_absolute` and would otherwise reach `create_dir` unconfined.
-        if !current.starts_with(&server_dir) {
-            return Err(OutputPathError::Escape {
-                path: sanitize_path_for_error(&current),
-            });
-        }
-        match tokio::fs::symlink_metadata(&current).await {
-            Ok(_) => {
-                let resolved = tokio::fs::canonicalize(&current).await?;
-                if !resolved.starts_with(&server_dir) {
-                    return Err(OutputPathError::Escape {
-                        path: sanitize_path_for_error(&current),
-                    });
-                }
-                if !tokio::fs::metadata(&resolved).await?.is_dir() {
-                    return Err(OutputPathError::NotADirectory {
-                        path: sanitize_path_for_error(&current),
-                    });
-                }
-                current = resolved;
-            }
-            Err(_) => {
-                tokio::fs::create_dir(&current).await.map_err(|source| {
-                    OutputPathError::CreateDir {
-                        path: sanitize_path_for_error(&current),
-                        source,
-                    }
-                })?;
-            }
-        }
-    }
+    let relative = relative_target(output_path)?;
 
     // `relative_target` already guarantees a file name is present; re-checked
     // here (rather than `.expect`-ed) so this function has no panic surface.
@@ -311,26 +229,16 @@ pub async fn resolve_skill_output_path(
             path: sanitize_path_for_error(&relative),
         });
     };
-    let final_path = current.join(file_name);
+    let relative_dirs = relative.parent().unwrap_or_else(|| Path::new(""));
 
-    if let Ok(meta) = tokio::fs::symlink_metadata(&final_path).await {
-        // Reject unconditionally, independent of whether `canonicalize`
-        // would succeed: a dangling symlink (target does not exist) makes
-        // canonicalize fail, which must not be treated as "safe, doesn't
-        // exist yet" — a subsequent write still follows the link.
-        if meta.file_type().is_symlink() {
-            return Err(OutputPathError::Escape {
-                path: sanitize_path_for_error(&final_path),
-            });
-        }
-        if meta.is_dir() {
-            return Err(OutputPathError::NotAFile {
-                path: sanitize_path_for_error(&final_path),
-            });
-        }
-    }
-
-    Ok(final_path)
+    resolve_confined_path(
+        base_dir,
+        server_id,
+        relative_dirs,
+        Some(ConfinementTarget::File(file_name)),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -385,6 +293,24 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// When both `server_id` and `output_path` are invalid, `InvalidServerId` must win - matching
+    /// the error precedence this function had before the #395 confinement-walk extraction, and
+    /// the precedence `service.rs`'s `save_skill` handler relies on for external callers that
+    /// skip its own upstream `validate_server_id` check.
+    #[tokio::test]
+    async fn invalid_server_id_takes_precedence_over_invalid_output_path() {
+        let base = TempDir::new().unwrap();
+        let absolute = if cfg!(windows) {
+            r"C:\Windows\System32\config"
+        } else {
+            "/etc/passwd"
+        };
+        let err = resolve_skill_output_path(base.path(), "", Some(Path::new(absolute)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OutputPathError::InvalidServerId { .. }));
     }
 
     #[tokio::test]

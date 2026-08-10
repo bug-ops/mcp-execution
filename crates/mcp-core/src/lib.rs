@@ -32,6 +32,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 mod command;
+mod confinement;
 mod error;
 mod path;
 mod redact;
@@ -60,6 +61,9 @@ pub use command::{
 
 // Re-export path helpers shared by confinement checks
 pub use path::{contains_parent_dir, sanitize_path_for_error, validate_path_segment};
+
+// Re-export the shared path-confinement walk
+pub use confinement::{ConfinementError, ConfinementTarget, resolve_confined_path};
 
 // Re-export Debug-redaction helpers shared by secret-shaped fields
 pub use redact::{

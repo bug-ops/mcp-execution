@@ -20,7 +20,10 @@
 //! confinement check that matters runs as close to the actual write as this two-step protocol
 //! allows.
 
-use mcp_execution_core::sanitize_path_for_error;
+use mcp_execution_core::{
+    ConfinementError, ConfinementTarget, resolve_confined_path, sanitize_path_for_error,
+    validate_path_segment,
+};
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
@@ -91,23 +94,26 @@ pub enum OutputDirError {
     Io(#[from] std::io::Error),
 }
 
-/// Validates `server_id` is a single plain path segment: non-empty, and with no `..`, path
-/// separator, or root/prefix component.
+/// Maps the shared [`ConfinementError`] onto [`OutputDirError`]'s own, pre-existing variant set.
 ///
-/// `service::introspect_server` already validates `server_id` via `validate_server_id` (a
-/// tighter lowercase-letter/digit/hyphen charset check) before either this function or
-/// [`resolve_output_dir`] ever runs, but this function does not trust that: it delegates to
-/// `mcp_execution_core::validate_path_segment`, shared with `mcp-execution-skill`'s equivalent
-/// check for `save_skill`'s `server_id`, so `resolve_output_dir` is self-defending against a
-/// `server_id` that reaches it some other way (or after a future change loosens the
-/// caller-side check) rather than only being safe today because `introspect_server` happens to
-/// validate first.
-fn validate_server_id_component(server_id: &str) -> Result<Component<'_>, OutputDirError> {
-    mcp_execution_core::validate_path_segment(server_id).ok_or_else(|| {
-        OutputDirError::InvalidServerId {
-            server_id: server_id.to_string(),
+/// This is a 1:1 rename, not a lossy union: [`ConfinementError::WrongTargetKind`] becomes
+/// [`OutputDirError::NotADirectory`] here (the terminal component `resolve_output_dir` walks is
+/// always a directory), which is the only variant this crate names differently than
+/// `mcp-execution-skill`'s equivalent `From` impl.
+impl From<ConfinementError> for OutputDirError {
+    fn from(err: ConfinementError) -> Self {
+        match err {
+            ConfinementError::InvalidSegment { segment } => {
+                Self::InvalidServerId { server_id: segment }
+            }
+            ConfinementError::SegmentIsSymlink { path } => Self::ServerDirIsSymlink { path },
+            ConfinementError::Escape { path } => Self::Escape { path },
+            ConfinementError::NotADirectory { path }
+            | ConfinementError::WrongTargetKind { path } => Self::NotADirectory { path },
+            ConfinementError::CreateDir { path, source } => Self::CreateDir { path, source },
+            ConfinementError::Io(source) => Self::Io(source),
         }
-    })
+    }
 }
 
 /// Validates a caller-supplied `output_dir` and returns it as a safe, base-relative path, or
@@ -147,94 +153,20 @@ pub fn relative_subpath(output_dir: Option<&Path>) -> Result<PathBuf, OutputDirE
     Ok(path.to_path_buf())
 }
 
-/// Confines `current` to `root`, rejecting it outright if it already exists as a symlink -
-/// regardless of where it points - rather than resolving and re-checking it. Creates the
-/// directory if it doesn't exist yet.
-///
-/// Used only for the `server_id` component: a symlink there could point at a sibling server's
-/// own directory, which still resolves under `root` and would therefore pass a resolve-and-
-/// confine check. Rejecting any pre-existing symlink at this exact component closes that gap
-/// (the same one tracked for `save_skill` in issue #217) rather than merely narrowing it.
-async fn resolve_component_strict(current: &Path, root: &Path) -> Result<(), OutputDirError> {
-    if !current.starts_with(root) {
-        return Err(OutputDirError::Escape {
-            path: sanitize_path_for_error(current),
-        });
-    }
-    match tokio::fs::symlink_metadata(current).await {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() {
-                return Err(OutputDirError::ServerDirIsSymlink {
-                    path: sanitize_path_for_error(current),
-                });
-            }
-            if !meta.is_dir() {
-                return Err(OutputDirError::NotADirectory {
-                    path: sanitize_path_for_error(current),
-                });
-            }
-            Ok(())
-        }
-        Err(_) => {
-            tokio::fs::create_dir(current)
-                .await
-                .map_err(|source| OutputDirError::CreateDir {
-                    path: sanitize_path_for_error(current),
-                    source,
-                })
-        }
-    }
-}
-
-/// Confines `current` to `root`, resolving (and confirming) an existing symlink rather than
-/// rejecting it outright, or creating the directory if it's missing.
-///
-/// Used for `output_dir` subdirectory components other than `server_id`, mirroring
-/// `resolve_skill_output_path`'s intermediate-component handling: a symlink already present
-/// here is followed only if it still resolves inside `root`.
-async fn resolve_component_lenient(
-    current: &mut PathBuf,
-    root: &Path,
-) -> Result<(), OutputDirError> {
-    if !current.starts_with(root) {
-        return Err(OutputDirError::Escape {
-            path: sanitize_path_for_error(current),
-        });
-    }
-    match tokio::fs::symlink_metadata(&current).await {
-        Ok(_) => {
-            let resolved = tokio::fs::canonicalize(&current).await?;
-            if !resolved.starts_with(root) {
-                return Err(OutputDirError::Escape {
-                    path: sanitize_path_for_error(current),
-                });
-            }
-            if !tokio::fs::metadata(&resolved).await?.is_dir() {
-                return Err(OutputDirError::NotADirectory {
-                    path: sanitize_path_for_error(current),
-                });
-            }
-            *current = resolved;
-            Ok(())
-        }
-        Err(_) => {
-            tokio::fs::create_dir(&current)
-                .await
-                .map_err(|source| OutputDirError::CreateDir {
-                    path: sanitize_path_for_error(current),
-                    source,
-                })
-        }
-    }
-}
-
 /// Resolves an `introspect_server` output directory, confining it to `base_dir/server_id`.
 ///
-/// `server_id` is validated as a single plain path segment before anything else (defensively -
-/// see [`validate_server_id_component`]) and then pushed onto `base_dir`. `output_dir`, when
-/// supplied, is treated as *relative* to `base_dir/server_id`: an absolute path or a path
-/// containing a `..` component is rejected before any filesystem work happens. `None` resolves
-/// to `base_dir/server_id` itself.
+/// `server_id` is validated as a single plain path segment **before** `output_dir` is checked at
+/// all, matching this crate's pre-#395 error precedence: a caller supplying both an invalid
+/// `server_id` and an invalid `output_dir` sees [`OutputDirError::InvalidServerId`], not a
+/// relative-path error. `server_id` and `output_dir`'s directory components are then walked and
+/// confinement-checked by the shared [`resolve_confined_path`], which defensively re-validates
+/// `server_id` itself as its first step - even though it is already validated twice by the time
+/// it gets there (`service::introspect_server`'s tighter `validate_server_id` charset check, then
+/// the early check this function performs) - so `resolve_confined_path` stays self-defending
+/// against a `server_id` that reaches it some other way. `output_dir`, when supplied, is treated
+/// as *relative* to `base_dir/server_id`: an absolute path or a path containing a `..` component
+/// is rejected by [`relative_subpath`] before any filesystem work happens. `None` resolves to
+/// `base_dir/server_id` itself.
 ///
 /// Every directory component up to (but not including) the final target - `server_id`'s own
 /// directory, plus any but the last directory component of `output_dir` - is confinement-
@@ -273,62 +205,32 @@ pub async fn resolve_output_dir(
     server_id: &str,
     output_dir: Option<&Path>,
 ) -> Result<PathBuf, OutputDirError> {
-    let server_component = validate_server_id_component(server_id)?;
-    let relative = relative_subpath(output_dir)?;
-
-    tokio::fs::create_dir_all(base_dir)
-        .await
-        .map_err(|source| OutputDirError::CreateDir {
-            path: sanitize_path_for_error(base_dir),
-            source,
-        })?;
-    let canonical_root = tokio::fs::canonicalize(base_dir).await?;
-
-    let mut server_dir = canonical_root.clone();
-    server_dir.push(server_component);
-    resolve_component_strict(&server_dir, &canonical_root).await?;
-
-    let sub_components: Vec<Component<'_>> = relative.components().collect();
-    let Some((last, init)) = sub_components.split_last() else {
-        // No output_dir override: the target directory is server_dir itself.
-        return Ok(server_dir);
-    };
-
-    let mut current = server_dir.clone();
-    for component in init {
-        current.push(component);
-        resolve_component_lenient(&mut current, &server_dir).await?;
-    }
-
-    // Final component: the directory `export_to_filesystem` later publishes into via an
-    // atomic staged rename, so it is confinement-checked but deliberately not created here.
-    current.push(last);
-    if !current.starts_with(&server_dir) {
-        return Err(OutputDirError::Escape {
-            path: sanitize_path_for_error(&current),
+    // Validated again, I/O-free, before `relative_subpath` so an invalid `server_id` is reported
+    // even when `output_dir` is also invalid - matching this crate's pre-#395 error precedence
+    // (`resolve_confined_path` re-validates it a second time as part of its own walk).
+    if validate_path_segment(server_id).is_none() {
+        return Err(OutputDirError::InvalidServerId {
+            server_id: server_id.to_string(),
         });
     }
-    if let Ok(meta) = tokio::fs::symlink_metadata(&current).await {
-        if meta.file_type().is_symlink() {
-            return Err(OutputDirError::Escape {
-                path: sanitize_path_for_error(&current),
-            });
-        }
-        let resolved = tokio::fs::canonicalize(&current).await?;
-        if !resolved.starts_with(&server_dir) {
-            return Err(OutputDirError::Escape {
-                path: sanitize_path_for_error(&current),
-            });
-        }
-        if !meta.is_dir() {
-            return Err(OutputDirError::NotADirectory {
-                path: sanitize_path_for_error(&current),
-            });
-        }
-        current = resolved;
-    }
 
-    Ok(current)
+    let relative = relative_subpath(output_dir)?;
+
+    let sub_components: Vec<Component<'_>> = relative.components().collect();
+    let (relative_dirs, target) = match sub_components.split_last() {
+        // No output_dir override: the target directory is server_id's own directory.
+        None => (PathBuf::new(), None),
+        // Final component: the directory `export_to_filesystem` later publishes into via an
+        // atomic staged rename, so it is confinement-checked but deliberately not created.
+        Some((last, init)) => (
+            init.iter().copied().collect::<PathBuf>(),
+            Some(ConfinementTarget::Directory(last.as_os_str())),
+        ),
+    };
+
+    resolve_confined_path(base_dir, server_id, &relative_dirs, target)
+        .await
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -431,6 +333,22 @@ mod tests {
     async fn empty_server_id_is_rejected() {
         let base = TempDir::new().unwrap();
         let err = resolve_output_dir(base.path(), "", None).await.unwrap_err();
+        assert!(matches!(err, OutputDirError::InvalidServerId { .. }));
+    }
+
+    /// When both `server_id` and `output_dir` are invalid, `InvalidServerId` must win - matching
+    /// the error precedence this function had before the #395 confinement-walk extraction.
+    #[tokio::test]
+    async fn invalid_server_id_takes_precedence_over_invalid_output_dir() {
+        let base = TempDir::new().unwrap();
+        let absolute = if cfg!(windows) {
+            r"C:\Windows\System32\config"
+        } else {
+            "/etc"
+        };
+        let err = resolve_output_dir(base.path(), "", Some(Path::new(absolute)))
+            .await
+            .unwrap_err();
         assert!(matches!(err, OutputDirError::InvalidServerId { .. }));
     }
 

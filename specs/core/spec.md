@@ -46,8 +46,15 @@ related:
      (producer) and `mcp-skill`/`mcp-server` (consumers).
    - `path` — `sanitize_path_for_error` (used by `mcp-skill` and
      `mcp-server` for identical error-message redaction) and
-     `validate_path_segment` (used by both for identical `server_id`
-     path-segment validation).
+     `contains_parent_dir` (used by both, plus `mcp-cli`, for identical
+     `..`-traversal checks); `validate_path_segment` backs `ServerId`/
+     `ToolName` and, since #395, `confinement::resolve_confined_path`
+     internally.
+   - `confinement` — `resolve_confined_path` (issue #395), the shared
+     component-by-component resolve-and-confine filesystem walk used by both
+     `mcp-skill::resolve_skill_output_path` and
+     `mcp-server::output_dir::resolve_output_dir`, previously two independent
+     copies of the same algorithm.
    - `redact` — `Debug`-redaction wrapper types (`RedactedItems`,
      `RedactedMapValues`, `RedactedUrl`) used by `ServerConfig` itself and
      by `mcp-cli`'s CLI-argument types.
@@ -274,15 +281,68 @@ pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir to "~
 pub fn validate_path_segment(segment: &str) -> Option<Component<'_>>; // single plain component, no "..", no separator
 pub fn contains_parent_dir(path: &Path) -> bool; // true if any component is `..`
 ```
-`validate_path_segment` is the shared building block for both
-`mcp-skill::resolve_skill_output_path` and
-`mcp-server::output_dir::resolve_output_dir`'s `server_id` confinement — a
-`..` or embedded separator in `server_id` is rejected identically by both;
-it also backs `ServerId::new`/`ToolName::new`'s own invariant (see above).
+`validate_path_segment` backs `ServerId::new`/`ToolName::new`'s own invariant (see above) and,
+since #395, is used internally by `confinement::resolve_confined_path` to validate the `segment`
+(`server_id`) it's given — `mcp-skill` and `mcp-server` no longer call it directly, since the
+confinement walk itself validates `server_id` as part of resolving it.
 `contains_parent_dir` (issue #289) is the shared `..`-only check used by
 `mcp-skill::output_path`, `mcp-server::output_dir`, and
 `mcp-cli::commands::skill::has_path_traversal` for the narrower "is any
 component `..`" question, previously three byte-for-byte-identical copies.
+
+### `confinement` module (`src/confinement.rs`)
+
+```rust
+pub enum ConfinementTarget<'a> { Directory(&'a OsStr), File(&'a OsStr) }
+pub enum ConfinementError {
+    InvalidSegment { segment: String },
+    SegmentIsSymlink { path: String },
+    Escape { path: String },
+    NotADirectory { path: String },
+    WrongTargetKind { path: String },
+    CreateDir { path: String, source: std::io::Error },
+    Io(#[from] std::io::Error),
+}
+pub async fn resolve_confined_path(
+    base_dir: &Path,
+    segment: &str,
+    relative_dirs: &Path,
+    target: Option<ConfinementTarget<'_>>,
+) -> Result<PathBuf, ConfinementError>;
+```
+
+Issue #395: `mcp-skill::resolve_skill_output_path` and
+`mcp-server::output_dir::resolve_output_dir` independently implemented the same
+component-by-component resolve-and-confine walk (validate the `server_id` segment, canonicalize
+`base_dir` once, confine-and-create the segment directory rejecting any pre-existing symlink at
+it outright, then confine-and-create each further directory component leniently — following an
+existing symlink only if it still resolves inside the segment directory — before
+confinement-checking, but deliberately not creating, the terminal component). `resolve_confined_path`
+is that walk extracted once; the two crates differ only in what an *absent* input path means and
+in whether the terminal component is a directory or a file, both of which stay at the call site
+(see [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]] and
+[[../skill/spec#8. `resolve_skill_output_path` — Path Confinement]]).
+
+`ConfinementTarget` names the walk's terminal component without creating it: `Directory` is
+resolved and canonicalized (the typical caller publishes it itself via an atomic staged rename),
+`File` is confinement-checked but left uncanonicalized (the caller is about to create it) —
+this asymmetry is deliberate and preserved from both crates' pre-consolidation behavior, not
+unified away. `target: None` returns the walked `relative_dirs` chain itself, with nothing beyond
+the segment directory created.
+
+`ConfinementError` is a closed set every caller maps with a **total, 1:1** `From` impl into its
+own pre-existing, byte-identical error enum — `mcp-server::OutputDirError` and
+`mcp-skill::OutputPathError` — rather than matching on `ConfinementError` directly. The single
+`ConfinementError::WrongTargetKind` variant carries two different truthful call-site meanings:
+`OutputDirError::NotADirectory` (the terminal `resolve_output_dir` walks is always a directory)
+and `OutputPathError::NotAFile` (the terminal `resolve_skill_output_path` walks is always a
+file) — one core variant, zero unreachable arms in either `From` impl. `ConfinementError::InvalidSegment`/`SegmentIsSymlink`/`Escape`/`NotADirectory`/`CreateDir`/`Io` map
+1:1 by name to each crate's own variant of the same name (`InvalidSegment` → `InvalidServerId`,
+`SegmentIsSymlink` → `ServerDirIsSymlink`/`ServerIdIsSymlink`). The absolute-path, `..`-component,
+and file-name pre-checks (`relative_subpath`/`relative_target`) are **not** part of this module —
+they stay in each crate, since an absent path means "use the segment directory as-is" for
+`mcp-server` but "use the default `SKILL.md`" for `mcp-skill`, and only a crate-specific helper
+can express that.
 
 ### `redact` module (`src/redact.rs`)
 
@@ -367,8 +427,8 @@ data into text an LLM later reads as instructions — see
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result` |
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix` (renders them into the generated runtime bridge template) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen` |
-| `mcp-skill` | `sanitize_path_for_error`, `validate_path_segment`, `untrusted::*`, `metadata::*` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `validate_path_segment`, `untrusted::*` |
+| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
+| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
 | `mcp-cli` | `cli::{OutputFormat, ExitCode}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth
@@ -382,6 +442,16 @@ spawning/connecting anyway — not because it's needed to close a gap, but so th
 stays self-defending against a future construction path that forgets to validate, rather than
 relying solely on the invariant holding elsewhere.
 
+`resolve_confined_path` (issue #395) re-validates its `segment` argument via
+`validate_path_segment` on every call rather than trusting a caller's own upstream check (e.g.
+`mcp-server::service::introspect_server`'s tighter `validate_server_id` charset check) to have
+already run — the same self-defending posture: a future call site that reaches this function
+with an unvalidated `segment` is still caught here, not silently trusted. Both `mcp-skill` and
+`mcp-server` keep their own crate-specific `OutputPathError`/`OutputDirError` enums as the public
+error surface rather than exposing `ConfinementError` directly, so a caller matching on either
+enum sees no observable change from before #395 — the `From<ConfinementError>` impls are total
+and byte-preserving of each variant's existing `Display` message.
+
 ## 5. Edge Cases & Notable Behaviors (from tests)
 
 | Scenario | Behavior |
@@ -394,9 +464,14 @@ relying solely on the invariant holding elsewhere.
 | Absolute-path command that exists but lacks the execute bit | Rejected (Unix only) |
 | `sanitize_path_for_error` on a mounted/bind-mounted home directory | Falls back to scrubbing the bare username substring when the leading-prefix match fails |
 | `RedactedUrl` on `https://user:p/w@host/mcp` (unencoded `/` in password) | Whole URL redacted — the authority-terminator ambiguity check fires |
+| `resolve_confined_path` terminal component is a dangling symlink, under either `ConfinementTarget` | Rejected as `Escape` — checked via `symlink_metadata`, not `metadata`/`canonicalize`, so a target that can't be resolved is never mistaken for "doesn't exist yet" |
+| `resolve_confined_path` terminal component exists as the other `ConfinementTarget` kind (file where `Directory` expected, or vice versa) | `WrongTargetKind`, mapped by each caller to its own truthful variant name |
+| `resolve_confined_path` with `target: None` | Returns the walked `relative_dirs` chain itself; nothing beyond the segment directory is created |
+| `resolve_confined_path`'s lenient intermediate walk hits a symlink loop (`ELOOP`) | Surfaces as `Io`, not `Escape` — `canonicalize`'s error propagates via `?` before any confinement comparison runs |
 
 ## 6. See Also
 
 - [[../introspector/spec]] — primary consumer of `ServerConfig`/`validate_server_config`
 - [[../cli/spec]] — consumer of `cli::{OutputFormat,ExitCode}` and the error-classification contract
+- [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]] / [[../skill/spec#8. `resolve_skill_output_path` — Path Confinement]] — the two `confinement::resolve_confined_path` consumers
 - [[../constitution]] — security principles this crate embodies workspace-wide
