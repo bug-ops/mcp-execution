@@ -466,6 +466,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IntrospectedToolSummary`, `SaveCategorizedToolsResult`, `ToolGenerationError`,
   `ListGeneratedServersParams`, `ListGeneratedServersResult`, `GeneratedServerInfo`, and
   `PendingGeneration` (#440).
+- **`mcp-execution-server`**: clarified in the spec that `validate_categorized_tools` checks a
+  `categorized_tools` entry's `name` against `MAX_CATEGORIZED_TOOL_NAME_LEN` only after resolving
+  it through `display_to_raw`, so an oversized `name` that matches no introspected tool is
+  reported as not-found rather than too-long — an intentional, truthful trade-off, not a defect
+  (#462).
 
 ### Testing
 
