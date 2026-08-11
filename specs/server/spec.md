@@ -309,8 +309,22 @@ walks every tool file, so a large directory can take a while). A missing
 server directory or scan failure (`MissingMetadata`/`UnsupportedSchema`/
 `StaleMetadata`) is reported as `invalid_params` (caller's fault: "run
 `generate` first"), not `internal_error`. Non-fatal drift warnings from the
-scan (`ScanResult::warnings`) are copied into the structured
-`GenerateSkillResult::warnings` field, not just logged.
+scan (`ScanResult::warnings`) are *extended* onto the structured
+`GenerateSkillResult::warnings` field, not just logged — `extend`, not
+overwrite, since `build_skill_context` may already have seeded that field with
+its own `use_case_hints` sanitization warnings (see below; both sources are
+additive, see `GenerateSkillResult::warnings`'s doc comment in
+[[../skill/spec]] §2).
+
+`GenerateSkillResult` (issue #473) gained a `use_case_hints: Vec<String>` field — the sanitized,
+capped `use_case_hints` `build_skill_context` also feeds into `generation_prompt` (see
+[[../skill/spec]] §4-§5). Since this struct is serialized verbatim as `generate_skill`'s
+response, this is a real JSON wire-format and declared-`JsonSchema`-output change for the tool,
+not just a Rust-source one (additive/`#[serde(default)]`, so existing clients are unaffected) —
+mirroring the wire-format-change precedent `default_output_path_hint`'s rename set (issue #436).
+A client sending `"use_case_hints": []` also sees a small `generation_prompt` shape change: the
+previously emitted, fully-empty `### Use Case Hints` wrapped block no longer appears (issue #473
+moved the gate from `if let Some(hints)` to `if !use_case_hints.is_empty()`).
 
 ### `save_skill`
 

@@ -105,6 +105,9 @@ Key types (`types.rs`): `GenerateSkillParams`/`GenerateSkillResult` (the
 MCP-tool-shaped request/response — `GenerateSkillResult` doubles as the
 Handlebars render context for both templates), `SkillCategory`/`SkillTool`/
 `ToolExample`, `SaveSkillParams`/`SaveSkillResult`/`SkillMetadata`.
+`GenerateSkillResult::use_case_hints: Vec<String>` (`#[serde(default)]`) holds the
+sanitized/capped `use_case_hints` that `render_skill_md` renders as SKILL.md's "Use
+Cases" section — see §4 and §6 (issue #473).
 
 ## 3. `scan_tools_directory` — Sidecar-Backed Scanning
 
@@ -190,6 +193,40 @@ it. The prompt's `**Skill Name**` line gets one further layer beyond the
 flattening applied to `GenerateSkillResult::skill_name` — see §5 below
 (issue #410, #411).
 
+`use_case_hints` is sanitized and capped exactly once, by a private
+`sanitize_use_case_hints(hints: Option<&[String]>) -> (Vec<String>, Vec<String>)` helper called
+from `build_skill_context` itself (not from `build_generation_prompt`, where this used to
+happen) — the result feeds both `generation_prompt` (via `build_generation_prompt`,
+now taking an already-sanitized `&[String]`) and the new
+`GenerateSkillResult::use_case_hints` field (§2, §6). Before issue #473, a hint only
+ever reached the LLM-facing prompt: `mcp-cli`'s `skill` command calls `render_skill_md`
+directly and never reads `generation_prompt`, so `--hint` had no observable effect on
+CLI-rendered SKILL.md at all. Routing both outputs through one sanitize pass — rather
+than sanitizing twice — means the prompt and the deterministically-rendered section can
+never disagree on what "sanitized" produced.
+
+The helper's second return value is a `Vec<String>` of warnings, seeded onto
+`GenerateSkillResult::warnings` (§2). A hint dropped past `MAX_USE_CASE_HINTS` or truncated past
+`MAX_USE_CASE_HINT_LENGTH` used to be silent — the same "flag silently discarded" complaint issue
+#473 itself was filed about, just for the entry-count/length bounds instead of the whole flag —
+so both now produce a human-readable warning on that channel (critic finding S1 on the initial
+#473 fix). A blank hint (empty, whitespace-only, or — since `sanitize_untrusted_text` maps every
+control character to a space — composed entirely of control characters) is trimmed and dropped
+without a warning: it has an obviously-correct resolution (there is nothing meaningful to
+render), unlike truncation or cap-dropping, which lose caller-intended content (critic finding
+m3). Dropping blank entries is what makes "`use_case_hints` empty ⇒ no `## Use Cases` section"
+(§6) a total invariant rather than one only true for a `None`/`[]` input.
+
+`Some(&[])` (a caller explicitly supplying zero hints, as opposed to omitting the parameter) is
+handled the same as `None` end to end: `sanitize_use_case_hints` returns an empty `Vec` for both,
+so `generation_prompt` gets no `### Use Case Hints` block at all — before issue #473's fix,
+`build_generation_prompt` gated on `if let Some(hints) = use_case_hints`, which is true for
+`Some(&[])`, so it emitted a fully-empty wrapped block for that one input shape; the fix's
+`if !use_case_hints.is_empty()` gate removes that stray block (critic finding m1). This is a
+real, if minor, `generation_prompt` shape change visible to any MCP client that sends
+`"use_case_hints": []` explicitly — see [[../server/spec#`generate_skill`]] for the wire-format
+implications of the new field itself.
+
 ## 5. Prompt Injection Defense
 
 `build_generation_prompt` accumulates the categorized-tool-metadata section
@@ -231,14 +268,20 @@ the prompt via a bare `format!("- {hint}\n")` loop, with no
 Hints" section from the trusted `## Instructions` section immediately
 following it — the same structural-breakout-plus-instruction-reading gap
 `skill_name` had before #411, and the same fix: the "### Use Case Hints"
-heading plus each hint (sanitized with `sanitize_untrusted_text`,
-`MAX_UNTRUSTED_FIELD_LEN` cap, matching every sibling field) are accumulated
-together and the whole section — heading included, mirroring how "### Categories
-and Tools" keeps its own heading inside its block — is passed through its own
-`wrap_untrusted_block` call, a boundary separate from the tool-metadata one
-above it, not merged into it, so the two sections stay independently
-forgeable-boundary-tested (critic finding S2 caught an earlier draft of this
-fix dropping the heading entirely rather than moving it inside the boundary).
+heading plus each hint are accumulated together and the whole section —
+heading included, mirroring how "### Categories and Tools" keeps its own
+heading inside its block — is passed through its own `wrap_untrusted_block`
+call, a boundary separate from the tool-metadata one above it, not merged
+into it, so the two sections stay independently forgeable-boundary-tested
+(critic finding S2 caught an earlier draft of this fix dropping the heading
+entirely rather than moving it inside the boundary). Since issue #473, the
+per-entry `sanitize_untrusted_text`/`MAX_UNTRUSTED_FIELD_LEN` flattening and
+the `MAX_USE_CASE_HINTS` count cap no longer happen inside
+`build_generation_prompt` itself — `build_generation_prompt` now takes an
+already-sanitized `&[String]` and only owns the `wrap_untrusted_block` step;
+sanitizing and capping moved to `build_skill_context`'s
+`sanitize_use_case_hints` helper (§4), the single pass that also feeds
+`GenerateSkillResult::use_case_hints`.
 `GenerateSkillParams::use_case_hints` also gained a
 `#[schemars(inner(length(max = ..)))]` per-entry bound (`MAX_USE_CASE_HINT_LENGTH`,
 re-exported from `mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`)
@@ -247,7 +290,7 @@ mirroring `skill_name`'s own declared-schema bound, plus a
 (`MAX_USE_CASE_HINTS`, currently 20 — a per-entry cap alone does not stop an
 unbounded entry *count*, critic finding M1), asserted against the real
 constants by a drift-guard test the same way `skill_name`'s is (issue #198
-S3's pattern). `build_generation_prompt` enforces the count bound at
+S3's pattern). `sanitize_use_case_hints` enforces the count bound at
 runtime by truncating (`hints.iter().take(MAX_USE_CASE_HINTS)`), not
 erroring — an over-long hint list is not attacker behavior worth failing
 the whole request over, the same truncate-not-reject treatment every other
@@ -330,6 +373,18 @@ render through it) enables `strict_mode(true)`, matching
 A template referencing a field absent from the render context now hard-fails
 with `TemplateError::RenderFailed` instead of silently rendering an empty
 string — the failure mode that regression-tests pin in `template.rs`.
+
+Since issue #473, `skill-md.hbs` also renders `GenerateSkillResult::use_case_hints`
+(already sanitized/capped by `build_skill_context`, §4) as a "## Use Cases" section
+between the intro paragraph and "## Usage": `{{#if use_case_hints}}` gates the whole
+section, and each hint is one `{{{this}}}` triple-stash bullet (no HTML-escaping,
+matching every other body field). Handlebars treats an empty `Vec` as falsy, so a
+context built from `None`/empty hints renders no "## Use Cases" section at all —
+byte-identical to pre-#473 output; this is a pinned regression test in
+`template.rs`, not just an implementation detail. This closes the gap where `--hint`
+only ever reached `generation_prompt` (the LLM-facing field `mcp-cli`'s `skill`
+command never reads, since it calls `render_skill_md` directly) and so had no
+observable effect on the CLI's directly-rendered SKILL.md.
 
 ## 7. `extract_skill_metadata` — Frontmatter Parsing
 

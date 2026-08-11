@@ -282,6 +282,7 @@ mod tests {
             generation_prompt: "Pre-built prompt".to_string(),
             default_output_path_hint: "~/.claude/skills/test/SKILL.md".to_string(),
             warnings: vec![],
+            use_case_hints: vec![],
         }
     }
 
@@ -335,6 +336,89 @@ mod tests {
             }
             Err(e) => panic!("render_skill_md failed: {e}"),
         }
+    }
+
+    /// Issue #473: `use_case_hints` must render as a deterministic "Use Cases" section, each
+    /// hint as its own bullet — this is the fix's core regression proof, since the CLI's
+    /// `--hint` flag only ever reached the LLM-facing `generation_prompt` before.
+    #[test]
+    fn test_render_skill_md_with_hints_includes_use_cases_section() {
+        let mut context = create_test_context();
+        context.use_case_hints = vec!["code review".to_string(), "CI/CD automation".to_string()];
+
+        let md = render_skill_md(&context).unwrap();
+
+        assert!(md.contains("## Use Cases"), "{md}");
+        assert!(md.contains("- code review"), "{md}");
+        assert!(md.contains("- CI/CD automation"), "{md}");
+    }
+
+    /// Backward-compat pin: `create_test_context`'s default `use_case_hints: vec![]` must
+    /// produce output with no "Use Cases" section at all — Handlebars treats an empty array
+    /// as falsy, so this must stay byte-identical to pre-#473 output.
+    #[test]
+    fn test_render_skill_md_without_hints_omits_use_cases_section() {
+        let context = create_test_context();
+
+        let md = render_skill_md(&context).unwrap();
+
+        assert!(!md.contains("## Use Cases"), "{md}");
+    }
+
+    /// Issue #473 (end-to-end): a hostile `use_case_hints` entry must not be able to inject a
+    /// heading or fenced code block into the rendered body — mirrors
+    /// `test_render_skill_md_end_to_end_flattens_injected_markdown_structure`, with the
+    /// heading count bumped by one for the new static "## Use Cases" heading that appears
+    /// whenever hints are present. Sanitization happens in `build_skill_context`
+    /// (`sanitize_use_case_hints`), so this exercises the real production pipeline rather
+    /// than a hand-built `GenerateSkillResult`.
+    #[test]
+    fn test_render_skill_md_end_to_end_flattens_injected_use_case_hint() {
+        use crate::build_skill_context;
+
+        let hostile_hint =
+            "safe hint\n### Injected Heading\n```\ninjected fenced block\n```".to_string();
+        let context = build_skill_context("test", &[], Some(&[hostile_hint]), None);
+
+        let md = render_skill_md(&context).unwrap();
+
+        assert!(md.contains("## Use Cases"), "{md}");
+        // With no tools/categories, only the static H1 title, "## Use Cases", "## Usage", and
+        // "## Tools by Category" headings may start a line (4 total); the injected "###
+        // Injected Heading" must have been flattened into the hint's single bullet line
+        // instead of starting its own.
+        assert_eq!(
+            md.lines().filter(|l| l.starts_with('#')).count(),
+            4,
+            "hostile hint must not introduce a new heading line: {md}"
+        );
+        assert_eq!(
+            md.lines()
+                .filter(|l| l.trim_start().starts_with("```"))
+                .count(),
+            8,
+            "hostile hint must not introduce a new fenced-code-block delimiter line: {md}"
+        );
+        assert!(
+            md.contains("Injected Heading"),
+            "sanitized content must still render, just inert"
+        );
+    }
+
+    /// Critic finding m3 (end-to-end): a blank/whitespace-only hint must not force the "##
+    /// Use Cases" section into existence with a bare, textless bullet — `build_skill_context`'s
+    /// `sanitize_use_case_hints` filters it out before it ever reaches `use_case_hints`, so
+    /// this must render identically to the no-hints case.
+    #[test]
+    fn test_render_skill_md_end_to_end_blank_hints_omit_use_cases_section() {
+        use crate::build_skill_context;
+
+        let context =
+            build_skill_context("test", &[], Some(&[String::new(), "   ".to_string()]), None);
+
+        let md = render_skill_md(&context).unwrap();
+
+        assert!(!md.contains("## Use Cases"), "{md}");
     }
 
     #[test]

@@ -452,7 +452,8 @@ pub enum Commands {
 
         /// Use case hints for skill generation
         ///
-        /// Multiple hints can be provided to generate more relevant documentation.
+        /// Multiple hints can be provided to generate more relevant documentation. Each hint is
+        /// rendered as a bullet in the generated SKILL.md's "Use Cases" section.
         /// Examples: "managing pull requests", "code review", "CI/CD automation"
         #[arg(long = "hint", num_args = 1)]
         hints: Vec<String>,

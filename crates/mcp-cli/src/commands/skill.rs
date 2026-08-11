@@ -150,12 +150,19 @@ pub async fn run(
         context.tool_count,
     );
 
+    // Two independent, additive warning sources (issue #473): scan-time drift
+    // (`scan_result.warnings`) and `use_case_hints` sanitization warnings already carried on
+    // `context.warnings` (populated by `build_skill_context`, see its doc comment). Neither
+    // overwrites the other.
+    let mut warnings = scan_result.warnings;
+    warnings.extend(context.warnings.iter().cloned());
+
     let result = SkillWriteResult {
         success: true,
         output_path: output_path.display().to_string(),
         bytes_written,
         tool_count: context.tool_count,
-        warnings: scan_result.warnings,
+        warnings,
     };
 
     crate::formatters::emit(&result, output_format, ExitCode::SUCCESS)
@@ -866,6 +873,31 @@ mod tests {
         );
     }
 
+    /// Critic finding S1 (issue #473 follow-up): hints dropped past `mcp_execution_skill::
+    /// MAX_USE_CASE_HINTS` must not be silent. `build_skill_context` (called from
+    /// `prepare_skill_context`) seeds `GenerateSkillResult::warnings` with a drop warning; `run`
+    /// then merges it onto `SkillWriteResult.warnings` alongside `scan_result.warnings` (see
+    /// `run`'s warning-merge comment) — the same channel `ScanResult::warnings` drift already
+    /// surfaces on, so a caller inspecting `--format json` output sees both kinds of non-fatal
+    /// data loss the same way.
+    #[test]
+    fn test_prepare_skill_context_surfaces_use_case_hint_cap_warning() {
+        let tools = vec![];
+        let hints: Vec<String> = (0..(mcp_execution_skill::types::MAX_USE_CASE_HINTS + 2))
+            .map(|i| format!("hint-{i}"))
+            .collect();
+
+        let (context, _output_path) =
+            prepare_skill_context("github", &tools, hints, None, None).unwrap();
+
+        assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
+        assert!(
+            context.warnings[0].contains("dropped"),
+            "{:?}",
+            context.warnings
+        );
+    }
+
     /// Issue #413: an oversized `--skill-name` must be rejected up front, before anything is
     /// rendered or written to disk — not left to fail later at `extract_skill_metadata`'s
     /// `MAX_FRONTMATTER_SIZE` check on a file that's already been written.
@@ -897,6 +929,10 @@ mod tests {
         );
     }
 
+    /// Issue #473: `--hint` must have a real, observable effect on the written SKILL.md, not
+    /// just report success — before the fix, hints only reached the LLM-facing
+    /// `generation_prompt`, which the CLI never uses (it renders `render_skill_md` directly),
+    /// so a hint-bearing run and a hint-less run produced byte-identical output.
     #[tokio::test]
     async fn test_run_with_hints() {
         let temp = TempDir::new().unwrap();
@@ -910,7 +946,7 @@ mod tests {
         let result = run(
             "github".to_string(),
             Some(temp.path().to_path_buf()),
-            Some(output_path),
+            Some(output_path.clone()),
             None,
             vec!["code review".to_string(), "CI/CD".to_string()],
             false,
@@ -922,6 +958,50 @@ mod tests {
             result.is_ok(),
             "Expected success but got: {:?}",
             result.err()
+        );
+
+        let written = std::fs::read_to_string(&output_path).unwrap();
+        assert!(
+            written.contains("## Use Cases"),
+            "written SKILL.md must include a Use Cases section: {written}"
+        );
+        assert!(written.contains("code review"), "{written}");
+        assert!(written.contains("CI/CD"), "{written}");
+    }
+
+    /// Sibling of `test_run_with_hints`: no `--hint` supplied must produce a written SKILL.md
+    /// with no "Use Cases" section at all, confirming the fix does not force the section to
+    /// always render.
+    #[tokio::test]
+    async fn test_run_without_hints_omits_use_cases_section() {
+        let temp = TempDir::new().unwrap();
+        let server_dir = temp.path().join("github");
+        std::fs::create_dir(&server_dir).unwrap();
+        write_meta_sidecar(&server_dir, "github", "list_prs");
+
+        let output_path = temp.path().join("SKILL.md");
+
+        let result = run(
+            "github".to_string(),
+            Some(temp.path().to_path_buf()),
+            Some(output_path.clone()),
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected success but got: {:?}",
+            result.err()
+        );
+
+        let written = std::fs::read_to_string(&output_path).unwrap();
+        assert!(
+            !written.contains("## Use Cases"),
+            "written SKILL.md must not have a Use Cases section without --hint: {written}"
         );
     }
 

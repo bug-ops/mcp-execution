@@ -992,8 +992,10 @@ impl GeneratorService {
 
         // Surface non-fatal drift warnings (e.g. `.ts` files excluded for lacking
         // a sidecar entry) in the structured response, not just server-side
-        // tracing output (issue #161).
-        result.warnings = scan_result.warnings;
+        // tracing output (issue #161). Extended, not overwritten: `result.warnings` may already
+        // carry `use_case_hints` sanitization warnings from `build_skill_context` itself (issue
+        // #473) — see `GenerateSkillResult::warnings`'s doc comment.
+        result.warnings.extend(scan_result.warnings);
 
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {

@@ -259,6 +259,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-skill`, `mcp-execution-cli`**: the `skill` command's `--hint` flag now has a
+  real effect on the generated `SKILL.md`. Previously, use-case hints only ever reached the
+  LLM-facing `generation_prompt` field, which `mcp-cli skill` never reads (it renders
+  `render_skill_md` directly, with no LLM in the loop) — so `--hint` silently produced
+  byte-identical output whether supplied or not. `GenerateSkillResult` gained a
+  `use_case_hints: Vec<String>` field, populated by `build_skill_context` with the same
+  sanitized/capped hints fed to `generation_prompt`, and `skill-md.hbs` now renders it as a
+  deterministic "## Use Cases" section (one bullet per hint) between the intro and "## Usage" —
+  omitted entirely when no hints are supplied, preserving prior output byte-for-byte. A hint
+  dropped past the 20-hint cap or truncated past the 500-character per-hint cap is no longer
+  silent either: both now produce a human-readable entry on `GenerateSkillResult::warnings`
+  (`mcp-cli`'s `--format json` output, the same channel `.ts`-file drift warnings already use).
+  This is also a JSON wire-format change for the `generate_skill` MCP tool, not just a
+  CLI/Rust-source one: `GenerateSkillResult` is serialized verbatim as that tool's response, so
+  `use_case_hints` is a new key in the response JSON and the tool's declared `JsonSchema` output
+  changes to match (additive, so existing deserializers are unaffected). A caller sending
+  `"use_case_hints": []` also sees a small `generation_prompt` shape change: the previously
+  emitted, fully-empty `### Use Case Hints` wrapped block no longer appears (#473).
 - **`mcp-execution-server`**: a `categorized_tools` entry whose `name` cannot be resolved to a raw
   introspected tool now reports which of two distinct causes applies, instead of one message
   covering both regardless of which occurred: "not found in introspected tools" when no raw tool
