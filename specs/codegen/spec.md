@@ -59,16 +59,35 @@ impl<'a> ProgressiveGenerator<'a> {
 }
 pub struct ToolCategorization { pub category: String, pub keywords: Vec<String>, pub short_description: String }
 
-// BridgeContext's three fields are private with read-only accessor methods of the same
-// name; `BridgeContext::default()` is the only construction path (no `pub` fields, no
-// `derive(Default)`, no `Deserialize`) — see [[#Runtime bridge]] and issue #315.
-pub struct BridgeContext { /* forbidden_chars, forbidden_env_names, forbidden_env_prefix: private */ }
+// Four of BridgeContext's fields (forbidden_chars, forbidden_env_names, forbidden_env_prefix,
+// env_name_charset_pattern) are private with read-only accessor methods of the same name —
+// each could fail open (e.g. an empty forbidden_chars, or an env_name_charset_pattern of ""
+// which `new RegExp('')` matches every string against) if a caller bypassed Default via a
+// struct literal, so `pub` fields aren't used for these. The remaining fields — the DoS
+// size/count ceilings (max_arg_count and siblings, see [[#9. Resource-Exhaustion Bounds
+// (CWE-400)]]) and env_name_charset_desc (message text only, not enforcement) — are plain
+// `pub`: a wrong value there cannot fail open, only reject more (or less clearly) than
+// intended, so the accessor ceremony buys nothing. `BridgeContext::default()` is the only
+// construction path (no `derive(Default)`, no `Deserialize`) — see [[#Runtime bridge]] and
+// issues #315, #471, #467.
+pub struct BridgeContext {
+    /* forbidden_chars, forbidden_env_names, forbidden_env_prefix, env_name_charset_pattern: private */
+    pub max_arg_count: usize,
+    pub max_arg_len: usize,
+    pub max_env_count: usize,
+    pub max_env_value_len: usize,
+    pub max_url_len: usize,
+    pub max_header_count: usize,
+    pub max_header_value_len: usize,
+    pub env_name_charset_desc: String,
+}
 impl BridgeContext {
     pub fn forbidden_chars(&self) -> &[String];
     pub fn forbidden_env_names(&self) -> &[String];
     pub fn forbidden_env_prefix(&self) -> &str;
+    pub fn env_name_charset_pattern(&self) -> &str;
 }
-impl Default for BridgeContext { /* populates from mcp_execution_core::forbidden_chars()/forbidden_env_names()/forbidden_env_prefix() — hand-written, so it can never render a fail-open (empty) bridge */ }
+impl Default for BridgeContext { /* populates every field from mcp_execution_core: forbidden_chars()/forbidden_env_names()/forbidden_env_prefix()/env_name_charset_pattern()/env_name_charset_desc() and the MAX_* constants — hand-written, so it can never render a fail-open (empty) bridge. forbidden_chars, env_name_charset_pattern, and env_name_charset_desc are each passed through sanitize_ts_string_literal before storing, so a future Rust-side value containing `'`/`\` renders as a valid (and correct) TS string literal rather than breaking or silently changing what it matches. */ }
 
 pub const MAX_GENERATED_FILES: usize; // = introspector::MAX_TOOL_COUNT + 5 (fixed files)
 pub const MAX_GENERATED_BYTES: usize; // = 2 * MAX_TOOL_COUNT * (MAX_TOOL_NAME_LEN + MAX_TOOL_DESCRIPTION_LEN + MAX_SCHEMA_SIZE_BYTES)
@@ -274,27 +293,58 @@ actual injection-safety mechanism given `no_escape` is set:
 ## 8. Runtime Bridge (`_runtime/mcp-bridge.ts`)
 
 Generated once per server (identical content regardless of tool count,
-except for the forbidden-char/env-name lists rendered from `BridgeContext`).
+except for the forbidden-char/env-name/DoS-bound/charset-pattern fields
+rendered from `BridgeContext`).
 Responsibilities:
 - Loads `~/.claude/mcp.json` at **call time** (not generation time) and
   **re-validates** the resolved server config on every connection —
-  mirroring `mcp_execution_core::validate_server_config` (command
-  metacharacters, forbidden env names, URL scheme, header safety) to the
-  same depth, since the config file can be hand-edited after generation to
-  add e.g. `LD_PRELOAD`. The forbidden-env-name/prefix check is
-  case-insensitive (`validateEnvName` upper-cases `name` before comparing
-  against the already-upper-cased `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX`),
-  mirroring `validate_env_name`'s `eq_ignore_ascii_case` comparison so a
-  case-varied spelling like `Path`/`path` cannot bypass either layer; note
-  that JS `String.prototype.toUpperCase` folds full Unicode case mappings
-  (a strict superset of Rust's ASCII-only fold), so the TS side never
-  matches *fewer* names than the Rust side — the "mirrors" claim holds in
-  the fail-closed direction, even where the two foldings could in principle
-  diverge on non-ASCII input.
-- `FORBIDDEN_CHARS`/`FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` are
-  rendered **directly from the Rust constants** at generation time (via
-  `BridgeContext`), not hand-copied, so the TS copy cannot silently drift
-  from `mcp-core`'s source of truth.
+  mirroring `mcp_execution_core::validate_server_config` (element
+  counts/lengths, command metacharacters, env-name charset, forbidden env
+  names, URL scheme, header safety) to the same depth and ordering (DoS
+  size/count bounds before injection-specific checks), since the config
+  file can be hand-edited after generation to add e.g. `LD_PRELOAD` or an
+  oversized argument list. Two Rust-side checks are intentionally *not*
+  mirrored: absolute-path executability (would require a blocking
+  filesystem call; a bad path surfaces as a `spawn` failure instead) and
+  `connect_timeout`/`discover_timeout` bounds (not part of the JSON-RPC
+  protocol this bridge speaks).
+  - `validateEnvName` first checks the name against
+    `ENV_NAME_CHARSET_REGEX` (`[A-Za-z_][A-Za-z0-9_]*`, #467) before the
+    forbidden-name/prefix comparison — mirroring `validate_env_name`'s own
+    check order (#438) and closing the Unicode-case-confusable gap
+    directly, rather than relying only on the incidental case-insensitive
+    match below. The forbidden-env-name/prefix check itself is
+    case-insensitive (`validateEnvName` upper-cases `name` before
+    comparing against the already-upper-cased
+    `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX`), mirroring
+    `validate_env_name`'s `eq_ignore_ascii_case` comparison so a
+    case-varied spelling like `Path`/`path` cannot bypass either layer.
+  - `validateStdioSizeBounds`/`validateNetworkSizeBounds` bound element
+    counts/lengths (`MAX_ARG_COUNT`, `MAX_ARG_LEN`, `MAX_ENV_COUNT`,
+    `MAX_ENV_VALUE_LEN`, `MAX_URL_LEN`, `MAX_HEADER_COUNT`,
+    `MAX_HEADER_VALUE_LEN`, #471) before the injection-specific checks run,
+    using `Buffer.byteLength(v, 'utf8')` (not `.length`, which
+    under-counts non-ASCII bytes) to match Rust's `str::len()` semantics.
+    A non-string `env`/header value is rejected outright rather than
+    exempted from the length check, since `spawn`'s `env` option would
+    otherwise silently coerce it via `String()`, bypassing the ceiling
+    entirely. A non-object `env`/`headers` itself (a string, array, or
+    other primitive) is rejected the same way, not treated as zero
+    entries (`recordEntries`, #471/#467 critique S5): `Object.entries`
+    on a string/array would otherwise let each character/element bypass
+    `MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`validateEnvName` while still
+    being spread into `spawn`'s `env` option per character/element.
+- `FORBIDDEN_CHARS`/`FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX`/
+  `ENV_NAME_CHARSET_REGEX`/`ENV_NAME_CHARSET_DESC` and the seven `MAX_*`
+  constants are rendered **directly from the Rust constants/accessors** at
+  generation time (via `BridgeContext`), not hand-copied, so the TS copy
+  cannot silently drift from `mcp-core`'s source of truth. The two
+  string-valued renders that participate in matching (`FORBIDDEN_CHARS`'
+  entries, `ENV_NAME_CHARSET_REGEX`'s pattern) — plus `ENV_NAME_CHARSET_DESC`
+  for consistency, though it's message text only — go through
+  `sanitize_ts_string_literal` first, so a future Rust-side value
+  containing `'`/`\` cannot break or silently change what the generated
+  `new RegExp('...')` matches.
 - Connection caching per `serverId` (`serverConnections: Map<string,
   Promise<ServerConnection>>`), caching the **in-flight promise** so
   concurrent cold-start callers share one spawn rather than racing.

@@ -480,6 +480,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pattern #436 eliminated from the MCP `generate_skill`/`save_skill` tool pair. `prepare_skill_context`
   now returns `(GenerateSkillResult, PathBuf)`, with the resolved path returned separately
   instead of round-tripped through the DTO (#436).
+- **`mcp-execution-codegen`**: the generated TypeScript runtime bridge's `validateServerConfig`
+  now enforces the same denial-of-service size/count ceilings as
+  `mcp_execution_core::validate_server_config` — `MAX_ARG_COUNT`, `MAX_ARG_LEN`, `MAX_ENV_COUNT`,
+  `MAX_ENV_VALUE_LEN`, `MAX_URL_LEN`, `MAX_HEADER_COUNT`, `MAX_HEADER_VALUE_LEN` — before any
+  command-injection-specific check runs, mirroring the Rust source of truth's ordering. A
+  hostile or hand-edited `~/.claude/mcp.json` entry with e.g. thousands of arguments or a
+  multi-megabyte env value previously reached `spawn()` unbounded; the bridge now rejects it the
+  same way the Rust CLI/server already do (#471). `BridgeContext` renders all seven constants
+  directly from `mcp_execution_core::command`, so the two validators cannot drift apart. A
+  non-string `env`/header value (only possible via a hand-edited `mcp.json`, since JSON Schema
+  cannot express this today) is now also rejected outright rather than silently exempted from
+  the length check, since `spawn()`'s `env` option coerces a non-string value via `String()`
+  and would otherwise let it carry arbitrarily more data than the new ceiling permits.
+- **`mcp-execution-codegen`**: the generated bridge's `validateEnvName` now rejects any
+  environment variable name outside the `[A-Za-z_][A-Za-z0-9_]*` identifier charset, mirroring
+  `mcp_execution_core::validate_env_name`'s #438 fix. Previously this function had no charset
+  check at all and relied entirely on `String.prototype.toUpperCase()`'s incidental Unicode case
+  folding, so a name JavaScript's mapping did not happen to fold onto a forbidden entry passed
+  through unrejected even though the Rust source of truth already rejected it outright (#467).
+  The check is rendered from a new `mcp_execution_core::env_name_charset_pattern()` accessor, for
+  the same anti-drift reason as the existing `forbidden_chars`/`forbidden_env_names` rendering.
+  **Behavior change**: an already-generated bridge pointed at a live `~/.claude/mcp.json` that
+  declares an env var name outside this charset (e.g. containing a hyphen or dot, such as
+  Windows' `ProgramFiles(x86)`-style names) will now fail at connection time where it previously
+  did not — this brings the bridge in line with what `mcp_execution_core::validate_server_config`
+  has rejected since #438, not a new restriction relative to the Rust CLI/server.
 
 ### Documentation
 

@@ -341,6 +341,8 @@ pub fn validate_url_scheme(url: &str) -> Result<()>;
 pub const fn forbidden_chars() -> &'static [char];
 pub const fn forbidden_env_names() -> &'static [&'static str];
 pub const fn forbidden_env_prefix() -> &'static str; // "DYLD_"
+pub const fn env_name_charset_pattern() -> &'static str; // "^[A-Za-z_][A-Za-z0-9_]*$", JS RegExp-compatible
+pub const fn env_name_charset_desc() -> &'static str; // "[A-Za-z_][A-Za-z0-9_]*", message text only
 ```
 Constants (all `pub`): `MAX_ARG_COUNT` (256), `MAX_ARG_LEN` (4096),
 `MAX_ENV_COUNT` (256), `MAX_ENV_VALUE_LEN` (32 KiB), `MAX_HEADER_COUNT`
@@ -797,7 +799,7 @@ it would require either a request-wide (not per-field) budget threaded through e
 | Consumer | What it depends on from `mcp-core` |
 |---|---|
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result` |
-| `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix` (renders them into the generated runtime bridge template) |
+| `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen` |
 | `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
 | `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |

@@ -1157,6 +1157,268 @@ fn test_runtime_bridge_rejects_forbidden_env_var_before_spawn() {
     );
 }
 
+/// #467 — a hostile `~/.claude/mcp.json` entry can carry an env var name outside the
+/// `[A-Za-z_][A-Za-z0-9_]*` identifier charset (e.g. containing a hyphen or space) without
+/// matching any entry on `FORBIDDEN_ENV_NAMES`; before this fix, `validateEnvName` had no
+/// charset check at all, so such a name passed through unrejected even though
+/// `mcp_execution_core::validate_env_name` (added by #438) already rejects it.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_env_name_outside_charset() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": { "MY-VAR": "value" }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_env_name_outside_charset",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject the charset-violating env name cleanly:\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("valid identifier"),
+        "rejection reason should mention the charset requirement: {stdout}"
+    );
+}
+
+/// #471 — a hostile `~/.claude/mcp.json` entry can carry more positional arguments than
+/// `mcp_execution_core::MAX_ARG_COUNT` allows (denial-of-service protection, CWE-400); the
+/// rendered bridge must reject this before spawning, mirroring
+/// `validate_stdio_size_bounds`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_too_many_arguments() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let too_many_args: Vec<String> = (0..=mcp_execution_core::MAX_ARG_COUNT)
+        .map(|i| i.to_string())
+        .collect();
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": too_many_args
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_too_many_arguments",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject too many arguments cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("too many arguments"),
+        "rejection reason should mention the argument count bound: {stdout}"
+    );
+}
+
+/// #471 — a single argument longer than `mcp_execution_core::MAX_ARG_LEN` bytes must be
+/// rejected before spawning, mirroring `validate_stdio_size_bounds`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_argument_too_long() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let long_arg = "a".repeat(mcp_execution_core::MAX_ARG_LEN + 1);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": [long_arg]
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_argument_too_long",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized argument cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("argument 0") && stdout.contains("too long"),
+        "rejection reason should name the argument and the length bound: {stdout}"
+    );
+}
+
+/// #471 — more environment variables than `mcp_execution_core::MAX_ENV_COUNT` must be
+/// rejected before spawning, mirroring `validate_stdio_size_bounds`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_too_many_env_vars() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let too_many_env: HashMap<String, String> = (0..=mcp_execution_core::MAX_ENV_COUNT)
+        .map(|i| (format!("VAR_{i}"), "value".to_string()))
+        .collect();
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": too_many_env
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_too_many_env_vars",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject too many env vars cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("too many environment variables"),
+        "rejection reason should mention the env count bound: {stdout}"
+    );
+}
+
+/// #471 — an environment variable value longer than `mcp_execution_core::MAX_ENV_VALUE_LEN`
+/// bytes must be rejected before spawning, mirroring `validate_stdio_size_bounds`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_env_value_too_long() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let long_value = "a".repeat(mcp_execution_core::MAX_ENV_VALUE_LEN + 1);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": { "MY_VAR": long_value }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_env_value_too_long",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized env value cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("environment variable 'MY_VAR' value too long"),
+        "rejection reason should name the env var and the length bound: {stdout}"
+    );
+}
+
 /// Behavioral regression guard for #201's critic follow-up (S3): `{"transport":"http",...}`
 /// is a valid `mcp.json` entry since #200 (all `ServerConfig` fields are `#[serde(default)]`
 /// on the Rust side). Before this fix, the bridge's validator called `.trim()` on the
@@ -1457,6 +1719,957 @@ fn test_runtime_bridge_rejects_http_transport_duplicate_case_insensitive_headers
     assert!(
         stdout.contains("duplicate header"),
         "rejection reason should mention the duplicate header: {stdout}"
+    );
+}
+
+/// #471 — a `url` longer than `mcp_execution_core::MAX_URL_LEN` bytes must be rejected,
+/// mirroring `validate_network_size_bounds`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_url_too_long() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let padding = "a".repeat(mcp_execution_core::MAX_URL_LEN);
+    let long_url = format!("https://example.com/{padding}");
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": long_url
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_url_too_long",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized url cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("url for server") && stdout.contains("too long"),
+        "rejection reason should name the url and the length bound: {stdout}"
+    );
+}
+
+/// #471 — more headers than `mcp_execution_core::MAX_HEADER_COUNT` must be rejected, mirroring
+/// `validate_network_size_bounds`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_too_many_headers() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let too_many_headers: HashMap<String, String> = (0..=mcp_execution_core::MAX_HEADER_COUNT)
+        .map(|i| (format!("X-Header-{i}"), "value".to_string()))
+        .collect();
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": too_many_headers
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_too_many_headers",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject too many headers cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("too many headers"),
+        "rejection reason should mention the header count bound: {stdout}"
+    );
+}
+
+/// #471 — a header value longer than `mcp_execution_core::MAX_HEADER_VALUE_LEN` bytes must be
+/// rejected, mirroring `validate_network_size_bounds`.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_header_value_too_long() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let long_value = "a".repeat(mcp_execution_core::MAX_HEADER_VALUE_LEN + 1);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": { "Authorization": long_value }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_header_value_too_long",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized header value cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("value for header 'Authorization'") && stdout.contains("too long"),
+        "rejection reason should name the header and the length bound: {stdout}"
+    );
+}
+
+/// #471/#467 critique S1 — a non-string environment variable value (here, a JSON array) must
+/// be rejected outright rather than silently skipped by the length check: `spawn`'s `env`
+/// option coerces a non-string value via `String()`, so an unrejected array could carry
+/// arbitrarily more data than `MAX_ENV_VALUE_LEN` while never being measured as a string.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_non_string_env_value() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": { "FOO": ["evil", "evil", "evil"] }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_non_string_env_value",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject a non-string env value cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("environment variable 'FOO' value") && stdout.contains("must be a string"),
+        "rejection reason should say the env value must be a string: {stdout}"
+    );
+}
+
+/// #471/#467 critique S1 — a non-string header value (here, a number) must be rejected
+/// outright, mirroring the env-value fix above for the http/sse transport's own size-bound
+/// check.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_non_string_header_value() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": { "Authorization": 12345 }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_non_string_header_value",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject a non-string header value cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("value for header 'Authorization'") && stdout.contains("must be a string"),
+        "rejection reason should say the header value must be a string: {stdout}"
+    );
+}
+
+/// #471/#467 critique S5 — a string `env` (not an object) must be rejected outright rather
+/// than treated as zero entries. An earlier revision of `recordEntries` returned `[]` for a
+/// non-object `env`/`headers` value, which silently disabled `MAX_ENV_COUNT`,
+/// `MAX_ENV_VALUE_LEN`, and `validateEnvName` entirely — verified under node that
+/// `{ ...process.env, ...'x'.repeat(2000) }` really produces 2000 numeric-keyed environment
+/// variables passed to `spawn`, none of them length- or count-checked.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_string_env() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": "a".repeat(2000)
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_string_env",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject a string env cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("env for server") && stdout.contains("must be an object"),
+        "rejection reason should say env must be an object: {stdout}"
+    );
+}
+
+/// #471/#467 critique S5 — an array `env` must be rejected outright for the same reason as a
+/// string `env` (see `test_runtime_bridge_rejects_string_env`): each array element keeps its
+/// full length once spread into `spawn`'s `env` option, so `MAX_ENV_VALUE_LEN` would fail even
+/// harder than for a string `env` if this were merely skipped rather than rejected.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_array_env() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": ["a".repeat(2000), "b".repeat(2000)]
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_array_env",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an array env cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("env for server") && stdout.contains("must be an object"),
+        "rejection reason should say env must be an object: {stdout}"
+    );
+}
+
+/// #471 critique M2 — `byteLength` (UTF-8 bytes), not `.length` (UTF-16 code units), must
+/// drive the length check. `'é'` is one UTF-16 code unit but two UTF-8 bytes: at exactly
+/// `MAX_ARG_LEN` repetitions, `.length` sits at the cap (would NOT reject under a `.length`
+/// regression) while the UTF-8 byte length is double the cap (MUST reject). This is the
+/// tightest-margin proof that the port uses byte length, not code-unit length.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_argument_too_long_multibyte_utf8() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let long_arg = "é".repeat(mcp_execution_core::MAX_ARG_LEN);
+    assert_eq!(long_arg.chars().count(), mcp_execution_core::MAX_ARG_LEN);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": [long_arg]
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_argument_too_long_multibyte_utf8",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized multi-byte argument cleanly:\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("argument 0") && stdout.contains("too long"),
+        "rejection reason should name the argument and the length bound — a `.length` \
+         regression would accept this config instead: {stdout}"
+    );
+}
+
+/// #471 critique M3 — the `command` field itself, not just `args`/`env`, must be
+/// length-bounded, mirroring `validate_stdio_size_bounds`'s `command.len() > MAX_ARG_LEN` check.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_command_too_long() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let long_command = "a".repeat(mcp_execution_core::MAX_ARG_LEN + 1);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": long_command
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_command_too_long",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized command cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("command for server") && stdout.contains("too long"),
+        "rejection reason should name the command and the length bound: {stdout}"
+    );
+}
+
+/// #471 critique M3 — an environment variable *name* longer than `MAX_ARG_LEN` must be
+/// rejected, mirroring `validate_stdio_size_bounds`'s `env_name.len() > MAX_ARG_LEN` check.
+/// Uses an all-uppercase-letter name so it never also trips the #467 charset check, isolating
+/// this specific bound.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_env_name_too_long() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let long_name = "A".repeat(mcp_execution_core::MAX_ARG_LEN + 1);
+    let env: HashMap<String, String> = HashMap::from([(long_name, "value".to_string())]);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "node",
+                "args": ["--version"],
+                "env": env
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_env_name_too_long",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized env name cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("environment variable name too long"),
+        "rejection reason should mention the env name length bound: {stdout}"
+    );
+}
+
+/// #471 critique M3 — a header *name* longer than `MAX_ARG_LEN` must be rejected, mirroring
+/// `validate_network_size_bounds`'s `name.len() > MAX_ARG_LEN` check.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_rejects_http_transport_header_name_too_long() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let long_name = "X".repeat(mcp_execution_core::MAX_ARG_LEN + 1);
+    let headers: HashMap<String, String> = HashMap::from([(long_name, "value".to_string())]);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": headers
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_rejects_http_transport_header_name_too_long",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not reject an oversized header name cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected the bridge to reject the config: stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("header name for server") && stdout.contains("too long"),
+        "rejection reason should mention the header name length bound: {stdout}"
+    );
+}
+
+/// #471 critique M1 — an at-cap element count/length must be *accepted* by the size-bound
+/// checks (Rust's comparisons are `>`, not `>=`), the mirror-image of the over-cap tests
+/// above. Spawns a deliberately nonexistent command so the outcome is deterministic
+/// regardless of argument content/count: the OS never parses argv for a program that isn't
+/// found, so this only proves the size checks let the config through, not anything about
+/// `node`'s own CLI parsing.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_accepts_argument_count_at_cap() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let args_at_cap: Vec<String> = (0..mcp_execution_core::MAX_ARG_COUNT)
+        .map(|i| i.to_string())
+        .collect();
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "mcp-execution-test-definitely-nonexistent-command-xyz",
+                "args": args_at_cap
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_accepts_argument_count_at_cap",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness did not settle cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected rejection (nonexistent command), just not from the size check: \
+         stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("too many arguments"),
+        "an at-cap argument count must be accepted by the size check: {stdout}"
+    );
+}
+
+/// #471 critique M1 — mirror-image of `test_runtime_bridge_rejects_argument_too_long`. See
+/// `test_runtime_bridge_accepts_argument_count_at_cap` for why a nonexistent command is used.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_accepts_argument_length_at_cap() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let arg_at_cap = "a".repeat(mcp_execution_core::MAX_ARG_LEN);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "mcp-execution-test-definitely-nonexistent-command-xyz",
+                "args": [arg_at_cap]
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_accepts_argument_length_at_cap",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness did not settle cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected rejection (nonexistent command), just not from the size check: \
+         stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("too long"),
+        "an at-cap argument length must be accepted by the size check: {stdout}"
+    );
+}
+
+/// #471 critique M1 — mirror-image of `test_runtime_bridge_rejects_too_many_env_vars`. See
+/// `test_runtime_bridge_accepts_argument_count_at_cap` for why a nonexistent command is used.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_accepts_env_count_at_cap() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let env_at_cap: HashMap<String, String> = (0..mcp_execution_core::MAX_ENV_COUNT)
+        .map(|i| (format!("VAR_{i}"), "value".to_string()))
+        .collect();
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "mcp-execution-test-definitely-nonexistent-command-xyz",
+                "args": [],
+                "env": env_at_cap
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_accepts_env_count_at_cap",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness did not settle cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected rejection (nonexistent command), just not from the size check: \
+         stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("too many environment variables"),
+        "an at-cap env var count must be accepted by the size check: {stdout}"
+    );
+}
+
+/// #471 critique M1 — mirror-image of `test_runtime_bridge_rejects_env_value_too_long`. See
+/// `test_runtime_bridge_accepts_argument_count_at_cap` for why a nonexistent command is used.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_accepts_env_value_length_at_cap() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let value_at_cap = "a".repeat(mcp_execution_core::MAX_ENV_VALUE_LEN);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "command": "mcp-execution-test-definitely-nonexistent-command-xyz",
+                "args": [],
+                "env": { "MY_VAR": value_at_cap }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_accepts_env_value_length_at_cap",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "harness did not settle cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:"),
+        "expected rejection (nonexistent command), just not from the size check: \
+         stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("value too long"),
+        "an at-cap env value length must be accepted by the size check: {stdout}"
+    );
+}
+
+/// #471 critique M1 — mirror-image of `test_runtime_bridge_rejects_http_transport_url_too_long`.
+/// Uses the same "validated then rejected as unsupported transport" pattern as the other
+/// http-transport tests: an at-cap url passes size validation, so the only rejection reason
+/// left is the (deterministic, no process spawn) "unsupported transport" message.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_accepts_url_length_at_cap() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let prefix = "https://e.co/";
+    let padding = "a".repeat(mcp_execution_core::MAX_URL_LEN - prefix.len());
+    let url_at_cap = format!("{prefix}{padding}");
+    assert_eq!(url_at_cap.len(), mcp_execution_core::MAX_URL_LEN);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": url_at_cap
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_accepts_url_length_at_cap",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not settle cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:") && stdout.contains("only supports stdio"),
+        "expected rejection for unsupported transport, not a size-check failure: {stdout}"
+    );
+    assert!(
+        !stdout.contains("too long"),
+        "an at-cap url length must be accepted by the size check: {stdout}"
+    );
+}
+
+/// #471 critique M1 — mirror-image of `test_runtime_bridge_rejects_http_transport_too_many_headers`.
+/// See `test_runtime_bridge_accepts_url_length_at_cap` for the "unsupported transport" pattern
+/// this relies on.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_accepts_header_count_at_cap() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let headers_at_cap: HashMap<String, String> = (0..mcp_execution_core::MAX_HEADER_COUNT)
+        .map(|i| (format!("X-Header-{i}"), "value".to_string()))
+        .collect();
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": headers_at_cap
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_accepts_header_count_at_cap",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not settle cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:") && stdout.contains("only supports stdio"),
+        "expected rejection for unsupported transport, not a size-check failure: {stdout}"
+    );
+    assert!(
+        !stdout.contains("too many headers"),
+        "an at-cap header count must be accepted by the size check: {stdout}"
+    );
+}
+
+/// #471 critique M1 — mirror-image of
+/// `test_runtime_bridge_rejects_http_transport_header_value_too_long`. See
+/// `test_runtime_bridge_accepts_url_length_at_cap` for the "unsupported transport" pattern
+/// this relies on.
+///
+/// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
+#[test]
+fn test_runtime_bridge_accepts_header_value_length_at_cap() {
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let server_info = create_test_server_info();
+    let code = generator
+        .generate(&server_info)
+        .expect("Failed to generate code");
+    let bridge = code
+        .files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found");
+
+    let value_at_cap = "a".repeat(mcp_execution_core::MAX_HEADER_VALUE_LEN);
+    let mcp_json = json!({
+        "mcpServers": {
+            "github": {
+                "transport": "http",
+                "url": "https://api.example.com/mcp",
+                "headers": { "Authorization": value_at_cap }
+            }
+        }
+    });
+
+    let Some((success, stdout, stderr)) = run_bridge_harness(
+        "test_runtime_bridge_accepts_header_value_length_at_cap",
+        &bridge.content,
+        &mcp_json,
+        "github",
+    ) else {
+        return;
+    };
+
+    assert!(
+        success,
+        "bridge did not settle cleanly:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REJECTED:") && stdout.contains("only supports stdio"),
+        "expected rejection for unsupported transport, not a size-check failure: {stdout}"
+    );
+    assert!(
+        !stdout.contains("too long"),
+        "an at-cap header value length must be accepted by the size check: {stdout}"
     );
 }
 
