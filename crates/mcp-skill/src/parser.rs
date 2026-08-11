@@ -1152,8 +1152,10 @@ mod tests {
     async fn test_scan_tools_directory_file_too_large() {
         let temp_dir = TempDir::new().unwrap();
         let mut meta = sample_metadata(1);
-        // MAX_FILE_SIZE (1MB) always fits in usize; the cast cannot truncate.
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "MAX_FILE_SIZE (1MB) always fits in usize; the cast cannot truncate."
+        )]
         let padding = "a".repeat((MAX_FILE_SIZE as usize) + 1);
         meta.tools[0].description = Some(padding);
         write_metadata(temp_dir.path(), &meta).await;
@@ -1514,7 +1516,7 @@ description: 'quoted text'
         }
 
         #[derive(Debug, Deserialize)]
-        #[allow(
+        #[expect(
             dead_code,
             reason = "fields exist only to mirror RawFrontmatter's shape"
         )]

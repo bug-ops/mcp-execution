@@ -79,21 +79,26 @@ related:
 
 ## IV. Code Style
 
-- Clippy `all`, `cargo`, `nursery`, `pedantic` are `deny` at workspace level;
-  narrow, per-crate `#[allow(...)]`s are used only where the lint's intent
-  doesn't apply (e.g. `too_many_lines` suppressed item-level on two
-  concurrency-test functions whose length is inherent to the scenario they
-  cover — see the `#[expect]` convention below; `unused_async` allowed in
-  `mcp-cli` for uniformly-dispatched handlers).
-- Convention going forward: new item-level lint suppressions use
+- Clippy `all`, `cargo`, `nursery`, `pedantic` are `deny` at workspace level.
+  The only surviving `#[allow(...)]` suppressions are the two crate-level
+  ones in `mcp-cli` (`clippy::unused_async`, for handlers uniformly
+  dispatched through a single async entry point; `clippy::needless_collect`,
+  for a test-readability `collect()` that isn't reused as an iterator
+  afterward) — deliberately out of scope for the `#[expect]` migration below,
+  which covers item-level suppressions only.
+- Convention: every item-level lint suppression uses
   `#[expect(lint, reason = "...")]` rather than `#[allow(lint)]` — `#[expect]`
   emits its own warning if the lint stops firing, which surfaces a
   suppression that has outlived its justification instead of letting it go
-  stale silently. The two `too_many_lines` sites named above use `#[expect]`
-  as the first application of this convention (issue #459); the 10 other
-  pre-existing `#[allow(...)]` sites elsewhere in the workspace are
-  intentionally left unmigrated for now — a candidate for a separate,
-  dedicated follow-up if a full migration is wanted later. Under CI's
+  stale silently. `too_many_lines`, suppressed item-level on two
+  concurrency-test functions whose length is inherent to the scenario they
+  cover, was the first application of this convention (issue #459); every
+  other item-level `#[allow(...)]` site in the workspace has since been
+  converted the same way (issue #465), except one
+  (`mcp-cli/src/commands/skill.rs` `too_many_arguments`) that was removed
+  outright rather than converted — the function has exactly 7 parameters, at
+  clippy's default `too-many-arguments-threshold` (the lint fires only above
+  it), so the suppression no longer suppressed anything. Under CI's
   `-D warnings`, an unfulfilled `#[expect]` (the lint no longer fires) is a
   hard build failure, not a warning — this is the intended mechanism, but it
   means a routine simplification that brings a function back under a

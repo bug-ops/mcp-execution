@@ -248,10 +248,13 @@ pub struct CategoryInfo {
 /// assert!(context.forbidden_chars().contains(&";".to_string()));
 /// assert!(!context.forbidden_env_prefix().is_empty());
 /// ```
-// The shared `forbidden_` prefix mirrors the three distinct `mcp_execution_core` accessors
-// (`forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`) these fields are populated
-// from; dropping it would obscure that correspondence for no clarity gain.
-#[allow(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "The shared `forbidden_` prefix mirrors the three distinct mcp_execution_core \
+              accessors (forbidden_chars/forbidden_env_names/forbidden_env_prefix) these fields \
+              are populated from; dropping it would obscure that correspondence for no clarity \
+              gain."
+)]
 #[derive(Debug, Clone, Serialize)]
 pub struct BridgeContext {
     /// Shell metacharacters forbidden in a command or argument string, each pre-escaped for
