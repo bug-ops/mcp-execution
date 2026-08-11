@@ -4,9 +4,10 @@
 //! for progressive loading pattern.
 
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
-use mcp_execution_core::{ServerId, ToolName};
+use mcp_execution_core::{Error, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
+use std::collections::HashMap;
 use std::process::Command;
 
 /// Creates a mock server info for testing.
@@ -102,6 +103,59 @@ fn test_progressive_generator_creates_correct_number_of_files() {
     // - 1 tsconfig.json
     // - 1 _meta.json
     assert_eq!(code.file_count(), 8);
+}
+
+/// Issue #458: the per-tool error wrapper in `emit_tool_files` (extract/render/track stages)
+/// was previously only exercised by unit tests calling the private wrapper helper directly,
+/// never by a real failure driven through the public `generate_with_categories` entry point.
+///
+/// Of the three stages, `extract property schema` can't fail through this entry point:
+/// `extract_properties` always yields well-typed `name`/`type` strings regardless of input.
+/// `render tool template` and `track generated tool file` are both reachable, but only from a
+/// structurally invalid `ServerInfo` that `mcp-introspector` itself can never produce (it always
+/// builds `input_schema` as a JSON object, and bounds schema size far below what `track` needs
+/// to trip) — i.e. only from a direct library caller that hand-builds a `ToolInfo`, not from a
+/// real MCP server round-trip. This test exercises `render`: `TemplateEngine` runs in Handlebars
+/// strict mode, and `tool.ts.hbs` does `{{#if input_schema.description}}` — a JSON *array*
+/// `input_schema` fails that path navigation (only objects/scalars survive it), at effectively
+/// no cost, unlike forcing the `track` stage's byte-count check.
+#[test]
+fn test_generate_with_categories_wraps_non_object_schema_as_script_generation_error() {
+    let server_info = ServerInfo {
+        id: ServerId::new("bulk-server").unwrap(),
+        name: "Bulk Server".to_string(),
+        version: "1.0.0".to_string(),
+        tools: vec![ToolInfo {
+            name: ToolName::new("malformed_tool").unwrap(),
+            description: String::new(),
+            input_schema: json!([1, 2, 3]),
+            output_schema: None,
+        }],
+        capabilities: ServerCapabilities {
+            supports_tools: true,
+            supports_resources: false,
+            supports_prompts: false,
+        },
+    };
+    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+
+    let result = generator.generate_with_categories(&server_info, &HashMap::new());
+
+    match result {
+        Err(Error::ScriptGenerationError {
+            tool,
+            message,
+            source,
+        }) => {
+            assert_eq!(tool, "malformed_tool");
+            assert_eq!(message, "failed to render tool template");
+            assert!(
+                source.is_some(),
+                "source must be preserved for exit-code classification"
+            );
+        }
+        other => panic!("expected ScriptGenerationError wrapping a render failure, got {other:?}"),
+    }
 }
 
 #[test]
