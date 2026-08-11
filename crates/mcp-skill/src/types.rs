@@ -137,6 +137,7 @@ pub struct GenerateSkillParams {
 ///     generation_prompt: "Generate a SKILL.md for github...".to_string(),
 ///     default_output_path_hint: "~/.claude/skills/github/SKILL.md".to_string(),
 ///     warnings: vec![],
+///     use_case_hints: vec![],
 /// };
 ///
 /// assert_eq!(result.server_id, "github");
@@ -180,11 +181,24 @@ pub struct GenerateSkillResult {
     /// own default.
     pub default_output_path_hint: String,
 
-    /// Non-fatal drift warnings, e.g. `.ts` files on disk excluded from
-    /// `categories`/`tool_count` because `_meta.json` has no matching entry
-    /// for them. Empty when the scanned directory has no drift.
+    /// Non-fatal drift/degradation warnings. Two independent sources feed this field, both
+    /// additive rather than either overwriting the other: [`crate::build_skill_context`] seeds
+    /// it with any `use_case_hints` sanitization warnings (a hint dropped past
+    /// [`MAX_USE_CASE_HINTS`] or truncated past [`MAX_USE_CASE_HINT_LENGTH`], issue #473), and
+    /// both callers (`mcp-cli`'s `skill` command, `mcp-server`'s `generate_skill` tool) extend
+    /// it with `ScanResult::warnings` (e.g. `.ts` files on disk excluded from
+    /// `categories`/`tool_count` because `_meta.json` has no matching entry for them) —
+    /// `build_skill_context` only sees already-scanned `tools`, not the drift detected while
+    /// scanning, so it cannot populate that half itself. Empty when neither source has anything
+    /// to report.
     #[serde(default)]
     pub warnings: Vec<String>,
+
+    /// Sanitized, capped `use_case_hints` rendered as SKILL.md's "Use Cases" section by
+    /// [`crate::render_skill_md`]. Empty when no hints were supplied. `#[serde(default)]`
+    /// so a value serialized before this field existed still deserializes (issue #473).
+    #[serde(default)]
+    pub use_case_hints: Vec<String>,
 }
 
 /// A category of tools for the skill.
