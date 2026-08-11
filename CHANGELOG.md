@@ -84,10 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `#[expect(clippy::too_many_lines, reason = "...")]`, preserving the same rationale text. Adopted
   as the convention going forward for new item-level lint suppressions — `#[expect]` emits its own
   warning if the lint stops firing, catching a suppression that has outlived its justification
-  instead of letting it go stale silently — and documented in `specs/constitution.md` §IV. This is
-  a forward-looking convention only: the 10 other pre-existing `#[allow(...)]` sites elsewhere in
-  the workspace are intentionally left unmigrated, a candidate for a separate follow-up if a full
-  migration is wanted (#459).
+  instead of letting it go stale silently — and documented in `specs/constitution.md` §IV (#459).
+- **`mcp-codegen`**, **`mcp-core`**, **`mcp-server`**, **`mcp-cli`**, **`mcp-skill`**: completed the
+  `#[expect]` migration started by #459 — the remaining item-level `#[allow(...)]` sites elsewhere
+  in the workspace are now `#[expect(lint, reason = "...")]`, each `reason` carrying the original
+  suppression's rationale. One site (`mcp-cli::commands::skill::run`'s
+  `#[allow(clippy::too_many_arguments)]`) was removed outright rather than converted: the function
+  has 7 parameters, at clippy's default `too-many-arguments-threshold` (the lint fires only above
+  it), so the suppression no longer had anything to suppress. `specs/constitution.md` §IV updated
+  to reflect the migration is now complete (#465).
 - **`mcp-execution-core`**: added `validate_server_id_slug`, `ServerIdSlugError`, and
   `MAX_SERVER_ID_LENGTH` — the authoritative, core-owned invariant for a slug-shaped server id
   (1-64 lowercase ASCII letters, digits, or hyphens), distinct from `ServerId::new()`'s own

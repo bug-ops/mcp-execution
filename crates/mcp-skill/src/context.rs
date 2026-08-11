@@ -315,10 +315,12 @@ fn infer_server_description(tools: &[ParsedToolFile]) -> Option<String> {
 }
 
 /// Build the generation prompt.
-// Building the prompt incrementally with `push_str(&format!(...))` in loops over
-// categories/tools/examples is clearer than a single chained `format!`, and the
-// target is a pre-sized `String` buffer rather than a hot path.
-#[allow(clippy::format_push_string)]
+#[expect(
+    clippy::format_push_string,
+    reason = "Building the prompt incrementally with push_str(&format!(...)) in loops over \
+              categories/tools/examples is clearer than a single chained format!, and the \
+              target is a pre-sized String buffer rather than a hot path."
+)]
 fn build_generation_prompt(
     server_id: &str,
     skill_name: &str,

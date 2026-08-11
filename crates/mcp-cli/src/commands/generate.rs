@@ -65,9 +65,11 @@ struct DryRunResult {
     total_size: usize,
 }
 
-// Converting byte counts to f64 for human-readable KB/MB formatting; precision
-// loss at display magnitude is inconsequential.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Converting byte counts to f64 for human-readable KB/MB formatting; precision loss \
+              at display magnitude is inconsequential."
+)]
 fn format_size(bytes: usize) -> String {
     if bytes < 1024 {
         format!("{bytes} B")

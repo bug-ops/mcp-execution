@@ -7,8 +7,11 @@ use mcp_execution_core::cli::ServerConnectionString;
 
 /// Test that zero-width Unicode characters are rejected.
 #[test]
-// Similar variable names (zwj, zws, zwnj, etc.) are necessary to test different zero-width characters.
-#[allow(clippy::similar_names)]
+#[expect(
+    clippy::similar_names,
+    reason = "Similar variable names (zwj, zws, zwnj, etc.) are necessary to test different \
+              zero-width characters."
+)]
 fn test_zero_width_unicode_rejected() {
     // Zero-width joiner
     let zwj = "server\u{200D}malicious";
