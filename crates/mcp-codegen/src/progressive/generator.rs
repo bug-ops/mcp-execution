@@ -17,7 +17,7 @@
 //! let info = introspector.discover_server(server_id, &config).await?;
 //!
 //! let generator = ProgressiveGenerator::new()?;
-//! let code = generator.generate(&info)?;
+//! let code = generator.generate(&info, &config)?;
 //!
 //! // Generated files:
 //! // - index.ts (re-exports)
@@ -45,7 +45,8 @@ use mcp_execution_core::metadata::{
     INDEX_FILE_NAME, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata,
     ServerMetadata, ToolMetadata,
 };
-use mcp_execution_core::{Error, Result};
+use mcp_execution_core::provenance::{GenerationProvenance, ToolDigestEntry};
+use mcp_execution_core::{Error, Result, ServerConfig};
 use mcp_execution_introspector::{ServerInfo, ToolInfo};
 use std::collections::{HashMap, HashSet};
 
@@ -222,6 +223,8 @@ impl ProgressiveGenerator<'_> {
     /// # Arguments
     ///
     /// * `server_info` - MCP server introspection data
+    /// * `server_config` - The [`ServerConfig`] used to connect to and introspect the server,
+    ///   used to stamp the `_meta.json` sidecar's [`GenerationProvenance`]
     ///
     /// # Returns
     ///
@@ -238,7 +241,7 @@ impl ProgressiveGenerator<'_> {
     /// ```no_run
     /// use mcp_execution_codegen::progressive::ProgressiveGenerator;
     /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
-    /// use mcp_execution_core::ServerId;
+    /// use mcp_execution_core::{ServerConfig, ServerId};
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let generator = ProgressiveGenerator::new()?;
@@ -254,8 +257,9 @@ impl ProgressiveGenerator<'_> {
     ///         supports_prompts: false,
     ///     },
     /// };
+    /// let config = ServerConfig::builder().command("/path/to/github-server".to_string()).build()?;
     ///
-    /// let code = generator.generate(&info)?;
+    /// let code = generator.generate(&info, &config)?;
     ///
     /// // Files generated:
     /// // - index.ts
@@ -267,8 +271,12 @@ impl ProgressiveGenerator<'_> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn generate(&self, server_info: &ServerInfo) -> Result<GeneratedCode> {
-        self.generate_with_categories(server_info, &HashMap::new())
+    pub fn generate(
+        &self,
+        server_info: &ServerInfo,
+        server_config: &ServerConfig,
+    ) -> Result<GeneratedCode> {
+        self.generate_with_categories(server_info, server_config, &HashMap::new())
     }
 
     /// Generates progressive loading files with categorization metadata.
@@ -280,6 +288,8 @@ impl ProgressiveGenerator<'_> {
     /// # Arguments
     ///
     /// * `server_info` - MCP server introspection data
+    /// * `server_config` - The [`ServerConfig`] used to connect to and introspect the server,
+    ///   used to stamp the `_meta.json` sidecar's [`GenerationProvenance`]
     /// * `categorizations` - Map of tool name to categorization metadata
     ///
     /// # Returns
@@ -295,7 +305,7 @@ impl ProgressiveGenerator<'_> {
     /// ```no_run
     /// use mcp_execution_codegen::progressive::{ProgressiveGenerator, ToolCategorization};
     /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
-    /// use mcp_execution_core::ServerId;
+    /// use mcp_execution_core::{ServerConfig, ServerId};
     /// use std::collections::HashMap;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -312,6 +322,7 @@ impl ProgressiveGenerator<'_> {
     ///         supports_prompts: false,
     ///     },
     /// };
+    /// let config = ServerConfig::builder().command("/path/to/github-server".to_string()).build()?;
     ///
     /// let mut categorizations = HashMap::new();
     /// categorizations.insert("create_issue".to_string(), ToolCategorization {
@@ -320,7 +331,7 @@ impl ProgressiveGenerator<'_> {
     ///     short_description: "Create a new issue".to_string(),
     /// });
     ///
-    /// let code = generator.generate_with_categories(&info, &categorizations)?;
+    /// let code = generator.generate_with_categories(&info, &config, &categorizations)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -331,6 +342,7 @@ impl ProgressiveGenerator<'_> {
     pub fn generate_with_categories(
         &self,
         server_info: &ServerInfo,
+        server_config: &ServerConfig,
         categorizations: &HashMap<String, ToolCategorization>,
     ) -> Result<GeneratedCode> {
         if categorizations.is_empty() {
@@ -373,7 +385,7 @@ impl ProgressiveGenerator<'_> {
         add_tracked(
             &mut code,
             &mut total_bytes,
-            Self::create_metadata_file(server_info, tool_metadata)?,
+            Self::create_metadata_file(server_info, server_config, tool_metadata)?,
         )?;
 
         tracing::debug!("Generated {}", METADATA_FILE_NAME);
@@ -838,20 +850,38 @@ impl ProgressiveGenerator<'_> {
     /// Builds the `_meta.json` sidecar file from per-tool metadata already collected
     /// during the tool-file generation loop.
     ///
+    /// Computes [`GenerationProvenance`] from `server_config` and `server_info.tools` — the
+    /// same inputs this whole call is generating from — so the recorded digest can never drift
+    /// from the files actually emitted.
+    ///
     /// # Errors
     ///
     /// Returns error if the metadata cannot be serialized to JSON (should not happen
     /// with these plain-data types).
     fn create_metadata_file(
         server_info: &ServerInfo,
+        server_config: &ServerConfig,
         tools: Vec<ToolMetadata>,
     ) -> Result<GeneratedFile> {
+        let digest_entries: Vec<ToolDigestEntry<'_>> = server_info
+            .tools
+            .iter()
+            .map(|tool| ToolDigestEntry {
+                name: tool.name.as_str(),
+                description: &tool.description,
+                input_schema: &tool.input_schema,
+                output_schema: tool.output_schema.as_ref(),
+            })
+            .collect();
+        let provenance = GenerationProvenance::capture(server_config, &digest_entries);
+
         let meta = ServerMetadata {
             schema_version: METADATA_SCHEMA_VERSION,
             server_id: server_info.id.clone(),
             server_name: server_info.name.clone(),
             server_version: server_info.version.clone(),
             tools,
+            provenance,
         };
 
         let content =
@@ -1275,6 +1305,13 @@ mod tests {
         }
     }
 
+    fn test_config() -> mcp_execution_core::ServerConfig {
+        mcp_execution_core::ServerConfig::builder()
+            .command("test-command".to_string())
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn test_progressive_generator_new() {
         let generator = ProgressiveGenerator::new();
@@ -1286,7 +1323,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         // Should generate:
         // - 2 tool files
@@ -1319,7 +1356,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let index_file = code.files.iter().find(|f| f.path == "index.ts").unwrap();
 
         assert!(
@@ -1340,7 +1377,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         let tsconfig_file = code
             .files
@@ -1366,7 +1403,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         let package_json_file = code
             .files
@@ -1391,7 +1428,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let meta_file = code.files.iter().find(|f| f.path == "_meta.json").unwrap();
         let meta: ServerMetadata = serde_json::from_str(&meta_file.content).unwrap();
 
@@ -1416,6 +1453,68 @@ mod tests {
         assert!(title.required);
     }
 
+    /// The `_meta.json` sidecar carries `schema_version: 2` and 64-hex-char provenance fields,
+    /// and two runs against identical input agree on the fingerprint and digest — only
+    /// `generated_at` is allowed to differ between them.
+    #[test]
+    fn test_generate_meta_json_provenance_is_stable_across_runs() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+        let config = test_config();
+
+        let first = generator.generate(&server_info, &config).unwrap();
+        let first_meta_file = first.files.iter().find(|f| f.path == "_meta.json").unwrap();
+        let first_meta: ServerMetadata = serde_json::from_str(&first_meta_file.content).unwrap();
+
+        // Guarantees the two `generated_at` timestamps differ (rather than merely being
+        // "unlikely to collide"), so the assertion below actually exercises "only generated_at
+        // differs" instead of passing vacuously if both calls happened to land in the same
+        // clock tick.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        let second = generator.generate(&server_info, &config).unwrap();
+        let second_meta_file = second
+            .files
+            .iter()
+            .find(|f| f.path == "_meta.json")
+            .unwrap();
+        let second_meta: ServerMetadata = serde_json::from_str(&second_meta_file.content).unwrap();
+
+        assert_eq!(first_meta.schema_version, 2);
+        assert_eq!(first_meta.provenance.config_fingerprint.as_str().len(), 64);
+        assert!(
+            first_meta
+                .provenance
+                .config_fingerprint
+                .as_str()
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
+        assert_eq!(first_meta.provenance.tool_digest.as_str().len(), 64);
+        assert!(
+            first_meta
+                .provenance
+                .tool_digest
+                .as_str()
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
+
+        assert_eq!(
+            first_meta.provenance.config_fingerprint,
+            second_meta.provenance.config_fingerprint
+        );
+        assert_eq!(
+            first_meta.provenance.tool_digest,
+            second_meta.provenance.tool_digest
+        );
+        assert_ne!(
+            first_meta.provenance.generated_at, second_meta.provenance.generated_at,
+            "the two calls must actually be stamped at different times for \"only generated_at \
+             differs\" to be a meaningful claim"
+        );
+    }
+
     #[test]
     fn test_generate_with_categories_meta_json_includes_categorization() {
         let generator = ProgressiveGenerator::new().unwrap();
@@ -1432,7 +1531,7 @@ mod tests {
         );
 
         let code = generator
-            .generate_with_categories(&server_info, &categorizations)
+            .generate_with_categories(&server_info, &test_config(), &categorizations)
             .unwrap();
         let meta_file = code.files.iter().find(|f| f.path == "_meta.json").unwrap();
         let meta: ServerMetadata = serde_json::from_str(&meta_file.content).unwrap();
@@ -1498,7 +1597,7 @@ mod tests {
         };
 
         let generator = ProgressiveGenerator::new().unwrap();
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         // The sidecar carries the raw, untruncated, unescaped, non-flattened description.
         let meta_file = code.files.iter().find(|f| f.path == "_meta.json").unwrap();
@@ -1790,7 +1889,7 @@ mod tests {
             },
         };
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         let typescript_names = resolve_typescript_names(&server_info.tools);
         assert_eq!(
@@ -1868,7 +1967,7 @@ mod tests {
             },
         };
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         let typescript_names = resolve_typescript_names(&server_info.tools);
         assert_eq!(
@@ -1924,7 +2023,7 @@ mod tests {
             },
         };
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let typescript_names = resolve_typescript_names(&server_info.tools);
 
         assert_ne!(
@@ -2116,7 +2215,7 @@ mod tests {
             "required": []
         });
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let tool = code
             .files
             .iter()
@@ -2149,7 +2248,7 @@ mod tests {
             "required": []
         });
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let tool = code
             .files
             .iter()
@@ -2204,7 +2303,7 @@ mod tests {
         );
 
         let code = generator
-            .generate_with_categories(&server_info, &categorizations)
+            .generate_with_categories(&server_info, &test_config(), &categorizations)
             .unwrap();
         let index = code.files.iter().find(|f| f.path == "index.ts").unwrap();
 
@@ -2390,7 +2489,7 @@ mod tests {
         let mut server_info = create_test_server_info();
         server_info.tools[0].name = ToolName::new(raw_name).unwrap();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let tool = code
             .files
             .iter()
@@ -2440,7 +2539,7 @@ mod tests {
         let hostile_name = format!("a{}", "'".repeat(250));
         server_info.tools[0].name = ToolName::new(hostile_name).unwrap();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let tool = code
             .files
             .iter()
@@ -2758,7 +2857,7 @@ mod tests {
             output_schema: None,
         }];
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let tool_file = code.files.iter().find(|f| f.path == "delete_2.ts").unwrap();
 
         assert!(!tool_file.content.contains("export async function delete("));
@@ -2788,7 +2887,7 @@ mod tests {
             },
         ];
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         // Both tools must produce distinct files: no silent overwrite.
         let tool_files: Vec<&str> = code
@@ -2838,7 +2937,7 @@ mod tests {
             },
         ];
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         let dup_files: Vec<&str> = code
             .files
@@ -3039,7 +3138,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let bridge = code
             .files
             .iter()
@@ -3140,7 +3239,7 @@ mod tests {
         server_info.tools[0].description =
             "Compares values: a < b && b > c, or use \"quotes\" & don't forget 'em".to_string();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let tool = code
             .files
             .iter()
@@ -3169,7 +3268,7 @@ mod tests {
         server_info.name = "Evil */ injection".to_string();
         server_info.version = "1.0\n<script>".to_string();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let index = code.files.iter().find(|f| f.path == "index.ts").unwrap();
 
         // Raw injected strings must not appear in the output.
@@ -3210,7 +3309,7 @@ mod tests {
         );
 
         let code = generator
-            .generate_with_categories(&server_info, &categorizations)
+            .generate_with_categories(&server_info, &test_config(), &categorizations)
             .unwrap();
         let tool = code
             .files
@@ -3266,7 +3365,7 @@ mod tests {
         let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT + 1);
         let generator = ProgressiveGenerator::new().unwrap();
 
-        let result = generator.generate(&server_info);
+        let result = generator.generate(&server_info, &test_config());
 
         assert!(result.is_err());
         assert!(result.unwrap_err().is_resource_limit_exceeded());
@@ -3277,7 +3376,7 @@ mod tests {
         let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT);
         let generator = ProgressiveGenerator::new().unwrap();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
 
         assert_eq!(code.file_count(), MAX_GENERATED_FILES);
     }
@@ -3287,7 +3386,8 @@ mod tests {
         let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT + 1);
         let generator = ProgressiveGenerator::new().unwrap();
 
-        let result = generator.generate_with_categories(&server_info, &HashMap::new());
+        let result =
+            generator.generate_with_categories(&server_info, &test_config(), &HashMap::new());
 
         assert!(result.is_err());
         assert!(result.unwrap_err().is_resource_limit_exceeded());

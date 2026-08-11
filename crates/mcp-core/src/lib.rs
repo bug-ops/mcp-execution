@@ -41,6 +41,7 @@ mod types;
 
 pub mod cli;
 pub mod metadata;
+pub mod provenance;
 pub mod untrusted;
 
 // Re-export error types

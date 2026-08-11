@@ -20,7 +20,7 @@
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let generator = ProgressiveGenerator::new()?;
-//! // generator.generate(&server_info)?;
+//! // generator.generate(&server_info, &server_config)?;
 //! # Ok(())
 //! # }
 //! ```

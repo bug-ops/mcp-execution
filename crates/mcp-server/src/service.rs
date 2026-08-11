@@ -674,8 +674,13 @@ impl GeneratorService {
             )
         })?;
 
-        let code = generate_with_categorization(&generator, &pending.server_info, categorization)
-            .map_err(|e| {
+        let code = generate_with_categorization(
+            &generator,
+            &pending.server_info,
+            &pending.config,
+            categorization,
+        )
+        .map_err(|e| {
             McpError::internal_error(
                 format!("Failed to generate code: {}", describe_with_causes(&e)),
                 None,
@@ -1705,6 +1710,7 @@ fn describe_with_causes(err: &(dyn std::error::Error + 'static)) -> String {
 fn generate_with_categorization(
     generator: &ProgressiveGenerator,
     server_info: &mcp_execution_introspector::ServerInfo,
+    server_config: &mcp_execution_core::ServerConfig,
     categorization: &HashMap<String, &CategorizedTool>,
 ) -> mcp_execution_core::Result<mcp_execution_codegen::GeneratedCode> {
     use mcp_execution_codegen::progressive::ToolCategorization;
@@ -1724,7 +1730,7 @@ fn generate_with_categorization(
         })
         .collect();
 
-    generator.generate_with_categories(server_info, &categorizations)
+    generator.generate_with_categories(server_info, server_config, &categorizations)
 }
 
 /// Splits `CategorizedTool::keywords`' comma-separated wire format into the individual
@@ -1750,6 +1756,21 @@ mod tests {
     // ========================================================================
     // Helper Functions Tests
     // ========================================================================
+
+    /// `ServerConfig` passed alongside a mock `ServerInfo` so `generate_with_categorization`
+    /// can stamp generation provenance.
+    fn test_server_config() -> ServerConfig {
+        ServerConfig::builder()
+            .command("test-command".to_string())
+            .build()
+            .unwrap()
+    }
+
+    /// Provenance for a hand-built `ServerMetadata` sidecar fixture, required now that
+    /// `provenance` is a non-`Option` field.
+    fn test_provenance() -> mcp_execution_core::provenance::GenerationProvenance {
+        mcp_execution_core::provenance::GenerationProvenance::capture(&test_server_config(), &[])
+    }
 
     #[test]
     fn test_extract_parameter_names() {
@@ -1969,7 +1990,12 @@ mod tests {
         let mut categorization = HashMap::new();
         categorization.insert("test_tool".to_string(), &categorized_tool);
 
-        let result = generate_with_categorization(&generator, &server_info, &categorization);
+        let result = generate_with_categorization(
+            &generator,
+            &server_info,
+            &test_server_config(),
+            &categorization,
+        );
         assert!(result.is_ok());
 
         let code = result.unwrap();
@@ -2023,7 +2049,12 @@ mod tests {
         categorization.insert("tool1".to_string(), &tool1);
         categorization.insert("tool2".to_string(), &tool2);
 
-        let result = generate_with_categorization(&generator, &server_info, &categorization);
+        let result = generate_with_categorization(
+            &generator,
+            &server_info,
+            &test_server_config(),
+            &categorization,
+        );
         assert!(result.is_ok());
     }
 
@@ -2046,7 +2077,12 @@ mod tests {
 
         let categorization = HashMap::new();
 
-        let result = generate_with_categorization(&generator, &server_info, &categorization);
+        let result = generate_with_categorization(
+            &generator,
+            &server_info,
+            &test_server_config(),
+            &categorization,
+        );
         assert!(result.is_ok());
     }
 
@@ -4951,6 +4987,7 @@ mod tests {
                     description: None,
                 }],
             }],
+            provenance: test_provenance(),
         };
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
@@ -5017,6 +5054,7 @@ mod tests {
                     description: None,
                 }],
             }],
+            provenance: test_provenance(),
         };
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
@@ -5097,6 +5135,7 @@ mod tests {
                     description: None,
                 }],
             }],
+            provenance: test_provenance(),
         };
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
@@ -5171,6 +5210,7 @@ mod tests {
                     description: None,
                 }],
             }],
+            provenance: test_provenance(),
         };
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)

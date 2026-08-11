@@ -54,8 +54,8 @@ impl GeneratedCode {
 pub struct ProgressiveGenerator<'a> { /* engine: TemplateEngine<'a> */ }
 impl<'a> ProgressiveGenerator<'a> {
     pub fn new() -> Result<Self>;
-    pub fn generate(&self, server_info: &ServerInfo) -> Result<GeneratedCode>;
-    pub fn generate_with_categories(&self, server_info: &ServerInfo, categorizations: &HashMap<String, ToolCategorization>) -> Result<GeneratedCode>;
+    pub fn generate(&self, server_info: &ServerInfo, server_config: &ServerConfig) -> Result<GeneratedCode>;
+    pub fn generate_with_categories(&self, server_info: &ServerInfo, server_config: &ServerConfig, categorizations: &HashMap<String, ToolCategorization>) -> Result<GeneratedCode>;
 }
 pub struct ToolCategorization { pub category: String, pub keywords: Vec<String>, pub short_description: String }
 
@@ -118,7 +118,9 @@ of the sanitizers documented below, run **before** rendering.
 ## 3. Input Contract
 
 `generate`/`generate_with_categories` accept `&ServerInfo` (from
-[[../introspector/spec]]) and an optional `HashMap<String, ToolCategorization>`
+[[../introspector/spec]]), `&ServerConfig` (issue #468 — the config used to connect to and
+introspect the server, consumed only to stamp `_meta.json`'s `provenance` field; see
+[[../core/spec#provenance module (src/provenance.rs)]]), and an optional `HashMap<String, ToolCategorization>`
 keyed by the tool's **raw** name (`ToolInfo.name`), not its
 display-sanitized `typescript_name` — every lookup in
 `generate_with_categories` indexes the map by `tool.name.as_str()` before any
@@ -151,7 +153,7 @@ For a server with N tools, exactly `N + 5` files:
 | `_runtime/mcp-bridge.ts` | Connection management + JSON-RPC client (see [[#Runtime bridge]]) |
 | `package.json` | `{"type":"module","devDependencies":{"@types/node":"^22"}}` |
 | `tsconfig.json` | `target: ES2022`, `module`/`moduleResolution: NodeNext`, `strict: true`, `noEmit: true`, `allowImportingTsExtensions: true`, `skipLibCheck: true`, `types: ["node"]` |
-| `_meta.json` | `mcp_execution_core::metadata::ServerMetadata` (schema_version, server_id/name/version, per-tool metadata incl. **raw, unsanitized** parameter descriptions) |
+| `_meta.json` | `mcp_execution_core::metadata::ServerMetadata` (schema_version, server_id/name/version, per-tool metadata incl. **raw, unsanitized** parameter descriptions, and `provenance`: a `generated_at` timestamp plus a `ConfigFingerprint`/`ToolDigest` pair computed from the same `server_config`/`server_info.tools` this call is generating from — see [[../core/spec#provenance module (src/provenance.rs)]]) |
 
 Each tool's `{Name}Params` is emitted as a `type` alias, not an `interface` —
 only a `type` alias gets the implicit `Record<string, unknown>`-compatible
@@ -426,6 +428,13 @@ Responsibilities:
   extracting twice — the JSDoc-sanitized `PropertyInfo` half feeds the
   `.ts` template, the raw-description half feeds `_meta.json`, sharing one
   schema walk (issue #295).
+- Two `generate`/`generate_with_categories` calls against identical `ServerInfo`/`ServerConfig`
+  input agree on `_meta.json`'s `provenance.config_fingerprint` and `provenance.tool_digest` —
+  only `provenance.generated_at` differs between runs (issue #468). `_meta.json`'s digest is
+  computed from `server_info.tools`, not from the generated `.ts` files' content, so it does
+  **not** detect drift introduced purely by `resolve_typescript_names`' index-based collision
+  suffixes or by a changed `categorizations` map — see
+  [[../core/spec#What provenance does and does not answer]].
 
 ## 13. See Also
 

@@ -14,7 +14,10 @@
 //!
 //! ```
 //! use mcp_execution_core::metadata::{ServerMetadata, ToolMetadata, METADATA_SCHEMA_VERSION};
-//! use mcp_execution_core::{ServerId, ToolName};
+//! use mcp_execution_core::provenance::GenerationProvenance;
+//! use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+//!
+//! let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
 //!
 //! let meta = ServerMetadata {
 //!     schema_version: METADATA_SCHEMA_VERSION,
@@ -29,6 +32,7 @@
 //!         description: Some("Creates a new issue".to_string()),
 //!         parameters: vec![],
 //!     }],
+//!     provenance: GenerationProvenance::capture(&config, &[]),
 //! };
 //!
 //! let json = serde_json::to_string_pretty(&meta).unwrap();
@@ -36,6 +40,7 @@
 //! assert_eq!(round_tripped, meta);
 //! ```
 
+use crate::provenance::GenerationProvenance;
 use crate::{ServerId, ToolName};
 use serde::{Deserialize, Serialize};
 
@@ -46,14 +51,18 @@ use serde::{Deserialize, Serialize};
 /// loudly (via a schema-version mismatch check) instead of silently
 /// misinterpreting the new shape.
 ///
+/// Bumped from `1` to `2` when [`ServerMetadata::provenance`] was added: a `schema_version: 1`
+/// sidecar has no `provenance` key at all, so a consumer must check this value *before*
+/// attempting a typed deserialization (see `mcp-execution-skill`'s parser).
+///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_core::metadata::METADATA_SCHEMA_VERSION;
 ///
-/// assert_eq!(METADATA_SCHEMA_VERSION, 1);
+/// assert_eq!(METADATA_SCHEMA_VERSION, 2);
 /// ```
-pub const METADATA_SCHEMA_VERSION: u32 = 1;
+pub const METADATA_SCHEMA_VERSION: u32 = 2;
 
 /// Filename of the sidecar metadata file emitted alongside generated tool files.
 ///
@@ -96,7 +105,10 @@ pub const INDEX_FILE_NAME: &str = "index.ts";
 ///
 /// ```
 /// use mcp_execution_core::metadata::{ServerMetadata, METADATA_SCHEMA_VERSION};
-/// use mcp_execution_core::ServerId;
+/// use mcp_execution_core::provenance::GenerationProvenance;
+/// use mcp_execution_core::{ServerConfig, ServerId};
+///
+/// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
 ///
 /// let meta = ServerMetadata {
 ///     schema_version: METADATA_SCHEMA_VERSION,
@@ -104,6 +116,7 @@ pub const INDEX_FILE_NAME: &str = "index.ts";
 ///     server_name: "GitHub".to_string(),
 ///     server_version: "1.0.0".to_string(),
 ///     tools: vec![],
+///     provenance: GenerationProvenance::capture(&config, &[]),
 /// };
 ///
 /// assert_eq!(meta.tools.len(), 0);
@@ -132,6 +145,15 @@ pub struct ServerMetadata {
 
     /// Metadata for every generated tool, in generation order.
     pub tools: Vec<ToolMetadata>,
+
+    /// When and against what server state this sidecar was generated.
+    ///
+    /// Required rather than `Option`: a `schema_version: 1` sidecar (produced before this
+    /// field existed) is rejected by the schema-version check before a consumer ever
+    /// constructs a `ServerMetadata`, so every value that exists already carries real
+    /// provenance — see `mcp-execution-skill`'s parser and
+    /// [`crate::provenance::GenerationProvenance`]'s own doc comment.
+    pub provenance: GenerationProvenance,
 }
 
 /// Structured metadata for a single generated tool.
@@ -213,7 +235,16 @@ pub struct ParameterMetadata {
 #[cfg(test)]
 mod tests {
     use super::{METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata};
-    use crate::{ServerId, ToolName};
+    use crate::provenance::GenerationProvenance;
+    use crate::{ServerConfig, ServerId, ToolName};
+
+    fn test_provenance() -> GenerationProvenance {
+        let config = ServerConfig::builder()
+            .command("docker".to_string())
+            .build()
+            .unwrap();
+        GenerationProvenance::capture(&config, &[])
+    }
 
     #[test]
     fn round_trips_through_json() {
@@ -235,6 +266,7 @@ mod tests {
                     description: Some("Issue title".to_string()),
                 }],
             }],
+            provenance: test_provenance(),
         };
 
         let json = serde_json::to_string_pretty(&meta).unwrap();
@@ -246,7 +278,7 @@ mod tests {
     #[test]
     fn deserializes_minimal_tool() {
         let json = r#"{
-            "schema_version": 1,
+            "schema_version": 2,
             "server_id": "github",
             "server_name": "GitHub",
             "server_version": "1.0.0",
@@ -257,7 +289,12 @@ mod tests {
                 "keywords": [],
                 "description": null,
                 "parameters": []
-            }]
+            }],
+            "provenance": {
+                "generated_at": "2026-01-01T00:00:00Z",
+                "config_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+                "tool_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
         }"#;
 
         let meta: ServerMetadata = serde_json::from_str(json).unwrap();
@@ -265,5 +302,22 @@ mod tests {
         assert_eq!(meta.tools.len(), 1);
         assert!(meta.tools[0].category.is_none());
         assert!(meta.tools[0].keywords.is_empty());
+    }
+
+    /// A genuine `schema_version: 1` sidecar has no `provenance` key at all — typed
+    /// deserialization must fail (a consumer is expected to check `schema_version` *first*, see
+    /// `mcp-execution-skill`'s parser, rather than rely on this generic failure).
+    #[test]
+    fn deserialize_rejects_v1_shaped_document_missing_provenance() {
+        let json = r#"{
+            "schema_version": 1,
+            "server_id": "github",
+            "server_name": "GitHub",
+            "server_version": "1.0.0",
+            "tools": []
+        }"#;
+
+        let result: Result<ServerMetadata, _> = serde_json::from_str(json);
+        assert!(result.is_err());
     }
 }

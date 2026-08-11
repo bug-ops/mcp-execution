@@ -144,43 +144,138 @@ pub struct RedactedUrl<'a>(pub &'a str);
 
 impl fmt::Debug for RedactedUrl<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Some((scheme, rest)) = self.0.split_once("://") else {
+        let Some(parts) = split_url(self.0) else {
             return f.write_str(REDACTED_PLACEHOLDER);
         };
 
-        let scheme_is_valid = !scheme.is_empty()
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-        if !scheme_is_valid {
-            return f.write_str(REDACTED_PLACEHOLDER);
+        if parts.userinfo_present {
+            write!(
+                f,
+                "{}://{REDACTED_PLACEHOLDER}@{}{}",
+                parts.scheme, parts.authority, parts.path
+            )?;
+        } else {
+            write!(f, "{}://{}{}", parts.scheme, parts.authority, parts.path)?;
         }
 
-        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-        let (authority, remainder) = rest.split_at(authority_end);
-
-        // See the type doc comment: an `@` past the authority terminator
-        // means the terminator landed inside unencoded userinfo rather than
-        // at a true authority boundary, so the split can't be trusted.
-        if remainder.contains('@') {
-            return f.write_str(REDACTED_PLACEHOLDER);
-        }
-
-        let authority = authority.rfind('@').map_or_else(
-            || authority.to_string(),
-            |at| format!("{REDACTED_PLACEHOLDER}@{}", &authority[at + 1..]),
-        );
-
-        let separator_pos = remainder.find(['?', '#']);
-        let path = separator_pos.map_or(remainder, |pos| &remainder[..pos]);
-
-        write!(f, "{scheme}://{authority}{path}")?;
-        if let Some(pos) = separator_pos {
-            let separator = &remainder[pos..=pos];
+        if let Some((kind, _)) = parts.tail {
+            let separator = match kind {
+                UrlTailKind::Query => '?',
+                UrlTailKind::Fragment => '#',
+            };
             write!(f, "{separator}{REDACTED_PLACEHOLDER}")?;
         }
         Ok(())
     }
+}
+
+/// Which separator introduced a [`SplitUrl`]'s `tail` — the first `?` or `#` found after the
+/// authority. Mirrors [`split_url`]'s single-separator rule: whichever character comes first
+/// determines the whole kind, even if the other character also appears later inside `tail`'s
+/// text (e.g. a `#` inside an unparsed query string, or a `?` inside a fragment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UrlTailKind {
+    /// The separator was `?`: `tail` is the URL's query string.
+    Query,
+    /// The separator was `#`: `tail` is the URL's fragment.
+    Fragment,
+}
+
+/// Parsed pieces of a `scheme://...` URL, shared by [`RedactedUrl`]'s [`Debug`] impl and the
+/// config-fingerprint preimage (`mcp_execution_core::provenance`). Two renderings over one
+/// parser, so they cannot disagree about where the authority ends — see [`split_url`].
+#[derive(Clone, Copy)]
+pub struct SplitUrl<'a> {
+    /// URL scheme, validated to contain only characters legal in a URI scheme.
+    pub(crate) scheme: &'a str,
+    /// Whether the authority carried a `user[:pass]@` prefix. The credentials themselves are
+    /// never exposed by this type — only their presence.
+    pub(crate) userinfo_present: bool,
+    /// Host\[:port\], with any userinfo prefix already stripped.
+    pub(crate) authority: &'a str,
+    /// Path segment, up to (not including) the first `?`/`#` after the authority. Empty if the
+    /// URL has no path.
+    pub(crate) path: &'a str,
+    /// The first `?`/`#` found after the authority, paired with everything from just past that
+    /// character to the end of the URL — verbatim, even if it itself contains further `?`/`#`
+    /// characters. `None` if the URL has no query string or fragment.
+    pub(crate) tail: Option<(UrlTailKind, &'a str)>,
+}
+
+impl fmt::Debug for SplitUrl<'_> {
+    /// Hand-written rather than derived: `tail` carries the raw, unredacted query string or
+    /// fragment — the exact secret-shaped text this module exists to keep out of `Debug`
+    /// output. Currently unreachable from outside the crate (`SplitUrl` is `pub` but `mod
+    /// redact` is private and this type is not re-exported at `lib.rs`), but a derived impl
+    /// would silently reopen that leak the moment either changes, inside the one module whose
+    /// stated purpose is preventing it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SplitUrl")
+            .field("scheme", &self.scheme)
+            .field("userinfo_present", &self.userinfo_present)
+            .field("authority", &self.authority)
+            .field("path", &self.path)
+            .field(
+                "tail",
+                &self
+                    .tail
+                    .as_ref()
+                    .map(|(kind, _)| (kind, REDACTED_PLACEHOLDER)),
+            )
+            .finish()
+    }
+}
+
+/// Parses `url` into [`SplitUrl`]'s pieces, or returns `None` for every shape [`RedactedUrl`]
+/// redacts in full: no `://`, an invalid scheme, or an authority/userinfo split that can't be
+/// trusted (see [`RedactedUrl`]'s own doc comment for the ambiguity this last case guards
+/// against).
+///
+/// Deliberately parse-free, matching [`RedactedUrl`]'s existing documented tradeoff: this crate
+/// does not depend on the `url` crate, so a URL that a strict parser would accept can still be
+/// rejected here in favor of staying consistent with the rest of this module's boundary.
+pub fn split_url(url: &str) -> Option<SplitUrl<'_>> {
+    let (scheme, rest) = url.split_once("://")?;
+
+    let scheme_is_valid = !scheme.is_empty() && scheme.chars().all(is_scheme_char);
+    if !scheme_is_valid {
+        return None;
+    }
+
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority_with_userinfo, remainder) = rest.split_at(authority_end);
+
+    // See `RedactedUrl`'s doc comment: an `@` past the authority terminator means the
+    // terminator landed inside unencoded userinfo rather than at a true authority boundary, so
+    // the split can't be trusted.
+    if remainder.contains('@') {
+        return None;
+    }
+
+    let (userinfo_present, authority) = authority_with_userinfo
+        .rfind('@')
+        .map_or((false, authority_with_userinfo), |at| {
+            (true, &authority_with_userinfo[at + 1..])
+        });
+
+    let separator_pos = remainder.find(['?', '#']);
+    let path = separator_pos.map_or(remainder, |pos| &remainder[..pos]);
+    let tail = separator_pos.map(|pos| {
+        let kind = if remainder.as_bytes()[pos] == b'?' {
+            UrlTailKind::Query
+        } else {
+            UrlTailKind::Fragment
+        };
+        (kind, &remainder[pos + 1..])
+    });
+
+    Some(SplitUrl {
+        scheme,
+        userinfo_present,
+        authority,
+        path,
+        tail,
+    })
 }
 
 /// Characters legal in a URI scheme, per [`RedactedUrl`]'s own scheme check.
@@ -732,5 +827,39 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&json_line)
                 .unwrap_or_else(|e| panic!("invalid JSON for {raw:?}: {e}\n{json_line}"));
         }
+    }
+
+    /// `SplitUrl`'s hand-written `Debug` impl (not derived) must redact `tail` the same way
+    /// `RedactedUrl` redacts a query string — a secret placed there must never appear in
+    /// `{:?}` output, even though `SplitUrl` itself is currently unreachable from outside the
+    /// crate.
+    #[test]
+    fn split_url_debug_redacts_tail() {
+        let secret = "sk-secret-token";
+        let url = format!("https://host.com/path?api_key={secret}");
+        let parts = split_url(&url).unwrap();
+        let debug_output = format!("{parts:?}");
+        assert!(!debug_output.contains(secret));
+        assert!(debug_output.contains(REDACTED_PLACEHOLDER));
+        assert!(debug_output.contains("host.com"));
+    }
+
+    /// Companion to the query case above: a fragment must be redacted the same way.
+    #[test]
+    fn split_url_debug_redacts_fragment_tail() {
+        let secret = "sk-secret-fragment";
+        let url = format!("https://host.com/path#{secret}");
+        let parts = split_url(&url).unwrap();
+        let debug_output = format!("{parts:?}");
+        assert!(!debug_output.contains(secret));
+        assert!(debug_output.contains(REDACTED_PLACEHOLDER));
+    }
+
+    /// A URL with no query/fragment must render `tail` as `None`, not a spurious placeholder.
+    #[test]
+    fn split_url_debug_shows_none_tail_when_absent() {
+        let parts = split_url("https://host.com/path").unwrap();
+        let debug_output = format!("{parts:?}");
+        assert!(debug_output.contains("tail: None"));
     }
 }
