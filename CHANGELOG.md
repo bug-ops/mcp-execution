@@ -285,6 +285,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes to match (additive, so existing deserializers are unaffected). A caller sending
   `"use_case_hints": []` also sees a small `generation_prompt` shape change: the previously
   emitted, fully-empty `### Use Case Hints` wrapped block no longer appears (#473).
+- **`mcp-execution-cli`**: `setup`'s `check_files_executable` no longer follows symlinks while
+  walking `~/.claude/servers/` to `chmod` generated `.ts` files. Two vectors were closed: a
+  symlinked server-id directory previously let the walk descend into and `chmod` an arbitrary
+  directory elsewhere on disk, and — not covered by the original report — a symlinked `.ts` file
+  inside an otherwise legitimate server directory previously let `chmod` land on its target
+  anywhere the process could reach. Both levels of the walk now check entry kind via
+  `DirEntry::file_type()` (which does not traverse symlinks) and skip symlinked entries instead of
+  following them, mirroring the guard semantics `mcp_execution_core::confinement` already uses.
+  `SetupResult` gained a `skipped_entries: usize` field (breaking change, acceptable pre-1.0.0) so
+  a planted symlink is surfaced to the user rather than silently ignored; the walk itself is now
+  exposed as `check_files_executable_in(servers_dir: &Path)` for testing without `HOME` mutation
+  (#476).
+- **`mcp-execution-cli`**: `server validate` no longer labels every configuration-lookup failure
+  as "Server not found in configuration", even when `~/.claude/mcp.json` itself is missing or
+  malformed — the same class of mislabeling #304 fixed for entries present but failing security
+  validation, left unaddressed for the file-load path. `get_mcp_server_entry` is now split into
+  `load_mcp_config` and `lookup_server_entry`, letting `validate_command` report a config-load
+  failure with its true cause and reserve the "not found" message for a genuinely absent server
+  name, matching the framing `generate --from-config`, `server list`, and `server info` already
+  use for the same three underlying conditions (#479).
 - **`mcp-execution-server`**: a `categorized_tools` entry whose `name` cannot be resolved to a raw
   introspected tool now reports which of two distinct causes applies, instead of one message
   covering both regardless of which occurred: "not found in introspected tools" when no raw tool

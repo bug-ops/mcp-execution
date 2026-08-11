@@ -6,6 +6,7 @@
 use crate::actions::ServerAction;
 use crate::commands::common::{
     McpServerEntry, McpTransport, build_core_config, get_mcp_server_entry, list_mcp_servers,
+    load_mcp_config, lookup_server_entry,
 };
 use crate::formatters::escape_error_text;
 use anyhow::{Context, Result};
@@ -324,7 +325,10 @@ async fn list_servers(output_format: OutputFormat) -> Result<ExitCode> {
 /// An entry whose `url` (or other field) fails [`build_core_config`]'s security validation is
 /// reported the same way as an entry that is well-formed but unreachable — a structured
 /// `"status": "unavailable"` [`ServerInfo`] through `output_format`, not a raw, unformatted error
-/// (#305). Only a genuinely absent entry propagates as `Err` via [`get_mcp_server_entry`].
+/// (#305). [`get_mcp_server_entry`]'s own errors — a missing/malformed `~/.claude/mcp.json` as
+/// well as a genuinely absent server name — are not caught here and still propagate as `Err`
+/// (unlike `server validate`, which distinguishes these cases into its own structured
+/// `ValidationResult`, #479).
 async fn show_server_info(server: String, output_format: OutputFormat) -> Result<ExitCode> {
     let (server_id, entry) = get_mcp_server_entry(&server)?;
     let command = build_command_string(&entry);
@@ -422,8 +426,26 @@ fn unavailable_server_info(server: String, command: String) -> ServerInfo {
 /// [`build_core_config`]'s security validation (e.g. an invalid URL scheme) is reported with a
 /// message describing that specific problem, not the "not found" message reserved for a
 /// genuinely absent entry (#304).
+///
+/// Config loading and name lookup are performed as two separate steps (via [`load_mcp_config`]
+/// and [`lookup_server_entry`], rather than the combined [`get_mcp_server_entry`]) so a missing
+/// or malformed `~/.claude/mcp.json` produces its own message instead of being collapsed into
+/// "server not found" — mirroring how `generate --from-config`/`server info`/`server list`
+/// report the same underlying conditions (#479).
 async fn validate_command(server_name: String, output_format: OutputFormat) -> Result<ExitCode> {
-    let (server_id, entry) = match get_mcp_server_entry(&server_name) {
+    let config = match load_mcp_config() {
+        Ok(config) => config,
+        Err(e) => {
+            let result = ValidationResult {
+                command: server_name,
+                valid: false,
+                message: format!("Failed to read server configuration: {e}"),
+            };
+            return crate::formatters::emit(&result, output_format, ExitCode::ERROR);
+        }
+    };
+
+    let (server_id, entry) = match lookup_server_entry(&config, &server_name) {
         Ok(result) => result,
         Err(e) => {
             let result = ValidationResult {
@@ -1300,6 +1322,71 @@ mod tests {
 
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"status\":\"unavailable\""));
+    }
+
+    // ── validate_command config-load vs. name-lookup error paths (#479) ──
+    //
+    // `validate_command`'s message field is only ever printed to stdout (see
+    // `with_home_pointed_at` doc comment above), so — like the #280/#304 regression tests above
+    // — these assert on `ExitCode` only. The message-content distinction itself is covered
+    // directly in `common.rs`'s `test_config_load_and_lookup_errors_are_distinguishable`; what
+    // these confirm is that all three underlying conditions (missing config file, malformed
+    // JSON, genuinely absent server name) are reachable through `validate_command` and still
+    // resolve to a structured `ExitCode::ERROR` result rather than an unhandled `Err`.
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_validate_command_missing_config_file_reports_error() {
+        // HOME points at a fresh temp dir with no `.claude/mcp.json` at all.
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let result = with_home_pointed_at(temp.path(), || {
+            run(
+                ServerAction::Validate {
+                    command: "anything".to_string(),
+                },
+                OutputFormat::Json,
+            )
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), ExitCode::ERROR);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_validate_command_malformed_config_reports_error() {
+        let temp = write_test_mcp_config("not valid json");
+
+        let result = with_home_pointed_at(temp.path(), || {
+            run(
+                ServerAction::Validate {
+                    command: "anything".to_string(),
+                },
+                OutputFormat::Json,
+            )
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), ExitCode::ERROR);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_validate_command_unknown_server_name_reports_error() {
+        let temp = write_test_mcp_config(r#"{"mcpServers": {"unrelated": {"command": "node"}}}"#);
+
+        let result = with_home_pointed_at(temp.path(), || {
+            run(
+                ServerAction::Validate {
+                    command: "nonexistent-server".to_string(),
+                },
+                OutputFormat::Json,
+            )
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
     #[test]

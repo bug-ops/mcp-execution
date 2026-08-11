@@ -383,11 +383,16 @@ fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
 ///
 /// Delegates to [`load_mcp_config_from`] after resolving the default path.
 ///
+/// `pub(crate)` (rather than private) so callers that must distinguish "config file itself is
+/// missing/malformed" from "the config loaded but doesn't have this server" — `server
+/// validate` (#479) — can call this and [`lookup_server_entry`] separately instead of treating
+/// both failure modes as the same generic error the way [`get_mcp_server_entry`] does.
+///
 /// # Errors
 ///
 /// Returns an error if the home directory cannot be determined, the file
 /// cannot be read, or the JSON is malformed.
-fn load_mcp_config() -> Result<McpConfig> {
+pub(crate) fn load_mcp_config() -> Result<McpConfig> {
     let home = dirs::home_dir().context("failed to get home directory")?;
     load_mcp_config_from(&home.join(".claude").join("mcp.json"))
 }
@@ -488,7 +493,24 @@ pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpS
 /// present.
 pub(crate) fn get_mcp_server_entry(name: &str) -> Result<(ServerId, McpServerEntry)> {
     let config = load_mcp_config()?;
+    lookup_server_entry(&config, name)
+}
 
+/// Looks up `name` within an already-loaded [`McpConfig`], returning its [`ServerId`] and entry.
+///
+/// Split out from [`get_mcp_server_entry`] so callers that need "config file itself is
+/// missing/malformed" and "the config loaded but doesn't have this server" to produce distinct
+/// messages — `server validate` (#479) — can call [`load_mcp_config`] and this function
+/// separately instead of collapsing both failure modes into one generic error.
+///
+/// # Errors
+///
+/// Returns an error if the named server is not present in `config`, or its name is not a valid
+/// [`ServerId`].
+pub(crate) fn lookup_server_entry(
+    config: &McpConfig,
+    name: &str,
+) -> Result<(ServerId, McpServerEntry)> {
     let entry = config
         .mcp_servers
         .get(name)
@@ -1119,6 +1141,56 @@ mod tests {
         let result = load_mcp_config_from(file.path());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("parse MCP config"));
+    }
+
+    // ── config-load vs. name-lookup error distinction (#479) ──
+
+    #[test]
+    fn test_lookup_server_entry_absent_name_errors_not_found() {
+        let json = r#"{"mcpServers": {"github": {"command": "node"}}}"#;
+        let file = create_test_config(json);
+        let config = load_mcp_config_from(file.path()).unwrap();
+
+        let result = lookup_server_entry(&config, "nonexistent");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not found in ~/.claude/mcp.json")
+        );
+    }
+
+    #[test]
+    fn test_config_load_and_lookup_errors_are_distinguishable() {
+        // Regression test for #479: `server validate` used to unconditionally label every
+        // `get_mcp_server_entry` failure as "not found", even when the real problem was that
+        // `~/.claude/mcp.json` itself was missing or malformed. Config-load failures (missing
+        // file, malformed JSON) and a genuinely absent server name must produce distinct,
+        // non-overlapping messages when handled as the two separate steps `load_mcp_config`/
+        // `lookup_server_entry` now allow.
+        let missing = load_mcp_config_from(Path::new("/nonexistent/path/mcp.json"))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("failed to read"));
+        assert!(!missing.contains("not found in ~/.claude/mcp.json"));
+
+        let malformed_file = create_test_config("not valid json");
+        let malformed = load_mcp_config_from(malformed_file.path())
+            .unwrap_err()
+            .to_string();
+        assert!(malformed.contains("parse MCP config"));
+        assert!(!malformed.contains("not found in ~/.claude/mcp.json"));
+
+        let json = r#"{"mcpServers": {"github": {"command": "node"}}}"#;
+        let ok_file = create_test_config(json);
+        let config = load_mcp_config_from(ok_file.path()).unwrap();
+        let not_found = lookup_server_entry(&config, "missing")
+            .unwrap_err()
+            .to_string();
+        assert!(not_found.contains("not found in ~/.claude/mcp.json"));
+        assert!(!not_found.contains("failed to read"));
+        assert!(!not_found.contains("parse MCP config"));
     }
 
     // ── mixed stdio/http/sse configs (#210) ──
