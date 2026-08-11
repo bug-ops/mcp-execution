@@ -70,6 +70,22 @@ pub const METADATA_SCHEMA_VERSION: u32 = 1;
 /// ```
 pub const METADATA_FILE_NAME: &str = "_meta.json";
 
+/// Filename of the generated re-export entry point emitted alongside per-tool files.
+///
+/// Shared between the producer (`mcp-execution-codegen`, which renders it) and its consumers
+/// (`mcp-execution-skill` and `mcp-execution-server`, which must recognize it as the package's
+/// aggregator file rather than a per-tool file) to avoid a stringly-typed filename duplicated
+/// across crates.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::INDEX_FILE_NAME;
+///
+/// assert_eq!(INDEX_FILE_NAME, "index.ts");
+/// ```
+pub const INDEX_FILE_NAME: &str = "index.ts";
+
 /// Structured sidecar describing one server's generated tools.
 ///
 /// Serialized as `_meta.json` by `mcp-execution-codegen` and deserialized by

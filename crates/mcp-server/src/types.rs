@@ -397,7 +397,7 @@ pub struct GeneratedServerInfo {
     /// Server identifier
     pub id: String,
 
-    /// Number of tool files (excluding runtime)
+    /// Number of tool files (excluding `index.ts` and files starting with `_`)
     pub tool_count: usize,
 
     /// Last generation timestamp

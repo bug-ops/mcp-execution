@@ -42,7 +42,8 @@ use crate::progressive::types::{
 use crate::template_engine::TemplateEngine;
 use mcp_execution_core::ResourceKind;
 use mcp_execution_core::metadata::{
-    METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
+    INDEX_FILE_NAME, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata,
+    ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::{Error, Result};
 use mcp_execution_introspector::{ServerInfo, ToolInfo};
@@ -480,7 +481,7 @@ impl ProgressiveGenerator<'_> {
             code,
             total_bytes,
             GeneratedFile {
-                path: "index.ts".to_string(),
+                path: INDEX_FILE_NAME.to_string(),
                 content: index_code,
             },
         )?;

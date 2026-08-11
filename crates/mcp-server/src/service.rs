@@ -14,6 +14,7 @@ use crate::types::{
     PendingGeneration, SaveCategorizedToolsParams, SaveCategorizedToolsResult,
 };
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_core::metadata::INDEX_FILE_NAME;
 use mcp_execution_core::untrusted::{
     MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_inline, sanitize_untrusted_text,
     wrap_untrusted_block,
@@ -824,13 +825,25 @@ impl GeneratorService {
                         if entry.path().is_dir() {
                             let id = entry.file_name().to_string_lossy().to_string();
 
-                            // Count .ts files (excluding _runtime and starting with _)
+                            // Count per-tool .ts files. Excludes `INDEX_FILE_NAME`, the
+                            // package's always-present re-export entry point, which is not
+                            // itself a tool (issue #477); compared case-insensitively to
+                            // match `disambiguate_output_filename`'s own case-insensitive
+                            // handling of `index` (issue #312), since a tool named `Index`
+                            // would otherwise collide with it on a case-insensitive
+                            // filesystem. Also excludes files starting with `_` — real
+                            // generator output never produces a top-level `_`-prefixed
+                            // `.ts` file (`_meta.json` isn't `.ts`, and the runtime bridge
+                            // lives in the `_runtime/` subdirectory), so this clause is
+                            // defensive rather than covering a file that exists today.
                             let tool_count = std::fs::read_dir(entry.path()).map_or(0, |e| {
                                 e.flatten()
                                     .filter(|f| {
                                         let name = f.file_name();
                                         let name = name.to_string_lossy();
-                                        name.ends_with(".ts") && !name.starts_with('_')
+                                        name.ends_with(".ts")
+                                            && !name.starts_with('_')
+                                            && !name.eq_ignore_ascii_case(INDEX_FILE_NAME)
                                     })
                                     .count()
                             });
@@ -4563,6 +4576,85 @@ mod tests {
         assert_eq!(parsed.total_servers, 1);
         assert_eq!(parsed.servers[0].id, "my-server");
         assert_eq!(parsed.servers[0].tool_count, 1);
+    }
+
+    /// `tool_count` must count only per-tool `.ts` files, excluding `index.ts` (the package's
+    /// always-present re-export entry point) among files real generator output actually places
+    /// at the server directory's top level — `_meta.json` (not `.ts`, so it never matches the
+    /// filter's own extension check) and the `_runtime/` subdirectory (not a file) alongside it
+    /// (issue #477).
+    #[tokio::test]
+    async fn test_list_generated_servers_tool_count_excludes_index_and_underscore_files() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let server_dir = temp_dir.path().join("my-server");
+        tokio::fs::create_dir_all(&server_dir).await.unwrap();
+        tokio::fs::write(server_dir.join("index.ts"), "export {}")
+            .await
+            .unwrap();
+        tokio::fs::write(server_dir.join("_meta.json"), "{}")
+            .await
+            .unwrap();
+        let runtime_dir = server_dir.join("_runtime");
+        tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
+        tokio::fs::write(runtime_dir.join("mcp-bridge.ts"), "export {}")
+            .await
+            .unwrap();
+        tokio::fs::write(server_dir.join("tool_a.ts"), "export {}")
+            .await
+            .unwrap();
+        tokio::fs::write(server_dir.join("tool_b.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = ListGeneratedServersParams { base_dir: None };
+
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text_content = content.content[0].as_text().unwrap();
+        let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
+
+        assert_eq!(parsed.servers[0].id, "my-server");
+        assert_eq!(parsed.servers[0].tool_count, 2);
+    }
+
+    /// A server directory containing only `index.ts` (no per-tool files yet) must report a
+    /// `tool_count` of zero rather than counting the entry point itself as a tool.
+    #[tokio::test]
+    async fn test_list_generated_servers_tool_count_zero_when_only_index_ts() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let server_dir = temp_dir.path().join("empty-server");
+        tokio::fs::create_dir_all(&server_dir).await.unwrap();
+        tokio::fs::write(server_dir.join("index.ts"), "export {}")
+            .await
+            .unwrap();
+
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+
+        let params = ListGeneratedServersParams { base_dir: None };
+
+        let result = service
+            .list_generated_servers(Parameters(params), CancellationToken::new())
+            .await;
+
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        let text_content = content.content[0].as_text().unwrap();
+        let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
+
+        assert_eq!(parsed.servers[0].id, "empty-server");
+        assert_eq!(parsed.servers[0].tool_count, 0);
     }
 
     #[tokio::test]
