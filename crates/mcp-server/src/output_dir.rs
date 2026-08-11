@@ -176,8 +176,10 @@ impl From<ConfinementError> for OutputDirError {
 /// let result = relative_subpath(Some(Path::new("nested/custom"))).unwrap();
 /// assert_eq!(result.to_str().unwrap(), "nested/custom");
 ///
-/// // Absolute path: rejected
-/// let err = relative_subpath(Some(Path::new("/etc/config"))).unwrap_err();
+/// // Absolute path: rejected. `Path::is_absolute()` requires a drive prefix on Windows, so
+/// // the path used here must be genuinely absolute on the current platform.
+/// let absolute = if cfg!(windows) { r"C:\Windows\System32\config" } else { "/etc/config" };
+/// let err = relative_subpath(Some(Path::new(absolute))).unwrap_err();
 /// assert!(err.to_string().contains("absolute"));
 ///
 /// // Parent traversal: rejected
