@@ -3071,6 +3071,64 @@ mod tests {
         );
     }
 
+    /// #471/#467 drift guard: the `DoS` size/count ceilings and the env-name charset pattern
+    /// must be rendered from `mcp_execution_core`'s constants/accessor, not hand-copied
+    /// literals — same "read from the accessor, not a hardcoded second copy" reasoning as
+    /// `test_generate_runtime_bridge_declares_forbidden_env_var_list` above, and the same
+    /// caveat: this proves the values are rendered, not that the checks are reachable or
+    /// enforced at runtime (see `crates/mcp-codegen/tests/progressive_generation.rs` for the
+    /// behavioral guards that compile and execute the rendered bridge under Node).
+    #[test]
+    fn test_generate_runtime_bridge_declares_dos_bounds_and_env_name_charset() {
+        let generator = ProgressiveGenerator::new().unwrap();
+        let server_info = create_test_server_info();
+
+        let code = generator.generate(&server_info).unwrap();
+        let bridge = code
+            .files
+            .iter()
+            .find(|f| f.path == "_runtime/mcp-bridge.ts")
+            .unwrap();
+
+        // Asserts name *and* value together — asserting only the value would pass even with
+        // `MAX_ENV_COUNT` deleted from the template entirely, since it collides with
+        // `MAX_ARG_COUNT` (both 256) and `MAX_URL_LEN`/`MAX_HEADER_VALUE_LEN` collide too (both
+        // 8192); see #471/#467 critique S4.
+        for (name, value) in [
+            ("MAX_ARG_COUNT", mcp_execution_core::MAX_ARG_COUNT),
+            ("MAX_ARG_LEN", mcp_execution_core::MAX_ARG_LEN),
+            ("MAX_ENV_COUNT", mcp_execution_core::MAX_ENV_COUNT),
+            ("MAX_ENV_VALUE_LEN", mcp_execution_core::MAX_ENV_VALUE_LEN),
+            ("MAX_URL_LEN", mcp_execution_core::MAX_URL_LEN),
+            ("MAX_HEADER_COUNT", mcp_execution_core::MAX_HEADER_COUNT),
+            (
+                "MAX_HEADER_VALUE_LEN",
+                mcp_execution_core::MAX_HEADER_VALUE_LEN,
+            ),
+        ] {
+            assert!(
+                bridge.content.contains(&format!("const {name} = {value};")),
+                "runtime bridge must declare {name} = {value}: {}",
+                bridge.content
+            );
+        }
+
+        assert!(
+            bridge
+                .content
+                .contains(mcp_execution_core::env_name_charset_pattern()),
+            "runtime bridge must reference the env-name charset pattern: {}",
+            bridge.content
+        );
+        assert!(
+            bridge
+                .content
+                .contains(mcp_execution_core::env_name_charset_desc()),
+            "runtime bridge must reference the env-name charset description: {}",
+            bridge.content
+        );
+    }
+
     #[test]
     fn test_generate_preserves_benign_punctuation() {
         // Issue #204 regression: Handlebars' default HTML-escaping corrupted benign

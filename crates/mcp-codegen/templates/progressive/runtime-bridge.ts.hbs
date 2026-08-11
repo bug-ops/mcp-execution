@@ -177,6 +177,106 @@ const FORBIDDEN_ENV_NAMES = [{{#each forbidden_env_names}}'{{{this}}}'{{#unless 
 const FORBIDDEN_ENV_PREFIX = '{{{forbidden_env_prefix}}}';
 
 /**
+ * POSIX/Windows environment-variable-name identifier charset, rendered directly from
+ * `mcp-execution-core`'s `env_name_charset_pattern()` (`command.rs`). Used by
+ * {@link validateEnvName} to close the #467 gap: this bridge previously relied entirely on
+ * `String.prototype.toUpperCase()`'s incidental Unicode case folding, with no explicit charset
+ * check of its own.
+ */
+const ENV_NAME_CHARSET_REGEX = new RegExp('{{{env_name_charset_pattern}}}');
+
+/**
+ * Human-readable description of {@link ENV_NAME_CHARSET_REGEX}, rendered directly from
+ * `mcp-execution-core`'s `env_name_charset_desc()` (`command.rs`) so {@link validateEnvName}'s
+ * rejection message doesn't hand-copy the same literal a second time.
+ */
+const ENV_NAME_CHARSET_DESC = '{{{env_name_charset_desc}}}';
+
+/**
+ * Denial-of-service (CWE-400) size/count ceilings, rendered directly from
+ * `mcp-execution-core`'s constants of the same name (`command.rs`), enforced by
+ * {@link validateStdioSizeBounds} and {@link validateNetworkSizeBounds} before any
+ * command-injection-specific check runs — mirroring the ordering in
+ * `mcp_execution_core::validate_server_config`.
+ */
+const MAX_ARG_COUNT = {{max_arg_count}};
+const MAX_ARG_LEN = {{max_arg_len}};
+const MAX_ENV_COUNT = {{max_env_count}};
+const MAX_ENV_VALUE_LEN = {{max_env_value_len}};
+const MAX_URL_LEN = {{max_url_len}};
+const MAX_HEADER_COUNT = {{max_header_count}};
+const MAX_HEADER_VALUE_LEN = {{max_header_value_len}};
+
+/**
+ * Returns the UTF-8 byte length of `value`, matching the semantics of Rust's `str::len()`
+ * that `mcp-execution-core`'s size-bound constants (`MAX_ARG_LEN` and siblings) are defined
+ * against. `string.length` counts UTF-16 code units instead, which under-counts any non-ASCII
+ * character relative to its UTF-8 byte count and would let a config past a bound the Rust
+ * source of truth would reject.
+ */
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+/**
+ * Returns `Object.entries(value)` when `value` is a non-null, non-array object; `[]` when
+ * `value` is `undefined`/`null` (the genuine "field absent" case, preserving the previous
+ * `config.env ?? {}`-style semantics); throws for anything else (a string, array, number,
+ * boolean).
+ *
+ * `config.env`/`config.headers` are read from an untyped `JSON.parse` result, so either could
+ * actually be any of those shapes at runtime despite `ServerConfig`'s static type — mirroring
+ * why `mcp_execution_core`'s `Transport::Stdio.env`/`Transport::Http.headers` being
+ * `HashMap<String, String>` makes serde reject a non-map shape at deserialization, before
+ * `validate_server_config` ever runs.
+ *
+ * Critique #471/#467 S5: an earlier revision of this function *returned `[]`* for a
+ * string/array `value` instead of throwing, reasoning that this closed the "iterate once per
+ * character" cost of `Object.entries`/`Object.keys` on a string. It did — but by turning a
+ * rejection into a silent acceptance: with zero entries, `MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`
+ * and {@link validateEnvName} never ran at all, and `spawn(..., { env: { ...config.env } })`
+ * still spreads a string/array *per character/element* — verified under node, a 2000-character
+ * string `env` produces 2000 numeric-keyed environment variables, none of them length- or
+ * count-checked. Throwing preserves the O(1)-rejection property (still no per-character
+ * iteration) without reopening that bypass.
+ *
+ * @param value - The `config.env`/`config.headers` value to convert to entries
+ * @param context - Human-readable description of `value`, used in the thrown message
+ * @throws {Error} If `value` is neither `undefined`/`null` nor a non-array object
+ */
+function recordEntries(value: unknown, context: string): Array<[string, unknown]> {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${context} must be an object mapping names to values`);
+  }
+  return Object.entries(value);
+}
+
+/**
+ * Narrows `value` to `string`, throwing `message` if it is not one.
+ *
+ * `config.env`/`config.headers` values are read from an untyped `JSON.parse` result, so
+ * despite `ServerConfig`'s static `Record<string, string>` typing, a value could actually be
+ * any JSON type at runtime — an array, object, number, boolean, or `null`. Node's
+ * `child_process.spawn` silently *coerces* a non-string `env` value via string conversion
+ * (e.g. an array of many long strings becomes their comma-joined concatenation), so letting one
+ * reach `spawn()` unrejected would bypass {@link validateStdioSizeBounds}'s length ceiling
+ * entirely rather than merely mis-measuring it — the #471/#467 critique's S1 finding. Rejecting
+ * outright, rather than measuring `String(value).length`, is the closer mirror of the Rust side:
+ * `Transport::Stdio`'s `env`/`Transport::Http`'s `headers` are `HashMap<String, String>`, so a
+ * non-string value there is rejected at JSON deserialization, before `validate_server_config`
+ * ever runs.
+ */
+function ensureStringValue(value: unknown, message: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(message);
+  }
+  return value;
+}
+
+/**
  * Validates a command or argument string for forbidden shell metacharacters.
  *
  * Mirrors `validate_command_string` in `mcp-execution-core`'s `command.rs`. The offending
@@ -209,28 +309,38 @@ function validateCommandString(value: unknown, context: string): void {
 }
 
 /**
- * Validates an environment variable name against the forbidden list.
+ * Validates an environment variable name against the required charset and the forbidden list.
  *
- * Mirrors the case-insensitive forbidden-name/prefix comparison in `validate_env_name`
- * (`mcp-execution-core`'s `command.rs`): Windows treats environment variable names as
- * case-insensitive at the OS/`CreateProcess` level, so a case-varied spelling such as `Path`
- * or `path` must be rejected exactly like the canonical `PATH`. `FORBIDDEN_ENV_NAMES`/
- * `FORBIDDEN_ENV_PREFIX` are rendered from the Rust source already upper-cased, so upper-casing
- * `name` before comparing is sufficient.
+ * Mirrors `validate_env_name` (`mcp-execution-core`'s `command.rs`) in both checks and their
+ * order:
  *
- * As of `mcp-execution-core` #438, the Rust validator is strictly stricter than this function:
- * it additionally rejects any name outside the `[A-Za-z_][A-Za-z0-9_]*` charset outright, which
- * closes a Unicode-case-confusable bypass (e.g. `ı` U+0131, `ſ` U+017F) that ASCII-only case
- * folding cannot catch. This function has no equivalent explicit charset check — whatever
- * coverage it has against such names is incidental to `String.prototype.toUpperCase()`'s own
- * Unicode-aware case mapping, not a deliberate guarantee, and a name JavaScript's mapping does
- * not fold onto a forbidden entry will pass through unrejected here even though the Rust side
- * now rejects it.
+ * 1. **Charset** — the name must match {@link ENV_NAME_CHARSET_REGEX}
+ *    ({@link ENV_NAME_CHARSET_DESC}), rendered from the Rust source of truth. This closes the
+ *    #467 gap: before this check existed here, this function's only defense against a Unicode
+ *    case-confusable name (e.g. `ı` U+0131, `ſ` U+017F) was incidental to
+ *    `String.prototype.toUpperCase()`'s own Unicode-aware case mapping, not a deliberate
+ *    guarantee — a name JavaScript's mapping did not happen to fold onto a forbidden entry
+ *    passed through unrejected even though `validate_env_name` (added by #438) already
+ *    rejected it outright for being outside the conventional identifier charset.
+ * 2. **Forbidden name/prefix** — case-insensitive comparison against `FORBIDDEN_ENV_NAMES`/
+ *    `FORBIDDEN_ENV_PREFIX`, since Windows treats environment variable names as
+ *    case-insensitive at the OS/`CreateProcess` level, so a case-varied spelling such as
+ *    `Path` or `path` must be rejected exactly like the canonical `PATH`. Both are rendered
+ *    from the Rust source already upper-cased, so upper-casing `name` before comparing is
+ *    sufficient.
  *
  * @param name - The environment variable name to validate
- * @throws {Error} If the name is forbidden (exact match or `DYLD_*` prefix, case-insensitive)
+ * @throws {Error} If the name is outside the required charset, or is forbidden (exact match
+ *   or `DYLD_*` prefix, case-insensitive)
  */
 function validateEnvName(name: string): void {
+  if (!ENV_NAME_CHARSET_REGEX.test(name)) {
+    throw new Error(
+      `environment variable name is not a valid identifier (expected ` +
+      `${ENV_NAME_CHARSET_DESC}): ${name}`
+    );
+  }
+
   const upperName = name.toUpperCase();
   if (FORBIDDEN_ENV_NAMES.includes(upperName)) {
     throw new Error(`Forbidden environment variable name: ${name}`);
@@ -314,33 +424,177 @@ function validateHeaderValueString(name: string, value: string, serverId: string
 }
 
 /**
+ * Bounds `url`'s length and `headers`' count/lengths (denial-of-service protection, CWE-400),
+ * mirroring `validate_network_size_bounds` in `mcp-execution-core`'s `command.rs`. Called by
+ * {@link validateNetworkConfig} before its injection-specific checks, mirroring the ordering
+ * in `mcp_execution_core::validate_server_config`.
+ *
+ * Assumes `config.url` is already known to be a non-empty string — {@link validateNetworkConfig}
+ * checks that first, mirroring `url` being a required (non-optional) field on the Rust
+ * `Transport::Http`/`Transport::Sse` variants.
+ *
+ * A header value that is not a string is rejected outright here (via {@link ensureStringValue})
+ * rather than skipped — see that helper's doc comment for why a `typeof value === 'string' &&`
+ * guard around the length check alone is not safe for header values.
+ *
+ * @param config - The server configuration to validate
+ * @param serverId - Server identifier, used in error messages
+ * @throws {Error} If `url` or any header name/value count/length exceeds its bound, or a
+ *   header value is not a string
+ */
+function validateNetworkSizeBounds(config: ServerConfig, serverId: string): void {
+  const url = config.url as string;
+  if (byteLength(url) > MAX_URL_LEN) {
+    throw new Error(
+      `url for server '${serverId}' too long: ${byteLength(url)} bytes exceeds the ` +
+      `${MAX_URL_LEN} limit`
+    );
+  }
+
+  const headerEntries = recordEntries(config.headers, `headers for server '${serverId}'`);
+  if (headerEntries.length > MAX_HEADER_COUNT) {
+    throw new Error(
+      `too many headers for server '${serverId}': ${headerEntries.length} exceeds the ` +
+      `${MAX_HEADER_COUNT} limit`
+    );
+  }
+  for (const [name, value] of headerEntries) {
+    if (byteLength(name) > MAX_ARG_LEN) {
+      throw new Error(
+        `header name for server '${serverId}' too long: ${byteLength(name)} bytes exceeds ` +
+        `the ${MAX_ARG_LEN} limit`
+      );
+    }
+    const stringValue = ensureStringValue(
+      value,
+      `value for header '${name}' for server '${serverId}' must be a string`
+    );
+    if (byteLength(stringValue) > MAX_HEADER_VALUE_LEN) {
+      throw new Error(
+        `value for header '${name}' for server '${serverId}' too long: ` +
+        `${byteLength(stringValue)} bytes exceeds the ${MAX_HEADER_VALUE_LEN} limit`
+      );
+    }
+  }
+}
+
+/**
  * Validates the Http/Sse-transport-specific fields of a server configuration.
  *
  * Mirrors `validate_network_config` in `mcp-execution-core`'s `command.rs`: URL presence and
  * scheme, and header name/value safety, including rejecting header names that collide
  * case-insensitively (e.g. `Authorization` and `authorization` both present), since a
  * downstream HTTP client would otherwise silently pick one with no deterministic winner.
+ * {@link validateNetworkSizeBounds} runs first, mirroring
+ * `mcp_execution_core::validate_server_config`'s size-bounds-before-injection-checks ordering.
  *
  * @param config - The server configuration to validate
  * @param serverId - Server identifier, used in error messages
- * @throws {Error} If `url` is missing, its scheme is not http/https, or a header name/value
- *   is unsafe
+ * @throws {Error} If `url` is missing, an element count/length exceeds its bound, its scheme
+ *   is not http/https, or a header name/value is unsafe
  */
 function validateNetworkConfig(config: ServerConfig, serverId: string): void {
   if (typeof config.url !== 'string' || config.url.length === 0) {
     throw new Error(`url is required for server '${serverId}'`);
   }
+
+  validateNetworkSizeBounds(config, serverId);
+
   validateUrlScheme(config.url, serverId);
 
   const seenHeaderNames = new Set<string>();
-  for (const [name, value] of Object.entries(config.headers ?? {})) {
+  for (const [name, value] of recordEntries(config.headers, `headers for server '${serverId}'`)) {
+    // `validateNetworkSizeBounds` above already rejected any non-string header value, but
+    // this loop makes no assumption about running only after it — narrow again rather than
+    // asserting the type.
+    const stringValue = ensureStringValue(
+      value,
+      `value for header '${name}' for server '${serverId}' must be a string`
+    );
     validateHeaderNameString(name, serverId);
-    validateHeaderValueString(name, value, serverId);
+    validateHeaderValueString(name, stringValue, serverId);
     const lowerName = name.toLowerCase();
     if (seenHeaderNames.has(lowerName)) {
       throw new Error(`duplicate header name (case-insensitive) for server '${serverId}': '${name}'`);
     }
     seenHeaderNames.add(lowerName);
+  }
+}
+
+/**
+ * Bounds `command`'s length and `args`'/`env`'s counts/lengths (denial-of-service protection,
+ * CWE-400), mirroring `validate_stdio_size_bounds` in `mcp-execution-core`'s `command.rs`.
+ * Called by {@link validateServerConfig} before its command-injection-specific checks
+ * (`validateCommandString`/`validateEnvName`), mirroring the ordering in
+ * `mcp_execution_core::validate_server_config`.
+ *
+ * Deliberately does not check for shell metacharacters, the env-name charset, or forbidden
+ * environment variable names — those remain {@link validateCommandString}/
+ * {@link validateEnvName}'s responsibility. A non-string `command` or a non-array `args` is
+ * silently skipped here and left for {@link validateCommandString} (called later, on every
+ * element) to reject with a precise "must be a string"/"must be an array" error — safe because
+ * that later check always runs regardless of what this function does. A non-string *env value*
+ * is different: no later check rejects it (env values are only read, in
+ * {@link validateEnvName}, by name), so `spawn(..., { env: { ...config.env } })` would silently
+ * coerce it via `String()`, bypassing this function's own length ceiling entirely (critique
+ * S1) — this function rejects a non-string env value outright instead, via
+ * {@link ensureStringValue}.
+ *
+ * @param config - The server configuration to validate
+ * @param serverId - Server identifier, used in error messages
+ * @throws {Error} If any element count or length exceeds its bound, or an env value is not a
+ *   string
+ */
+function validateStdioSizeBounds(config: ServerConfig, serverId: string): void {
+  if (typeof config.command === 'string' && byteLength(config.command) > MAX_ARG_LEN) {
+    throw new Error(
+      `command for server '${serverId}' too long: ${byteLength(config.command)} bytes ` +
+      `exceeds the ${MAX_ARG_LEN} limit`
+    );
+  }
+
+  const args = config.args ?? [];
+  if (Array.isArray(args)) {
+    if (args.length > MAX_ARG_COUNT) {
+      throw new Error(
+        `too many arguments for server '${serverId}': ${args.length} exceeds the ` +
+        `${MAX_ARG_COUNT} limit`
+      );
+    }
+    args.forEach((arg, idx) => {
+      if (typeof arg === 'string' && byteLength(arg) > MAX_ARG_LEN) {
+        throw new Error(
+          `argument ${idx} for server '${serverId}' too long: ${byteLength(arg)} bytes ` +
+          `exceeds the ${MAX_ARG_LEN} limit`
+        );
+      }
+    });
+  }
+
+  const envEntries = recordEntries(config.env, `env for server '${serverId}'`);
+  if (envEntries.length > MAX_ENV_COUNT) {
+    throw new Error(
+      `too many environment variables for server '${serverId}': ${envEntries.length} ` +
+      `exceeds the ${MAX_ENV_COUNT} limit`
+    );
+  }
+  for (const [name, value] of envEntries) {
+    if (byteLength(name) > MAX_ARG_LEN) {
+      throw new Error(
+        `environment variable name too long for server '${serverId}': ${byteLength(name)} ` +
+        `bytes exceeds the ${MAX_ARG_LEN} limit`
+      );
+    }
+    const stringValue = ensureStringValue(
+      value,
+      `environment variable '${name}' value must be a string for server '${serverId}'`
+    );
+    if (byteLength(stringValue) > MAX_ENV_VALUE_LEN) {
+      throw new Error(
+        `environment variable '${name}' value too long for server '${serverId}': ` +
+        `${byteLength(stringValue)} bytes exceeds the ${MAX_ENV_VALUE_LEN} limit`
+      );
+    }
   }
 }
 
@@ -352,8 +606,17 @@ function validateNetworkConfig(config: ServerConfig, serverId: string): void {
  * bypass that one-time check. This re-validates the command, arguments, and environment
  * variable names (stdio) or URL and headers (http/sse) on every load, mirroring
  * `mcp_execution_core::validate_server_config` (`command.rs`) to the same depth for every
- * transport. Fails closed by throwing rather than silently stripping the offending value, so
- * an invalid config surfaces as a clear error instead of an unexpectedly sanitized spawn.
+ * transport — including its denial-of-service size/count ceilings
+ * ({@link validateStdioSizeBounds}/{@link validateNetworkSizeBounds}), checked before the
+ * command-injection-specific checks, exactly as the Rust source of truth orders them. Fails
+ * closed by throwing rather than silently stripping the offending value, so an invalid config
+ * surfaces as a clear error instead of an unexpectedly sanitized spawn.
+ *
+ * Two checks in the Rust source of truth are intentionally *not* mirrored here: absolute-path
+ * existence/executability (would require a blocking filesystem call this bridge avoids; a bad
+ * path instead surfaces as a `spawn` failure) and `connect_timeout`/`discover_timeout` bounds
+ * (not part of the JSON-RPC protocol this bridge speaks, so there is no timeout value to
+ * validate).
  *
  * This bridge only ever spawns a subprocess (stdio transport) — it has no http/sse client of
  * its own — so a validated http/sse config is still rejected as unsupported afterward. The
@@ -385,6 +648,8 @@ function validateServerConfig(config: ServerConfig, serverId: string): void {
     );
   }
 
+  validateStdioSizeBounds(config, serverId);
+
   validateCommandString(config.command, `command for server '${serverId}'`);
 
   const args: unknown = config.args ?? [];
@@ -395,7 +660,7 @@ function validateServerConfig(config: ServerConfig, serverId: string): void {
     validateCommandString(arg, `argument ${idx} for server '${serverId}'`);
   });
 
-  for (const envName of Object.keys(config.env ?? {})) {
+  for (const [envName] of recordEntries(config.env, `env for server '${serverId}'`)) {
     validateEnvName(envName);
   }
 }

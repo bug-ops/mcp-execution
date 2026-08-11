@@ -219,9 +219,10 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
 6. **The generated TypeScript runtime bridge re-derives its own security
    rules from the same Rust source of truth**, rendered via Handlebars at
    generation time (`BridgeContext::default()`), not hand-copied — so
-   `FORBIDDEN_CHARS`/`FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` in
-   `_runtime/mcp-bridge.ts` cannot silently drift from
-   `mcp-core::command`'s Rust constants.
+   `FORBIDDEN_CHARS`/`FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX`/
+   `ENV_NAME_CHARSET_REGEX` and the DoS size/count ceilings
+   (`MAX_ARG_COUNT` and siblings) in `_runtime/mcp-bridge.ts` cannot
+   silently drift from `mcp-core::command`'s Rust constants (#471, #467).
 
 7. **Prompt-injection defense is one primitive (`mcp-core::untrusted`), two
    independent call sites.** Both `mcp-skill` (SKILL.md body + LLM
