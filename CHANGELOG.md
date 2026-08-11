@@ -84,6 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **workspace**: bumped `regex` (1.12 → 1.13), `rmcp` (3.0 → 3.1), `tokio` (1.52 → 1.53), and `uuid`
+  (1.23 → 1.24) minimum versions, with `Cargo.lock` refreshed for the resulting transitive updates.
 - **`mcp-execution-codegen`**: split `ProgressiveGenerator::generate_with_categories` into the
   public method plus three private helpers (`emit_tool_files`, `emit_index_file`,
   `emit_scaffolding_files`), bringing it under clippy's `too_many_lines` threshold with no change
