@@ -79,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to behavior, output ordering, or error conditions. The workspace-wide `too_many_lines` allow is
   removed from the root `Cargo.toml`; the two test functions that still legitimately exceed the
   threshold now carry a narrow, rationale-commented item-level allow instead (#443).
+- **`mcp-execution-codegen`**, **`mcp-execution-server`**: the two item-level
+  `#[allow(clippy::too_many_lines)]` test-function attributes added by #443 are now
+  `#[expect(clippy::too_many_lines, reason = "...")]`, preserving the same rationale text. Adopted
+  as the convention going forward for new item-level lint suppressions — `#[expect]` emits its own
+  warning if the lint stops firing, catching a suppression that has outlived its justification
+  instead of letting it go stale silently — and documented in `specs/constitution.md` §IV. This is
+  a forward-looking convention only: the 10 other pre-existing `#[allow(...)]` sites elsewhere in
+  the workspace are intentionally left unmigrated, a candidate for a separate follow-up if a full
+  migration is wanted (#459).
 - **`mcp-execution-core`**: added `validate_server_id_slug`, `ServerIdSlugError`, and
   `MAX_SERVER_ID_LENGTH` — the authoritative, core-owned invariant for a slug-shaped server id
   (1-64 lowercase ASCII letters, digits, or hyphens), distinct from `ServerId::new()`'s own
