@@ -7,7 +7,11 @@
 
 use anyhow::{Context, Result};
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
+#[cfg(unix)]
+use mcp_execution_core::sanitize_path_for_error;
 use serde::Serialize;
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -29,6 +33,7 @@ use tokio::process::Command;
 ///     mcp_config_found: true,
 ///     servers_dir_found: true,
 ///     files_made_executable: 3,
+///     skipped_entries: 0,
 /// };
 ///
 /// assert_eq!(result.files_made_executable, 3);
@@ -47,6 +52,11 @@ pub struct SetupResult {
     /// Number of `.ts` files made executable under `~/.claude/servers/`.
     /// Always `0` on non-Unix platforms.
     pub files_made_executable: usize,
+    /// Number of symlinked entries skipped while walking
+    /// `~/.claude/servers/` — a symlinked server-id directory or a
+    /// symlinked `.ts` file inside an otherwise legitimate server
+    /// directory. Always `0` on non-Unix platforms.
+    pub skipped_entries: usize,
 }
 
 /// Runs the setup command.
@@ -93,7 +103,8 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
     let mcp_config_path = get_mcp_config_path()?;
     let mcp_config_found = mcp_config_path.exists();
 
-    let (servers_dir_found, files_made_executable) = check_files_executable().await?;
+    let (servers_dir_found, files_made_executable, skipped_entries) =
+        check_files_executable().await?;
 
     let result = SetupResult {
         node_version,
@@ -101,6 +112,7 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
         mcp_config_found,
         servers_dir_found,
         files_made_executable,
+        skipped_entries,
     };
 
     if output_format == OutputFormat::Pretty {
@@ -141,6 +153,17 @@ fn print_pretty_summary(result: &SetupResult) {
                 println!(
                     "✓ Made {} TypeScript files executable",
                     result.files_made_executable
+                );
+            }
+            if result.skipped_entries > 0 {
+                println!(
+                    "⚠ Skipped {} symlinked entr{} under the servers directory (see warnings above)",
+                    result.skipped_entries,
+                    if result.skipped_entries == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
                 );
             }
         } else {
@@ -226,8 +249,9 @@ async fn check_node_version() -> Result<String> {
 ///
 /// # Platform Support
 ///
-/// - Unix/Linux/macOS: Sets permissions, returns `(servers_dir_found, files_made_executable)`
-/// - Windows: No-op, always returns `(false, 0)`
+/// - Unix/Linux/macOS: Sets permissions, returns
+///   `(servers_dir_found, files_made_executable, skipped_entries)`
+/// - Windows: No-op, always returns `(false, 0, 0)`
 ///
 /// # Errors
 ///
@@ -235,51 +259,119 @@ async fn check_node_version() -> Result<String> {
 /// - Home directory cannot be determined
 /// - Permission changes fail
 #[cfg(unix)]
-async fn check_files_executable() -> Result<(bool, usize)> {
-    use std::os::unix::fs::PermissionsExt;
-    use tokio::fs;
-
+async fn check_files_executable() -> Result<(bool, usize, usize)> {
     let servers_dir = get_servers_dir()?;
-
-    // Check if servers directory exists
-    if !servers_dir.exists() {
-        return Ok((false, 0));
-    }
-
-    // Walk through all .ts files and make them executable
-    let mut count = 0;
-    let mut entries = fs::read_dir(&servers_dir).await?;
-
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-
-        if path.is_dir() {
-            // Recurse into server directories
-            if let Ok(mut server_entries) = fs::read_dir(&path).await {
-                while let Some(server_entry) = server_entries.next_entry().await? {
-                    let file_path = server_entry.path();
-
-                    if file_path.extension().and_then(|s| s.to_str()) == Some("ts") {
-                        let metadata = fs::metadata(&file_path).await?;
-                        let mut perms = metadata.permissions();
-                        perms.set_mode(0o755); // rwxr-xr-x
-                        fs::set_permissions(&file_path, perms).await?;
-                        count += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    Ok((true, count))
+    check_files_executable_in(&servers_dir).await
 }
 
 /// Checks for and makes TypeScript files executable (Unix only).
 ///
 /// No-op on non-Unix platforms, since file permissions are not checked there.
 #[cfg(not(unix))]
-async fn check_files_executable() -> Result<(bool, usize)> {
-    Ok((false, 0))
+async fn check_files_executable() -> Result<(bool, usize, usize)> {
+    Ok((false, 0, 0))
+}
+
+/// Walks `servers_dir` and makes every `.ts` file executable (0755), rejecting
+/// symlinked entries at both levels of the walk rather than following them.
+///
+/// A symlinked server-id directory (outer level) or a symlinked `.ts` file
+/// inside an otherwise legitimate server directory (inner level) is skipped
+/// and counted in `skipped_entries` rather than chmod'd, since following
+/// either would let a planted symlink redirect a permission change to any
+/// file the process can reach outside `servers_dir`. Entry kind is checked
+/// with [`std::fs::DirEntry::file_type`] (via its `tokio` equivalent), which
+/// — like `symlink_metadata` — does not traverse symlinks, so the check
+/// itself cannot be tricked into following the entry it's inspecting.
+///
+/// This is a check against pre-existing state, not a concurrency guarantee:
+/// it does not defend against a symlink planted by a racing process between
+/// this function's kind check and the subsequent `set_permissions` call (see
+/// `mcp_execution_core::confinement`'s equivalent TOCTOU note). A hardlink
+/// inside `servers_dir` pointing at a file outside it is also indistinguishable
+/// from a regular file by `file_type` and is not defended against; both are
+/// accepted as out of scope.
+///
+/// # Errors
+///
+/// Returns error if a directory cannot be read, an entry's file type cannot
+/// be determined, or permission changes fail (other than a bare `read_dir`
+/// failure on a server subdirectory, which is skipped and warned about).
+#[cfg(unix)]
+async fn check_files_executable_in(servers_dir: &Path) -> Result<(bool, usize, usize)> {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::fs;
+
+    // Check if servers directory exists
+    if !servers_dir.exists() {
+        return Ok((false, 0, 0));
+    }
+
+    let root = fs::canonicalize(servers_dir).await?;
+
+    // Walk through all .ts files and make them executable
+    let mut count = 0;
+    let mut skipped = 0;
+    let mut entries = fs::read_dir(&root).await?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+
+        let file_type = entry.file_type().await?;
+        if file_type.is_symlink() {
+            tracing::warn!(
+                path = %sanitize_path_for_error(&path),
+                "skipping symlinked entry under the servers directory"
+            );
+            skipped += 1;
+            continue;
+        }
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        // Recurse into the server directory
+        let mut server_entries = match fs::read_dir(&path).await {
+            Ok(server_entries) => server_entries,
+            Err(error) => {
+                tracing::warn!(
+                    path = %sanitize_path_for_error(&path),
+                    %error,
+                    "skipping unreadable server directory"
+                );
+                continue;
+            }
+        };
+
+        while let Some(server_entry) = server_entries.next_entry().await? {
+            let file_path = server_entry.path();
+
+            if file_path.extension().and_then(|s| s.to_str()) != Some("ts") {
+                continue;
+            }
+
+            let file_type = server_entry.file_type().await?;
+            if file_type.is_symlink() {
+                tracing::warn!(
+                    path = %sanitize_path_for_error(&file_path),
+                    "skipping symlinked .ts file under the servers directory"
+                );
+                skipped += 1;
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let metadata = fs::metadata(&file_path).await?;
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o755); // rwxr-xr-x
+            fs::set_permissions(&file_path, perms).await?;
+            count += 1;
+        }
+    }
+
+    Ok((true, count, skipped))
 }
 
 /// Gets the path to ~/.claude/mcp.json
@@ -342,6 +434,90 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_makes_real_ts_files_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        let my_server_dir = servers_dir.path().join("my-server");
+        tokio::fs::create_dir_all(&my_server_dir).await.unwrap();
+        let tool_path = my_server_dir.join("tool.ts");
+        tokio::fs::write(&tool_path, "// tool").await.unwrap();
+
+        let (servers_dir_found, files_made_executable, skipped_entries) =
+            check_files_executable_in(servers_dir.path()).await.unwrap();
+
+        assert!(servers_dir_found);
+        assert_eq!(files_made_executable, 1);
+        assert_eq!(skipped_entries, 0);
+        let mode = tokio::fs::metadata(&tool_path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_skips_symlinked_server_dir() {
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target_path = outside.path().join("target.ts");
+        tokio::fs::write(&target_path, "// outside").await.unwrap();
+        std::os::unix::fs::symlink(outside.path(), servers_dir.path().join("evil-server")).unwrap();
+
+        let (servers_dir_found, files_made_executable, skipped_entries) =
+            check_files_executable_in(servers_dir.path()).await.unwrap();
+
+        assert!(servers_dir_found);
+        assert_eq!(files_made_executable, 0);
+        assert_eq!(skipped_entries, 1);
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &tokio::fs::metadata(&target_path)
+                .await
+                .unwrap()
+                .permissions(),
+        );
+        assert_eq!(
+            mode & 0o111,
+            0,
+            "symlinked target must not become executable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_skips_symlinked_ts_file() {
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target_path = outside.path().join("target.ts");
+        tokio::fs::write(&target_path, "// outside").await.unwrap();
+
+        let legit_server_dir = servers_dir.path().join("legit-server");
+        tokio::fs::create_dir_all(&legit_server_dir).await.unwrap();
+        std::os::unix::fs::symlink(&target_path, legit_server_dir.join("link.ts")).unwrap();
+
+        let (servers_dir_found, files_made_executable, skipped_entries) =
+            check_files_executable_in(servers_dir.path()).await.unwrap();
+
+        assert!(servers_dir_found);
+        assert_eq!(files_made_executable, 0);
+        assert_eq!(skipped_entries, 1);
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &tokio::fs::metadata(&target_path)
+                .await
+                .unwrap()
+                .permissions(),
+        );
+        assert_eq!(
+            mode & 0o111,
+            0,
+            "symlinked target must not become executable"
+        );
+    }
+
     #[test]
     fn test_setup_result_serialization() {
         let result = SetupResult {
@@ -350,6 +526,7 @@ mod tests {
             mcp_config_found: true,
             servers_dir_found: true,
             files_made_executable: 3,
+            skipped_entries: 0,
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -366,6 +543,7 @@ mod tests {
             mcp_config_found: false,
             servers_dir_found: true,
             files_made_executable: 7,
+            skipped_entries: 0,
         };
 
         let formatted =
@@ -386,6 +564,7 @@ mod tests {
             mcp_config_found: true,
             servers_dir_found: false,
             files_made_executable: 0,
+            skipped_entries: 0,
         };
 
         let formatted =

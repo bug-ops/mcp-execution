@@ -532,14 +532,46 @@ itself was already safe (issue #346, S1).
 
 Validates the local runtime is ready to execute generated tools:
 1. Checks `node --version` is ≥ 18.0.0 (hard error if missing/older).
-2. On Unix only: makes every `.ts` file under `~/.claude/servers/` executable
-   (`files_made_executable` count) and reports whether a servers directory
-   exists at all.
+2. On Unix only: makes every `.ts` file directly inside each server directory
+   under `~/.claude/servers/` executable (`files_made_executable` count) —
+   the walk is exactly two levels deep and does not descend into further
+   nested subdirectories (e.g. `{server-id}/_runtime/`) — skipping symlinked
+   entries rather than following them (`skipped_entries` count), and reports
+   whether a servers directory exists at all.
 3. Reports whether `~/.claude/mcp.json` exists, printing a starter example
    if not.
 
 Non-Unix platforms always report `servers_dir_found: false`,
-`files_made_executable: 0` (permission bits aren't a concept there).
+`files_made_executable: 0`, `skipped_entries: 0` (permission bits aren't a
+concept there).
+
+**Symlink rejection** (issue #476): the walk is confined to `~/.claude/servers/`
+by rejecting symlinked entries outright rather than resolving and re-checking
+them, at both levels of the walk — mirroring the guard semantics of
+`mcp_execution_core::confinement::resolve_confined_path` (not reused directly,
+since that function creates directories for caller-supplied paths and this
+walk enumerates existing entries and must create nothing):
+- Outer level: a symlinked server-id entry under `~/.claude/servers/` is
+  skipped (would otherwise let `chmod` descend into an arbitrary directory
+  elsewhere on disk).
+- Inner level: a symlinked `.ts` file inside an otherwise legitimate server
+  directory is skipped (would otherwise `chmod` its target anywhere the
+  process can reach).
+
+Entry kind is checked via `DirEntry::file_type()` (does not traverse
+symlinks), and each skipped entry increments `SetupResult::skipped_entries`
+and emits a `tracing::warn!` with the sanitized path, so a planted symlink is
+surfaced to the user instead of silently ignored. This is a check against
+pre-existing state, not a concurrency guarantee: it does not defend against a
+symlink planted by a racing process between the kind check and the
+subsequent `set_permissions` call (same non-guarantee documented for
+`resolve_confined_path`), nor against a hardlink inside the servers tree
+pointing outside it, which `file_type()` cannot distinguish from a regular
+file — both are accepted as out of scope.
+
+The core walk is exposed as `check_files_executable_in(servers_dir: &Path)`
+for testing without `HOME` mutation; the public, no-argument
+`check_files_executable()` resolves `~/.claude/servers/` and delegates to it.
 
 ## 11. `completions` Command (`commands/completions.rs`)
 
