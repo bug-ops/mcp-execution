@@ -3183,7 +3183,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
-        let code = generator.generate(&server_info).unwrap();
+        let code = generator.generate(&server_info, &test_config()).unwrap();
         let bridge = code
             .files
             .iter()
