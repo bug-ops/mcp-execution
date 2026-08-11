@@ -297,8 +297,12 @@ catches even a non-existent target and a Windows root-without-prefix path
 like `\pwn\evil`), then, if the joined path exists, re-checked via
 canonicalization against the canonicalized root (catches a symlink planted
 inside it). The scan itself (`spawn_blocking`, nested `read_dir`) counts
-`.ts` files per subdirectory (excluding `_`-prefixed and `_runtime`) and the
-subdirectory's mtime as `generated_at`.
+`.ts` files per subdirectory, excluding `index.ts` (the package's
+always-present re-export entry point, matched case-insensitively against
+`INDEX_FILE_NAME` for consistency with `disambiguate_output_filename`'s own
+handling of `index` — issue #477) and files starting with `_` (defensive:
+real generator output never places a `_`-prefixed `.ts` file at this level),
+and the subdirectory's mtime as `generated_at`.
 
 ### `generate_skill`
 

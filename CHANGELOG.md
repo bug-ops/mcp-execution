@@ -259,6 +259,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-server`**: `list_generated_servers`'s `tool_count` no longer over-reports by
+  one for every generated server. The directory-scan filter counted every `.ts` file not starting
+  with `_`, which included `index.ts` — the package's always-present re-export entry point,
+  itself not a tool — alongside the actual per-tool `.ts` files. The exclusion now also covers
+  `index.ts`, compared case-insensitively to match `disambiguate_output_filename`'s existing
+  case-insensitive handling of `index` (#312). The filename itself now lives in a single shared
+  `mcp_execution_core::metadata::INDEX_FILE_NAME` constant, replacing a bare string literal in
+  `mcp-execution-codegen` and a locally-scoped duplicate constant in `mcp-execution-skill` (#477).
 - **`mcp-execution-skill`, `mcp-execution-cli`**: the `skill` command's `--hint` flag now has a
   real effect on the generated `SKILL.md`. Previously, use-case hints only ever reached the
   LLM-facing `generation_prompt` field, which `mcp-cli skill` never reads (it renders

@@ -12,7 +12,9 @@
 //! `mcp_execution_core::metadata`, so no re-parsing of generated source is
 //! needed at all.
 
-use mcp_execution_core::metadata::{METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ServerMetadata};
+use mcp_execution_core::metadata::{
+    INDEX_FILE_NAME, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ServerMetadata,
+};
 use regex::Regex;
 use serde::Deserialize;
 use serde_saphyr::budget::{BudgetBreach, BudgetReport};
@@ -365,9 +367,6 @@ async fn verify_tool_files_on_disk(
     tools: &[mcp_execution_core::metadata::ToolMetadata],
     meta_path: &Path,
 ) -> Result<Vec<String>, ScanError> {
-    // Generated aggregator file, not a per-tool file — never expected in the sidecar.
-    const INDEX_FILE_NAME: &str = "index.ts";
-
     let mut expected_files: std::collections::HashSet<String> =
         std::collections::HashSet::with_capacity(tools.len());
 
