@@ -57,6 +57,7 @@ pub mod state;
 pub mod types;
 
 pub use clock::{Clock, SystemClock};
+pub use output_dir::{OutputDirError, relative_subpath, resolve_output_dir};
 pub use service::GeneratorService;
 pub use state::StateManager;
 pub use types::{

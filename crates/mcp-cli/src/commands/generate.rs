@@ -111,6 +111,52 @@ fn format_size(bytes: usize) -> String {
 /// - Tool introspection fails
 /// - Code generation fails
 /// - File export fails (skipped in dry-run mode)
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
+/// use mcp_execution_cli::commands::generate;
+/// use mcp_execution_core::cli::OutputFormat;
+/// use std::path::PathBuf;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// // Generate from a stdio transport
+/// let exit_code = generate::run(
+///     ServerSource::Flags {
+///         transport: TransportArgs::Stdio {
+///             command: "github-mcp-server".to_string(),
+///             args: vec![],
+///             env: vec![],
+///             cwd: None,
+///         },
+///         connect_timeout_secs: None,
+///         discover_timeout_secs: None,
+///     },
+///     None,
+///     None,
+///     false,
+///     OutputFormat::Pretty
+/// ).await?;
+///
+/// // Generate with custom output directory and name override
+/// let exit_code = generate::run(
+///     ServerSource::Flags {
+///         transport: TransportArgs::Http {
+///             url: "https://api.example.com/mcp/".to_string(),
+///             headers: vec!["Authorization=Bearer token".to_string()],
+///         },
+///         connect_timeout_secs: Some(10),
+///         discover_timeout_secs: Some(30),
+///     },
+///     Some("my-custom-name".to_string()),
+///     Some(PathBuf::from("/tmp/generated")),
+///     false,
+///     OutputFormat::Json
+/// ).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn run(
     source: ServerSource,
     name: Option<String>,

@@ -476,6 +476,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it through `display_to_raw`, so an oversized `name` that matches no introspected tool is
   reported as not-found rather than too-long — an intentional, truthful trade-off, not a defect
   (#462).
+- **`mcp-execution-server`**, **`mcp-execution-cli`**: added `# Examples` doc-test sections to
+  `relative_subpath`, `resolve_output_dir`, and `generate::run`. `output_dir::relative_subpath`,
+  `output_dir::resolve_output_dir`, and `OutputDirError` are now re-exported from
+  `mcp-execution-server`'s crate root — the `output_dir` module is private, so these `pub fn`
+  items were otherwise unreachable outside the crate, mirroring the existing
+  `resolve_skill_output_path`/`OutputPathError` re-export pattern in `mcp-execution-skill`
+  (#472).
 
 ### Testing
 

@@ -161,6 +161,29 @@ impl From<ConfinementError> for OutputDirError {
 ///
 /// Returns [`OutputDirError::AbsolutePath`] if `output_dir` is absolute, or
 /// [`OutputDirError::ParentTraversal`] if it contains a `..` component.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_server::relative_subpath;
+/// use std::path::Path;
+///
+/// // No override: returns empty path (use server_id's directory directly)
+/// let result = relative_subpath(None).unwrap();
+/// assert!(result.as_os_str().is_empty());
+///
+/// // Relative subdirectory: valid and accepted
+/// let result = relative_subpath(Some(Path::new("nested/custom"))).unwrap();
+/// assert_eq!(result.to_str().unwrap(), "nested/custom");
+///
+/// // Absolute path: rejected
+/// let err = relative_subpath(Some(Path::new("/etc/config"))).unwrap_err();
+/// assert!(err.to_string().contains("absolute"));
+///
+/// // Parent traversal: rejected
+/// let err = relative_subpath(Some(Path::new("../../etc"))).unwrap_err();
+/// assert!(err.to_string().contains(".."));
+/// ```
 pub fn relative_subpath(output_dir: Option<&Path>) -> Result<PathBuf, OutputDirError> {
     let Some(path) = output_dir else {
         return Ok(PathBuf::new());
@@ -230,6 +253,26 @@ pub fn relative_subpath(output_dir: Option<&Path>) -> Result<PathBuf, OutputDirE
 /// symlink, if the resolved path escapes `base_dir`, if a required directory could not be
 /// created, or if a path component that must be a directory already exists as the wrong kind of
 /// entry.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_server::{resolve_output_dir, OutputDirError};
+/// use std::path::Path;
+///
+/// # async fn example() -> Result<(), OutputDirError> {
+/// let base_dir = Path::new("/home/user/.claude/servers");
+///
+/// // Resolve with no subdirectory override (uses server_id's directory directly)
+/// let resolved = resolve_output_dir(base_dir, "github", None).await?;
+/// println!("Resolved to {}", resolved.display());
+///
+/// // Resolve with custom subdirectory
+/// let resolved = resolve_output_dir(base_dir, "github", Some(Path::new("custom"))).await?;
+/// println!("Resolved to {}", resolved.display());
+/// # Ok(())
+/// # }
+/// ```
 pub async fn resolve_output_dir(
     base_dir: &Path,
     server_id: &str,
