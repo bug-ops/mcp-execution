@@ -221,6 +221,9 @@ issue #381).
    other three sites are sanitized too, but only for one consistent code path:
    reaching them requires `cat_tool.name` to already equal a `ToolName`-validated
    display key, which cannot carry the characters entity-escaping would change.
+   Consequently, a submitted `name` that exceeds `MAX_CATEGORIZED_TOOL_NAME_LEN` but
+   does not match any introspected tool will be reported as not-found, not too-long —
+   intentional, since resolution is checked before length (issue #462).
    Rejects: more entries than
    `min(introspected count, MAX_TOOL_FILES)` (reusing
    `mcp_execution_skill::MAX_TOOL_FILES` so this stage can never generate more
