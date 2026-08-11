@@ -245,6 +245,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-server`**: a `categorized_tools` entry whose `name` cannot be resolved to a raw
+  introspected tool now reports which of two distinct causes applies, instead of one message
+  covering both regardless of which occurred: "not found in introspected tools" when no raw tool
+  produces that display key at all, versus a separate "ambiguous" message when the key is shared
+  by two or more raw tools whose display forms collided (only reachable via
+  `sanitize_untrusted_text`'s truncation, per `validate_categorized_tools`'s S3 doc comment).
+  Not-found remains the common case for a genuinely mistyped or stale name; distinguishing it from
+  the rare ambiguous case just gives the caller a more actionable message either way (#456).
 - **`mcp-execution-core`**: `validate_env_name` now rejects any environment variable name that
   does not match the conventional POSIX/Windows identifier charset `[A-Za-z_][A-Za-z0-9_]*`,
   before the forbidden-name comparison runs. The prior ASCII-case-insensitive comparison (#428)
@@ -508,6 +516,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mcp-execution-cli` user rejecting an id/name containing `&`/`<`/`>` now sees the entity-escaped
   form in their terminal too (e.g. `invalid server id "my&amp;server"` rather than
   `"my&server"`) — an accepted, intentional trade-off rather than a regression (#446).
+- **`mcp-execution-server`**: `save_categorized_tools`'s `validate_categorized_tools` no longer
+  echoes a rejected `categorized_tools` entry's `name` raw into `McpError::invalid_params` text.
+  At the not-found/ambiguous branch specifically, `cat_tool.name` has not yet passed the
+  `MAX_CATEGORIZED_TOOL_NAME_LEN` check — that runs later, only for entries that already resolved
+  to a raw tool — and the `#[schemars(length(max = 128))]` on `CategorizedTool::name` is schema
+  metadata that `serde` itself never enforces, so at this point the value is bounded by nothing
+  but the transport frame and `sanitize_untrusted_inline`'s own `MAX_UNTRUSTED_FIELD_LEN`
+  truncation (500 chars, up to 2500 once escaped). That not-found branch could previously carry
+  attacker-controlled markup or a boundary delimiter straight into the returned text, unbounded in
+  length. The other three sites this change also sanitizes — ambiguous-display-name,
+  duplicate-entry, and the per-field length-cap messages — are not reachable with hostile content
+  in practice, since reaching them requires `cat_tool.name` to already equal a `ToolName`-validated
+  display key (see the `seen_raw_names` code comment); they're sanitized anyway for a single
+  consistent code path. Every one of these messages now interpolates the same
+  `untrusted::sanitize_untrusted_inline` form #446 introduced for `ServerIdError`/`ToolNameError`,
+  applied once per entry and reused across all four error sites (#460).
 - **`mcp-execution-cli`**: `runner::init_logging` now applies the same `cap_rmcp_log_level`
   treatment to both the non-verbose (`RUST_LOG`-driven) and `--verbose` branches. The `--verbose`
   branch previously set a bare `EnvFilter::new("debug")` with no `RUST_LOG` involved at all —

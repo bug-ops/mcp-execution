@@ -1306,8 +1306,9 @@ type CategorizedToolsValidation<'p> =
 /// keep only the last one, misattributing one tool's categorization to a different tool's
 /// `_meta.json` entry with no error surfaced. Instead, `owners` tracks every raw name that could
 /// produce each key, and any key with more than one distinct owner is dropped from
-/// `display_to_raw` entirely, so a caller trying to use it hits the "not found" branch below
-/// explicitly.
+/// `display_to_raw` entirely and recorded in `ambiguous_display_keys`, so a caller trying to use
+/// it hits the ambiguous-key branch below with a message distinguishable from a plain
+/// not-found (issue #456).
 ///
 /// Since issue #433, `ToolName::new`'s Unicode-identifier allowlist rejects every character
 /// [`display_tool_name`] would otherwise transform, so this collision is reachable only via
@@ -1339,16 +1340,18 @@ fn validate_categorized_tools<'p>(
             .or_default()
             .insert(raw);
     }
-    let display_to_raw: HashMap<String, &str> = display_key_owners
-        .into_iter()
-        .filter_map(|(key, owners)| {
-            if owners.len() == 1 {
-                owners.into_iter().next().map(|raw| (key, raw))
-            } else {
-                None
+    let mut display_to_raw: HashMap<String, &str> =
+        HashMap::with_capacity(display_key_owners.len());
+    let mut ambiguous_display_keys: HashSet<String> = HashSet::new();
+    for (key, owners) in display_key_owners {
+        if owners.len() == 1 {
+            if let Some(raw) = owners.into_iter().next() {
+                display_to_raw.insert(key, raw);
             }
-        })
-        .collect();
+        } else {
+            ambiguous_display_keys.insert(key);
+        }
+    }
 
     // A legitimate call can never submit more entries than there are introspected tools.
     // Reject early, before any per-entry validation, HashMap insertion, or codegen work
@@ -1395,48 +1398,70 @@ fn validate_categorized_tools<'p>(
     let mut categories: HashMap<String, usize> = HashMap::with_capacity(tool_count);
 
     for cat_tool in categorized_tools {
+        // `cat_tool.name` is caller-supplied and, at the not-found/ambiguous branch below,
+        // genuinely unbounded: the `MAX_CATEGORIZED_TOOL_NAME_LEN` check runs later in this loop
+        // and only for entries that already resolved to a raw tool, and `CategorizedTool::name`'s
+        // `#[schemars(length(max = 128))]` is schema metadata that `serde` itself never enforces.
+        // So the only bound in effect here is `sanitize_untrusted_inline`'s own
+        // `MAX_UNTRUSTED_FIELD_LEN` truncation. Every error message that echoes `cat_tool.name`
+        // back must use this sanitized form instead of the raw value (issue #460), matching the
+        // same escaping `display_tool_name` applies to introspected names.
+        let sanitized_name = sanitize_untrusted_inline(&cat_tool.name);
+
         let Some(&raw_name) = display_to_raw.get(cat_tool.name.as_str()) else {
-            return Err(McpError::invalid_params(
+            let message = if ambiguous_display_keys.contains(cat_tool.name.as_str()) {
                 format!(
-                    "Tool '{}' not found in introspected tools (or its sanitized display \
-                     name is ambiguous between two or more introspected tools)",
-                    cat_tool.name
-                ),
-                None,
-            ));
+                    "Tool '{sanitized_name}' could not be resolved because its sanitized \
+                     display name is ambiguous between two or more introspected tools"
+                )
+            } else {
+                format!("Tool '{sanitized_name}' not found in introspected tools")
+            };
+            return Err(McpError::invalid_params(message, None));
         };
 
         if !seen_raw_names.insert(raw_name) {
+            // Reaching this branch requires `cat_tool.name` to already equal a key in
+            // `display_to_raw`, which is only ever built from `ToolName`-validated raw names -
+            // so `sanitized_name` is an identity transform here in practice (the identifier
+            // allowlist excludes every character entity-escaping would touch, and a name long
+            // enough to hit `sanitize_untrusted_text`'s truncation would already have been
+            // rejected by `check_categorized_field_length` on its first occurrence). This is a
+            // no-op today, not a hedge against future allowlist drift: if a disallowed character
+            // were ever readmitted, `display_tool_name` would already have escaped it once when
+            // building `display_to_raw`'s key, and `cat_tool.name` has to equal that escaped key
+            // to reach this branch at all - re-sanitizing an already-escaped value here would
+            // double-escape (`&amp;` -> `&amp;amp;`), not protect. Sanitized anyway purely to keep
+            // one code path across all three branches.
             return Err(McpError::invalid_params(
                 format!(
-                    "Tool '{}' appears more than once in categorized_tools (resolves to \
-                     the same introspected tool as an earlier entry)",
-                    cat_tool.name
+                    "Tool '{sanitized_name}' appears more than once in categorized_tools \
+                     (resolves to the same introspected tool as an earlier entry)"
                 ),
                 None,
             ));
         }
 
         check_categorized_field_length(
-            &cat_tool.name,
+            &sanitized_name,
             "name",
             &cat_tool.name,
             MAX_CATEGORIZED_TOOL_NAME_LEN,
         )?;
         check_categorized_field_length(
-            &cat_tool.name,
+            &sanitized_name,
             "category",
             &cat_tool.category,
             MAX_CATEGORY_LEN,
         )?;
         check_categorized_field_length(
-            &cat_tool.name,
+            &sanitized_name,
             "keywords",
             &cat_tool.keywords,
             MAX_KEYWORDS_LEN,
         )?;
         check_categorized_field_length(
-            &cat_tool.name,
+            &sanitized_name,
             "short_description",
             &cat_tool.short_description,
             MAX_SHORT_DESCRIPTION_LEN,
@@ -1453,6 +1478,10 @@ fn validate_categorized_tools<'p>(
 /// wording each check used before this helper existed: the tool's own `name` field
 /// renders as `Tool name '<name>'`, every other field as `<field_label> for tool
 /// '<name>'`.
+///
+/// `tool_name` is echoed verbatim into the error message, so callers must pass an
+/// already-sanitized display form (e.g. [`sanitize_untrusted_inline`]) rather than a raw,
+/// caller-supplied value - see issue #460.
 fn check_categorized_field_length(
     tool_name: &str,
     field_label: &str,
@@ -3146,6 +3175,84 @@ mod tests {
         assert!(err.message.contains("appears more than once"));
     }
 
+    /// Regression guard for issue #460: a `categorized_tools` entry whose `name` matches no
+    /// introspected tool falls straight into the not-found branch without ever being compared
+    /// against a `ToolName`-validated raw name, so unlike the duplicate/ambiguous branches below
+    /// it is reachable with entirely attacker-controlled content - markup and all. The rejected
+    /// value must be entity-escaped in the error text, not echoed raw.
+    #[tokio::test]
+    async fn test_save_categorized_tools_not_found_error_sanitizes_hostile_name() {
+        let service = GeneratorService::new();
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(1))
+            .await
+            .unwrap();
+
+        let hostile_name = "<script>alert(1)</script>&pwned";
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool(hostile_name)],
+        };
+
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
+
+        let err = result.expect_err("an unmatched hostile tool name must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(
+            !err.message.contains("<script>") && !err.message.contains("</script>"),
+            "raw markup must not reach the error message: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("&lt;script&gt;") && err.message.contains("&amp;pwned"),
+            "the rejected name must be entity-escaped in the error message: {}",
+            err.message
+        );
+        assert!(err.message.contains("not found in introspected tools"));
+        assert!(
+            !err.message.contains("ambiguous"),
+            "a plain not-found is not the same failure as an ambiguous match and must not \
+             reuse its wording: {}",
+            err.message
+        );
+    }
+
+    /// Regression guard for issue #460: a not-found `name` well past
+    /// `MAX_UNTRUSTED_FIELD_LEN` (500 chars) must still be rejected safely - the error message
+    /// reflects the truncated, sanitized form rather than growing unbounded with the input.
+    #[tokio::test]
+    async fn test_save_categorized_tools_not_found_error_truncates_oversized_hostile_name() {
+        let service = GeneratorService::new();
+        let session_id = service
+            .state
+            .store(pending_with_tool_count(1))
+            .await
+            .unwrap();
+
+        let hostile_name = "<".repeat(5000);
+        let params = SaveCategorizedToolsParams {
+            session_id,
+            categorized_tools: vec![categorized_tool(&hostile_name)],
+        };
+
+        let result = service
+            .save_categorized_tools(Parameters(params), CancellationToken::new())
+            .await;
+
+        let err = result.expect_err("an unmatched oversized hostile tool name must be rejected");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(
+            !err.message.contains('<'),
+            "raw markup must not reach the error message: {}",
+            err.message.chars().take(80).collect::<String>()
+        );
+        assert!(err.message.contains("&lt;"));
+        assert!(err.message.contains("not found in introspected tools"));
+    }
+
     // ========================================================================
     // save_categorized_tools Session Survival Tests (issue #371)
     // ========================================================================
@@ -3606,9 +3713,17 @@ mod tests {
              not silently resolved to one of them",
         );
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        // #456: the ambiguous case must be distinguishable from a plain not-found - not just
+        // one message covering both possibilities.
         assert!(
-            err.message.contains("not found") || err.message.contains("ambiguous"),
+            err.message.contains("ambiguous"),
             "error message should explain the ambiguity: {}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("not found in introspected tools"),
+            "an ambiguous match is not the same failure as a plain not-found and must not \
+             reuse its wording: {}",
             err.message
         );
     }

@@ -196,27 +196,44 @@ issue #381).
    identity function — raw and display keys coincide. If two **distinct** raw
    tool names still collide on the same display key (reachable today only via
    truncation past `MAX_UNTRUSTED_FIELD_LEN`), that key is dropped from the
-   lookup entirely — genuinely ambiguous, so a caller using it hits "not found"
-   rather than silently having one raw tool's categorization misattributed to
-   another's. Each `categorized_tools` entry's `name` is resolved through this
-   lookup to a raw tool name once; both the duplicate check and the codegen
-   categorization map are keyed by that **resolved raw name**, not the submitted
-   string. This fixes a categorization-lookup desync (issue #307): an earlier
-   version built the categorization map keyed by the submitted display string
-   while codegen looked up tools by their raw name, silently dropping
-   category/keywords/description for any tool name containing a control
-   character, line terminator, or `&`/`<`/`>`. Rejects: more entries than
+   `display_to_raw` lookup entirely and recorded separately in
+   `ambiguous_display_keys` — genuinely ambiguous, so a caller using it gets an
+   error distinguishable from a plain not-found (issue #456) rather than
+   silently having one raw tool's categorization misattributed to another's.
+   Each `categorized_tools` entry's `name` is resolved through this lookup to a
+   raw tool name once; both the duplicate check and the codegen categorization
+   map are keyed by that **resolved raw name**, not the submitted string. This
+   fixes a categorization-lookup desync (issue #307): an earlier version built
+   the categorization map keyed by the submitted display string while codegen
+   looked up tools by their raw name, silently dropping category/keywords/
+   description for any tool name containing a control character, line
+   terminator, or `&`/`<`/`>`. Every error that echoes `cat_tool.name` back —
+   not-found, ambiguous, duplicate, and the field-length checks below — first
+   passes it through `sanitize_untrusted_inline` (issue #460). Only the
+   not-found/ambiguous branch is actually reachable with attacker-controlled
+   content: at that point `cat_tool.name` has not yet passed the
+   `MAX_CATEGORIZED_TOOL_NAME_LEN` check (which runs later, only for entries that
+   already resolved to a raw tool) and `CategorizedTool::name`'s
+   `#[schemars(length(max = 128))]` is schema metadata `serde` never enforces —
+   so before this fix, an unmatched name could carry markup or a boundary
+   delimiter into the returned text, unbounded except by
+   `sanitize_untrusted_inline`'s own `MAX_UNTRUSTED_FIELD_LEN` truncation. The
+   other three sites are sanitized too, but only for one consistent code path:
+   reaching them requires `cat_tool.name` to already equal a `ToolName`-validated
+   display key, which cannot carry the characters entity-escaping would change.
+   Rejects: more entries than
    `min(introspected count, MAX_TOOL_FILES)` (reusing
    `mcp_execution_skill::MAX_TOOL_FILES` so this stage can never generate more
    tool files than `generate_skill` will later accept — bounded by the true
    introspected tool count, not by the lookup's size, since an ambiguous key is
    excluded from the map); a name that doesn't resolve to any raw tool (unknown,
-   or an ambiguous display key); a name that resolves to a raw tool a previous
-   entry in the same call already claimed; any field
-   (`name`/`category`/`keywords`/`short_description`) over its own byte cap
-   (`MAX_CATEGORIZED_TOOL_NAME_LEN`=128, `MAX_CATEGORY_LEN`=100,
+   or an ambiguous display key — two distinguishable error messages); a name
+   that resolves to a raw tool a previous entry in the same call already
+   claimed; any field (`name`/`category`/`keywords`/`short_description`) over
+   its own byte cap (`MAX_CATEGORIZED_TOOL_NAME_LEN`=128, `MAX_CATEGORY_LEN`=100,
    `MAX_KEYWORDS_LEN`=500, `MAX_SHORT_DESCRIPTION_LEN`=320 — each checked via a
-   single private `check_categorized_field_length` helper called once per field).
+   single private `check_categorized_field_length` helper called once per
+   field, given the already-sanitized display name rather than the raw one).
 3. `generate_and_export` runs the rest of the pipeline against the now-owned
    `pending`, **borrowed** (not consumed) so the caller can hand it back on failure:
    resolves and confines `output_dir` fresh, right here — not from any value cached
