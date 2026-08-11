@@ -81,10 +81,25 @@ related:
 
 - Clippy `all`, `cargo`, `nursery`, `pedantic` are `deny` at workspace level;
   narrow, per-crate `#[allow(...)]`s are used only where the lint's intent
-  doesn't apply (e.g. `too_many_lines` allowed item-level on two
+  doesn't apply (e.g. `too_many_lines` suppressed item-level on two
   concurrency-test functions whose length is inherent to the scenario they
-  cover; `unused_async` allowed in `mcp-cli` for uniformly-dispatched
-  handlers).
+  cover — see the `#[expect]` convention below; `unused_async` allowed in
+  `mcp-cli` for uniformly-dispatched handlers).
+- Convention going forward: new item-level lint suppressions use
+  `#[expect(lint, reason = "...")]` rather than `#[allow(lint)]` — `#[expect]`
+  emits its own warning if the lint stops firing, which surfaces a
+  suppression that has outlived its justification instead of letting it go
+  stale silently. The two `too_many_lines` sites named above use `#[expect]`
+  as the first application of this convention (issue #459); the 10 other
+  pre-existing `#[allow(...)]` sites elsewhere in the workspace are
+  intentionally left unmigrated for now — a candidate for a separate,
+  dedicated follow-up if a full migration is wanted later. Under CI's
+  `-D warnings`, an unfulfilled `#[expect]` (the lint no longer fires) is a
+  hard build failure, not a warning — this is the intended mechanism, but it
+  means a routine simplification that brings a function back under a
+  threshold like `too_many_lines` breaks the build until the now-unfulfilled
+  `#[expect]` is deleted; do not pad a function back over the threshold just
+  to keep the attribute satisfied.
 - `#![deny(unsafe_code)]` in every crate except `mcp-server`/`mcp-cli` (which
   don't need it) — no crate in this workspace uses `unsafe`.
 - `#![warn(missing_docs, missing_debug_implementations)]` everywhere: every

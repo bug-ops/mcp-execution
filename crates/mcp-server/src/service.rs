@@ -2600,9 +2600,11 @@ mod tests {
     /// mismatched `server_id` leaking from one call's span stack into the other's
     /// events is exactly what the assertions below detect.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    // The test's length is a custom `tracing_subscriber::Layer` plus span-field capture
-    // harness that only makes sense inline with the assertions it feeds.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The test's length is a custom `tracing_subscriber::Layer` plus span-field \
+                  capture harness that only makes sense inline with the assertions it feeds."
+    )]
     async fn test_introspect_server_concurrent_calls_do_not_cross_contaminate_server_id() {
         use std::sync::{Arc, Mutex};
         use tokio::sync::Barrier;

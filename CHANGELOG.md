@@ -79,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to behavior, output ordering, or error conditions. The workspace-wide `too_many_lines` allow is
   removed from the root `Cargo.toml`; the two test functions that still legitimately exceed the
   threshold now carry a narrow, rationale-commented item-level allow instead (#443).
+- **`mcp-execution-codegen`**, **`mcp-execution-server`**: the two item-level
+  `#[allow(clippy::too_many_lines)]` test-function attributes added by #443 are now
+  `#[expect(clippy::too_many_lines, reason = "...")]`, preserving the same rationale text. Adopted
+  as the convention going forward for new item-level lint suppressions — `#[expect]` emits its own
+  warning if the lint stops firing, catching a suppression that has outlived its justification
+  instead of letting it go stale silently — and documented in `specs/constitution.md` §IV. This is
+  a forward-looking convention only: the 10 other pre-existing `#[allow(...)]` sites elsewhere in
+  the workspace are intentionally left unmigrated, a candidate for a separate follow-up if a full
+  migration is wanted (#459).
 - **`mcp-execution-core`**: added `validate_server_id_slug`, `ServerIdSlugError`, and
   `MAX_SERVER_ID_LENGTH` — the authoritative, core-owned invariant for a slug-shaped server id
   (1-64 lowercase ASCII letters, digits, or hyphens), distinct from `ServerId::new()`'s own
@@ -474,6 +483,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under different historical labels (plain name, formerly-ampersand, formerly-angle-bracket,
   single-display-form) into one end-to-end test plus one direct `display_tool_name` unit
   assertion, following the `display_forms` removal above (#447).
+- **`mcp-execution-codegen`**: added
+  `test_generate_with_categories_wraps_non_object_schema_as_script_generation_error`, an
+  integration test driving a real per-tool failure through the public
+  `generate_with_categories` entry point rather than only through unit tests calling the private
+  `wrap_tool_generation_error`/`add_tracked` helpers directly. Of the three `emit_tool_files`
+  stages the error wrapper covers, `extract property schema` can't fail through this entry point
+  (`extract_properties` always yields well-typed `name`/`type` strings); `render tool template`
+  and `track generated tool file` are both reachable, but only from a structurally invalid
+  `ServerInfo` a real MCP server round-trip can never produce (`mcp-introspector` always builds
+  `input_schema` as a JSON object, and bounds schema size far below what `track` needs to trip) —
+  i.e. only from a direct library caller hand-building a `ToolInfo`. The test exercises `render`:
+  a JSON-array `input_schema` fails `tool.ts.hbs`'s `{{#if input_schema.description}}` path
+  navigation under Handlebars strict mode, reaching the wrapper at effectively no cost, unlike
+  forcing `track`'s byte-count check (#458).
 
 ### Security
 
