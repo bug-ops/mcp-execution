@@ -181,7 +181,7 @@ pub async fn run(
     }
 
     let server_dir_name = resolve_server_dir_name(&server_info, id_from_unvalidated_config_key)?;
-    let generated_code = generate_code(&server_info)?;
+    let generated_code = generate_code(&server_info, &server_config)?;
 
     let base_dir = resolve_base_dir(output_dir)?;
     let output_path = base_dir.join(&server_dir_name);
@@ -251,10 +251,10 @@ async fn discover_server_info(
 /// # Errors
 ///
 /// Returns an error if the code generator fails to initialize or generate code.
-fn generate_code(server_info: &ServerInfo) -> Result<GeneratedCode> {
+fn generate_code(server_info: &ServerInfo, server_config: &ServerConfig) -> Result<GeneratedCode> {
     let generator = ProgressiveGenerator::new().context("failed to create code generator")?;
     let generated_code = generator
-        .generate(server_info)
+        .generate(server_info, server_config)
         .context("failed to generate TypeScript code")?;
 
     info!(
@@ -520,6 +520,15 @@ mod tests {
         }
     }
 
+    /// `ServerConfig` passed alongside `create_mock_server_info`'s output so `generate` can
+    /// stamp generation provenance.
+    fn create_mock_server_config() -> ServerConfig {
+        ServerConfig::builder()
+            .command("test-command".to_string())
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn test_generation_result_serialization() {
         let result = GenerationResult {
@@ -661,7 +670,7 @@ mod tests {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_mock_server_info();
 
-        let result = generator.generate(&server_info);
+        let result = generator.generate(&server_info, &create_mock_server_config());
         assert!(result.is_ok());
 
         let code = result.unwrap();
@@ -720,7 +729,9 @@ mod tests {
     fn test_dry_run_collects_file_metadata() {
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_mock_server_info();
-        let generated_code = generator.generate(&server_info).unwrap();
+        let generated_code = generator
+            .generate(&server_info, &create_mock_server_config())
+            .unwrap();
 
         let server_dir_name = server_info.id.to_string();
         let files: Vec<FilePreview> = generated_code
@@ -755,7 +766,9 @@ mod tests {
 
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_mock_server_info();
-        let generated_code = generator.generate(&server_info).unwrap();
+        let generated_code = generator
+            .generate(&server_info, &create_mock_server_config())
+            .unwrap();
 
         // Simulate what dry-run does: collect metadata without touching the filesystem
         let server_dir_name = server_info.id.to_string();
@@ -963,7 +976,9 @@ mod tests {
 
         let generator = ProgressiveGenerator::new().unwrap();
         let server_info = create_mock_server_info();
-        let generated_code = generator.generate(&server_info).unwrap();
+        let generated_code = generator
+            .generate(&server_info, &create_mock_server_config())
+            .unwrap();
 
         let result = export_generated_code(generated_code, &base_dir, &escape_target);
 

@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Generate progressive loading files
     let generator = ProgressiveGenerator::new()?;
-    let code = generator.generate(&info)?;
+    let code = generator.generate(&info, &config)?;
 
     println!("Generated {} files", code.file_count());
     Ok(())

@@ -88,7 +88,10 @@ pub enum ScanError {
     },
 
     /// The sidecar's `schema_version` does not match the version this crate understands.
-    #[error("unsupported metadata schema version: found {found}, expected {expected}")]
+    #[error(
+        "unsupported metadata schema version: found {found}, expected {expected} \
+         (re-run 'generate' to regenerate this server)"
+    )]
     UnsupportedSchema {
         /// Schema version read from the sidecar.
         found: u32,
@@ -134,6 +137,19 @@ pub enum ScanError {
         /// Sanitized path of the sidecar that references `tool`.
         sidecar_path: String,
     },
+}
+
+/// Minimal shape used to read a sidecar's `schema_version` before attempting a typed
+/// [`ServerMetadata`] parse.
+///
+/// A genuine `schema_version: 1` document has no `provenance` key at all, so parsing it
+/// directly as [`ServerMetadata`] would fail with a generic "missing field `provenance`"
+/// [`ScanError::MetadataParse`] before [`ScanError::UnsupportedSchema`] — the error this probe
+/// exists to produce — ever gets a chance to fire. `#[derive(Deserialize)]` ignores unknown
+/// fields by default, so this probe succeeds against both a v1 and a v2 document.
+#[derive(Deserialize)]
+struct SchemaVersionProbe {
+    schema_version: u32,
 }
 
 /// Result of [`scan_tools_directory`]: the parsed tools plus any non-fatal
@@ -311,18 +327,30 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
 
     let content = tokio::fs::read_to_string(&canonical_meta).await?;
 
-    let meta: ServerMetadata =
+    // `schema_version` is checked from a minimal probe *before* the typed `ServerMetadata`
+    // parse below, not after: a genuine `schema_version: 1` sidecar has no `provenance` key at
+    // all, so a typed parse against the current (v2) shape would fail first with a generic
+    // "missing field `provenance`" `MetadataParse`, and `UnsupportedSchema` — the error this
+    // check exists to produce — could never fire. A bare `#[derive(Deserialize)]` probe ignores
+    // unknown fields by default, so it succeeds against both v1 and v2 documents alike.
+    let probe: SchemaVersionProbe =
         serde_json::from_str(&content).map_err(|source| ScanError::MetadataParse {
             path: sanitize_path_for_error(&meta_path),
             source,
         })?;
 
-    if meta.schema_version != METADATA_SCHEMA_VERSION {
+    if probe.schema_version != METADATA_SCHEMA_VERSION {
         return Err(ScanError::UnsupportedSchema {
-            found: meta.schema_version,
+            found: probe.schema_version,
             expected: METADATA_SCHEMA_VERSION,
         });
     }
+
+    let meta: ServerMetadata =
+        serde_json::from_str(&content).map_err(|source| ScanError::MetadataParse {
+            path: sanitize_path_for_error(&meta_path),
+            source,
+        })?;
 
     if meta.tools.len() > MAX_TOOL_FILES {
         return Err(ScanError::TooManyFiles {
@@ -798,8 +826,17 @@ pub fn extract_skill_metadata(
 mod tests {
     use super::*;
     use mcp_execution_core::metadata::{ParameterMetadata, ToolMetadata};
-    use mcp_execution_core::{ServerId, ToolName};
+    use mcp_execution_core::provenance::GenerationProvenance;
+    use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use tempfile::TempDir;
+
+    fn test_provenance() -> GenerationProvenance {
+        let config = ServerConfig::builder()
+            .command("test-command".to_string())
+            .build()
+            .unwrap();
+        GenerationProvenance::capture(&config, &[])
+    }
 
     fn sample_metadata(tool_count: usize) -> ServerMetadata {
         ServerMetadata {
@@ -822,6 +859,7 @@ mod tests {
                     }],
                 })
                 .collect(),
+            provenance: test_provenance(),
         }
     }
 
@@ -1070,11 +1108,16 @@ mod tests {
     async fn test_scan_tools_directory_rejects_invalid_server_id_in_valid_json() {
         let temp_dir = TempDir::new().unwrap();
         let json = r#"{
-            "schema_version": 1,
+            "schema_version": 2,
             "server_id": "not/a/valid/id",
             "server_name": "GitHub",
             "server_version": "1.0.0",
-            "tools": []
+            "tools": [],
+            "provenance": {
+                "generated_at": "2026-01-01T00:00:00Z",
+                "config_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+                "tool_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
         }"#;
         tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), json)
             .await
@@ -1090,7 +1133,7 @@ mod tests {
     async fn test_scan_tools_directory_rejects_invalid_tool_name_in_valid_json() {
         let temp_dir = TempDir::new().unwrap();
         let json = r#"{
-            "schema_version": 1,
+            "schema_version": 2,
             "server_id": "github",
             "server_name": "GitHub",
             "server_version": "1.0.0",
@@ -1101,7 +1144,12 @@ mod tests {
                 "keywords": [],
                 "description": null,
                 "parameters": []
-            }]
+            }],
+            "provenance": {
+                "generated_at": "2026-01-01T00:00:00Z",
+                "config_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+                "tool_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
         }"#;
         tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), json)
             .await
@@ -1124,6 +1172,35 @@ mod tests {
         match result {
             Err(ScanError::UnsupportedSchema { found, expected }) => {
                 assert_eq!(found, METADATA_SCHEMA_VERSION + 1);
+                assert_eq!(expected, METADATA_SCHEMA_VERSION);
+            }
+            other => panic!("expected UnsupportedSchema, got: {other:?}"),
+        }
+    }
+
+    /// A genuine `schema_version: 1` sidecar (produced before `provenance` existed) has no
+    /// `provenance` key at all. The probe-before-typed-parse ordering must surface this as
+    /// `UnsupportedSchema { found: 1, expected: 2 }`, not a generic `MetadataParse` "missing
+    /// field `provenance`" error — see the `schema_version` probe's doc comment.
+    #[tokio::test]
+    async fn test_scan_tools_directory_v1_sidecar_missing_provenance_yields_unsupported_schema() {
+        let temp_dir = TempDir::new().unwrap();
+        let json = r#"{
+            "schema_version": 1,
+            "server_id": "github",
+            "server_name": "GitHub",
+            "server_version": "1.0.0",
+            "tools": []
+        }"#;
+        tokio::fs::write(temp_dir.path().join(METADATA_FILE_NAME), json)
+            .await
+            .unwrap();
+
+        let result = scan_tools_directory(temp_dir.path()).await;
+
+        match result {
+            Err(ScanError::UnsupportedSchema { found, expected }) => {
+                assert_eq!(found, 1);
                 assert_eq!(expected, METADATA_SCHEMA_VERSION);
             }
             other => panic!("expected UnsupportedSchema, got: {other:?}"),

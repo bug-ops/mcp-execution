@@ -4,11 +4,20 @@
 //! for progressive loading pattern.
 
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
-use mcp_execution_core::{Error, ServerId, ToolName};
+use mcp_execution_core::{Error, ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 use std::collections::HashMap;
 use std::process::Command;
+
+/// Creates a mock `ServerConfig` for testing, passed alongside `ServerInfo` so
+/// `generate`/`generate_with_categories` can stamp generation provenance.
+fn test_config() -> ServerConfig {
+    ServerConfig::builder()
+        .command("test-command".to_string())
+        .build()
+        .unwrap()
+}
 
 /// Creates a mock server info for testing.
 fn create_test_server_info() -> ServerInfo {
@@ -92,7 +101,7 @@ fn test_progressive_generator_creates_correct_number_of_files() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     // Should generate:
@@ -139,7 +148,7 @@ fn test_generate_with_categories_wraps_non_object_schema_as_script_generation_er
     };
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
 
-    let result = generator.generate_with_categories(&server_info, &HashMap::new());
+    let result = generator.generate_with_categories(&server_info, &test_config(), &HashMap::new());
 
     match result {
         Err(Error::ScriptGenerationError {
@@ -164,7 +173,7 @@ fn test_progressive_tool_files_exist() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let file_paths: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
@@ -198,7 +207,7 @@ fn test_progressive_tool_file_structure() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let create_issue_file = code
@@ -258,7 +267,7 @@ fn test_progressive_tool_file_has_proper_types() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let create_issue_file = code
@@ -292,7 +301,7 @@ fn test_progressive_index_structure() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let index_file = code
@@ -346,7 +355,7 @@ fn test_progressive_index_doc_comment_not_prematurely_closed() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let index_file = code
@@ -383,7 +392,7 @@ fn test_progressive_index_uses_ts_specifiers_not_js() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let index_file = code
@@ -416,7 +425,7 @@ fn test_progressive_runtime_bridge_structure() {
     let server_info = create_test_server_info();
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let bridge_file = code
@@ -476,7 +485,7 @@ fn test_progressive_generator_with_empty_server() {
     };
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     // Should generate:
@@ -520,7 +529,7 @@ fn test_progressive_tool_camel_case_conversion() {
     };
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     // Should convert snake_case to camelCase for filename
@@ -580,7 +589,7 @@ fn test_progressive_tool_with_complex_types() {
     };
 
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let tool_file = code
@@ -754,7 +763,7 @@ fn test_generated_tool_passes_tsc_noemit() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
@@ -835,7 +844,7 @@ fn test_generated_index_resolves_at_runtime_under_node_esm() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
 
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
@@ -1037,7 +1046,7 @@ fn test_runtime_bridge_rejects_forbidden_env_var_before_spawn() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1169,7 +1178,7 @@ fn test_runtime_bridge_rejects_env_name_outside_charset() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1222,7 +1231,7 @@ fn test_runtime_bridge_rejects_too_many_arguments() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1274,7 +1283,7 @@ fn test_runtime_bridge_rejects_argument_too_long() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1324,7 +1333,7 @@ fn test_runtime_bridge_rejects_too_many_env_vars() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1377,7 +1386,7 @@ fn test_runtime_bridge_rejects_env_value_too_long() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1433,7 +1442,7 @@ fn test_runtime_bridge_rejects_http_transport_with_clear_error_not_crash() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1490,7 +1499,7 @@ fn test_runtime_bridge_rejects_http_transport_bad_url_scheme() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1538,7 +1547,7 @@ fn test_runtime_bridge_rejects_http_transport_missing_url() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1586,7 +1595,7 @@ fn test_runtime_bridge_rejects_http_transport_unsafe_headers() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1634,7 +1643,7 @@ fn test_runtime_bridge_rejects_http_transport_control_char_in_header_value() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1685,7 +1694,7 @@ fn test_runtime_bridge_rejects_http_transport_duplicate_case_insensitive_headers
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1731,7 +1740,7 @@ fn test_runtime_bridge_rejects_http_transport_url_too_long() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1782,7 +1791,7 @@ fn test_runtime_bridge_rejects_http_transport_too_many_headers() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1835,7 +1844,7 @@ fn test_runtime_bridge_rejects_http_transport_header_value_too_long() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1888,7 +1897,7 @@ fn test_runtime_bridge_rejects_non_string_env_value() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1939,7 +1948,7 @@ fn test_runtime_bridge_rejects_non_string_header_value() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -1993,7 +2002,7 @@ fn test_runtime_bridge_rejects_string_env() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2045,7 +2054,7 @@ fn test_runtime_bridge_rejects_array_env() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2098,7 +2107,7 @@ fn test_runtime_bridge_rejects_argument_too_long_multibyte_utf8() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2151,7 +2160,7 @@ fn test_runtime_bridge_rejects_command_too_long() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2202,7 +2211,7 @@ fn test_runtime_bridge_rejects_env_name_too_long() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2254,7 +2263,7 @@ fn test_runtime_bridge_rejects_http_transport_header_name_too_long() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2310,7 +2319,7 @@ fn test_runtime_bridge_accepts_argument_count_at_cap() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2363,7 +2372,7 @@ fn test_runtime_bridge_accepts_argument_length_at_cap() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2414,7 +2423,7 @@ fn test_runtime_bridge_accepts_env_count_at_cap() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2468,7 +2477,7 @@ fn test_runtime_bridge_accepts_env_value_length_at_cap() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2522,7 +2531,7 @@ fn test_runtime_bridge_accepts_url_length_at_cap() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2576,7 +2585,7 @@ fn test_runtime_bridge_accepts_header_count_at_cap() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2631,7 +2640,7 @@ fn test_runtime_bridge_accepts_header_value_length_at_cap() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2701,7 +2710,7 @@ fn test_runtime_bridge_rejects_when_child_exits_before_responding() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2754,7 +2763,7 @@ fn test_runtime_bridge_times_out_when_server_never_replies() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -2821,7 +2830,7 @@ fn test_runtime_bridge_dispatches_concurrent_out_of_order_responses_by_request_i
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -3011,7 +3020,7 @@ fn test_runtime_bridge_surfaces_tool_error_with_empty_content() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -3062,7 +3071,7 @@ fn test_runtime_bridge_returns_structured_content_when_content_empty() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -3108,7 +3117,7 @@ fn test_runtime_bridge_rejects_empty_content_without_structured_content() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -3156,7 +3165,7 @@ fn test_runtime_bridge_rejects_null_first_content_element() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -3205,7 +3214,7 @@ fn test_runtime_bridge_falls_back_to_structured_content_on_null_first_content_el
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -3251,7 +3260,7 @@ fn test_runtime_bridge_treats_null_structured_content_as_absent() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files
@@ -3297,7 +3306,7 @@ fn test_runtime_bridge_surfaces_structured_content_on_tool_error() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
-        .generate(&server_info)
+        .generate(&server_info, &test_config())
         .expect("Failed to generate code");
     let bridge = code
         .files

@@ -51,7 +51,7 @@
 //!
 //! // Generate progressive loading files
 //! let generator = ProgressiveGenerator::new()?;
-//! let code = generator.generate(&info)?;
+//! let code = generator.generate(&info, &config)?;
 //!
 //! // Files are generated, ready to write to disk
 //! for file in &code.files {

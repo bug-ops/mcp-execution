@@ -123,9 +123,16 @@ never recover parameter descriptions). Now:
    `ScanError::Io` — and requires the resolved sidecar path to
    `starts_with(canonical_base)` — defends against a symlinked
    `_meta.json` escaping the directory (path-traversal via symlink).
-2. Size-checks the sidecar (`MAX_FILE_SIZE`), parses as
-   `mcp_core::metadata::ServerMetadata`, checks
-   `schema_version == METADATA_SCHEMA_VERSION`, checks tool count ≤
+2. Size-checks the sidecar (`MAX_FILE_SIZE`), then reads `schema_version` from a minimal
+   `SchemaVersionProbe { schema_version: u32 }` (a bare `#[derive(Deserialize)]`, which ignores
+   unknown fields by default) and compares it against `METADATA_SCHEMA_VERSION` **before**
+   attempting a typed `mcp_core::metadata::ServerMetadata` parse (issue #468). This ordering is
+   load-bearing, not cosmetic: a genuine `schema_version: 1` sidecar has no `provenance` key at
+   all (that field was added in schema v2, and `ServerMetadata::provenance` is required, not
+   `Option`), so parsing it directly as the current typed shape would fail first with a generic
+   "missing field `provenance`" `ScanError::MetadataParse`, and `ScanError::UnsupportedSchema` —
+   the error this check exists to produce — could never fire. Only once the probe confirms a
+   matching `schema_version` does the typed `ServerMetadata` parse run. Also checks tool count ≤
    `MAX_TOOL_FILES`.
 3. `verify_tool_files_on_disk`: every sidecar entry's `{typescript_name}.ts`
    must exist on disk, or the whole scan fails with
@@ -508,8 +515,9 @@ name before any filesystem work; the rest is delegated with
 ## 9. Error Conditions
 
 `ScanError`: `Io`, `DirectoryNotFound`, `MissingMetadata`,
-`MetadataParse`, `UnsupportedSchema`, `TooManyFiles`, `FileTooLarge`,
-`StaleMetadata`.
+`MetadataParse`, `UnsupportedSchema { found, expected }`, `TooManyFiles`, `FileTooLarge`,
+`StaleMetadata`. `UnsupportedSchema`'s message carries "re-run 'generate' to regenerate this
+server" guidance, matching its sibling `StaleMetadata` (issue #468).
 
 `SkillMetadataError`: `MissingFrontmatter`, `FrontmatterTooLarge`,
 `InvalidYaml`, `MissingField`, `NameTooLong { len, limit }` (issue #419 — `name` exceeded

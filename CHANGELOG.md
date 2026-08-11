@@ -70,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Breaking` entry below). Adds the `unicode-security` 0.1.2 dependency (unconditional, unlike
   the existing platform-gated `unicode-normalization`), pulling in `unicode-script` 0.5.8 as a
   new transitive dependency (#433).
+- **`mcp-execution-core`**: new `provenance` module — `GenerationProvenance`, `ConfigFingerprint`,
+  `ToolDigest`, and `ToolDigestEntry<'a>` — recording when and against what server state a
+  `_meta.json` sidecar was generated, so a future comparison mechanism can detect that the
+  server's connection parameters or tool surface changed since generation. `ConfigFingerprint`
+  and `ToolDigest` are SHA-256 digests over an explicit, length-framed preimage (never `Debug`
+  output or serialized JSON, both of which lack a stability guarantee this needs); the
+  fingerprint excludes every secret-bearing `ServerConfig` value (argument/env/header/query
+  values, userinfo) by construction, so rotating a credential never registers as drift. Adds the
+  `sha2` 0.11 dependency (`default-features = false`) and enables `chrono`'s `serde` feature on
+  `mcp-execution-core`, pulling in `digest`, `block-buffer`, `crypto-common`, `hybrid-array`, and
+  `typenum` as new transitive dependencies (#468).
 
 ### Changed
 
@@ -189,6 +200,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`mcp-execution-core`**: `METADATA_SCHEMA_VERSION` bumped from `1` to `2`. `ServerMetadata`
+  gained a new required field, `provenance: GenerationProvenance` — not `Option`, since a
+  `schema_version: 1` sidecar (which has no `provenance` key at all) is now rejected by a
+  schema-version check before any consumer constructs a `ServerMetadata`, so an `Option` every
+  consumer would have to unwrap could never actually be `None`. Any `_meta.json` sidecar written
+  by a `generate` run before this change no longer parses: re-run `generate` to produce a v2
+  sidecar. `mcp-execution-codegen`'s `ProgressiveGenerator::generate`/`generate_with_categories`
+  both gained a required `&ServerConfig` parameter (used to compute `provenance` from the same
+  inputs the run is generating from, so the digest can't drift from the emitted files) —
+  source-breaking for every caller. `mcp-execution-skill`'s `scan_tools_directory` now reads
+  `schema_version` from a minimal probe *before* attempting a typed `ServerMetadata` parse, so a
+  genuine v1 sidecar correctly surfaces `ScanError::UnsupportedSchema` instead of a generic
+  "missing field `provenance`" `ScanError::MetadataParse`; `UnsupportedSchema`'s message also
+  gained the "re-run `generate`" guidance its sibling `StaleMetadata` already carried. Also,
+  `ConfigFingerprint`/`ToolDigest`'s `Deserialize` is now routed through a validating
+  `TryFrom<String>` (new `DigestFormatError`), mirroring `ServerId`/`ToolName`'s pattern: a
+  `_meta.json` whose `provenance.config_fingerprint`/`tool_digest` is not exactly 64 lowercase
+  hex characters now fails to deserialize instead of silently producing a value that violates
+  the documented shape (#468).
 - **`mcp-execution-skill`**: `SkillMetadataError` gained a new `NameTooLong { len, limit }`
   variant, returned by `extract_skill_metadata` when the frontmatter `name` exceeds
   `MAX_SKILL_NAME_LENGTH` (see the `### Fixed` entry below). Source-breaking for any downstream

@@ -44,6 +44,10 @@ related:
      `mcp-cli`).
    - `metadata` — the `_meta.json` sidecar schema shared by `mcp-codegen`
      (producer) and `mcp-skill`/`mcp-server` (consumers).
+   - `provenance` (issue #468) — `GenerationProvenance`/`ConfigFingerprint`/`ToolDigest`, the
+     generation-timestamp-and-fingerprint data `mcp-codegen` stamps into every
+     `metadata::ServerMetadata` it writes, computed from the same `ServerConfig`/tool list a
+     `generate` run is generating from.
    - `path` — `sanitize_path_for_error` (used by `mcp-skill` and
      `mcp-server` for identical error-message redaction) and
      `contains_parent_dir` (used by both, plus `mcp-cli`, for identical
@@ -66,7 +70,12 @@ related:
      copies of the same algorithm.
    - `redact` — `Debug`-redaction wrapper types (`RedactedItems`,
      `RedactedMapValues`, `RedactedUrl`) used by `ServerConfig` itself and
-     by `mcp-cli`'s CLI-argument types.
+     by `mcp-cli`'s CLI-argument types. `RedactedUrl`'s URL-splitting logic is factored out into
+     a crate-internal `split_url` (issue #468), returning parsed pieces (scheme, userinfo
+     presence, authority, path, query/fragment tail) rather than a formatted string — `Debug`
+     formats those pieces one way, `provenance::ConfigFingerprint::compute` another, so the two
+     can never disagree about where the authority ends, and the fingerprint never depends on a
+     `Debug` rendering's unstable format.
    - `untrusted` — sanitization/boundary-wrapping helpers for
      attacker-controlled MCP-server metadata embedded into Markdown/LLM
      prompts, used by `mcp-skill` and `mcp-server`.
@@ -449,9 +458,9 @@ call `LogFormat::resolve` and then build the same `.boxed()`-branched
 ### `metadata` module (`src/metadata.rs`)
 
 ```rust
-pub const METADATA_SCHEMA_VERSION: u32 = 1;
+pub const METADATA_SCHEMA_VERSION: u32 = 2;
 pub const METADATA_FILE_NAME: &str = "_meta.json";
-pub struct ServerMetadata { schema_version: u32, server_id: ServerId, server_name: String, server_version: String, tools: Vec<ToolMetadata> }
+pub struct ServerMetadata { schema_version: u32, server_id: ServerId, server_name: String, server_version: String, tools: Vec<ToolMetadata>, provenance: GenerationProvenance }
 pub struct ToolMetadata { name: ToolName, typescript_name: String, category: Option<String>, keywords: Vec<String>, description: Option<String>, parameters: Vec<ParameterMetadata> }
 pub struct ParameterMetadata { name, typescript_type, required, description: Option<String> }
 ```
@@ -465,6 +474,78 @@ This is the **wire contract** between `mcp-codegen` (producer, writes
 `METADATA_SCHEMA_VERSION` is the intended way to signal a breaking shape
 change; consumers compare it and fail loudly on mismatch (see
 [[../skill/spec#ScanError]]).
+
+`provenance` (issue #468) is required, not `Option`: a `schema_version: 1` sidecar has no
+`provenance` key at all, and a consumer is expected to check `schema_version` — via a minimal
+probe struct, *before* attempting a typed `ServerMetadata` deserialization (see
+[[../skill/spec#ScanError]]) — so every `ServerMetadata` a consumer actually constructs already
+carries real provenance; an `Option` would encode a state the version check has already ruled
+out.
+
+### `provenance` module (`src/provenance.rs`)
+
+```rust
+pub struct GenerationProvenance { generated_at: DateTime<Utc>, config_fingerprint: ConfigFingerprint, tool_digest: ToolDigest }
+pub struct ConfigFingerprint(String); // 64 lowercase hex chars (SHA-256)
+pub struct ToolDigest(String);        // 64 lowercase hex chars (SHA-256)
+pub struct ToolDigestEntry<'a> { name: &'a str, description: &'a str, input_schema: &'a Value, output_schema: Option<&'a Value> }
+pub struct DigestFormatError { value: String } // not exactly 64 lowercase hex chars
+impl GenerationProvenance { pub fn capture(config: &ServerConfig, tools: &[ToolDigestEntry<'_>]) -> Self; }
+impl ConfigFingerprint { pub fn compute(config: &ServerConfig) -> Self; }
+impl ToolDigest { pub fn compute(entries: &[ToolDigestEntry<'_>]) -> Self; }
+```
+
+`ConfigFingerprint`/`ToolDigest`'s `Deserialize` is routed through `TryFrom<String>` (via
+`#[serde(try_from = "String")]`), mirroring `ServerId`/`ToolName`'s validated-newtype pattern: no
+separate, unvalidated deserialization path exists, so a hand-edited `_meta.json` cannot produce
+one of these types holding a value that violates `as_str`'s documented "64-character
+lowercase-hex" contract. Both types' own `compute` is the only internal construction path and
+always produces a valid value, so this validation only ever fires against externally-sourced
+(deserialized) data.
+
+#### What provenance does and does not answer
+
+Provenance answers **"has the server's exposed surface, or the identity of the endpoint we
+generated from, changed since generation?"** It does **not** answer "would re-running `generate`
+today produce byte-identical files?" — `mcp-codegen`'s collision-disambiguating TypeScript name
+suffixes (index-based, not content-based) and its `categorizations` input both affect generated
+output without affecting either digest. Any future comparison mechanism and all user-facing
+wording must be phrased as "the server changed", never "your files are out of date
+byte-for-byte".
+
+#### Hashing
+
+Both digests are SHA-256 (via the `sha2` crate, `default-features = false`), hex-encoded
+lowercase via an explicit `{:02x}` loop (`sha2`'s digest type has no `LowerHex` impl). Preimages
+are never built from `Debug` output (no stability guarantee — the same objection that rules out
+`std::hash::DefaultHasher`) or from serializing a `serde_json::Value` (this workspace enables
+`serde_json/preserve_order` transitively via `handlebars`, and a `HashMap`-backed preimage would
+vary by process regardless). Instead, one length-framing primitive (`u64` big-endian length ‖
+bytes) builds every preimage from an explicitly sorted, fixed field order.
+
+`ConfigFingerprint::compute`'s preimage carries, in order: a domain tag, the transport
+discriminant (`stdio`/`http`/`sse`), then either `command` + `cwd` presence + argument *count* +
+sorted environment variable *names* (stdio), or the URL's canonical `scheme://authority/path`
+form + deduplicated sorted query-parameter *names* + a userinfo-present marker + sorted
+ASCII-lowercased header *names* (http/sse). **No argument value, environment/header value,
+query-parameter value, or userinfo is ever fed** — this is a deliberate secrecy guarantee, not
+an oversight: rotating a credential must never register as configuration drift. The URL is
+parsed via `redact::split_url` (the same parser `RedactedUrl`'s `Debug` impl uses, factored out
+so the two can't disagree about where the authority ends), never via `RedactedUrl`'s `Debug`
+output itself. A bare query parameter (no `=`) and an unparseable URL each contribute a
+type-tagged marker rather than literal `<bare>`/`<unparseable>` text, so a real parameter or URL
+segment that happens to contain that literal string cannot collide with the marker.
+
+`ToolDigest::compute` is two-level: each tool entry is hashed on its own (domain tag, framed
+`name`/`description`, then `input_schema`/`output_schema` via a recursive `serde_json::Value`
+walk that type-tags every variant and sorts object keys at hash time), the resulting 32-byte
+digests are sorted, and the sorted sequence is hashed into the aggregate — giving a total order
+even for two tools sharing a name. `output_schema`'s `Option` wrapper gets an explicit presence
+byte in the same framing `cwd` already uses, so `None` and `Some(Value::Null)` hash differently.
+
+`GenerationProvenance::capture(config, tools)` stamps `Utc::now()` and computes both digests
+from the same `ServerConfig`/tool list a `generate` call is generating from, so the recorded
+digest can never drift from the emitted files — see [[../codegen/spec]].
 
 ### `path` module (`src/path.rs`)
 

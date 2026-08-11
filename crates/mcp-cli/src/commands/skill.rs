@@ -451,8 +451,17 @@ mod tests {
         METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
         ToolMetadata,
     };
-    use mcp_execution_core::{ServerId, ToolName};
+    use mcp_execution_core::provenance::GenerationProvenance;
+    use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use tempfile::TempDir;
+
+    fn test_provenance() -> GenerationProvenance {
+        let config = ServerConfig::builder()
+            .command("test-command".to_string())
+            .build()
+            .unwrap();
+        GenerationProvenance::capture(&config, &[])
+    }
 
     /// Writes a minimal `_meta.json` sidecar with a single tool into `server_dir`,
     /// matching what `mcp-execution-codegen` would emit for a generated server.
@@ -478,6 +487,7 @@ mod tests {
                     description: Some("Test input".to_string()),
                 }],
             }],
+            provenance: test_provenance(),
         };
 
         let content = serde_json::to_string_pretty(&meta).unwrap();
@@ -1127,6 +1137,7 @@ mod tests {
                     parameters: vec![],
                 },
             ],
+            provenance: test_provenance(),
         };
         let content = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(server_dir.join(METADATA_FILE_NAME), content).unwrap();

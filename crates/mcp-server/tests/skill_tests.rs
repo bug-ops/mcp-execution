@@ -3,10 +3,21 @@
 use mcp_execution_core::metadata::{
     METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
 };
-use mcp_execution_core::{ServerId, ToolName};
+use mcp_execution_core::provenance::GenerationProvenance;
+use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_skill::{ParsedToolFile, ScanError, build_skill_context, scan_tools_directory};
 use tempfile::TempDir;
 use tokio::fs;
+
+/// Provenance for a hand-built `ServerMetadata` sidecar fixture, required now that
+/// `provenance` is a non-`Option` field.
+fn test_provenance() -> GenerationProvenance {
+    let config = ServerConfig::builder()
+        .command("test-command".to_string())
+        .build()
+        .unwrap();
+    GenerationProvenance::capture(&config, &[])
+}
 
 /// Build a `ServerMetadata` sidecar with `count` simple test tools, each with one
 /// required string parameter, and write it as `_meta.json` into `dir`.
@@ -43,6 +54,7 @@ async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
                 ],
             })
             .collect(),
+        provenance: test_provenance(),
     };
 
     let content = serde_json::to_string_pretty(&meta).unwrap();
@@ -423,6 +435,7 @@ async fn test_scan_directory_file_too_large() {
             description: Some(String::new()),
             parameters: vec![],
         }],
+        provenance: test_provenance(),
     };
     meta.tools[0].description = Some(large_description);
 
