@@ -69,6 +69,17 @@ const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
 /// - Path traversal detected
 /// - TypeScript files cannot be scanned
 ///
+/// # Side Effects
+///
+/// When no custom `--output` is given, resolving the confined default path creates and
+/// confines the `{server}/` segment directory under the skills directory *before* the
+/// `--overwrite` check and before rendering - unavoidably, since that resolution is what the
+/// `--overwrite` check itself runs against. A refused (existing file, no `--overwrite`) or
+/// otherwise failed run can therefore leave an empty `{server}/` directory behind - the same
+/// side effect `save_skill`'s own default-path resolution has. A custom `--output` path has no
+/// such side effect: its parent directory is created only after the `--overwrite` gate and
+/// rendering succeed, matching this command's behavior before issue #501.
+///
 /// # Examples
 ///
 /// ```no_run
@@ -120,13 +131,36 @@ pub async fn run(
 
     let scan_result = scan_server_tools(&tool_dir, &server).await?;
 
-    let (context, output_path) = prepare_skill_context(
+    let (context, custom_output_path) = prepare_skill_context(
         &server,
         &scan_result.tools,
         hints,
         skill_name.as_deref(),
         output_path,
     )?;
+
+    // See this function's own doc comment (`# Side Effects`) for why the default branch below
+    // creates `{server}/` this early, and why the custom branch's own directory creation is
+    // deferred past the `--overwrite` gate instead of happening here.
+    let had_custom_output_path = custom_output_path.is_some();
+    let output_path = if let Some(path) = custom_output_path {
+        // A custom `--output` path is a CLI operator's own flag, evaluated with the operator's
+        // own filesystem permissions - confining it would not defend against anything a symlink
+        // swapped in by a *racing local process* could not already do to any path this process
+        // touches, so it keeps its existing narrower, traversal-only validation
+        // (`validate_output_path`) instead of the confined walk below.
+        path
+    } else {
+        // No `--output` override: confine and create the default `{server}` segment directory
+        // the same way `save_skill`'s own default path is confined, rejecting it outright if it
+        // already exists as a symlink - `write_skill_md`'s O_NOFOLLOW guard on its temp file
+        // only protects that file's own terminal component, not an ancestor directory planted
+        // as a symlink ahead of time (issue #501). See `resolve_default_output_path`'s own doc
+        // comment for why this leaves the terminal `SKILL.md` component's pre-existing-symlink
+        // case untouched.
+        let skills_dir = resolve_skills_dir()?;
+        resolve_default_output_path(&skills_dir, &server).await?
+    };
 
     // Check if output file exists and overwrite flag
     if output_path.exists() && !overwrite {
@@ -140,7 +174,19 @@ pub async fn run(
     // Step 7: Render SKILL.md and write atomically.
     let rendered = render_skill_md(&context).context("failed to render SKILL.md template")?;
 
-    write_skill_md(&rendered, &output_path)?;
+    // A custom `--output` path's parent directory is created only now, after the `--overwrite`
+    // gate and rendering above - matching this branch's pre-#501 behavior, where directory
+    // creation lived inside `write_skill_md` and so ran after both. Unlike the default branch,
+    // nothing here needs to run earlier: `validate_output_path` already ran in
+    // `prepare_skill_context`, and `output_path.exists()` above returns `false` regardless of
+    // whether the parent exists yet, so deferring this creates no gate-ordering hazard.
+    if had_custom_output_path && let Some(parent) = output_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
+    }
+
+    write_skill_md(&rendered, &output_path).await?;
 
     let bytes_written = rendered.len();
     info!(
@@ -229,26 +275,31 @@ async fn scan_server_tools(tool_dir: &Path, server: &str) -> Result<ScanResult> 
     Ok(scan_result)
 }
 
-/// Builds the skill generation context and resolves the actual path SKILL.md will be written
-/// to, applying custom skill name and output path overrides.
+/// Builds the skill generation context and validates a custom `--output` path, if the caller
+/// supplied one.
 ///
-/// The resolved write path is returned separately from `GenerateSkillResult` rather than
-/// written back into its `default_output_path_hint` field: that field is a non-authoritative
-/// display hint `build_skill_context` computes (see its doc comment), not a slot for this
-/// command's actual write target — overwriting it here would resurrect the same
-/// field-reuse-across-semantics pattern issue #436 eliminated from the MCP tool pair.
+/// Returns `Some(path)` only when `output_path` was supplied - traversal-validated, but
+/// otherwise returned unchanged. `None` means the caller wants the default path; resolving that
+/// confined default requires an async filesystem walk (`resolve_default_output_path`) this
+/// function cannot perform itself, since it stays synchronous for its own unit tests, so `run`
+/// resolves it separately instead of this function pre-computing a plain, unconfined join.
+///
+/// The returned path is kept separate from `GenerateSkillResult` rather than written back into
+/// its `default_output_path_hint` field: that field is a non-authoritative display hint
+/// `build_skill_context` computes (see its doc comment), not a slot for this command's actual
+/// write target — overwriting it here would resurrect the same field-reuse-across-semantics
+/// pattern issue #436 eliminated from the MCP tool pair.
 ///
 /// # Errors
 ///
-/// Returns an error if a custom `output_path` fails traversal validation, or if the default
-/// skills directory cannot be resolved (home directory not determinable).
+/// Returns an error if a custom `output_path` fails traversal validation.
 fn prepare_skill_context(
     server: &str,
     tools: &[ParsedToolFile],
     hints: Vec<String>,
     skill_name: Option<&str>,
     output_path: Option<PathBuf>,
-) -> Result<(GenerateSkillResult, PathBuf)> {
+) -> Result<(GenerateSkillResult, Option<PathBuf>)> {
     // Step 6: Build skill context. Custom skill name is validated up front (same pattern as
     // `validate_server_id` above) and passed into `build_skill_context` itself — not applied as
     // a post-hoc override — so an oversized name fails fast here instead of being rendered and
@@ -264,41 +315,78 @@ fn prepare_skill_context(
 
     let context = build_skill_context(server, tools, hints_ref.as_deref(), skill_name);
 
-    // Resolve the actual output path, independent of `context.default_output_path_hint`.
-    let resolved_output_path = if let Some(path) = output_path {
-        // Validate output path for path traversal
-        validate_output_path(&path)?;
-        path
-    } else {
-        // Use default skills directory
-        let skills_dir = resolve_skills_dir()?;
-        skills_dir.join(server).join("SKILL.md")
-    };
+    if let Some(path) = &output_path {
+        validate_output_path(path)?;
+    }
 
-    Ok((context, resolved_output_path))
+    Ok((context, output_path))
 }
 
 /// Writes `rendered` SKILL.md content to `output_path` atomically (write-temp then rename).
 ///
+/// The caller is responsible for `output_path`'s parent directory already existing: the two call
+/// sites create it themselves, with different guarantees (`resolve_default_output_path`'s
+/// confined walk for the default path, a plain `create_dir_all` for a custom `--output` path) -
+/// duplicating that step here would either weaken the default path's confinement or run it
+/// twice.
+///
 /// # Errors
 ///
-/// Returns an error if the parent directory cannot be created, the temp file cannot be
-/// written, or the rename fails.
-fn write_skill_md(rendered: &str, output_path: &Path) -> Result<()> {
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
-    }
-
-    // Atomic write: write to a temp file in the same directory, then rename.
-    // `with_added_extension` appends `.tmp` without removing `.md` (N1).
+/// Returns an error if the temp file cannot be written or the rename fails.
+async fn write_skill_md(rendered: &str, output_path: &Path) -> Result<()> {
+    // Atomic write: the temp file itself is written through `write_confined_file`, which opens
+    // it with `O_NOFOLLOW` on Unix, so a symlink pre-planted at the predictable `.tmp` path is
+    // rejected instead of followed (issue #501) - the same primitive `save_skill` uses for the
+    // equivalent race on its own write step (issue #496). The final `std::fs::rename` needs no
+    // equivalent guard: it replaces whatever directory entry is at `output_path` rather than
+    // following it, so a pre-existing symlink at `output_path` itself (e.g. a dotfiles setup
+    // symlinking `SKILL.md` into a repo) is safely replaced rather than followed or rejected -
+    // matching this function's pre-#501 behavior for the final path, on both the default and a
+    // custom `--output` path.
     let tmp_path = output_path.with_added_extension("tmp");
-    std::fs::write(&tmp_path, rendered)
+    mcp_execution_core::write_confined_file(&tmp_path, rendered.as_bytes())
+        .await
         .with_context(|| format!("failed to write temp file: {}", tmp_path.display()))?;
     std::fs::rename(&tmp_path, output_path)
         .with_context(|| format!("failed to rename to: {}", output_path.display()))?;
 
     Ok(())
+}
+
+/// Resolves and confines the default `SKILL.md` output path under `skills_dir`
+/// (`skills_dir/{server}/SKILL.md`), creating and confining the `{server}` segment directory the
+/// same way `save_skill`'s own default path is confined via `resolve_skill_output_path` -
+/// rejecting it outright if it already exists as a symlink, regardless of where it points (issue
+/// #217/#501). Deliberately does *not* use `resolve_skill_output_path` itself: that helper also
+/// confinement-checks the terminal `SKILL.md` component and rejects it outright if it is already
+/// a symlink, which would break the existing `skill --overwrite` dotfiles pattern (symlinking
+/// `SKILL.md` into a repo) that `write_skill_md`'s `rename` already replaces safely. Calling
+/// `resolve_confined_path` directly with `target: None` confines and creates only the segment
+/// directory, leaving the terminal component's pre-existing-symlink case exactly as it was
+/// before this function existed.
+///
+/// Only used when the caller did not supply a custom `--output` path; a custom path keeps its
+/// existing narrower, traversal-only validation (`validate_output_path`) instead - see `run`'s
+/// call site for why confining it would not add anything.
+///
+/// # Errors
+///
+/// Returns an error if the resolved path escapes `skills_dir` - including via a pre-existing
+/// symlink at the server's own segment directory.
+async fn resolve_default_output_path(skills_dir: &Path, server: &str) -> Result<PathBuf> {
+    // `server` is already validated by `validate_server_id` (a `validate_server_id_slug`
+    // passthrough) at `run`'s entry, before this is ever reached, so `resolve_confined_path`'s
+    // own structural `validate_path_segment` check below is the only validation this call gets -
+    // intentionally: re-running `validate_server_id_slug` here would just re-check what already
+    // passed.
+    let segment_dir =
+        mcp_execution_core::resolve_confined_path(skills_dir, server, Path::new(""), None)
+            .await
+            .with_context(|| {
+                format!("failed to resolve default skills directory for server: {server}")
+            })?;
+
+    Ok(segment_dir.join("SKILL.md"))
 }
 
 /// Resolve servers directory from provided path or default.
@@ -742,6 +830,38 @@ mod tests {
         );
     }
 
+    /// A custom `--output` path whose parent directory does not exist yet must still have it
+    /// created - `run`'s custom-path branch owns this now that `write_skill_md` no longer calls
+    /// `create_dir_all` itself.
+    #[tokio::test]
+    async fn test_run_creates_nested_parent_directory_for_custom_output_path() {
+        let temp = TempDir::new().unwrap();
+        let server_dir = temp.path().join("test-server");
+        std::fs::create_dir(&server_dir).unwrap();
+        write_meta_sidecar(&server_dir, "test-server", "test_tool");
+
+        let output_path = temp.path().join("nested").join("dir").join("SKILL.md");
+        assert!(!output_path.parent().unwrap().exists());
+
+        let result = run(
+            "test-server".to_string(),
+            Some(temp.path().to_path_buf()),
+            Some(output_path.clone()),
+            None,
+            vec![],
+            false,
+            OutputFormat::Json,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected success but got: {:?}",
+            result.err()
+        );
+        assert!(output_path.exists(), "SKILL.md must be written to disk");
+    }
+
     #[tokio::test]
     async fn test_run_with_orphan_ts_file_succeeds() {
         // Issue #161: a `.ts` file not referenced by `_meta.json` remains
@@ -875,7 +995,7 @@ mod tests {
             prepare_skill_context("github", &tools, vec![], None, Some(custom_output.clone()))
                 .unwrap();
 
-        assert_eq!(resolved_output_path, custom_output);
+        assert_eq!(resolved_output_path, Some(custom_output));
         assert_eq!(
             context.default_output_path_hint, "~/.claude/skills/github/SKILL.md",
             "default_output_path_hint must stay build_skill_context's own default, not be \
@@ -1204,6 +1324,133 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid server ID")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_skill_md_writes_content() {
+        let base = TempDir::new().unwrap();
+        let output_path = base.path().join("SKILL.md");
+
+        write_skill_md("rendered content", &output_path)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            "rendered content"
+        );
+        // The temp file must not survive a successful write.
+        assert!(!output_path.with_added_extension("tmp").exists());
+    }
+
+    /// `write_skill_md` must preserve the overwrite semantics `run`'s own `--overwrite` gate
+    /// relies on: a pre-existing regular `SKILL.md` is replaced with the new content, not
+    /// rejected or merged with the old.
+    #[tokio::test]
+    async fn test_write_skill_md_overwrites_existing_regular_file() {
+        let base = TempDir::new().unwrap();
+        let output_path = base.path().join("SKILL.md");
+        std::fs::write(&output_path, "old content").unwrap();
+
+        write_skill_md("new content", &output_path).await.unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            "new content"
+        );
+    }
+
+    /// Issue #501: `write_skill_md`'s actual vulnerability was a symlink planted at its
+    /// predictable temp path (`SKILL.md.tmp`), not at the final `SKILL.md` path - `rename`
+    /// already replaces whatever entry sits at the final path rather than following it, so a
+    /// symlink planted there was never the bug. Plants the symlink at the `.tmp` path instead and
+    /// asserts the write is rejected without ever touching the symlink's target, and that no
+    /// half-written `SKILL.md` is left behind at the final path.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_write_skill_md_rejects_symlink_planted_at_tmp_path() {
+        let base = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("real.md");
+
+        let output_path = base.path().join("SKILL.md");
+        let tmp_path = output_path.with_added_extension("tmp");
+        std::os::unix::fs::symlink(&outside_file, &tmp_path).unwrap();
+
+        let result = write_skill_md("attacker-controlled", &output_path).await;
+
+        assert!(result.is_err());
+        assert!(!outside_file.exists());
+        assert!(!output_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_default_output_path_creates_and_confines_segment_directory() {
+        let skills_dir = TempDir::new().unwrap();
+
+        let resolved = resolve_default_output_path(skills_dir.path(), "my-server")
+            .await
+            .unwrap();
+
+        let canonical_base = skills_dir.path().canonicalize().unwrap();
+        assert_eq!(resolved, canonical_base.join("my-server").join("SKILL.md"));
+        assert!(canonical_base.join("my-server").is_dir());
+    }
+
+    /// Issue #501 (S3): the default output path must be confined the same way `save_skill`'s
+    /// own default path is - a symlink already planted at the `{server}` segment directory (e.g.
+    /// by an earlier process with write access to `~/.claude/skills`) must be rejected outright,
+    /// not followed by the parent-directory creation a plain `create_dir_all` would have done.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_resolve_default_output_path_rejects_symlinked_segment_directory() {
+        let skills_dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), skills_dir.path().join("evil-server")).unwrap();
+
+        let err = resolve_default_output_path(skills_dir.path(), "evil-server")
+            .await
+            .unwrap_err();
+
+        // `{:#}` walks the full anyhow chain: `to_string()`/`{}` would only print the outer
+        // `with_context` message, not the underlying `ConfinementError::SegmentIsSymlink` cause.
+        assert!(format!("{err:#}").contains("symlink"), "{err:?}");
+        assert!(!outside.path().join("SKILL.md").exists());
+    }
+
+    /// Preserves pre-#501 behavior by user decision: `resolve_default_output_path` confines only
+    /// the `{server}` segment directory, not the terminal `SKILL.md` component, so a symlink
+    /// already at `SKILL.md` itself (e.g. a dotfiles setup symlinking it into a repo) is left
+    /// alone by resolution and then safely *replaced* by `write_skill_md`'s `rename` - not
+    /// rejected the way a symlinked segment directory is.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_default_path_symlinked_skill_md_is_replaced_not_rejected() {
+        let skills_dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("real.md");
+        std::fs::write(&outside_file, "linked content").unwrap();
+
+        let server_dir = skills_dir.path().join("my-server");
+        std::fs::create_dir_all(&server_dir).unwrap();
+        std::os::unix::fs::symlink(&outside_file, server_dir.join("SKILL.md")).unwrap();
+
+        let output_path = resolve_default_output_path(skills_dir.path(), "my-server")
+            .await
+            .unwrap();
+        write_skill_md("new content", &output_path).await.unwrap();
+
+        assert!(!output_path.is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(&output_path).unwrap(),
+            "new content"
+        );
+        // The symlink's old target must be untouched - `rename` swaps the directory entry, it
+        // never writes through the link.
+        assert_eq!(
+            std::fs::read_to_string(&outside_file).unwrap(),
+            "linked content"
         );
     }
 }
