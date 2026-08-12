@@ -138,8 +138,9 @@ impl fmt::Debug for Cli {
 pub struct ServerFlags {
     /// Load server configuration from ~/.claude/mcp.json by name
     ///
-    /// When specified, all other server configuration options are ignored.
-    /// The server must be defined in ~/.claude/mcp.json with matching name.
+    /// When specified, all other server configuration options are rejected as
+    /// conflicting arguments. The server must be defined in ~/.claude/mcp.json
+    /// with matching name.
     ///
     /// Example mcp.json (stdio and http entries can be mixed freely):
     /// ```json
@@ -158,7 +159,7 @@ pub struct ServerFlags {
     ///   }
     /// }
     /// ```
-    #[arg(long = "from-config", conflicts_with_all = ["server", "args", "env", "cwd", "http", "sse", "connect_timeout_secs", "discover_timeout_secs"])]
+    #[arg(long = "from-config", conflicts_with_all = ["server", "args", "env", "cwd", "http", "sse", "headers", "connect_timeout_secs", "discover_timeout_secs"])]
     from_config: Option<String>,
 
     /// Server command (binary name or path)
@@ -188,6 +189,9 @@ pub struct ServerFlags {
     sse: Option<String>,
 
     /// HTTP headers in KEY=VALUE format (for HTTP/SSE transport)
+    ///
+    /// Conflicts with `--from-config`: to send headers for a server defined
+    /// in `mcp.json`, add them to its `headers` field instead.
     #[arg(long = "header", num_args = 1)]
     headers: Vec<String>,
 
@@ -720,6 +724,32 @@ mod tests {
             "github",
             "--discover-timeout-secs",
             "90",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_introspect_header_conflicts_with_from_config() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "introspect",
+            "--from-config",
+            "github",
+            "--header",
+            "Authorization=Bearer x",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_header_conflicts_with_from_config() {
+        let result = Cli::try_parse_from([
+            "mcp-cli",
+            "generate",
+            "--from-config",
+            "github",
+            "--header",
+            "Authorization=Bearer x",
         ]);
         assert!(result.is_err());
     }
