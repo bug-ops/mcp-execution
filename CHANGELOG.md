@@ -291,6 +291,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-cli`**: `--header` is no longer silently discarded when combined with
+  `--from-config`. It now conflicts with `--from-config` at clap parse time, matching the
+  existing treatment of the other non-selector flags (`--arg`, `--env`, `--cwd`, the two
+  timeout overrides) (#492).
 - **`mcp-execution-server`**: `list_generated_servers`'s `tool_count` no longer over-reports by
   one for every generated server. The directory-scan filter counted every `.ts` file not starting
   with `_`, which included `index.ts` — the package's always-present re-export entry point,
