@@ -295,6 +295,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--from-config`. It now conflicts with `--from-config` at clap parse time, matching the
   existing treatment of the other non-selector flags (`--arg`, `--env`, `--cwd`, the two
   timeout overrides) (#492).
+- **`mcp-execution-server`**: `save_skill`'s file write no longer follows a symlink planted at the
+  target path after `resolve_skill_output_path`'s confinement check but before the write. The
+  check deliberately never creates the terminal path component (the caller writes it), leaving a
+  window a plain `tokio::fs::write` would fall into — the new `mcp_execution_core::write_confined_file`
+  closes it for that exact path on Unix by opening with `O_CREAT | O_TRUNC | O_NOFOLLOW` inside a
+  single `spawn_blocking` call, so there is no separate check-then-write step left to race, and the
+  write keeps the same disconnect-safe atomicity `tokio::fs::write` already had. Windows has no
+  usable equivalent flag for this open (the candidate, `FILE_FLAG_OPEN_REPARSE_POINT`, cannot be
+  combined with the create+truncate open this function needs), so it relies on a `symlink_metadata`
+  pre-check that remains TOCTOU against a racing process — documented as such rather than claimed
+  as closed. Overwrite semantics for a pre-existing regular file are unchanged. This closes the
+  race for the terminal path only on Unix — a symlink swapped in for a parent directory (e.g.
+  `{server_id}/` itself) after the check, or a hardlink at the target, are documented residual gaps
+  on every platform, not silently claimed as closed (#496).
+- **`mcp-execution-core`**: `resolve_confined_path` no longer fails one of two callers racing to
+  resolve the same not-yet-existing confined directory. `create_dir`'s `ErrorKind::AlreadyExists`
+  is now tolerated for both the segment directory and each lenient intermediate directory, and the
+  concurrent winner's directory is re-validated under the exact same confinement rule the loser
+  would have applied had it already existed at call time — this closes the race without weakening
+  either directory-kind's symlink-rejection guarantee (#491).
 - **`mcp-execution-server`**: `list_generated_servers`'s `tool_count` no longer over-reports by
   one for every generated server. The directory-scan filter counted every `.ts` file not starting
   with `_`, which included `index.ts` — the package's always-present re-export entry point,

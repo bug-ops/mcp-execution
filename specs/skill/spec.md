@@ -510,7 +510,12 @@ name before any filesystem work; the rest is delegated with
   never canonicalized even when it doesn't yet exist as a symlink.
 - This is a check against **pre-existing** state at call time — not a
   concurrency guarantee against a symlink planted by a racing process
-  between this check and the caller's write.
+  between this check and the caller's write. `mcp-server`'s `save_skill`
+  closes that gap for its own write via
+  `mcp_execution_core::write_confined_file` (issue #496; see
+  [[../server/spec#save_skill]] and
+  [[../core/spec#`confinement` module (`src/confinement.rs`)]]) rather than
+  by changing this function's own contract.
 
 ## 9. Error Conditions
 
