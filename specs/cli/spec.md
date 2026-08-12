@@ -532,12 +532,12 @@ itself was already safe (issue #346, S1).
 
 Validates the local runtime is ready to execute generated tools:
 1. Checks `node --version` is ≥ 18.0.0 (hard error if missing/older).
-2. On Unix only: makes every `.ts` file directly inside each server directory
-   under `~/.claude/servers/` executable (`files_made_executable` count) —
-   the walk is exactly two levels deep and does not descend into further
-   nested subdirectories (e.g. `{server-id}/_runtime/`) — skipping symlinked
-   entries rather than following them (`skipped_entries` count), and reports
-   whether a servers directory exists at all.
+2. On Unix only: makes every `.ts` file executable (`files_made_executable`
+   count) anywhere under `~/.claude/servers/`, at any depth — the walk
+   recurses into nested subdirectories (e.g. `{server-id}/_runtime/`) rather
+   than stopping at the server-id level — skipping symlinked entries rather
+   than following them (`skipped_entries` count), and reports whether a
+   servers directory exists at all.
 3. Reports whether `~/.claude/mcp.json` exists, printing a starter example
    if not.
 
@@ -545,18 +545,31 @@ Non-Unix platforms always report `servers_dir_found: false`,
 `files_made_executable: 0`, `skipped_entries: 0` (permission bits aren't a
 concept there).
 
-**Symlink rejection** (issue #476): the walk is confined to `~/.claude/servers/`
-by rejecting symlinked entries outright rather than resolving and re-checking
-them, at both levels of the walk — mirroring the guard semantics of
-`mcp_execution_core::confinement::resolve_confined_path` (not reused directly,
-since that function creates directories for caller-supplied paths and this
-walk enumerates existing entries and must create nothing):
-- Outer level: a symlinked server-id entry under `~/.claude/servers/` is
-  skipped (would otherwise let `chmod` descend into an arbitrary directory
-  elsewhere on disk).
-- Inner level: a symlinked `.ts` file inside an otherwise legitimate server
-  directory is skipped (would otherwise `chmod` its target anywhere the
-  process can reach).
+**Symlink rejection** (issue #476, extended to arbitrary depth by #489): the
+walk is confined to `~/.claude/servers/` by rejecting symlinked entries
+outright rather than resolving and re-checking them, at every recursion
+level — mirroring the guard semantics of
+`mcp_execution_core::confinement::resolve_confined_path` (not reused
+directly, since that function creates directories for caller-supplied paths
+and this walk enumerates existing entries and must create nothing):
+- A symlinked server-id entry, or a symlinked intermediate subdirectory at
+  any depth, is skipped and never descended into (would otherwise let the
+  walk `chmod` into an arbitrary directory elsewhere on disk).
+- A symlinked `.ts` file, at any depth, is skipped (would otherwise `chmod`
+  its target anywhere the process can reach).
+
+The symlink check runs before the `.ts` extension filter, so a symlinked
+entry that is *not* a `.ts` file (a symlinked `README.md`, a symlinked
+`_meta.json`, etc.) is also skipped and counted in `skipped_entries` with a
+warning, even though the walk would never have touched it otherwise. This
+ordering is required for directories (their extension is irrelevant to
+whether they should be descended into) and is applied uniformly to files too
+for one consistent rule, rather than special-casing "symlinked but harmless."
+
+Because a symlinked directory is never descended into, the recursion cannot
+cycle back to an ancestor through a symlink; ordinary (non-symlink)
+directories cannot form cycles on their own, so the walk is bounded by the
+real directory depth.
 
 Entry kind is checked via `DirEntry::file_type()` (does not traverse
 symlinks), and each skipped entry increments `SetupResult::skipped_entries`
@@ -569,9 +582,35 @@ subsequent `set_permissions` call (same non-guarantee documented for
 pointing outside it, which `file_type()` cannot distinguish from a regular
 file — both are accepted as out of scope.
 
+**Error tolerance during the walk** (issue #490): below the root, a directory
+that fails to open, or a read error encountered mid-iteration over its
+entries (e.g. a transient I/O error from `next_entry()`), is logged as a
+`tracing::warn!` and treated as exhausted rather than aborting the command —
+the walk resumes with the next sibling entry instead of propagating the
+error via `?`. This applies uniformly at every recursion depth below the
+root, not only to the server-id level.
+
+The walk's root (`~/.claude/servers/` itself) is the one exception: failing
+to *open* the root is still fatal and propagates as an error. Unlike a
+nested directory, the root has no sibling directories whose processing needs
+protecting, so tolerating a root-open failure would only convert a real
+error (e.g. the servers directory exists but lost its permissions, or was
+replaced by a non-directory) into a silent `Ok((true, 0, 0))` — a `setup`
+run that reports success while having done nothing. A read error
+encountered *mid-iteration* over the root's own entries, by contrast, is
+still skip-and-warn like everywhere else: any `chmod`s already applied
+before the failure are on disk and stand regardless of what the function
+returns, and a read error after a directory has already been opened
+successfully is transient enough (e.g. a stale NFS handle) that best-effort
+completion of the walk is preferred over failing the whole command over it.
+
 The core walk is exposed as `check_files_executable_in(servers_dir: &Path)`
 for testing without `HOME` mutation; the public, no-argument
 `check_files_executable()` resolves `~/.claude/servers/` and delegates to it.
+`check_files_executable_in` opens the root directory itself (propagating on
+failure) and hands the resulting iterator to `walk_entries`, the shared
+per-entry loop also used — via the `walk_and_chmod` wrapper, which supplies
+the skip-and-warn open — for every recursive (non-root) directory.
 
 ## 11. `completions` Command (`commands/completions.rs`)
 

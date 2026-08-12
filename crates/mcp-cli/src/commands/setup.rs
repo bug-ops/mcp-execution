@@ -53,9 +53,9 @@ pub struct SetupResult {
     /// Always `0` on non-Unix platforms.
     pub files_made_executable: usize,
     /// Number of symlinked entries skipped while walking
-    /// `~/.claude/servers/` — a symlinked server-id directory or a
-    /// symlinked `.ts` file inside an otherwise legitimate server
-    /// directory. Always `0` on non-Unix platforms.
+    /// `~/.claude/servers/` — any symlinked entry (a server-id directory, an
+    /// intermediate subdirectory, or a file) encountered at any depth.
+    /// Always `0` on non-Unix platforms.
     pub skipped_entries: usize,
 }
 
@@ -272,17 +272,22 @@ async fn check_files_executable() -> Result<(bool, usize, usize)> {
     Ok((false, 0, 0))
 }
 
-/// Walks `servers_dir` and makes every `.ts` file executable (0755), rejecting
-/// symlinked entries at both levels of the walk rather than following them.
+/// Recursively walks `servers_dir` and makes every `.ts` file executable
+/// (0755) at any depth, rejecting symlinked entries at every recursion level
+/// rather than following them.
 ///
-/// A symlinked server-id directory (outer level) or a symlinked `.ts` file
-/// inside an otherwise legitimate server directory (inner level) is skipped
-/// and counted in `skipped_entries` rather than chmod'd, since following
-/// either would let a planted symlink redirect a permission change to any
-/// file the process can reach outside `servers_dir`. Entry kind is checked
-/// with [`std::fs::DirEntry::file_type`] (via its `tokio` equivalent), which
-/// — like `symlink_metadata` — does not traverse symlinks, so the check
-/// itself cannot be tricked into following the entry it's inspecting.
+/// A symlinked entry — a server-id directory, an intermediate subdirectory,
+/// or a `.ts` file, at any depth — is skipped and counted in
+/// `skipped_entries` rather than chmod'd or descended into, since following
+/// one would let a planted symlink redirect a permission change, or a
+/// directory descent, to anywhere the process can reach outside
+/// `servers_dir`. Entry kind is checked with
+/// [`std::fs::DirEntry::file_type`] (via its `tokio` equivalent), which —
+/// like `symlink_metadata` — does not traverse symlinks, so the check itself
+/// cannot be tricked into following the entry it's inspecting. Because a
+/// symlinked directory is therefore never descended into, the walk cannot
+/// cycle back to an ancestor through a symlink; ordinary (non-symlink)
+/// directories cannot form cycles on their own.
 ///
 /// This is a check against pre-existing state, not a concurrency guarantee:
 /// it does not defend against a symlink planted by a racing process between
@@ -294,12 +299,18 @@ async fn check_files_executable() -> Result<(bool, usize, usize)> {
 ///
 /// # Errors
 ///
-/// Returns error if a directory cannot be read, an entry's file type cannot
-/// be determined, or permission changes fail (other than a bare `read_dir`
-/// failure on a server subdirectory, which is skipped and warned about).
+/// Returns an error if `servers_dir` cannot be canonicalized, the root
+/// directory itself cannot be opened for reading, an entry's file type
+/// cannot be determined, or a `.ts` file's permissions cannot be read or
+/// changed. A root-open failure is fatal (there are no sibling directories
+/// to protect at the root, so tolerating it would only hide a real error).
+/// Below the root, a directory that fails to open, or a read error
+/// encountered mid-iteration over any directory's entries (root included),
+/// is not propagated: it is logged as a warning and the walk moves on (to
+/// the next sibling entry, or simply stops if the affected directory is the
+/// walk's root) rather than aborting the whole `setup` run.
 #[cfg(unix)]
 async fn check_files_executable_in(servers_dir: &Path) -> Result<(bool, usize, usize)> {
-    use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
     // Check if servers directory exists
@@ -308,70 +319,102 @@ async fn check_files_executable_in(servers_dir: &Path) -> Result<(bool, usize, u
     }
 
     let root = fs::canonicalize(servers_dir).await?;
+    // The root's own read_dir failure is fatal: unlike a nested server-id
+    // directory, there are no siblings at the root to protect by tolerating
+    // it, so propagating is the only way the caller learns setup didn't run.
+    let entries = fs::read_dir(&root).await?;
 
-    // Walk through all .ts files and make them executable
     let mut count = 0;
     let mut skipped = 0;
-    let mut entries = fs::read_dir(&root).await?;
+    walk_entries(&root, entries, &mut count, &mut skipped).await?;
 
-    while let Some(entry) = entries.next_entry().await? {
+    Ok((true, count, skipped))
+}
+
+/// Recursion step for [`check_files_executable_in`]: opens `dir` — skipping
+/// it with a warning rather than propagating if it cannot be opened, since
+/// (unlike the walk's root) it always has siblings whose processing should
+/// continue — then delegates to [`walk_entries`] for the shared per-entry
+/// logic.
+#[cfg(unix)]
+async fn walk_and_chmod(dir: &Path, count: &mut usize, skipped: &mut usize) -> Result<()> {
+    use tokio::fs;
+
+    let entries = match fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::warn!(
+                path = %sanitize_path_for_error(dir),
+                %error,
+                "skipping unreadable directory under the servers directory"
+            );
+            return Ok(());
+        }
+    };
+
+    walk_entries(dir, entries, count, skipped).await
+}
+
+/// Shared entry-processing loop for [`check_files_executable_in`]'s root
+/// call and [`walk_and_chmod`]'s recursive calls: chmod's `.ts` files,
+/// skips symlinks, and recurses into subdirectories. See
+/// [`check_files_executable_in`]'s docs for the full symlink-rejection and
+/// error-tolerance rationale, which applies here unchanged at every
+/// recursion depth — including a `next_entry()` read error mid-iteration,
+/// which is always skip-and-warn (only the initial directory open has
+/// different fatality between the root and its descendants).
+#[cfg(unix)]
+async fn walk_entries(
+    dir: &Path,
+    mut entries: tokio::fs::ReadDir,
+    count: &mut usize,
+    skipped: &mut usize,
+) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::fs;
+
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => break,
+            Err(error) => {
+                tracing::warn!(
+                    path = %sanitize_path_for_error(dir),
+                    %error,
+                    "stopping directory read after error; skipping any remaining entries"
+                );
+                break;
+            }
+        };
+
         let path = entry.path();
-
         let file_type = entry.file_type().await?;
         if file_type.is_symlink() {
             tracing::warn!(
                 path = %sanitize_path_for_error(&path),
                 "skipping symlinked entry under the servers directory"
             );
-            skipped += 1;
-            continue;
-        }
-        if !file_type.is_dir() {
+            *skipped += 1;
             continue;
         }
 
-        // Recurse into the server directory
-        let mut server_entries = match fs::read_dir(&path).await {
-            Ok(server_entries) => server_entries,
-            Err(error) => {
-                tracing::warn!(
-                    path = %sanitize_path_for_error(&path),
-                    %error,
-                    "skipping unreadable server directory"
-                );
-                continue;
-            }
-        };
-
-        while let Some(server_entry) = server_entries.next_entry().await? {
-            let file_path = server_entry.path();
-
-            if file_path.extension().and_then(|s| s.to_str()) != Some("ts") {
-                continue;
-            }
-
-            let file_type = server_entry.file_type().await?;
-            if file_type.is_symlink() {
-                tracing::warn!(
-                    path = %sanitize_path_for_error(&file_path),
-                    "skipping symlinked .ts file under the servers directory"
-                );
-                skipped += 1;
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-
-            let metadata = fs::metadata(&file_path).await?;
-            let mut perms = metadata.permissions();
-            perms.set_mode(0o755); // rwxr-xr-x
-            fs::set_permissions(&file_path, perms).await?;
-            count += 1;
+        if file_type.is_dir() {
+            Box::pin(walk_and_chmod(&path, count, skipped)).await?;
+            continue;
         }
+
+        if !file_type.is_file() || path.extension().and_then(|s| s.to_str()) != Some("ts") {
+            continue;
+        }
+
+        let metadata = fs::metadata(&path).await?;
+        let mut perms = metadata.permissions();
+        perms.set_mode(0o755); // rwxr-xr-x
+        fs::set_permissions(&path, perms).await?;
+        *count += 1;
     }
 
-    Ok((true, count, skipped))
+    Ok(())
 }
 
 /// Gets the path to ~/.claude/mcp.json
@@ -457,6 +500,149 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_recurses_into_nested_subdirectories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        let runtime_dir = servers_dir.path().join("my-server").join("_runtime");
+        tokio::fs::create_dir_all(&runtime_dir).await.unwrap();
+        let bridge_path = runtime_dir.join("mcp-bridge.ts");
+        tokio::fs::write(&bridge_path, "// bridge").await.unwrap();
+
+        let (servers_dir_found, files_made_executable, skipped_entries) =
+            check_files_executable_in(servers_dir.path()).await.unwrap();
+
+        assert!(servers_dir_found);
+        assert_eq!(files_made_executable, 1);
+        assert_eq!(skipped_entries, 0);
+        let mode = tokio::fs::metadata(&bridge_path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    // Note: this and the sibling `read_dir`-open-failure tests below do not exercise
+    // `walk_entries`'s mid-iteration `next_entry()` `Err` branch (setup.rs's skip-and-warn
+    // path for a read error *after* a directory has already opened successfully) — that
+    // requires deterministic fault injection with no seam this test suite has today, and is
+    // left untested (see #490's handoff notes).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_skips_unreadable_nested_dir_processes_siblings() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let servers_dir = tempfile::TempDir::new().unwrap();
+
+        let good_server_dir = servers_dir.path().join("good-server");
+        tokio::fs::create_dir_all(&good_server_dir).await.unwrap();
+        let good_tool_path = good_server_dir.join("tool.ts");
+        tokio::fs::write(&good_tool_path, "// tool").await.unwrap();
+
+        let locked_server_dir = servers_dir.path().join("locked-server");
+        tokio::fs::create_dir_all(&locked_server_dir).await.unwrap();
+        tokio::fs::set_permissions(&locked_server_dir, std::fs::Permissions::from_mode(0o000))
+            .await
+            .unwrap();
+
+        // Root (and some CI runners) bypass directory permission checks, in which case the
+        // property under test does not hold; restore permissions and skip.
+        if tokio::fs::read_dir(&locked_server_dir).await.is_ok() {
+            tokio::fs::set_permissions(&locked_server_dir, std::fs::Permissions::from_mode(0o755))
+                .await
+                .unwrap();
+            return;
+        }
+
+        let result = check_files_executable_in(servers_dir.path()).await;
+
+        // Restore permissions unconditionally so `TempDir`'s drop can clean up.
+        tokio::fs::set_permissions(&locked_server_dir, std::fs::Permissions::from_mode(0o755))
+            .await
+            .unwrap();
+
+        let (servers_dir_found, files_made_executable, skipped_entries) = result.unwrap();
+
+        assert!(servers_dir_found);
+        assert_eq!(
+            files_made_executable, 1,
+            "the healthy sibling directory must still be processed"
+        );
+        assert_eq!(skipped_entries, 0);
+        let mode = tokio::fs::metadata(&good_tool_path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_propagates_root_read_dir_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        tokio::fs::set_permissions(servers_dir.path(), std::fs::Permissions::from_mode(0o000))
+            .await
+            .unwrap();
+
+        // Root (and some CI runners) bypass directory permission checks, in which case the
+        // property under test does not hold; restore permissions and skip.
+        if tokio::fs::read_dir(servers_dir.path()).await.is_ok() {
+            tokio::fs::set_permissions(servers_dir.path(), std::fs::Permissions::from_mode(0o755))
+                .await
+                .unwrap();
+            return;
+        }
+
+        let result = check_files_executable_in(servers_dir.path()).await;
+
+        // Restore permissions unconditionally so `TempDir`'s drop can clean up.
+        tokio::fs::set_permissions(servers_dir.path(), std::fs::Permissions::from_mode(0o755))
+            .await
+            .unwrap();
+
+        assert!(
+            result.is_err(),
+            "an unreadable servers directory root must propagate an error, not report success"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_skips_symlinked_nested_subdirectory() {
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target_path = outside.path().join("target.ts");
+        tokio::fs::write(&target_path, "// outside").await.unwrap();
+
+        let my_server_dir = servers_dir.path().join("my-server");
+        tokio::fs::create_dir_all(&my_server_dir).await.unwrap();
+        std::os::unix::fs::symlink(outside.path(), my_server_dir.join("_runtime")).unwrap();
+
+        let (servers_dir_found, files_made_executable, skipped_entries) =
+            check_files_executable_in(servers_dir.path()).await.unwrap();
+
+        assert!(servers_dir_found);
+        assert_eq!(files_made_executable, 0);
+        assert_eq!(skipped_entries, 1);
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &tokio::fs::metadata(&target_path)
+                .await
+                .unwrap()
+                .permissions(),
+        );
+        assert_eq!(
+            mode & 0o111,
+            0,
+            "symlinked nested directory's target must not be descended into"
+        );
     }
 
     #[cfg(unix)]
