@@ -491,6 +491,20 @@ name before any filesystem work; the rest is delegated with
 `ConfinementTarget::File(file_name)` as the terminal target, and
 `ConfinementError` is mapped onto `OutputPathError` by a total `From` impl (see §9).
 
+- `output_path`, when supplied, is treated as *relative* to
+  `base_dir/server_id`: an absolute path, a path containing a `..`
+  component, a path containing a literal `~` path component anywhere (not
+  only as the leading segment — a `~` embedded within a longer segment,
+  e.g. `my~file`, is not a component and is accepted), or a path with no
+  file name is rejected by `relative_target` before any filesystem work
+  happens. The `~` check exists because `output_path` has no
+  home-directory-expansion semantics here — it is purely relative to
+  `base_dir/server_id` — so a caller mistakenly echoing `generate_skill`'s
+  display-only `default_output_path_hint` response field (shaped
+  `~/.claude/skills/{server_id}/SKILL.md`) back into `save_skill`'s
+  `output_path` would otherwise be silently accepted as an ordinary
+  relative path and create a nonsensical literal `~` directory
+  (issue #434/#441).
 - `server_id` and `output_path`'s directory components walk the **same**
   checked, one-component-at-a-time loop, rooted at a once-canonicalized
   `base_dir`.
@@ -517,6 +531,20 @@ name before any filesystem work; the rest is delegated with
   [[../core/spec#`confinement` module (`src/confinement.rs`)]]) rather than
   by changing this function's own contract.
 
+Every `OutputPathError` variant that embeds caller-supplied text
+(`server_id` in `InvalidServerId`, or a rejected path in
+`AbsolutePath`/`ParentTraversal`/`TildeComponent`/`InvalidPath`/`ServerIdIsSymlink`/`Escape`/`NotADirectory`/`NotAFile`/`CreateDir`)
+stores a display form pre-sanitized with
+`mcp_execution_core::untrusted::sanitize_untrusted_inline` (for
+`server_id`) or `sanitize_path_for_error` (for paths) before construction,
+escaping `&`/`<`/`>` while leaving legitimate non-ASCII text (emoji, other
+scripts) untouched. This sanitization alone is not sufficient: some
+invisible/joining characters (e.g. U+200D ZERO WIDTH JOINER) are
+deliberately left unescaped by the sanitizer, so `#[error(...)]` formats
+the stored field with `{:?}` (`Debug`), not `{}` (`Display`) — `Debug`
+escapes such characters to `\u{200d}` — as a required second layer. This
+defends error text that can be LLM-facing (issue #461).
+
 ## 9. Error Conditions
 
 `ScanError`: `Io`, `DirectoryNotFound`, `MissingMetadata`,
@@ -533,6 +561,8 @@ confinement now validates `server_id` via `mcp_execution_core::validate_server_i
 same rule `mcp-server`'s tool handlers gate entry with, rather than the looser
 `validate_path_segment`; `source` carries the precise violation so the message can't drift from
 the actual rule enforced), `AbsolutePath`, `ParentTraversal`,
+`TildeComponent` (issue #434/#441 — a literal `~` path component anywhere
+in `output_path`, distinct from `ParentTraversal`; see §8),
 `InvalidPath`, `ServerIdIsSymlink`, `Escape`, `NotADirectory`, `NotAFile`,
 `CreateDir`, `Io`.
 

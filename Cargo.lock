@@ -1378,7 +1378,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-execution-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1403,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-codegen"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "criterion",
  "handlebars",
@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-files"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "criterion",
  "dhat",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-introspector"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "axum",
  "criterion",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-server"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-execution-skill"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "handlebars",
  "mcp-execution-core",

@@ -105,11 +105,21 @@ impl PendingGeneration {
 
 | Tool | Purpose | Cancellation-aware? |
 |---|---|---|
-| [[#introspect_server]] | Connect to a target server, discover tools, return a session id | Yes |
-| [[#save_categorized_tools]] | Generate + export TypeScript from a prior session's categorization | No (deliberately) |
-| [[#list_generated_servers]] | Enumerate previously-generated servers under `~/.claude/servers` | No (single bounded scan) |
-| [[#generate_skill]] | Scan a generated server's tools, return an LLM-facing SKILL.md generation prompt | Yes |
-| [[#save_skill]] | Write Claude-composed SKILL.md content, confined to `~/.claude/skills/{server_id}/` | No (deliberately) |
+| [[#introspect_server]] | Connect to a target server, discover tools, return a session id | Yes (races discovery) |
+| [[#save_categorized_tools]] | Generate + export TypeScript from a prior session's categorization | Checkpoints only (C1-C3), never races the export |
+| [[#list_generated_servers]] | Enumerate previously-generated servers under `~/.claude/servers` | Yes (races the scan) |
+| [[#generate_skill]] | Scan a generated server's tools, return an LLM-facing SKILL.md generation prompt | Yes (races the scan) |
+| [[#save_skill]] | Write Claude-composed SKILL.md content, confined to `~/.claude/skills/{server_id}/` | Checkpoints only (S1-S2), never races the write |
+
+Since issue #404, every `#[tool]` handler observes client-issued
+cancellation in some form — either by racing its longest-running await
+point against the token via `tokio::select!` (`introspect_server`,
+`list_generated_servers`, `generate_skill`), or by polling
+`ct.is_cancelled()` at safe, side-effect-free checkpoints before an
+irreversible section it deliberately never races
+(`save_categorized_tools`, `save_skill` — an earlier attempt to race their
+lock-wait/write was reverted because it reopened a data-loss race or could
+make a cancelled response lie about whether a write had landed).
 
 `get_info()` (`ServerHandler`) pins `protocol_version` to `2025-06-18` as
 the fallback used for negotiation against clients requesting an
@@ -277,13 +287,20 @@ issue #381).
    failure apart from an ordinary retriable pipeline error. Only once step 3 fully
    succeeds, or `restore` runs (successfully or not), is the session's fate
    settled.
-5. Does **not** observe request cancellation — a documented, deliberate
-   choice: an earlier version raced the *lock wait* (not the export
-   itself, which was already excluded) against cancellation, but that
-   produced two successive correctness bugs (a leaked lock-table entry, or
-   an evicted entry pulled out from under the still-running holder,
-   reopening the exact data-loss race the lock exists to prevent) for
-   little benefit, since the export itself was never interruptible anyway.
+5. Observes cancellation at three checkpoints only (`ct.is_cancelled()`),
+   never by racing an operation in flight (issue #404): C1 on entry,
+   before the session is taken; C2 after codegen/VFS-build, before the
+   per-`output_dir` export lock is requested; C3 after that lock is held,
+   before the export's `spawn_blocking` task is created. Any checkpoint
+   firing returns an internal-error response and leaves the session
+   retriable under the same `session_id` (C1: never taken; C2/C3: taken
+   then `restore`d). Nothing already started is interrupted — once
+   `spawn_blocking` has the export, it runs to completion regardless. The
+   export-lock *wait* and the export itself are deliberately never raced
+   against cancellation: an earlier version raced the lock wait and
+   reopened a data-loss race (leaked or wrongly-evicted lock-table
+   entries) for little benefit, since the export itself was never
+   interruptible anyway.
 
 ### `list_generated_servers`
 
@@ -296,7 +313,11 @@ rejected). Confinement is lexical first (`Path::join` + `starts_with`, which
 catches even a non-existent target and a Windows root-without-prefix path
 like `\pwn\evil`), then, if the joined path exists, re-checked via
 canonicalization against the canonicalized root (catches a symlink planted
-inside it). The scan itself (`spawn_blocking`, nested `read_dir`) counts
+inside it). Since issue #404, the scan is raced against client-issued
+cancellation via the same `tokio::select! { biased; ... }` pattern as
+`introspect_server`/`generate_skill` (`biased` so cancellation
+deterministically wins over an in-progress poll). The scan itself
+(`spawn_blocking`, nested `read_dir`) counts
 `.ts` files per subdirectory, excluding `index.ts` (the package's
 always-present re-export entry point, matched case-insensitively against
 `INDEX_FILE_NAME` for consistency with `disambiguate_output_filename`'s own
@@ -336,12 +357,15 @@ Thin MCP-tool wrapper around `mcp_execution_skill::resolve_skill_output_path`
 + `extract_skill_metadata`. Validates `server_id`, content size
 (`MAX_SKILL_CONTENT_SIZE` = 100 KiB), and that content starts with `---`
 before the more expensive frontmatter parse. Rejects overwriting an existing
-file unless `overwrite: true`. **Deliberately does not observe
-cancellation**: `write_confined_file` on the blocking-pool cannot actually be
-interrupted once queued — racing it against `ct.cancelled()` would make the
-response lie (telling a cancelled client the write never happened while it
-still lands on disk moments later), which is worse than not attempting
-cancellation. The content-size bound (100 KiB) is not what actually caps the
+file unless `overwrite: true`. Observes cancellation at two checkpoints
+only (`ct.is_cancelled()`, issue #404): S1 before `server_id`/content
+validation and `resolve_skill_output_path`; S2 immediately before the
+`write_confined_file` call. It deliberately never races the write itself:
+`write_confined_file` on the blocking-pool cannot actually be interrupted
+once queued — racing it against `ct.cancelled()` would make the response
+lie (telling a cancelled client the write never happened while it still
+lands on disk moments later), which is worse than not attempting
+cancellation there. The content-size bound (100 KiB) is not what actually caps the
 synchronous parse cost — `extract_skill_metadata`'s own
 `MAX_FRONTMATTER_SIZE` (8 KiB) on the extracted block is what keeps that
 bounded regardless of overall content size, since YAML parsing isn't
@@ -444,12 +468,14 @@ TOCTOU bug (it could evict a fresh handle a *third*, concurrent caller
 already inserted after a *second* caller's own eviction).
 
 Every lock helper (`introspector_for`/`evict_introspector`/`export_lock_for`/
-`evict_export_lock`) and every tool handler except `list_generated_servers`
-(`introspect_server`/`save_categorized_tools`/`generate_skill`/`save_skill`)
-carries a `#[tracing::instrument(skip_all, fields(server_id = ...))]` (or
-`output_dir = ...` for the lock helpers) span (issue #211) — this changes the
-shape of stderr output (nested spans, structured `server_id`/`output_dir`
-fields) but not log message text.
+`evict_export_lock`) and every tool handler
+(`introspect_server`/`save_categorized_tools`/`list_generated_servers`/`generate_skill`/`save_skill`)
+carries a `#[tracing::instrument(skip_all, fields(...))]` span (issue #211,
+`list_generated_servers` added by issue #404) — `server_id = ...` for
+`introspect_server`/`save_categorized_tools`/`generate_skill`/`save_skill`,
+`base_dir = ...` for `list_generated_servers`, `output_dir = ...` for the
+lock helpers — this changes the shape of stderr output (nested spans,
+structured fields) but not log message text.
 
 ## 6. Output Directory Resolution (`output_dir.rs`)
 
@@ -484,6 +510,16 @@ to each crate:
   **not created** here — `FileSystem::export_to_filesystem` publishes it
   atomically via a staged rename, and pre-creating it would defeat that
   atomicity on a first-time `generate`.
+
+Every `OutputDirError` variant that echoes a rejected path/segment/`server_id`
+back in its message does so through `mcp_execution_core::untrusted::sanitize_untrusted_inline`
+at construction time, not the raw caller-supplied text (issue #461) —
+closing a path where a hostile `server_id` or `output_dir` segment
+containing `&`/`<`/`>`/control/bidi characters could otherwise reach this
+project's (partly LLM-facing) error text unescaped. `resolve_output_dir`
+applies this at the `InvalidServerId` construction site; the
+`From<ConfinementError>` impl (see above) does the same for the path
+re-derived from a rejected `ConfinementError::InvalidSegment`.
 
 `resolve_list_base_dir` (`service.rs`) is a **third**, deliberately separate
 implementation of a related but weaker idea — it stays out of scope for #395
@@ -654,7 +690,9 @@ threads share one process).
 `OutputDirError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
 `source` carries the precise slug-format violation, so the message can't independently drift
 from the actual rule `mcp_execution_core::validate_server_id_slug` enforces), `AbsolutePath`,
-`ParentTraversal`, `ServerDirIsSymlink`, `Escape`, `NotADirectory`, `CreateDir`, `Io`.
+`ParentTraversal`, `ServerDirIsSymlink`, `Escape`, `NotADirectory`, `CreateDir`, `Io` — every
+variant's embedded path/`server_id` is a sanitized display form
+(`sanitize_untrusted_inline`), not the raw caller-supplied text (issue #461; see §6).
 
 Every tool method maps its internal errors to `rmcp::ErrorData` via either
 `McpError::invalid_params` (caller's fault — bad input, missing session,

@@ -57,7 +57,7 @@ Relevant call sites: `Introspector::discover_server()`
 
 **(a) Adopt now** (`ClientServiceExt::serve_with_lifecycle(t,
 ClientLifecycleMode::Auto { .. })` at both `().serve(...)` call sites,
-`crates/mcp-introspector/src/lib.rs:1060` and `:1121`)
+`crates/mcp-introspector/src/lib.rs:1077` and `:1141`)
 
 - **Pros:** forward-compatible with any future server that implements
   discover; the mechanism itself is already vendored and stable.
@@ -184,7 +184,7 @@ the only path actually taken.
 
 **Integration shape, if and when A is taken:** a `ServerConfig` lifecycle
 knob defaulting to legacy, threaded into `connect_and_list_tools`; only the
-two `().serve(...)` call sites change (`lib.rs:1060`, `lib.rs:1121`),
+two `().serve(...)` call sites change (`lib.rs:1077`, `lib.rs:1141`),
 swapping to `ClientServiceExt::serve_with_lifecycle(t,
 ClientLifecycleMode::Auto { .. })`, plus a `tracing::warn` when discover
 yields no `server_info` so risk 1 above is observable instead of silent.
@@ -235,8 +235,12 @@ assert_eq!(rmcp::model::ProtocolVersion::LATEST, rmcp::model::ProtocolVersion::V
 fails the moment `rmcp` promotes `LATEST` to `V_2026_07_28`. Implemented as
 `test_adr_369_protocol_version_latest_gate` in
 `crates/mcp-introspector/src/lib.rs` (`#[cfg(test)] mod tests`, ADR-369 §5
-section), the only workspace reference to `ProtocolVersion::LATEST` or
-`KNOWN_VERSIONS`.
+section), the only workspace reference to `ProtocolVersion::LATEST`.
+(`KNOWN_VERSIONS` is also referenced by
+`crates/mcp-server/tests/integration_tests.rs`, added by the Finding C
+follow-up (§7 item 2, #385) after this gate was written; that reference
+characterizes `GeneratorService`'s protocol-version advertisement and is
+unrelated to this gate.)
 
 **What a failing assertion means — and does not mean.** A red assertion is
 a **trigger to re-open the adoption discussion for A**, nothing more. It
@@ -317,30 +321,35 @@ user-confirmed scope split in §1.
 
 ## 7. Out-of-Scope Follow-Ups (file separately, per this project's convention)
 
-1. **`_meta.json` generation provenance + staleness check** — the real
-   content of finding B (§4.2): add a timestamp, config fingerprint, and
-   tool-list digest to `crates/mcp-core/src/metadata.rs`'s `_meta.json`
-   schema, plus a comparison command. `_meta.json` `schema_version: 1` may
-   be bumped for this, pre-1.0.
-2. **Finding C** — characterize-and-test `mcp-server`'s protocol
-   advertisement (§6). Includes the `supported_protocol_versions()` pin
-   that was deliberately excluded from this ADR's gate (§5). Suggested
-   label `P2`. File before or together with this ADR's commit, so the
-   caveat noted in §5 does not go unaddressed.
-3. **Issue #226 revisit is now actionable, and its docs are stale.**
-   `crates/mcp-introspector/src/lib.rs:369-378` and
-   [[../introspector/spec]] (its `rmcp`-version-gated HTTP transport
-   section) still describe `rmcp` 2.2.0 and say "revisit once 3.0.0 stable
-   ships," while the lockfile is at 3.1.2 and
-   `StreamableHttpClientTransportConfig::max_sse_event_size` now exists
-   and is **not** set by `discover_via_http` (`lib.rs:1113-1115`).
-4. **Spec drift.** [[../server/spec]]'s statement that `get_info()`
-   "advertises protocol version `2025-06-18`" is misleading per §6's
-   corrected understanding — it is a fallback value, not the advertised
-   or negotiated ceiling. `crates/mcp-server/tests/integration_tests.rs:27`
-   (`test_service_info_has_correct_capabilities`) pins `get_info()` in
-   isolation — a green test guarding an incomplete picture of what the
-   server actually negotiates.
+1. ~~**`_meta.json` generation provenance + staleness check**~~ **Resolved
+   by #468/#497** (`9bb3a33`): `mcp_execution_core::provenance`
+   (`GenerationProvenance`, `ConfigFingerprint`, `ToolDigest`) now records
+   generation-time server state in `_meta.json` (`schema_version` bumped
+   1 → 2), closing the gap this item re-scoped finding B (§4.2) into. No
+   further action needed on capture; a comparison/drift-detection command
+   consuming this data remains future work (see [[../NFR-mcp-execution-2026-07-27#10. Open Questions]]).
+2. ~~**Finding C**~~ **Resolved by #385** (`9dd4b81`,
+   "characterize SEP-2575 discover advertisement"): `mcp-server`'s
+   protocol-version advertisement, including the `supported_protocol_versions()`
+   pin excluded from this ADR's own gate (§5), is now characterized by
+   `test_service_advertises_all_known_protocol_versions_by_default` and
+   `test_discover_result_from_server_info_reports_all_known_versions`
+   in `crates/mcp-server/tests/integration_tests.rs`.
+3. ~~**Issue #226 revisit is now actionable, and its docs are stale.**~~
+   **Resolved by #403** (`a8e8785`): `discover_via_http` now sets
+   `StreamableHttpClientTransportConfig::max_sse_event_size` explicitly
+   (`crates/mcp-introspector/src/lib.rs:1134`, pinned via
+   `HTTP_MAX_SSE_EVENT_SIZE`), and both `lib.rs` and [[../introspector/spec]]
+   were updated to describe the current rmcp-3.1.2-era bound (SSE bounded,
+   plain JSON body still unbounded upstream, with no version-gated revisit
+   condition left).
+4. ~~**Spec drift.**~~ **Resolved by #385** (`9dd4b81`, same commit as
+   item 2): [[../server/spec]]'s `get_info()` description now correctly
+   states the `2025-06-18` pin is "the fallback used for negotiation
+   against clients requesting an unrecognized version," and separately
+   documents that `supported_protocol_versions()`/`discover()` are not
+   overridden, so rmcp's defaults advertise every `KNOWN_VERSIONS` entry —
+   matching §6's corrected understanding.
 5. **`Introspector`'s five dead accessors** (§4.2:
    `get_server`/`list_servers`/`server_count`/`remove_server`/`clear`) —
    wire a caller or delete outright; pre-1.0, no deprecation cycle needed.

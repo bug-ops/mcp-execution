@@ -12,7 +12,7 @@ Foundation types, traits, and error handling for MCP Code Execution.
 
 ```toml
 [dependencies]
-mcp-execution-core = "0.9"
+mcp-execution-core = "0.10"
 ```
 
 Or with cargo-add:
@@ -58,6 +58,13 @@ assert_eq!(tool.as_str(), "create_issue");
 
 > [!TIP]
 > Strong types prevent accidentally passing a `ToolName` where a `ServerId` is expected.
+
+> [!IMPORTANT]
+> `ServerId::new`/`ToolName::new` enforce a UTS #39 `Identifier_Status=Allowed` invariant: every
+> character must be an allowed Unicode identifier character. This rejects spaces and most
+> punctuation (`@`/`+`/`(`/`&`/`<`/`>`/etc.) outright, closing a spoofing class where a hostile MCP
+> server could publish a tool name that is visually near-identical to a legitimate one using
+> invisible or confusable characters.
 
 ### Error Handling
 
@@ -112,6 +119,16 @@ validate_server_config(&config)?;
 | `Transport` | Transport-specific config enum (Stdio, Http, Sse) |
 | `Error` | Error type with contextual information |
 | `Result<T>` | Alias for `std::result::Result<T, Error>` |
+
+### Modules
+
+| Module | Description |
+|--------|-------------|
+| `confinement` | Shared resolve-and-confine filesystem walk (`resolve_confined_path`), symlink-safe writes (`write_confined_file`, `open_confined_write`) |
+| `provenance` | `GenerationProvenance`/`ConfigFingerprint`/`ToolDigest` — SHA-256 digests recording when and against what server state a `_meta.json` sidecar was generated |
+| `untrusted` | `sanitize_untrusted_text`/`sanitize_untrusted_inline` — neutralizes attacker-controlled text (control chars, bidi overrides, invisible Unicode) before it reaches LLM-facing prompts or error messages |
+| `metadata` | `ServerMetadata`, `METADATA_SCHEMA_VERSION`, shared generated-file naming constants |
+| `cli` | Shared CLI helpers reused by `mcp-execution-cli` |
 
 ## Related Crates
 

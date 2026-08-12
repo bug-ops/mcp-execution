@@ -460,6 +460,7 @@ call `LogFormat::resolve` and then build the same `.boxed()`-branched
 ```rust
 pub const METADATA_SCHEMA_VERSION: u32 = 2;
 pub const METADATA_FILE_NAME: &str = "_meta.json";
+pub const INDEX_FILE_NAME: &str = "index.ts";
 pub struct ServerMetadata { schema_version: u32, server_id: ServerId, server_name: String, server_version: String, tools: Vec<ToolMetadata>, provenance: GenerationProvenance }
 pub struct ToolMetadata { name: ToolName, typescript_name: String, category: Option<String>, keywords: Vec<String>, description: Option<String>, parameters: Vec<ParameterMetadata> }
 pub struct ParameterMetadata { name, typescript_type, required, description: Option<String> }
@@ -474,6 +475,13 @@ This is the **wire contract** between `mcp-codegen` (producer, writes
 `METADATA_SCHEMA_VERSION` is the intended way to signal a breaking shape
 change; consumers compare it and fail loudly on mismatch (see
 [[../skill/spec#ScanError]]).
+
+`INDEX_FILE_NAME` (issue #487) is the filename of the generated re-export entry point
+(`index.ts`) `mcp-codegen` always emits alongside per-tool files. Shared so `mcp-server`'s
+`list_generated_servers` tool-count scan and `mcp-skill`'s sidecar-verification pass both
+recognize it as the package's aggregator file rather than a per-tool `.ts` file, matched
+case-insensitively — see
+[[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]].
 
 `provenance` (issue #468) is required, not `Option`: a `schema_version: 1` sidecar has no
 `provenance` key at all, and a consumer is expected to check `schema_version` — via a minimal
@@ -643,6 +651,19 @@ pub async fn resolve_confined_path(
 pub async fn write_confined_file(path: &Path, content: &[u8]) -> Result<(), ConfinementError>;
 pub fn open_confined_write(path: &Path) -> std::io::Result<std::fs::File>;
 ```
+
+Since issue #461, `ConfinementError::InvalidSegment`'s `segment` field holds a *sanitized* form
+of the rejected segment, not the raw one — `resolve_confined_path` runs it through
+`untrusted::sanitize_untrusted_inline` before constructing the error, mirroring `ServerId`/
+`ToolName`'s own error-construction sanitization (see [[#ServerId / ToolName (src/types.rs)]])
+since a rejected `server_id` segment is attacker-controlled and reaches the same LLM-facing/
+terminal-rendered error text. The `{segment:?}` (`Debug`) formatting on `InvalidSegment`'s
+`#[error(...)]` is a required second layer of defense on top of that sanitization, not
+incidental — it still escapes the residual characters `sanitize_untrusted_inline` deliberately
+leaves untouched (e.g. U+200D). Every caller that maps `ConfinementError::InvalidSegment` into
+its own `InvalidServerId` variant (`mcp-server::OutputDirError`, `mcp-skill::OutputPathError`)
+moves this field verbatim without re-sanitizing, so this is the sole sanitization point for both
+crates' `server_id` confinement errors.
 
 Issue #395: `mcp-skill::resolve_skill_output_path` and
 `mcp-server::output_dir::resolve_output_dir` independently implemented the same
@@ -961,7 +982,7 @@ it would require either a request-wide (not per-field) budget threaded through e
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen`; `confinement::open_confined_write` directly (issue #504) |
 | `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
+| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `metadata::{INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
 | `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth

@@ -137,7 +137,9 @@ single-file "group" swap the shared base directory wholesale in
    - Pre-creates every directory the file set needs, in one pass.
 3. Writes every file into the staging directory
    (`write_file_atomic` per file: temp-file → `fsync` → rename, when
-   `options.atomic`).
+   `options.atomic`) — the temp file is opened through a symlink guard
+   rather than a plain create; see
+   [[#Symlink guard (`write_file_atomic`)]].
 4. `publish_staged_export`: renames the staging directory into `target`.
    - If `target` doesn't exist yet: a single `rename`.
    - If it does: `target` is moved aside to a unique `.{stem}.stale-{pid}-{nanos}-{seq}`
@@ -187,8 +189,34 @@ check is unavailable through `export_to_filesystem` (which always uses
 layer behind its primary guard (sanitizing the server-id-derived directory
 name) — see [[../cli/spec#generate]].
 
+### Symlink guard (`write_file_atomic`)
+
+`write_file_atomic`'s temp file (`path.tmp`) sits at a predictable location
+a co-located attacker process could pre-plant as a symlink before this call
+creates it; opening it via a plain `fs::File::create` would make the write
+land on whatever that symlink points to instead of inside the staging
+directory (issue #504). The temp file is instead opened via
+`mcp_execution_core::open_confined_write`, the same primitive `mcp-core`'s
+`confinement::write_confined_file` uses internally (see
+[[../core/spec#`open_confined_write` exposes the same guard as its own synchronous primitive (issue #504)]]).
+On Unix, the open carries `O_NOFOLLOW`, so the kernel rejects a symlinked
+terminal path component as part of the same syscall that creates/truncates
+the file. Non-Unix platforms have no equivalent flag combinable with
+`create(true).truncate(true)`, so the guard falls back to a
+`std::fs::symlink_metadata` pre-check with no yield point before the open —
+narrowing but not closing the race against a symlink planted by a racing
+process between the check and the open. A pre-existing *regular* file at
+the temp path is still opened and truncated normally; only a symlink at
+that exact path is rejected.
+
 ### Non-goals / accepted gaps
 
+- On non-Unix platforms, the symlink guard on `write_file_atomic`'s
+  temp-file open is a check-then-open, not an atomic kernel-level
+  rejection — there is no `O_NOFOLLOW` equivalent combinable with
+  `create`+`truncate`. A symlink planted by a racing process in the gap
+  between the `symlink_metadata` check and the open is not caught. Unix
+  closes this entirely via `O_NOFOLLOW`.
 - Concurrent exports of the **same** `base_path` from different processes
   are not locked against each other; the last writer wins (a "lost
   update"), though the sweep guarantees neither loses its own staging/
@@ -299,9 +327,11 @@ is outside the base" (#311).
 - Displacing an existing **file** (not directory) at the group-collision
   boundary (e.g. `base/sub` already exists as a plain file, but this batch
   wants `/sub/nested.ts`) is handled: `remove_artifact_best_effort` falls
-  back to `fs::remove_file` when `remove_dir_all` fails with
-  `NotADirectory`, preventing a permanently-unremovable `.stale-*` artifact
-  (a real bug found in review, per test comments).
+  back to `fs::remove_file` whenever `remove_dir_all` fails for any
+  reason — including, but not limited to, `NotADirectory` when the
+  artifact is a plain file rather than a directory — preventing a
+  permanently-unremovable `.stale-*` artifact (a real bug found in review,
+  per test comments).
   `touch_dir` similarly handles both directory (marker-file trick) and
   plain-file (`File::set_modified`) mtime refresh, since the thing being
   displaced isn't always a directory.

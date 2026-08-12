@@ -82,9 +82,9 @@ Or add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-mcp-execution-core = "0.9"
-mcp-execution-introspector = "0.9"
-mcp-execution-codegen = "0.9"
+mcp-execution-core = "0.10"
+mcp-execution-introspector = "0.10"
+mcp-execution-codegen = "0.10"
 ```
 
 > [!WARNING]
@@ -189,6 +189,16 @@ mcp-execution-cli completions bash
 
 > [!IMPORTANT]
 > **v0.9 breaking change:** `generate <command> --http <url>` and `introspect <command> --http <url>` now require either `--from-config`, a positional command, or `--http`/`--sse`, not a combination. If you were combining a positional command with `--http` or `--sse`, use one or the other exclusively.
+
+> [!WARNING]
+> **v0.10 breaking change:** `_meta.json` metadata schema version bumped from 1 to 2. Files generated before this release will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
+
+> [!WARNING]
+> **v0.10 breaking change:** server IDs and tool names must now consist only of Unicode
+> `Identifier_Status=Allowed` characters. A remote MCP server exposing a tool named with a space or
+> `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright instead of being silently accepted —
+> this closes a spoofing risk where a hostile server could publish a tool name that is visually
+> near-identical to a legitimate one.
 
 ## Performance
 

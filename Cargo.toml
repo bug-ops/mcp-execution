@@ -4,7 +4,7 @@ default-members = [ "crates/*" ]
 resolver = "3"
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Andrei G <k05h31@gmail.com>"]
@@ -27,12 +27,12 @@ futures-util = "0.3"
 handlebars = "6.4"
 http = "1"
 libc = "0.2"
-mcp-execution-codegen = { path = "crates/mcp-codegen", version = "0.9.0" }
-mcp-execution-core = { path = "crates/mcp-core", version = "0.9.0" }
-mcp-execution-files = { path = "crates/mcp-files", version = "0.9.0" }
-mcp-execution-introspector = { path = "crates/mcp-introspector", version = "0.9.0" }
-mcp-execution-server = { path = "crates/mcp-server", version = "0.9.0" }
-mcp-execution-skill = { path = "crates/mcp-skill", version = "0.9.0" }
+mcp-execution-codegen = { path = "crates/mcp-codegen", version = "0.10.0" }
+mcp-execution-core = { path = "crates/mcp-core", version = "0.10.0" }
+mcp-execution-files = { path = "crates/mcp-files", version = "0.10.0" }
+mcp-execution-introspector = { path = "crates/mcp-introspector", version = "0.10.0" }
+mcp-execution-server = { path = "crates/mcp-server", version = "0.10.0" }
+mcp-execution-skill = { path = "crates/mcp-skill", version = "0.10.0" }
 rayon = "1.12"
 regex = "1.13"
 rmcp = "3.1"
