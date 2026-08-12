@@ -16,6 +16,7 @@
 //! walk, and the terminal-component check — lives here.
 
 use std::ffi::OsStr;
+use std::io::{ErrorKind, Write};
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
@@ -40,7 +41,11 @@ pub enum ConfinementTarget<'a> {
     /// resolved directory is confinement-checked and canonicalized but not created.
     Directory(&'a OsStr),
     /// The caller writes the file itself, so the resolved path is confinement-checked but
-    /// neither created nor canonicalized.
+    /// neither created nor canonicalized. [`write_confined_file`] closes the symlink-planting
+    /// race at this exact terminal path between that check and the write itself (issue #496); a
+    /// plain [`tokio::fs::write`] does not. It does not defend against a symlink swapped in for a
+    /// parent directory after the check, nor a hardlink at the target — see its own doc comment
+    /// for the residual.
     File(&'a OsStr),
 }
 
@@ -169,7 +174,18 @@ pub enum ConfinementError {
 /// call starts — whether at `segment` or at any deeper component — is resolved and rejected
 /// *before* this function creates anything under it or descends into it. This is a check against
 /// pre-existing state, not a concurrency guarantee: it does not defend against a symlink planted
-/// by a racing process between this function's checks and the caller's subsequent write.
+/// by a racing process between this function's checks and the caller's subsequent write (see
+/// [`write_confined_file`], which closes that gap for the write itself at the terminal path —
+/// though not against a parent directory swapped for a symlink after this function returns, nor
+/// a hardlink at the target; see its own doc comment for the residual).
+///
+/// Directory creation along the walk *is* safe against concurrent callers resolving the same
+/// not-yet-existing path: `ErrorKind::AlreadyExists` from creating `segment`'s own directory or
+/// any `relative_dirs` component is tolerated, and the entry left behind by the caller that won
+/// the race is then validated exactly as if it had already existed when this call started -
+/// rejected under the same rules (symlink, wrong kind) rather than trusted just because someone
+/// else created it (issue #491). This is the only race this function defends against; the
+/// terminal `target` component is still never created, per the paragraph above.
 ///
 /// # Errors
 ///
@@ -231,10 +247,31 @@ pub async fn resolve_confined_path(
     }
 }
 
+/// Validates `segment_dir`, which is already known to exist (`meta` is its `symlink_metadata`),
+/// under [`resolve_segment_dir`]'s strict policy: rejected outright if it's a symlink (regardless
+/// of where it points), or if it exists as anything other than a directory.
+fn validate_existing_segment_dir(
+    segment_dir: &Path,
+    meta: &std::fs::Metadata,
+) -> Result<(), ConfinementError> {
+    if meta.file_type().is_symlink() {
+        return Err(ConfinementError::SegmentIsSymlink {
+            path: sanitize_path_for_error(segment_dir),
+        });
+    }
+    if !meta.is_dir() {
+        return Err(ConfinementError::NotADirectory {
+            path: sanitize_path_for_error(segment_dir),
+        });
+    }
+    Ok(())
+}
+
 /// Resolves and confines `segment`'s own directory under `canonical_root`, rejecting it outright
 /// if it already exists as a symlink rather than resolving and re-checking it (see
 /// [`resolve_confined_path`]'s doc comment for why). Creates the directory if it doesn't exist
-/// yet.
+/// yet; if a concurrent caller creates it first, `ErrorKind::AlreadyExists` is tolerated and the
+/// winner's directory is validated exactly as if it had already existed (issue #491).
 async fn resolve_segment_dir(
     canonical_root: &Path,
     component: Component<'_>,
@@ -247,29 +284,46 @@ async fn resolve_segment_dir(
         });
     }
     if let Ok(meta) = tokio::fs::symlink_metadata(&segment_dir).await {
-        if meta.file_type().is_symlink() {
-            return Err(ConfinementError::SegmentIsSymlink {
-                path: sanitize_path_for_error(&segment_dir),
-            });
-        }
-        if !meta.is_dir() {
-            return Err(ConfinementError::NotADirectory {
-                path: sanitize_path_for_error(&segment_dir),
-            });
-        }
-    } else {
-        tokio::fs::create_dir(&segment_dir)
-            .await
-            .map_err(|source| ConfinementError::CreateDir {
+        validate_existing_segment_dir(&segment_dir, &meta)?;
+    } else if let Err(source) = tokio::fs::create_dir(&segment_dir).await {
+        if source.kind() != ErrorKind::AlreadyExists {
+            return Err(ConfinementError::CreateDir {
                 path: sanitize_path_for_error(&segment_dir),
                 source,
-            })?;
+            });
+        }
+        let meta = tokio::fs::symlink_metadata(&segment_dir).await?;
+        validate_existing_segment_dir(&segment_dir, &meta)?;
     }
     Ok(segment_dir)
 }
 
+/// Confirms `current`, which is already known to exist, resolves (as a symlink or otherwise) to a
+/// directory still confined to `segment_dir` - [`resolve_lenient_component`]'s lenient policy,
+/// which resolves and re-checks an existing symlink rather than rejecting it outright.
+async fn validate_existing_lenient_component(
+    current: &mut PathBuf,
+    segment_dir: &Path,
+) -> Result<(), ConfinementError> {
+    let resolved = tokio::fs::canonicalize(&current).await?;
+    if !resolved.starts_with(segment_dir) {
+        return Err(ConfinementError::Escape {
+            path: sanitize_path_for_error(current),
+        });
+    }
+    if !tokio::fs::metadata(&resolved).await?.is_dir() {
+        return Err(ConfinementError::NotADirectory {
+            path: sanitize_path_for_error(current),
+        });
+    }
+    *current = resolved;
+    Ok(())
+}
+
 /// Confines `current` to `segment_dir`, resolving (and confirming) an existing symlink rather
-/// than rejecting it outright, or creating the directory if it's missing.
+/// than rejecting it outright, or creating the directory if it's missing. If a concurrent caller
+/// creates it first, `ErrorKind::AlreadyExists` is tolerated and the winner's directory is
+/// validated exactly as if it had already existed (issue #491).
 async fn resolve_lenient_component(
     current: &mut PathBuf,
     segment_dir: &Path,
@@ -280,29 +334,17 @@ async fn resolve_lenient_component(
         });
     }
     match tokio::fs::symlink_metadata(&current).await {
-        Ok(_) => {
-            let resolved = tokio::fs::canonicalize(&current).await?;
-            if !resolved.starts_with(segment_dir) {
-                return Err(ConfinementError::Escape {
-                    path: sanitize_path_for_error(current),
-                });
+        Ok(_) => validate_existing_lenient_component(current, segment_dir).await,
+        Err(_) => match tokio::fs::create_dir(&current).await {
+            Ok(()) => Ok(()),
+            Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+                validate_existing_lenient_component(current, segment_dir).await
             }
-            if !tokio::fs::metadata(&resolved).await?.is_dir() {
-                return Err(ConfinementError::NotADirectory {
-                    path: sanitize_path_for_error(current),
-                });
-            }
-            *current = resolved;
-            Ok(())
-        }
-        Err(_) => {
-            tokio::fs::create_dir(&current)
-                .await
-                .map_err(|source| ConfinementError::CreateDir {
-                    path: sanitize_path_for_error(current),
-                    source,
-                })
-        }
+            Err(source) => Err(ConfinementError::CreateDir {
+                path: sanitize_path_for_error(current),
+                source,
+            }),
+        },
     }
 }
 
@@ -360,6 +402,119 @@ async fn resolve_terminal(
             Ok(final_path)
         }
     }
+}
+
+/// Writes `content` to `path`, refusing to follow a symlink planted at `path`'s exact location
+/// after a caller's [`ConfinementTarget::File`] confinement check but before this call.
+///
+/// [`ConfinementTarget::File`]'s own doc comment calls out the gap this closes: resolving and
+/// confinement-checking a file target deliberately does not create it, so nothing stops a
+/// symlink from being planted at the resolved path between that check and the caller's write -
+/// and a plain [`tokio::fs::write`] would follow it, redirecting the write outside the confined
+/// directory (issue #496).
+///
+/// The entire check-then-write sequence runs inside a single [`tokio::task::spawn_blocking`]
+/// call, using `std::fs` rather than `tokio::fs`: this preserves the same atomicity a plain
+/// `tokio::fs::write` already had - once the blocking task is queued, dropping the returned
+/// future (e.g. because a client disconnected and `rmcp` drops the handler future) does not stop
+/// or partially undo a write that already started running on the blocking pool. An async-native
+/// version built from `tokio::fs::OpenOptions` plus `AsyncWriteExt::write_all` would not have
+/// this property: each `.await` point is a place a dropped future can land between `O_TRUNC`
+/// truncating the file and the content actually being written, leaving a 0-byte file behind
+/// instead of either the old or the new content — worse than not attempting the write at all.
+///
+/// On Unix, the open that creates or truncates `path` also carries `O_NOFOLLOW`, so the kernel
+/// rejects a symlinked terminal component (dangling or not) as part of that same syscall - there
+/// is no separate check-then-write step left for a racing process to land in between *for that
+/// exact path*. A pre-existing regular file is still opened and truncated normally: `O_NOFOLLOW`
+/// only rejects a symlink at the final path component, so this does not change overwrite
+/// semantics for a caller that already decided (via its own `exists()`/`overwrite` check) that
+/// clobbering an existing file is fine.
+///
+/// **Residual gaps, even on Unix**: `O_NOFOLLOW` only guards the *terminal* component. Something
+/// with write access further up the confined path (e.g. `{server_id}/` itself) could rename that
+/// directory aside and drop a symlink in its place after the caller's confinement check but
+/// before this call — the open then traverses the symlinked *parent* and still escapes, one
+/// directory level up from what a flag on the final `open` call can see. A hardlink planted at
+/// `path` (same filesystem) is also not a symlink, so `O_NOFOLLOW` does not reject it, and the
+/// write clobbers whatever the hardlink points at. Neither is defended against here; closing them
+/// would need a directory file descriptor captured during the confinement walk itself
+/// (`openat`/`openat2` with `RESOLVE_NO_SYMLINKS` on Linux) rather than a flag on the terminal
+/// open call alone.
+///
+/// Windows has no usable equivalent for this specific open, even though `custom_flags` is exposed
+/// there too (`std::fs::OpenOptions::custom_flags` via `std::os::windows::fs::OpenOptionsExt`):
+/// `FILE_FLAG_OPEN_REPARSE_POINT`, the flag that opens a reparse point (Windows's symlink
+/// mechanism) itself, is documented by `CreateFileW` as unusable together with `CREATE_ALWAYS` —
+/// which is exactly what a `create(true).truncate(true)` open maps to — and even where it can be
+/// used, it does not reject on open the way `O_NOFOLLOW` does; it hands back a handle to the link
+/// itself, which a plain write would still land on. So Windows relies solely on an
+/// immediately-preceding [`std::fs::symlink_metadata`] check, still inside the same blocking
+/// closure and so still with no yield point in between - this narrows the window against a
+/// symlink already present when the check runs, but remains genuinely open (not just narrowed) to
+/// a symlink a racing *process* plants between that check and the `open` call, since there is no
+/// single-syscall check-and-open on this platform. This crate's test suite has no Windows symlink
+/// coverage — creating a symlink there requires a privilege most CI runners don't grant.
+///
+/// # Errors
+///
+/// Returns [`ConfinementError::Io`] if the symlink check (Windows only), the open, or the write
+/// failed - including the platform's "too many levels of symbolic links" error on Unix when
+/// `path`'s terminal component is a symlink - or if the blocking task itself panicked.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::write_confined_file;
+/// use tempfile::TempDir;
+///
+/// let dir = TempDir::new().unwrap();
+/// let path = dir.path().join("SKILL.md");
+/// tokio::runtime::Builder::new_current_thread()
+///     .build()
+///     .unwrap()
+///     .block_on(write_confined_file(&path, b"---\nname: demo\n---\n"))
+///     .unwrap();
+/// assert_eq!(std::fs::read(&path).unwrap(), b"---\nname: demo\n---\n");
+/// ```
+pub async fn write_confined_file(path: &Path, content: &[u8]) -> Result<(), ConfinementError> {
+    let path = path.to_path_buf();
+    let content = content.to_vec();
+    // The first `?` propagates a `JoinError` (the blocking task panicked or was cancelled,
+    // wrapped via `Error::other`); the second propagates `write_confined_file_blocking`'s own
+    // `io::Result`. Both convert to `ConfinementError` via its `#[from] std::io::Error` variant.
+    tokio::task::spawn_blocking(move || write_confined_file_blocking(&path, &content))
+        .await
+        .map_err(std::io::Error::other)??;
+    Ok(())
+}
+
+/// The synchronous body of [`write_confined_file`], run inside a single `spawn_blocking` call so
+/// the check-then-write sequence is atomic with respect to the calling future being dropped.
+fn write_confined_file_blocking(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    #[cfg(not(unix))]
+    if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(std::io::Error::new(
+            ErrorKind::AlreadyExists,
+            "refusing to write through a pre-existing symlink",
+        ));
+    }
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    // No Windows equivalent: `FILE_FLAG_OPEN_REPARSE_POINT` is documented as unusable together
+    // with `CREATE_ALWAYS` (what `create(true).truncate(true)` maps to), and even where usable it
+    // doesn't reject on open the way `O_NOFOLLOW` does - see this function's doc comment. Windows
+    // relies solely on the `symlink_metadata` pre-check above.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+
+    let mut file = options.open(path)?;
+    file.write_all(content)?;
+    file.flush()
 }
 
 #[cfg(test)]
@@ -680,6 +835,139 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(file_err, ConfinementError::WrongTargetKind { .. }));
+    }
+
+    /// Issue #491: two callers racing to resolve the same not-yet-existing segment directory
+    /// must both succeed - the loser's `create_dir` failing with `AlreadyExists` must be
+    /// tolerated and the winner's directory re-validated, not surfaced as a hard error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_first_time_segment_creation_both_succeed() {
+        let base = TempDir::new().unwrap();
+        let base_a = base.path().to_path_buf();
+        let base_b = base_a.clone();
+
+        let task_a = tokio::spawn(async move {
+            resolve_confined_path(&base_a, "my-server", Path::new(""), None).await
+        });
+        let task_b = tokio::spawn(async move {
+            resolve_confined_path(&base_b, "my-server", Path::new(""), None).await
+        });
+
+        let (a, b) = tokio::join!(task_a, task_b);
+        assert_eq!(a.unwrap().unwrap(), b.unwrap().unwrap());
+    }
+
+    /// Same race as above, one level deeper in the lenient `relative_dirs` walk.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_first_time_relative_dir_creation_both_succeed() {
+        let base = TempDir::new().unwrap();
+        tokio::fs::create_dir_all(base.path().join("my-server"))
+            .await
+            .unwrap();
+        let base_a = base.path().to_path_buf();
+        let base_b = base_a.clone();
+
+        let task_a = tokio::spawn(async move {
+            resolve_confined_path(&base_a, "my-server", Path::new("nested"), None).await
+        });
+        let task_b = tokio::spawn(async move {
+            resolve_confined_path(&base_b, "my-server", Path::new("nested"), None).await
+        });
+
+        let (a, b) = tokio::join!(task_a, task_b);
+        assert_eq!(a.unwrap().unwrap(), b.unwrap().unwrap());
+    }
+
+    /// `write_confined_file`'s check-then-write sequence must run inside a single
+    /// `spawn_blocking` call so it is atomic with respect to the calling future being dropped
+    /// (e.g. `rmcp` dropping `save_skill`'s handler future on client disconnect) - an
+    /// async-native version built from `tokio::fs::OpenOptions` plus `AsyncWriteExt::write_all`
+    /// has multiple `.await` points, any of which a dropped future can land between `O_TRUNC`
+    /// truncating the file and the content being written, leaving a 0-byte file behind. Aborting
+    /// the spawned task immediately after starting it and re-reading the file must therefore
+    /// always observe either the untouched pre-existing content or the fully written new content
+    /// - never a partial or empty file.
+    ///
+    /// A single iteration only lands the abort inside the vulnerable window often enough to
+    /// discriminate the fix from the pre-fix async-await implementation about 60% of the time, so
+    /// this loops several times rather than relying on one attempt.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_confined_file_survives_future_drop_without_partial_write() {
+        const OLD: &[u8] = b"old-content-should-survive-or-be-fully-replaced";
+        const NEW: &[u8] = b"new-content-0123456789";
+
+        for _ in 0..8 {
+            let base = TempDir::new().unwrap();
+            let path = base.path().join("SKILL.md");
+            tokio::fs::write(&path, OLD).await.unwrap();
+
+            let spawn_path = path.clone();
+            let handle = tokio::spawn(async move { write_confined_file(&spawn_path, NEW).await });
+            std::thread::sleep(std::time::Duration::from_micros(1));
+            handle.abort();
+            let _ = handle.await;
+
+            // Poll briefly rather than a flat settle sleep: a blocking task that was already
+            // running when `abort` fired cannot be interrupted mid-flight, but a write this
+            // small finishes in well under a millisecond once scheduled, so most iterations
+            // don't need to wait at all.
+            let mut content = tokio::fs::read(&path).await.unwrap();
+            for _ in 0..50 {
+                if content.as_slice() == OLD || content.as_slice() == NEW {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                content = tokio::fs::read(&path).await.unwrap();
+            }
+
+            assert!(
+                content.as_slice() == OLD || content.as_slice() == NEW,
+                "partial/corrupt content observed: {content:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn write_confined_file_creates_new_file() {
+        let base = TempDir::new().unwrap();
+        let path = base.path().join("SKILL.md");
+        write_confined_file(&path, b"content").await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"content");
+    }
+
+    /// `write_confined_file` must preserve the overwrite semantics of a plain `tokio::fs::write`
+    /// for a pre-existing regular file - only a symlink at the terminal component is rejected.
+    #[tokio::test]
+    async fn write_confined_file_overwrites_existing_regular_file() {
+        let base = TempDir::new().unwrap();
+        let path = base.path().join("SKILL.md");
+        tokio::fs::write(&path, b"old").await.unwrap();
+        write_confined_file(&path, b"new").await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"new");
+    }
+
+    /// Issue #496: a symlink planted at the confined path after `resolve_confined_path`'s own
+    /// `ConfinementTarget::File` check (which deliberately leaves the terminal component
+    /// uncreated) must not be followed by the write that lands there.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn write_confined_file_rejects_a_symlink_planted_at_the_target() {
+        let base = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("real.md");
+
+        let confined_path = base.path().join("SKILL.md");
+        std::os::unix::fs::symlink(&outside_file, &confined_path).unwrap();
+
+        let err = write_confined_file(&confined_path, b"attacker-controlled")
+            .await
+            .unwrap_err();
+        // Not asserting the specific errno here: `O_NOFOLLOW` on a symlink is `ELOOP` on
+        // Linux/macOS, but other Unix flavors (e.g. FreeBSD) surface `EMLINK` instead. The
+        // load-bearing assertions are that it's an I/O failure at all, and that the write never
+        // reached the symlink's target.
+        assert!(matches!(err, ConfinementError::Io(_)));
+        assert!(!outside_file.exists());
     }
 
     #[cfg(windows)]

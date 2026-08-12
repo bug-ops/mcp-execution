@@ -640,6 +640,7 @@ pub async fn resolve_confined_path(
     relative_dirs: &Path,
     target: Option<ConfinementTarget<'_>>,
 ) -> Result<PathBuf, ConfinementError>;
+pub async fn write_confined_file(path: &Path, content: &[u8]) -> Result<(), ConfinementError>;
 ```
 
 Issue #395: `mcp-skill::resolve_skill_output_path` and
@@ -660,6 +661,69 @@ resolved and canonicalized (the typical caller publishes it itself via an atomic
 this asymmetry is deliberate and preserved from both crates' pre-consolidation behavior, not
 unified away. `target: None` returns the walked `relative_dirs` chain itself, with nothing beyond
 the segment directory created.
+
+**Directory creation is idempotent under concurrency (issue #491).** `resolve_confined_path`'s
+segment-directory and lenient-intermediate-directory creation both tolerate
+`ErrorKind::AlreadyExists` from `create_dir`: when two callers race to resolve the same
+not-yet-existing directory, the loser's `create_dir` failing with `AlreadyExists` no longer
+surfaces as `ConfinementError::CreateDir`. Instead the loser re-runs the exact same
+existing-component validation the winner's directory would have gone through had it already been
+there when the walk started (segment directories: rejected if the winner's entry is a symlink or
+non-directory; lenient intermediate directories: resolved and re-confined if the winner's entry is
+a symlink, consistent with that walk's existing lenient policy) — tolerating `AlreadyExists` never
+skips or weakens confinement validation, it only changes which of the two racing callers performed
+the `create_dir` syscall that won. This is the only race `resolve_confined_path` defends against;
+it still does not defend the terminal `target` component against a symlink planted between this
+function's checks and a caller's subsequent write — that gap is what `write_confined_file` closes,
+below.
+
+**`write_confined_file` closes the write-time symlink race for the terminal path (issue #496).** A
+caller that resolved a [`ConfinementTarget::File`] path and is about to create it faces a gap
+`resolve_confined_path` itself cannot close: the terminal component is deliberately checked but
+never created, so a symlink planted at that exact path between the check and a plain
+`tokio::fs::write` would be followed, redirecting the write outside the confined directory.
+
+The entire check-then-write sequence runs inside one `tokio::task::spawn_blocking` call, using
+`std::fs` rather than `tokio::fs`. This is load-bearing, not incidental: an earlier async-native
+version built from `tokio::fs::OpenOptions` plus `AsyncWriteExt::write_all` had a real regression —
+each `.await` point (`open`, `write_all`, `flush`) was a place a dropped future (e.g. `rmcp`
+dropping the handler future on client disconnect) could land between `O_TRUNC` truncating the file
+and the content being written, leaving a 0-byte file where `tokio::fs::write` would have written
+the full content. A single `spawn_blocking` call restores `tokio::fs::write`'s original property:
+once the blocking task is queued, dropping the returned future does not stop or partially undo a
+write that already started running on the blocking pool.
+
+On Unix, `write_confined_file` opens with `O_CREAT | O_TRUNC | O_NOFOLLOW` in a single syscall —
+there is no separate check-then-write step for a racing process to land in between *for that exact
+path*, and a pre-existing *regular* file is still opened and truncated normally (`O_NOFOLLOW` only
+rejects a symlink at the final component), so overwrite semantics for a caller's own
+`exists()`/`overwrite` decision are unaffected.
+
+Windows has no usable equivalent for this specific open. `custom_flags` is exposed there too
+(`std::fs::OpenOptions::custom_flags` via `std::os::windows::fs::OpenOptionsExt`), but the
+candidate flag, `FILE_FLAG_OPEN_REPARSE_POINT`, is documented by `CreateFileW` as unusable
+together with `CREATE_ALWAYS` — which is exactly what `create(true).truncate(true)` maps to — and
+even where it *can* be used, it does not reject on open the way `O_NOFOLLOW` does: it hands back a
+handle to the symbolic link itself, which a subsequent write would still land on. So Windows relies
+solely on an immediately-preceding `std::fs::symlink_metadata` check, still inside the same
+blocking closure and so still with no yield point in between it and the `open` call. That narrows
+the window against a symlink already present when the check runs, but — unlike the Unix path —
+remains genuinely open, not just narrowed, against a symlink a racing *process* plants between the
+check and the open, since there is no single-syscall check-and-open available on this platform.
+This crate's test suite has no Windows symlink coverage (creating one needs a privilege most CI
+runners don't grant).
+
+**Residual gaps — deliberately not claimed as closed.** `O_NOFOLLOW` only guards the *terminal*
+path component, and only on Unix. Something with write access further up the confined path (e.g.
+`{server_id}/` itself) could rename that directory aside and drop a symlink in its place after the
+caller's confinement check but before the write — the open then traverses the symlinked *parent*
+and still escapes, one directory level up from what a flag on the terminal `open` call can see. A
+hardlink planted at the target path (same filesystem) is also not a symlink, so `O_NOFOLLOW` does
+not reject it, and the write clobbers whatever the hardlink points at. Closing either would need a
+directory file descriptor captured during the confinement walk itself (`openat`/`openat2` with
+`RESOLVE_NO_SYMLINKS` on Linux) rather than a flag on the terminal open call alone — out of scope
+for the issue #496 fix, and not silently claimed as covered. On Windows, the process-race gap
+described above is a third, platform-specific residual on top of these two.
 
 `ConfinementError` is a closed set every caller maps with a **total, 1:1** `From` impl into its
 own pre-existing, byte-identical error enum — `mcp-server::OutputDirError` and
@@ -883,7 +947,7 @@ it would require either a request-wide (not per-field) budget threaded through e
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen` |
 | `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
+| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
 | `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth
@@ -934,6 +998,13 @@ and byte-preserving of each variant's existing `Display` message.
 | `resolve_confined_path` terminal component exists as the other `ConfinementTarget` kind (file where `Directory` expected, or vice versa) | `WrongTargetKind`, mapped by each caller to its own truthful variant name |
 | `resolve_confined_path` with `target: None` | Returns the walked `relative_dirs` chain itself; nothing beyond the segment directory is created |
 | `resolve_confined_path`'s lenient intermediate walk hits a symlink loop (`ELOOP`) | Surfaces as `Io`, not `Escape` — `canonicalize`'s error propagates via `?` before any confinement comparison runs |
+| Two concurrent callers resolve the same not-yet-existing segment directory or lenient intermediate directory (issue #491) | Both succeed — the loser's `create_dir` `AlreadyExists` is tolerated, and the winner's directory is re-validated under the same rule (strict/symlink-rejecting for the segment directory, lenient/symlink-resolving for an intermediate directory) rather than trusted unconditionally |
+| `create_dir` fails with an error other than `AlreadyExists` (e.g. permission denied) while resolving the segment directory or a lenient intermediate directory | Surfaces as `ConfinementError::CreateDir`, unchanged from before #491 |
+| `write_confined_file` on a path whose terminal component is a symlink (dangling or not), planted after a caller's own confinement check on Unix (issue #496) | Rejected on open — the `O_NOFOLLOW` open fails (`ELOOP`, or a platform-specific equivalent errno on some BSDs) |
+| Same, on Windows | Rejected only if the pre-existing `symlink_metadata` check (run just before `open`, same blocking closure) observes the symlink — genuinely TOCTOU against a symlink a racing *process* plants between that check and `open`, since Windows has no single-syscall `O_NOFOLLOW` equivalent usable with a create+truncate open |
+| `write_confined_file` on a path that already exists as a regular file | Opened and truncated normally, same as a plain `tokio::fs::write` — `O_NOFOLLOW` does not affect non-symlink targets |
+| `write_confined_file`'s caller drops the returned future (e.g. client disconnect) after the write has started | No partial/0-byte file — the whole check-then-write sequence runs inside one `spawn_blocking` call, which cannot be interrupted once queued, matching `tokio::fs::write`'s original atomicity |
+| `write_confined_file` on a path whose *parent* directory is swapped for a symlink after the confinement check but before the call, or on a path that is a pre-existing hardlink to a file outside the confined directory | **Not** defended against on any platform — `O_NOFOLLOW` guards only the terminal component (and only on Unix); documented as a residual gap, not silently claimed as closed |
 | `ServerId::new`/`ToolName::new` rejects an input containing `&`, `<`, `>`, a control character, or a bidi override (issue #446) | The rejected value is sanitized (`untrusted::sanitize_untrusted_inline`) and `&`/`<`/`>` entity-escaped before being stored in `ServerIdError`/`ToolNameError`, so the raw disallowed characters never reach the `Display`/`Debug`-formatted error text an LLM or terminal renders |
 | `ServerId::new`/`ToolName::new` rejects an input containing emoji | **Not** sanitized or stripped — a deliberate accepted-risk exception, not an oversight: emoji is printable, cannot forge Markdown/HTML-like structure the way `&`/`<`/`>` can, and stripping arbitrary non-identifier printables would need a new allowlist pass that risks corrupting legitimate non-ASCII text elsewhere in the sanitizer |
 

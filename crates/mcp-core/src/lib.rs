@@ -71,7 +71,9 @@ pub use path::{
 };
 
 // Re-export the shared path-confinement walk
-pub use confinement::{ConfinementError, ConfinementTarget, resolve_confined_path};
+pub use confinement::{
+    ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file,
+};
 
 // Re-export Debug-redaction helpers shared by secret-shaped fields
 pub use redact::{

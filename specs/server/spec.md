@@ -337,7 +337,7 @@ Thin MCP-tool wrapper around `mcp_execution_skill::resolve_skill_output_path`
 (`MAX_SKILL_CONTENT_SIZE` = 100 KiB), and that content starts with `---`
 before the more expensive frontmatter parse. Rejects overwriting an existing
 file unless `overwrite: true`. **Deliberately does not observe
-cancellation**: `tokio::fs::write` on the blocking-pool cannot actually be
+cancellation**: `write_confined_file` on the blocking-pool cannot actually be
 interrupted once queued — racing it against `ct.cancelled()` would make the
 response lie (telling a cancelled client the write never happened while it
 still lands on disk moments later), which is worse than not attempting
@@ -346,6 +346,19 @@ synchronous parse cost — `extract_skill_metadata`'s own
 `MAX_FRONTMATTER_SIZE` (8 KiB) on the extracted block is what keeps that
 bounded regardless of overall content size, since YAML parsing isn't
 linear-time on pathological input.
+
+The write itself goes through `mcp_execution_core::write_confined_file` rather than a plain
+`tokio::fs::write` (issue #496): `resolve_skill_output_path` deliberately checks but never
+creates the terminal path component (see [[../skill/spec#8. `resolve_skill_output_path` — Path
+Confinement]]), so a symlink planted at `output_path` between that check and the write would
+otherwise be followed, redirecting the write outside `~/.claude/skills/{server_id}/`.
+`write_confined_file` closes that gap for `output_path` itself, on Unix, by opening with
+`O_NOFOLLOW` in the same syscall that creates/truncates the file, inside a single `spawn_blocking`
+call so a
+client disconnect mid-write can't leave a truncated file behind — it does not defend against a
+symlink swapped in for `{server_id}/` itself after the check, or a hardlink at `output_path`; see
+[[../core/spec#`confinement` module (`src/confinement.rs`)]] for the full guarantee and its
+documented residual.
 
 ## 4. State Management (`StateManager`)
 

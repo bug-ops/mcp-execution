@@ -20,7 +20,7 @@ use mcp_execution_core::untrusted::{
     wrap_untrusted_block,
 };
 use mcp_execution_core::{
-    ServerConfig, ServerId, sanitize_path_for_error, validate_server_id_slug,
+    ServerConfig, ServerId, sanitize_path_for_error, validate_server_id_slug, write_confined_file,
 };
 use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::{Introspector, ToolInfo};
@@ -1032,19 +1032,28 @@ impl GeneratorService {
     /// directory. Validates that the content contains required YAML
     /// frontmatter.
     ///
+    /// `resolve_skill_output_path` deliberately checks but never creates the terminal path
+    /// component, so the actual write goes through
+    /// [`write_confined_file`](mcp_execution_core::write_confined_file) rather than a plain
+    /// `tokio::fs::write`: on Unix it opens with `O_NOFOLLOW`, so a symlink planted at
+    /// `output_path` between the confinement check above and this call is rejected instead of
+    /// followed (issue #496). This closes the race for `output_path` itself, not for a symlink
+    /// swapped in for `{server_id}/` itself after the check — see `write_confined_file`'s own doc
+    /// comment for the full residual.
+    ///
     /// Observes client-issued cancellation at checkpoints only. `ct.is_cancelled()` is polled twice: on
     /// entry, before any validation and before the parent-directory creation performed by
     /// [`resolve_skill_output_path`](mcp_execution_skill::resolve_skill_output_path); and again
-    /// immediately before `tokio::fs::write` is invoked. Either firing returns
+    /// immediately before `write_confined_file` is invoked. Either firing returns
     /// `McpError::internal_error("save_skill cancelled by client", None)` with no file written - though a
     /// cancellation caught at the second checkpoint may still leave the confined parent directory behind,
     /// exactly as the existing `overwrite`-refused path does.
     ///
-    /// The write itself is never raced against cancellation: `tokio::fs::write` runs on the blocking-task
-    /// pool and, once started, cannot be interrupted - dropping its `JoinHandle` does not stop the queued
-    /// write, it only stops this handler from waiting for it. Racing it would make the response lie
-    /// (telling a cancelled client the write never happened while it still lands on disk moments later),
-    /// which is worse than not attempting cancellation at all. The write is also bounded by
+    /// The write itself is never raced against cancellation: `write_confined_file` runs on the
+    /// blocking-task pool and, once started, cannot be interrupted - dropping its `JoinHandle` does not
+    /// stop the queued write, it only stops this handler from waiting for it. Racing it would make the
+    /// response lie (telling a cancelled client the write never happened while it still lands on disk
+    /// moments later), which is worse than not attempting cancellation at all. The write is also bounded by
     /// [`MAX_SKILL_CONTENT_SIZE`] (100KB), so genuine interruptibility (e.g. a hand-rolled chunked write)
     /// is not worth pursuing for the marginal benefit. The checkpoints are correspondingly narrow: the
     /// pre-write work is a bounded frontmatter parse and one path-resolution walk, so in practice they
@@ -1164,8 +1173,11 @@ impl GeneratorService {
         }
 
         // Write file (parent directory already created and confined by
-        // resolve_skill_output_path)
-        tokio::fs::write(&output_path, &params.content)
+        // resolve_skill_output_path). `write_confined_file` closes the gap
+        // `resolve_skill_output_path` deliberately leaves open at its terminal component (it
+        // checks but never creates the target): a plain `tokio::fs::write` here would follow a
+        // symlink planted at `output_path` between that check and this call (issue #496).
+        write_confined_file(&output_path, params.content.as_bytes())
             .await
             .map_err(|e| McpError::internal_error(format!("Failed to write file: {e}"), None))?;
 
@@ -5805,5 +5817,39 @@ mod tests {
                 .unwrap();
         assert!(server_a_content.contains("name: test"));
         assert!(!server_a_content.contains("hijack"));
+    }
+
+    /// Issue #496: `resolve_skill_output_path`'s own pre-existing-symlink check (exercised by
+    /// `test_save_skill_rejects_dangling_symlink_at_output_path` above) only catches a symlink
+    /// that is already there when `save_skill` starts. This reproduces the actual race window -
+    /// a symlink planted at the resolved path *after* that check succeeds but *before* the write
+    /// - by calling the same two functions `save_skill` calls, in the same order, with the
+    /// symlink planted in between: the write must reject it rather than follow it out of the
+    /// confined directory.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_save_skill_write_step_rejects_symlink_planted_after_confinement_check() {
+        use tempfile::TempDir;
+
+        let skills_dir = TempDir::new().unwrap();
+        let outside_dir = TempDir::new().unwrap();
+        let outside_file = outside_dir.path().join("real.md");
+
+        let output_path = resolve_skill_output_path(skills_dir.path(), "test", None)
+            .await
+            .unwrap();
+        assert!(!output_path.exists());
+
+        // A racing process plants a symlink at the exact resolved path, after the confinement
+        // check above has already run and before the write below.
+        std::os::unix::fs::symlink(&outside_file, &output_path).unwrap();
+
+        let result = write_confined_file(&output_path, b"attacker-controlled").await;
+
+        // Not asserting the specific errno: `O_NOFOLLOW` on a symlink is `ELOOP` on Linux/macOS
+        // but other Unix flavors surface a different one. What matters is that the write failed
+        // and never reached the symlink's target.
+        assert!(result.is_err());
+        assert!(!outside_file.exists());
     }
 }

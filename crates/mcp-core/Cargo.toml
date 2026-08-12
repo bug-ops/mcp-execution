@@ -21,7 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "rt"] }
 # Backs `path::first_disallowed_identifier_char`, which gates `ServerId::new`/`ToolName::new`
 # on every platform — unlike `unicode-normalization` below, this cannot be target-gated.
 unicode-security = { workspace = true }
@@ -31,6 +31,11 @@ unicode-security = { workspace = true }
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 unicode-normalization = { workspace = true }
 
+# Only `confinement.rs`'s `write_confined_file` uses this, to pass `O_NOFOLLOW` to
+# `std::fs::OpenOptions::custom_flags` (issue #496).
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
