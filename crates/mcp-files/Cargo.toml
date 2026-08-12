@@ -22,6 +22,7 @@ parallel = ["dep:rayon"]
 dhat = { workspace = true, optional = true }
 dirs.workspace = true
 mcp-execution-codegen.workspace = true
+mcp-execution-core.workspace = true
 rayon = { workspace = true, optional = true }
 tempfile.workspace = true
 thiserror.workspace = true

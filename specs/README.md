@@ -73,6 +73,7 @@ graph TD
     codegen --> core
     codegen --> introspector
     files --> codegen
+    files --> core
     skill --> core
     server --> core
     server --> introspector

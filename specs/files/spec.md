@@ -21,7 +21,8 @@ related:
 > Path: `crates/mcp-files`. An in-memory, read-only VFS for generated tool
 > files, plus a high-performance, **atomic** export to the real filesystem.
 > Depends on `mcp-execution-codegen` (for `GeneratedCode` and its derived
-> resource bounds).
+> resource bounds) and, since #504, `mcp-execution-core` directly (for
+> `confinement::open_confined_write`).
 
 ## 1. Responsibility
 
@@ -254,10 +255,14 @@ free-form `resource: String` (issue #343), mirroring `mcp-core::ResourceKind`'s 
 pattern (issue #317, [[../core/spec#`Error` / `Result<T>` (`src/error.rs`)]]) without adding
 variants to that enum: `mcp-core`'s `ResourceKind` already has semantically adjacent variants
 (`GeneratedOutputSize`/`GeneratedFileCount`, the closest neighbors to
-`ExportTotalSize`/`ExportFileCount`), but this crate has no direct dependency on
-`mcp-execution-core` (only a transitive one via `mcp-execution-codegen`), so sharing that enum
-would mean adding a new direct dependency on `mcp-core` for a single error variant — a local enum
-avoids that coupling. Each variant's `Display` reproduces the same wording `check_export_bounds`
+`ExportTotalSize`/`ExportFileCount`), but sharing that enum would mean growing it with a variant
+pair used by exactly one downstream crate for a single error case — a local enum avoids that
+coupling regardless of the dependency edge below. At the time of #343 this crate also had no
+direct dependency on `mcp-execution-core` (only a transitive one via `mcp-execution-codegen`),
+which was the deciding factor then; #504 has since added a direct dependency for
+`confinement::open_confined_write`, so that specific rationale no longer applies, but the
+decision to keep `FilesResourceKind` local stands on the enum-scope argument above and was not
+revisited by #504. Each variant's `Display` reproduces the same wording `check_export_bounds`
 used to build by hand (`"export file count"` / `"export total size"`), so
 `FilesError::ResourceLimitExceeded`'s message is unchanged in substance.
 
