@@ -1440,6 +1440,7 @@ dependencies = [
  "dhat",
  "dirs",
  "mcp-execution-codegen",
+ "mcp-execution-core",
  "rayon",
  "tempfile",
  "thiserror",

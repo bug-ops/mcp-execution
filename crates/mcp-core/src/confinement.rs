@@ -492,6 +492,51 @@ pub async fn write_confined_file(path: &Path, content: &[u8]) -> Result<(), Conf
 /// The synchronous body of [`write_confined_file`], run inside a single `spawn_blocking` call so
 /// the check-then-write sequence is atomic with respect to the calling future being dropped.
 fn write_confined_file_blocking(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let mut file = open_confined_write(path)?;
+    file.write_all(content)?;
+    file.flush()
+}
+
+/// Opens `path` for writing, refusing to follow a pre-existing symlink planted at that exact
+/// location.
+///
+/// The same guard [`write_confined_file`] applies, factored out as its own blocking, synchronous
+/// primitive. [`write_confined_file`] stages content in memory and writes it to its *final* path
+/// in one call; a caller that instead needs to stage into a separate `.tmp` path and `rename` it into
+/// place (e.g. `mcp-execution-files`' `write_file_atomic`) cannot reuse that function directly,
+/// since the symlink race it closes is specific to the exact path passed in — here, the `.tmp`
+/// staging path rather than the final one (issue #504). Exposing this primitive lets both crates
+/// share one guard instead of each hand-rolling its own.
+///
+/// On Unix, the open that creates or truncates `path` carries `O_NOFOLLOW`, so the kernel rejects
+/// a symlinked terminal component (dangling or not) as part of that same syscall. Windows has no
+/// equivalent flag usable together with `create(true).truncate(true)` (see
+/// [`write_confined_file`]'s doc comment for why), so it relies solely on a
+/// [`std::fs::symlink_metadata`] pre-check with no yield point before the open — this narrows but
+/// does not close the window against a symlink planted by a racing process between the two.
+///
+/// A pre-existing regular file is still opened and truncated normally: this only rejects a
+/// symlink at the final path component, not an ordinary overwrite.
+///
+/// # Errors
+///
+/// Returns an error if the symlink check (Windows only) or the open failed — including the
+/// platform's "too many levels of symbolic links" error on Unix when `path`'s terminal component
+/// is a symlink.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::open_confined_write;
+/// use std::io::Write;
+/// use tempfile::TempDir;
+///
+/// let dir = TempDir::new().unwrap();
+/// let path = dir.path().join("staged.tmp");
+/// let mut file = open_confined_write(&path).unwrap();
+/// file.write_all(b"content").unwrap();
+/// ```
+pub fn open_confined_write(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(not(unix))]
     if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
         return Err(std::io::Error::new(
@@ -512,9 +557,7 @@ fn write_confined_file_blocking(path: &Path, content: &[u8]) -> std::io::Result<
         options.custom_flags(libc::O_NOFOLLOW);
     }
 
-    let mut file = options.open(path)?;
-    file.write_all(content)?;
-    file.flush()
+    options.open(path)
 }
 
 #[cfg(test)]

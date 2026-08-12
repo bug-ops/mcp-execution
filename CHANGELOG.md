@@ -81,6 +81,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sha2` 0.11 dependency (`default-features = false`) and enables `chrono`'s `serde` feature on
   `mcp-execution-core`, pulling in `digest`, `block-buffer`, `crypto-common`, `hybrid-array`, and
   `typenum` as new transitive dependencies (#468).
+- **`mcp-execution-core`**: `confinement::open_confined_write` — the symlink-planting guard
+  extracted out of `write_confined_file`'s blocking body into its own public, synchronous
+  primitive, so a caller that stages content into a separate `.tmp` path before renaming it into
+  place (rather than writing directly to the final path, `write_confined_file`'s own shape) can
+  apply the identical `O_NOFOLLOW`/pre-existing-symlink guard instead of hand-rolling it.
+  Re-exported from the crate root alongside the existing confinement API (#504).
+- **`mcp-execution-skill`**: `MAX_USE_CASE_HINT_LENGTH` and `MAX_USE_CASE_HINTS` are now
+  re-exported from the crate root's `pub use types::{...}` block, matching this crate's own spec's
+  documented public API surface. Both constants have existed in `types.rs` since #429 but were
+  never re-exported at the crate root (#494).
 
 ### Changed
 
@@ -812,6 +822,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the operator chose themselves would not defend against anything an attacker able to plant a
   symlink under it could not already do to any other path this process touches, so it keeps its
   existing narrower, traversal-only validation (#501).
+- **`mcp-execution-files`**: `write_file_atomic`'s temp-file write — the `.tmp` staging path used
+  by its atomic-write path — now opens via `mcp_execution_core::open_confined_write` instead of a
+  plain `fs::File::create`, refusing to follow a symlink pre-planted at that path. Previously, a
+  symlink planted ahead of time at the predictable `{target}.tmp` location was followed by the
+  write, redirecting file content anywhere the process could write — reachable via
+  `FilesBuilder::build_and_export`'s top-level file writes (#504).
 
 ### Removed
 

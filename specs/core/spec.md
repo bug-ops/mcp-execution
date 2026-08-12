@@ -641,6 +641,7 @@ pub async fn resolve_confined_path(
     target: Option<ConfinementTarget<'_>>,
 ) -> Result<PathBuf, ConfinementError>;
 pub async fn write_confined_file(path: &Path, content: &[u8]) -> Result<(), ConfinementError>;
+pub fn open_confined_write(path: &Path) -> std::io::Result<std::fs::File>;
 ```
 
 Issue #395: `mcp-skill::resolve_skill_output_path` and
@@ -724,6 +725,19 @@ directory file descriptor captured during the confinement walk itself (`openat`/
 `RESOLVE_NO_SYMLINKS` on Linux) rather than a flag on the terminal open call alone — out of scope
 for the issue #496 fix, and not silently claimed as covered. On Windows, the process-race gap
 described above is a third, platform-specific residual on top of these two.
+
+**`open_confined_write` exposes the same guard as its own synchronous primitive (issue #504).**
+`write_confined_file` writes caller-supplied content directly to its *final* path in one call; a
+caller that instead needs to stage into a separate `.tmp` path and `rename` it into place —
+`mcp-execution-files`' `write_file_atomic` — cannot reuse `write_confined_file` itself, since the
+symlink race it closes is specific to the exact path passed in (the `.tmp` staging path, not the
+final one). `open_confined_write(path: &Path) -> std::io::Result<std::fs::File>` is the check-and-open
+body extracted out of `write_confined_file`'s blocking closure — same `O_NOFOLLOW`/`symlink_metadata`
+guard, same residual gaps noted above — so both crates share one implementation instead of each
+hand-rolling its own. It is synchronous and not wrapped in `spawn_blocking`, since
+`mcp-execution-files`' export path has no `tokio` runtime dependency to preserve; callers that need
+the same future-drop atomicity `write_confined_file` provides must still run it inside their own
+`spawn_blocking` (or equivalent) rather than calling it directly from async code.
 
 `ConfinementError` is a closed set every caller maps with a **total, 1:1** `From` impl into its
 own pre-existing, byte-identical error enum — `mcp-server::OutputDirError` and
@@ -945,7 +959,7 @@ it would require either a request-wide (not per-field) budget threaded through e
 |---|---|
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result` |
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
-| `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen` |
+| `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen`; `confinement::open_confined_write` directly (issue #504) |
 | `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
 | `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
 | `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |

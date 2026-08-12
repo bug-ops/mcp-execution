@@ -1013,4 +1013,27 @@ mod tests {
         assert_eq!(content.len(), 100_000);
         assert_eq!(vfs.file_count(), 1);
     }
+
+    /// End-to-end regression for issue #504, through the actual production call path
+    /// (`build_and_export` -> this module's own `write_file_atomic` wrapper ->
+    /// `crate::filesystem::write_file_atomic`) rather than the lower-level unit test in
+    /// `filesystem.rs`. A bare top-level file (no `/` in its VFS path) is the shape that
+    /// reaches a predictable, attacker-plantable `.tmp` staging path: a symlink pre-planted
+    /// there must not be followed by the export.
+    #[test]
+    #[cfg(unix)]
+    fn test_build_and_export_rejects_a_symlink_planted_at_a_bare_file_tmp_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("real.ts");
+
+        std::os::unix::fs::symlink(&outside_file, temp_dir.path().join("test.ts.tmp")).unwrap();
+
+        let result = FilesBuilder::new()
+            .add_file("/test.ts", "attacker-controlled")
+            .build_and_export(temp_dir.path());
+
+        assert!(result.is_err());
+        assert!(!outside_file.exists());
+    }
 }

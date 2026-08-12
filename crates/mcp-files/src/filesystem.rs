@@ -61,6 +61,7 @@
 //! ```
 
 use crate::types::{FileEntry, FilePath, FilesError, FilesResourceKind, Result};
+use mcp_execution_core::open_confined_write;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
@@ -1131,13 +1132,17 @@ impl Default for ExportOptions {
 /// `pub(crate)` so [`crate::builder::FilesBuilder::build_and_export`] can reuse this for
 /// its own bare top-level files, rather than duplicating a weaker (no-`fsync`) atomic
 /// write helper.
+///
+/// The temp file is opened via [`open_confined_write`], which refuses to follow a symlink
+/// planted at the predictable `.tmp` path ahead of time, rather than a plain `fs::File::create`
+/// (issue #504).
 pub(crate) fn write_file_atomic(path: &Path, content: &str, atomic: bool) -> Result<()> {
     if atomic {
         // Atomic write: temp file + rename
         let temp_path = path.with_added_extension("tmp");
 
         // Write to temp file
-        let mut file = fs::File::create(&temp_path).map_err(|e| FilesError::InvalidPath {
+        let mut file = open_confined_write(&temp_path).map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to create temp file {}: {}", temp_path.display(), e),
         })?;
 
@@ -2025,5 +2030,25 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().is_resource_limit_exceeded());
+    }
+
+    /// A symlink pre-planted at the predictable `path.tmp` staging path must not be followed by
+    /// `write_file_atomic`'s temp-file write (issue #504) — the write must fail rather than land
+    /// on whatever the symlink points at.
+    #[test]
+    #[cfg(unix)]
+    fn test_write_file_atomic_rejects_a_symlink_planted_at_the_tmp_path() {
+        let base = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("real.ts");
+
+        let target_path = base.path().join("tool.ts");
+        let tmp_path = target_path.with_added_extension("tmp");
+        std::os::unix::fs::symlink(&outside_file, &tmp_path).unwrap();
+
+        let result = write_file_atomic(&target_path, "attacker-controlled", true);
+
+        assert!(result.is_err());
+        assert!(!outside_file.exists());
     }
 }
