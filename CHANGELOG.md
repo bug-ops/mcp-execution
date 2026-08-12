@@ -291,6 +291,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-cli`**: the `setup` command's executable-bit walk now descends recursively into
+  every nested subdirectory under each server-id directory (e.g. `{server-id}/_runtime/`) instead
+  of stopping two levels deep, so `.ts` files that aren't direct children of the server-id
+  directory are made executable too. The symlink-rejection guard from #476 now applies uniformly
+  at every recursion depth, including intermediate subdirectories, and a symlinked directory is
+  never descended into, which also rules out symlink-induced cycles (#489). Separately, a
+  transient read error mid-iteration over a directory's entries (`next_entry()` failing after the
+  directory itself opened successfully) is now logged as a warning and skipped, consistent with
+  the existing skip-and-warn handling of a directory that fails to open outright, rather than
+  aborting the whole `setup` run — this applies below the walk's root at every depth. The root
+  directory (`~/.claude/servers/` itself) failing to *open* remains a fatal error, since there are
+  no sibling directories at the root to protect by tolerating it (#490).
 - **`mcp-execution-cli`**: `--header` is no longer silently discarded when combined with
   `--from-config`. It now conflicts with `--from-config` at clap parse time, matching the
   existing treatment of the other non-selector flags (`--arg`, `--env`, `--cwd`, the two
