@@ -12,7 +12,7 @@ MCP server introspection using the official [rmcp](https://docs.rs/rmcp) SDK.
 
 ```toml
 [dependencies]
-mcp-execution-introspector = "0.9"
+mcp-execution-introspector = "0.10"
 ```
 
 Or with cargo-add:
@@ -74,14 +74,14 @@ for tool in &info.tools {
 ### Transport Support
 
 ```rust
-// npx-based servers
+// npx-based servers (stdio)
 let config = ServerConfig::builder()
     .command("npx".to_string())
     .arg("-y".to_string())
     .arg("@modelcontextprotocol/server-github".to_string())
     .build();
 
-// Docker-based servers
+// Docker-based servers (stdio)
 let config = ServerConfig::builder()
     .command("docker".to_string())
     .arg("run".to_string())
@@ -89,10 +89,19 @@ let config = ServerConfig::builder()
     .arg("--rm".to_string())
     .arg("ghcr.io/org/mcp-execution-server".to_string())
     .build();
+
+// HTTP/SSE servers
+let config = ServerConfig::builder()
+    .http_transport("https://api.example.com/mcp".to_string())
+    .header("Authorization".to_string(), "Bearer token".to_string())
+    .build();
 ```
 
 > [!NOTE]
-> Currently supports **stdio** transport, which is the most common for MCP servers.
+> Supports **stdio**, **HTTP**, and **SSE** transports. `discover_server` dispatches on
+> `ServerConfig`'s `Transport` variant; the HTTP/SSE path pins `max_sse_event_size` (16 MiB) to
+> bound the streamable-HTTP response, matching `rmcp`'s own default explicitly rather than
+> relying on it implicitly.
 
 ## Features
 

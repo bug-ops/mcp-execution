@@ -7,848 +7,227 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-12
+
 ### Added
 
-- **`mcp-execution-introspector`**: added `test_adr_369_protocol_version_latest_gate`, an
-  executable CI gate for ADR-369 §5 asserting `rmcp::model::ProtocolVersion::LATEST ==
-  ProtocolVersion::V_2025_11_25`. Fails the moment `rmcp` promotes `LATEST` to `V_2026_07_28`,
-  which is a trigger to re-open the ADR-369 discussion on adopting rmcp's SEP-2575 stateless
-  discover lifecycle — not authorization to implement it, and not a "fix the assertion" bug
-  (#382).
-- **`mcp-execution-server`**: `StateManager::take_if` — a validate-then-consume primitive that
-  runs a synchronous validation closure against a session while holding the state table's write
-  lock, removing the session only if the closure succeeds, without paying `StateManager::get`'s
-  full deep-clone cost on a failed (and likely retried) attempt; it hands back the entry's
-  already-known `size_bytes` alongside the session so nothing downstream needs to re-derive it
-  (#378). A crate-internal `StateManager::restore` re-inserts a previously-removed session under
-  its original `session_id`, `expires_at`, and `size_bytes`, enforcing the same
-  `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` bounds `store` does rather than silently
-  bypassing them (#379).
-- **`mcp-execution-server`**: two regression tests closing gaps left by #378/#379 —
-  `test_restore_does_not_extend_ttl_past_original_expiry` proves `restore` re-inserts a session
-  under its original `expires_at` rather than granting it a fresh TTL, and
-  `test_concurrent_take_if_same_session_exactly_one_succeeds` proves exactly one of several
-  callers racing `take_if` on the same `session_id` succeeds (#387).
-- **`mcp-execution-server`**: `list_generated_servers` now observes client-issued
-  `notifications/cancelled`, racing its directory-scan `spawn_blocking` task against
-  `ct.cancelled()` the same way `introspect_server` and `generate_skill` already do (#389).
-  Unlike `save_categorized_tools`'s export or `save_skill`'s write, the scan has no externally
-  visible side effect, so racing it carries none of the data-loss or lying-response risk that
-  applies to those two handlers. Also added `#[tracing::instrument]` to `list_generated_servers`,
-  the one `#[tool]` handler that previously had no span (#388).
-- **`mcp-execution-server`**: `save_categorized_tools` and `save_skill` now also observe
-  client-issued `notifications/cancelled` (#389), but via cooperative `ct.is_cancelled()`
-  checkpoints rather than racing an operation already in flight — neither handler's irreversible
-  work (the export, the file write) can safely be raced without reopening a documented bug: the
-  #169 data-loss race for the export lock, or a response that lies about whether the write
-  happened. `save_categorized_tools` checks at three points - handler entry, after the VFS is
-  built but before the export lock is requested, and after the lock is held but before the export
-  starts - so a cancellation is caught during the codegen/VFS-build stretch without ever touching
-  the per-`output_dir` lock map on the cancelled path. `save_skill` checks at handler entry and
-  again immediately before the write. A checkpoint firing after the session was already consumed
-  restores it via the existing `StateManager::restore` path, so a cancelled
-  `save_categorized_tools` call remains retriable under the same `session_id`.
-- **`mcp-execution-cli`**, **`mcp-execution-server`**: a new `--log-format {text,json}` flag
-  (and its `MCP_EXECUTION_LOG_FORMAT` environment-variable fallback, consulted only when the
-  flag is not passed) selects structured JSON diagnostic logging instead of the previous
-  text-only output, for log shippers/aggregators that expect JSON. `mcp-cli`'s `--format`
-  (command *result* output) is unaffected — the two are independent. Adding this to
-  `mcp-execution-server` required giving that binary a real argv parser
-  (`clap`) for the first time: it now honors `--help`/`--version` and rejects unknown
-  arguments with exit code 2, instead of silently ignoring all argv as before — a low-risk
-  change, since no in-repo `mcp.json` entry passes this server any arguments (#399).
-- **`mcp-execution-skill`**: `SkillMetadataError::FrontmatterTooComplex` — a new variant
-  reporting that a `SKILL.md` frontmatter block breached `serde-saphyr`'s explicit parse
-  `Budget` or an alias-replay limit, distinct from an ordinary syntax/type error
-  (`InvalidYaml`). `specs/decisions/ADR-405-adopt-serde-saphyr.md` — records the owner override
-  of ADR-341's decision to defer this swap, the corrected Evidence Ledger findings, the
-  measured Budget/latency figures, and resolutions to ADR-341's three open owner rulings
-  (#405).
-- **`mcp-execution-core`**: `path::first_disallowed_identifier_char` — returns the first
-  character in a string that is not UTS #39 `Identifier_Status=Allowed`, backing
-  `ServerId::new`/`ToolName::new`'s new Unicode-identifier-safety invariant (see the `###
-  Breaking` entry below). Adds the `unicode-security` 0.1.2 dependency (unconditional, unlike
-  the existing platform-gated `unicode-normalization`), pulling in `unicode-script` 0.5.8 as a
-  new transitive dependency (#433).
-- **`mcp-execution-core`**: new `provenance` module — `GenerationProvenance`, `ConfigFingerprint`,
-  `ToolDigest`, and `ToolDigestEntry<'a>` — recording when and against what server state a
-  `_meta.json` sidecar was generated, so a future comparison mechanism can detect that the
-  server's connection parameters or tool surface changed since generation. `ConfigFingerprint`
-  and `ToolDigest` are SHA-256 digests over an explicit, length-framed preimage (never `Debug`
-  output or serialized JSON, both of which lack a stability guarantee this needs); the
-  fingerprint excludes every secret-bearing `ServerConfig` value (argument/env/header/query
-  values, userinfo) by construction, so rotating a credential never registers as drift. Adds the
-  `sha2` 0.11 dependency (`default-features = false`) and enables `chrono`'s `serde` feature on
-  `mcp-execution-core`, pulling in `digest`, `block-buffer`, `crypto-common`, `hybrid-array`, and
-  `typenum` as new transitive dependencies (#468).
-- **`mcp-execution-core`**: `confinement::open_confined_write` — the symlink-planting guard
-  extracted out of `write_confined_file`'s blocking body into its own public, synchronous
-  primitive, so a caller that stages content into a separate `.tmp` path before renaming it into
-  place (rather than writing directly to the final path, `write_confined_file`'s own shape) can
-  apply the identical `O_NOFOLLOW`/pre-existing-symlink guard instead of hand-rolling it.
-  Re-exported from the crate root alongside the existing confinement API (#504).
-- **`mcp-execution-skill`**: `MAX_USE_CASE_HINT_LENGTH` and `MAX_USE_CASE_HINTS` are now
-  re-exported from the crate root's `pub use types::{...}` block, matching this crate's own spec's
-  documented public API surface. Both constants have existed in `types.rs` since #429 but were
-  never re-exported at the crate root (#494).
+- **`mcp-execution-introspector`**: added `test_adr_369_protocol_version_latest_gate`, an executable
+  CI gate for ADR-369 §5 asserting `rmcp::model::ProtocolVersion::LATEST == ProtocolVersion::V_2025_11_25`
+  — fails the moment `rmcp` promotes `LATEST`, which is a trigger to re-open the ADR-369 discussion on
+  adopting rmcp's SEP-2575 stateless discover lifecycle, not authorization to implement it (#382).
+- **`mcp-execution-server`**: `StateManager::take_if`, a validate-then-consume primitive that removes a
+  session only if a synchronous validation closure succeeds, without paying `get`'s full deep-clone cost
+  on a failed (and likely retried) attempt; and `StateManager::restore`, which re-inserts a previously
+  removed session under its original id/expiry/size, enforcing the existing capacity bounds (#378, #379).
+  Regression tests cover `restore`'s TTL and `take_if`'s exactly-once concurrency (#387).
+- **`mcp-execution-server`**: `list_generated_servers`, `save_categorized_tools`, and `save_skill` now
+  observe client-issued `notifications/cancelled` — racing the read-only directory scan, and checkpointing
+  cooperatively around the two handlers' irreversible export/write work. Added a missing
+  `#[tracing::instrument]` to `list_generated_servers` (#388, #389).
+- **`mcp-execution-cli`**, **`mcp-execution-server`**: a new `--log-format {text,json}` flag (and
+  `MCP_EXECUTION_LOG_FORMAT` env fallback) selects structured JSON diagnostic logging. `mcp-execution-server`
+  gained a real `clap` argv parser for the first time as part of this (#399).
+- **`mcp-execution-skill`**: `SkillMetadataError::FrontmatterTooComplex`, reported when a `SKILL.md`
+  frontmatter block breaches `serde-saphyr`'s parse `Budget` or alias-replay limit. `specs/decisions/
+  ADR-405-adopt-serde-saphyr.md` records the adoption decision (#405).
+- **`mcp-execution-core`**: `path::first_disallowed_identifier_char`, backing `ServerId`/`ToolName`'s new
+  UTS #39 identifier-safety invariant (see Breaking, below); adds the `unicode-security` dependency (#433).
+- **`mcp-execution-core`**: new `provenance` module (`GenerationProvenance`, `ConfigFingerprint`,
+  `ToolDigest`, `ToolDigestEntry`), recording as SHA-256 digests when and against what server state a
+  `_meta.json` sidecar was generated, excluding every secret-bearing `ServerConfig` value by construction;
+  adds the `sha2` dependency (#468).
+- **`mcp-execution-core`**: `confinement::open_confined_write`, the symlink-planting guard extracted out
+  of `write_confined_file` into its own public primitive for callers that stage-then-rename instead of
+  writing directly (#504).
+- **`mcp-execution-skill`**: `MAX_USE_CASE_HINT_LENGTH`/`MAX_USE_CASE_HINTS` re-exported from the crate
+  root, matching the crate's own documented public API surface (#494).
 
 ### Changed
 
 - **workspace**: bumped `regex` (1.12 → 1.13), `rmcp` (3.0 → 3.1), `tokio` (1.52 → 1.53), and `uuid`
-  (1.23 → 1.24) minimum versions, with `Cargo.lock` refreshed for the resulting transitive updates.
-- **`mcp-execution-codegen`**: split `ProgressiveGenerator::generate_with_categories` into the
-  public method plus three private helpers (`emit_tool_files`, `emit_index_file`,
-  `emit_scaffolding_files`), bringing it under clippy's `too_many_lines` threshold with no change
-  to behavior, output ordering, or error conditions. The workspace-wide `too_many_lines` allow is
-  removed from the root `Cargo.toml`; the two test functions that still legitimately exceed the
-  threshold now carry a narrow, rationale-commented item-level allow instead (#443).
-- **`mcp-execution-codegen`**, **`mcp-execution-server`**: the two item-level
-  `#[allow(clippy::too_many_lines)]` test-function attributes added by #443 are now
-  `#[expect(clippy::too_many_lines, reason = "...")]`, preserving the same rationale text. Adopted
-  as the convention going forward for new item-level lint suppressions — `#[expect]` emits its own
-  warning if the lint stops firing, catching a suppression that has outlived its justification
-  instead of letting it go stale silently — and documented in `specs/constitution.md` §IV (#459).
-- **`mcp-codegen`**, **`mcp-core`**, **`mcp-server`**, **`mcp-cli`**, **`mcp-skill`**: completed the
-  `#[expect]` migration started by #459 — the remaining item-level `#[allow(...)]` sites elsewhere
-  in the workspace are now `#[expect(lint, reason = "...")]`, each `reason` carrying the original
-  suppression's rationale. One site (`mcp-cli::commands::skill::run`'s
-  `#[allow(clippy::too_many_arguments)]`) was removed outright rather than converted: the function
-  has 7 parameters, at clippy's default `too-many-arguments-threshold` (the lint fires only above
-  it), so the suppression no longer had anything to suppress. `specs/constitution.md` §IV updated
-  to reflect the migration is now complete (#465).
-- **`mcp-execution-core`**: added `validate_server_id_slug`, `ServerIdSlugError`, and
-  `MAX_SERVER_ID_LENGTH` — the authoritative, core-owned invariant for a slug-shaped server id
-  (1-64 lowercase ASCII letters, digits, or hyphens), distinct from `ServerId::new()`'s own
-  looser baseline (single non-empty path segment, no `..`/separator), which is left unchanged.
-  `mcp-execution-skill`'s `validate_server_id` now delegates to it, and `SkillServerIdError` is
-  now a re-export of `ServerIdSlugError` rather than a hand-rolled, structurally identical mirror
-  type — the previous mirror had already let the two crates' error wording drift apart (MCP
-  clients and the CLI disagreed on identical input), which a re-export makes impossible rather
-  than merely fixing once. `mcp-execution-server`'s tool handlers (`introspect_server`,
-  `generate_skill`, `save_skill`) call the core function directly instead of importing
-  `mcp_execution_skill::validate_server_id`. Also fixes a gate/confine mismatch: the
-  output-confinement checks in `mcp-execution-server`'s `output_dir` and `mcp-execution-skill`'s
-  `output_path` previously confined a `server_id` using the looser `validate_path_segment` even
-  though entry validation already gated it with the stricter slug rule; both now confine using
-  the same `validate_server_id_slug` check that gates entry, and their `InvalidServerId` error
-  now carries and reports the specific slug-format violation instead of a hardcoded "must be a
-  single non-empty path segment" message that became inaccurate once the confinement rule
-  tightened (e.g. `"My-Server"` is a valid path segment but not a valid slug) (#401).
-- **`mcp-execution-core`**: `path::components_match`'s `TODO` comment is now accurate about the
-  ASCII-only case-folding gap: it previously claimed `scrub_username`'s fallback mitigates a
-  non-ASCII username differing only by case (e.g. Cyrillic), but that fallback shares the same
-  ASCII-only limitation and does not actually catch this case — the username is not redacted.
-  The comment now states this plainly and tracks the real fix as a new follow-up (#406) rather
-  than closing the loop with an inaccurate mitigation claim. No behavior change (#402).
-- **workspace**: sorted `[dependencies]` alphabetically in `mcp-execution-files` and
-  `mcp-execution-skill` (#391).
-- **workspace / `mcp-execution-skill`**: replaced `serde_norway` with `serde-saphyr` 1.0.1 as
-  the YAML parsing backend for `SKILL.md` frontmatter (`extract_skill_metadata`), overriding
-  ADR-341's earlier "monitor and revisit" decision — see
-  `specs/decisions/ADR-405-adopt-serde-saphyr.md` for the full rationale. Parsing is now bounded
-  by an explicit, fully-configured `serde_saphyr::Budget` in addition to the existing
-  `MAX_FRONTMATTER_SIZE` (8 KiB) pre-parse cap. `SkillMetadataError` is now `#[non_exhaustive]`.
-  Removes `unsafe-libyaml-norway` (228 `unsafe fn`) and `serde_norway`'s own (8) from the
-  dependency tree; adds `encoding_rs` (40) and `arraydeque` (15) — both `serde-saphyr` and its
-  `granit-parser` backend are themselves `#![forbid(unsafe_code)]` — a net `-181 unsafe fn`
-  (#405).
-- **`mcp-execution-introspector`**: `discover_via_http` now sets
-  `StreamableHttpClientTransportConfig::max_sse_event_size` explicitly (16 MiB, matching `rmcp`
-  3.1.2's own default) instead of relying on it implicitly, so a future upstream default change
-  cannot silently loosen this crate's bound. Corrected the `# Security` docs on `discover_server`
-  and `discover_via_http`, and `specs/introspector/spec.md`, which still described the HTTP/SSE
-  path as entirely unbounded against `rmcp` 2.2.0: as of the now-locked `rmcp` 3.1.2, SSE events
-  are bounded; only the plain JSON response body and a non-2xx error body remain unbounded,
-  buffered fully in memory by `rmcp` with no config knob to cap either — a known upstream
-  limitation this crate cannot fix without reimplementing `rmcp`'s HTTP transport client-side
-  (#390).
-- **`mcp-execution-core`**: added `confinement::{ConfinementError, ConfinementTarget,
-  resolve_confined_path}`, the component-by-component resolve-and-confine filesystem walk
-  previously implemented separately (and identically, apart from the terminal-component check)
-  by `mcp-execution-server::output_dir::resolve_output_dir` and
-  `mcp-execution-skill::resolve_skill_output_path`. Both call sites now delegate to this shared
-  primitive and map its `ConfinementError` onto their own, unchanged `OutputDirError`/
-  `OutputPathError` public error enums via a total `From` impl — no observable change to either
-  crate's error surface, messages, or confinement/symlink-rejection behavior (#395). `mcp-core`
-  gains a direct (previously dev-only) `tokio` dependency (`fs` feature) as a result.
-- **CI**: extracted `cargo build --all-targets --all-features --workspace` out of the `test`
-  job into a new, independent `build` job that runs on the same OS/toolchain matrix in
-  parallel with `test` (nextest already builds what it needs on its own, so the two no longer
-  need to run sequentially). `ci-success` now also gates on `build`'s result.
-- **CI**: the `release` job now only runs on pushes to `master`, instead of on every PR and
-  branch push covered by the workflow's triggers.
-- **workspace**: swapped the out-of-alphabetical-order `mcp-execution-introspector`/
-  `mcp-execution-files` dependency lines in `mcp-execution-cli`'s `Cargo.toml`, and moved the
-  `[lints]` table in `mcp-execution-server`/`mcp-execution-skill` and the `[features]`/
-  `[[bench]]`/`[[example]]` tables in `mcp-execution-files` to the position `cargo-sort` expects,
-  so the new CI gate below is clean from its first run. Purely mechanical; no semantic change
-  (#396).
-- **CI**: the `check` job now runs `cargo sort --check --workspace` after the formatting check,
-  failing the build if any crate's `Cargo.toml` has an out-of-alphabetical-order
-  `[dependencies]`/`[dev-dependencies]`/`[build-dependencies]` table, or a top-level table in
-  the wrong position (#397).
-- **`mcp-execution-cli`**: extracted `formatters::emit`, a shared helper that formats a value,
-  prints it, and returns the given `ExitCode`, collapsing the repeated
-  format/print/return-exit-code sequence duplicated across `server.rs`, `setup.rs`,
-  `introspect.rs`, and `skill.rs`'s command handlers. Behavior-preserving refactor only — no
-  change to CLI output or exit codes (#368, #377).
-- **`mcp-execution-server`**: when `save_categorized_tools`'s post-consume pipeline fails *and*
-  the subsequent `StateManager::restore` also can't put the session back (the pending-session
-  table already back at its `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES` caps), the error
-  returned to the client now says so explicitly, instead of reading like an ordinary transient
-  failure safe to retry with the same `session_id`. Previously this compound failure was only
-  logged server-side; the client had no way to tell it apart from a `restore` that succeeded
-  short of a second failed attempt. The message now also names the actual `restore` failure
-  cause (`AtCapacity` vs `MemoryBudgetExceeded`) instead of a single hardcoded wording, and
-  `data` carries a machine-checkable `session_restore_failure_reason` field so a programmatic
-  client doesn't have to substring-match prose (#387).
-- **`mcp-execution-server`**: simplified `validate_categorized_tools`'s display-name→raw-name
-  lookup to a single `display_tool_name` key per introspected tool, removing `display_forms`.
-  Issue #433's `ToolName::new` Unicode-identifier allowlist already rejects every character
-  `display_forms`'s second (entity-decoded) key existed to accept, making that branch
-  unreachable; the ambiguity guard for two distinct raw names colliding on one display key is
-  unchanged. Internal simplification only, no user-visible behavior change (#447, see
-  `specs/decisions/ADR-447-single-display-form-tool-name-lookup.md`).
+  (1.23 → 1.24) minimum versions, with `Cargo.lock` refreshed (#498).
+- **`mcp-execution-codegen`**: split `generate_with_categories` into the public method plus three private
+  helpers, bringing it under clippy's `too_many_lines` threshold and removing the workspace-wide allow
+  (#443). Its item-level allows, and the rest of the workspace's remaining `#[allow(...)]` sites, were
+  migrated to `#[expect(lint, reason = "...")]` so a stale suppression fails loudly once the lint stops
+  firing — the new convention, documented in `specs/constitution.md` §IV (#459, #465).
+- **`mcp-execution-core`**: added `validate_server_id_slug`/`ServerIdSlugError`/`MAX_SERVER_ID_LENGTH` as
+  the authoritative slug invariant; `mcp-execution-skill`'s `validate_server_id` now delegates to it
+  (`SkillServerIdError` re-exports `ServerIdSlugError`) and `mcp-execution-server`'s tool handlers call it
+  directly. Also fixes a gate/confine mismatch where output-path confinement used a looser rule than entry
+  validation already enforced (#401).
+- **`mcp-execution-core`**: corrected an inaccurate `TODO` on `components_match`'s ASCII-only case-folding
+  gap; no behavior change, real fix tracked as #406 (#402).
+- **workspace / `mcp-execution-skill`**: replaced `serde_norway` with `serde-saphyr` 1.0.1 as the SKILL.md
+  YAML frontmatter backend, bounded by an explicit `Budget`; `SkillMetadataError` is now
+  `#[non_exhaustive]`. Net effect: -181 `unsafe fn` in the dependency tree (#405).
+- **`mcp-execution-introspector`**: `discover_via_http` now explicitly pins `max_sse_event_size` (16 MiB)
+  instead of relying on `rmcp`'s default; corrected docs that described the HTTP/SSE path as entirely
+  unbounded (only the JSON body and non-2xx error body remain so, an upstream `rmcp` limitation) (#390).
+- **`mcp-execution-core`**: added `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}`,
+  the resolve-and-confine walk previously duplicated by `mcp-execution-server` and `mcp-execution-skill`;
+  both now delegate to it (#395).
+- **CI**: extracted `cargo build` into its own parallel `build` job; the `release` job now only runs on
+  pushes to `master`; fixed out-of-alphabetical-order `Cargo.toml` tables and added a `cargo sort --check`
+  gate (#396, #397).
+- **`mcp-execution-cli`**: extracted `formatters::emit`, collapsing the repeated format/print/exit-code
+  sequence duplicated across `server.rs`, `setup.rs`, `introspect.rs`, and `skill.rs` (#368, #377).
+- **`mcp-execution-server`**: `save_categorized_tools` now reports explicitly when a post-consume
+  failure's `StateManager::restore` also can't re-insert the session (capacity exhausted), naming the
+  actual cause via a machine-checkable `session_restore_failure_reason` field (#387).
+- **`mcp-execution-server`**: simplified `validate_categorized_tools`'s display-name lookup to a single
+  `display_tool_name` key, removing the now-unreachable `display_forms` branch (#447).
 
 ### Breaking
 
-- **`mcp-execution-core`**: `METADATA_SCHEMA_VERSION` bumped from `1` to `2`. `ServerMetadata`
-  gained a new required field, `provenance: GenerationProvenance` — not `Option`, since a
-  `schema_version: 1` sidecar (which has no `provenance` key at all) is now rejected by a
-  schema-version check before any consumer constructs a `ServerMetadata`, so an `Option` every
-  consumer would have to unwrap could never actually be `None`. Any `_meta.json` sidecar written
-  by a `generate` run before this change no longer parses: re-run `generate` to produce a v2
-  sidecar. `mcp-execution-codegen`'s `ProgressiveGenerator::generate`/`generate_with_categories`
-  both gained a required `&ServerConfig` parameter (used to compute `provenance` from the same
-  inputs the run is generating from, so the digest can't drift from the emitted files) —
-  source-breaking for every caller. `mcp-execution-skill`'s `scan_tools_directory` now reads
-  `schema_version` from a minimal probe *before* attempting a typed `ServerMetadata` parse, so a
-  genuine v1 sidecar correctly surfaces `ScanError::UnsupportedSchema` instead of a generic
-  "missing field `provenance`" `ScanError::MetadataParse`; `UnsupportedSchema`'s message also
-  gained the "re-run `generate`" guidance its sibling `StaleMetadata` already carried. Also,
-  `ConfigFingerprint`/`ToolDigest`'s `Deserialize` is now routed through a validating
-  `TryFrom<String>` (new `DigestFormatError`), mirroring `ServerId`/`ToolName`'s pattern: a
-  `_meta.json` whose `provenance.config_fingerprint`/`tool_digest` is not exactly 64 lowercase
-  hex characters now fails to deserialize instead of silently producing a value that violates
-  the documented shape (#468).
-- **`mcp-execution-skill`**: `SkillMetadataError` gained a new `NameTooLong { len, limit }`
-  variant, returned by `extract_skill_metadata` when the frontmatter `name` exceeds
-  `MAX_SKILL_NAME_LENGTH` (see the `### Fixed` entry below). Source-breaking for any downstream
-  consumer exhaustively matching `SkillMetadataError` without a wildcard arm (#419).
-- **`mcp-execution-skill`**: block/folded YAML scalars (`description: |` / `>`) in `SKILL.md`
-  frontmatter now keep their YAML-1.2-correct trailing newline instead of having it silently
-  stripped — `serde-saphyr` is YAML-1.2-correct where `serde_norway` was not. An owner ruling
-  accepted this behavior change rather than normalizing it away; see
-  `specs/decisions/ADR-405-adopt-serde-saphyr.md` §2.
-- **`mcp-execution-skill`**: an alias-bomb-shaped YAML input placed under a key
-  `RawFrontmatter` does not declare now fails with
-  `SkillMetadataError::FrontmatterTooComplex` instead of parsing successfully — the new
-  `serde-saphyr` `Budget` is not shape-independent the way the previous parser's incidental
-  protection was (see ADR-405 §4-§5), so this specific input is now correctly rejected rather
-  than silently ignored.
-- **`mcp-execution-skill`**: `SkillMetadataError` is now `#[non_exhaustive]` and gained the new
-  `FrontmatterTooComplex` variant. An exhaustive `match` on this enum outside `mcp-execution-skill`
-  will now fail to compile (none exist in-tree today).
-- **`mcp-execution-core`**: `ServerId::new`/`ToolName::new` now enforce a second, layered
-  invariant on top of `validate_path_segment`: every character must be UTS #39
-  `Identifier_Status=Allowed` (via the `unicode-security` crate, Unicode 16.0 tables), checked
-  with the new `first_disallowed_identifier_char` (backed by
-  `unicode_security::GeneralSecurityProfile::identifier_allowed`). Both `ServerIdError` and
-  `ToolNameError` gained a `DisallowedCharacter { id/name: String, code_point: u32 }` variant —
-  source-breaking for any downstream consumer exhaustively matching either enum without a
-  wildcard arm. Rationale: tool names and server ids are attacker-controlled (a remote MCP
-  server) and are rendered into LLM-facing text (`introspect_server` summaries, generated
-  `SKILL.md`); `untrusted::sanitize_untrusted_text` is a deliberate denylist that passes through
-  ZWNJ/ZWJ, variation selectors, soft hyphen, and other invisible characters by design (#430),
-  so a hostile server could previously publish a tool named near-identically to a legitimate one
-  (e.g. `get_issue` vs. `get_issue\u{00AD}`), spoofing it in LLM-facing summaries. An allowlist
-  at the newtype construction boundary closes this class of spoofing by construction rather than
-  adding more denylist entries. Deliberately does **not** detect homoglyphs (e.g. Cyrillic `а`
-  U+0430 is Allowed and renders identically to Latin `a`) — a hand-rolled ASCII-only allowlist
-  was rejected in favor of this Unicode-tracked one specifically to keep accepting legitimate
-  non-ASCII tool/server names (e.g. `café_menu_日本語`), which an ASCII allowlist would break.
-  **Compatibility risk**: a remote MCP server exposing a tool named with a space or
-  `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright — `Introspector::discover_server`
-  aborts for the whole server the moment one `ToolName::new` call fails (mapped to a graceful
-  `Error::ValidationError`, not a panic). This is a deliberate fail-closed trade-off: Claude's
-  own tool-name contract is `^[a-zA-Z0-9_-]{1,128}$`, a strict subset of what remains accepted.
-  Similarly, an `mcp.json` key containing such a character is no longer usable as a `ServerId`
-  at all (#433).
-- **`mcp-execution-core`**: `Error::is_connection_error()` and `Error::is_timeout()` removed —
-  neither had any real (non-test/non-doctest) call site anywhere in the workspace.
-  `mcp-cli`'s `classify_core_error` (`runner.rs`) is an exhaustive `match` over every `Error`
-  variant with no wildcard arm, so it always matched `ConnectionFailed`/`Timeout` by variant
-  name directly, never through these predicates; rewriting it as an `if`/`else if` predicate
-  chain would silently give a future `Error` variant a fallthrough exit code instead of a
-  compile error, so `classify_core_error` itself is unchanged. Mirrors the identical
-  dead-predicate-removal precedent for `is_connection_error`'s siblings (#199) and
-  `mcp_files::FilesError`'s equivalents (#202) (#427).
-- **`mcp-execution-skill`**: `GenerateSkillResult::output_path` is renamed to
-  `default_output_path_hint`. Three distinct concepts previously shared the `output_path`
-  identifier across the `generate_skill`/`save_skill` tool pair: `GenerateSkillResult`'s field
-  (a display-only, `~`-expanded hint with no filesystem meaning), `SaveSkillParams::output_path`
-  (a must-be-relative, confinement-checked path fragment), and `SaveSkillResult::output_path`
-  (the actual resolved, written-to path) — since `generate_skill` and `save_skill` are meant to
-  be chained, a caller could plausibly copy the first verbatim into the second, not realizing
-  the two have unrelated resolution semantics. `SaveSkillParams`/`SaveSkillResult` keep
-  `output_path`, since those two do share real filesystem-path semantics. Source-breaking for
-  any downstream consumer constructing or reading `GenerateSkillResult::output_path` directly.
-  This is also a JSON wire-format break, not just a Rust source-level one: the `generate_skill`
-  MCP tool serializes `GenerateSkillResult` directly as its response, so the `output_path` key
-  disappears from that JSON response (renamed to `default_output_path_hint`), and the tool's
-  declared `JsonSchema` output changes to match — any MCP client parsing the response by field
-  name is affected, not only Rust callers linking against this crate (#436).
+- **`mcp-execution-core`**: `METADATA_SCHEMA_VERSION` bumped `1` → `2`; `ServerMetadata` gained a required
+  `provenance: GenerationProvenance` field, and a `schema_version: 1` sidecar is now rejected before
+  parsing. `ProgressiveGenerator::generate`/`generate_with_categories` gained a required `&ServerConfig`
+  parameter. `ConfigFingerprint`/`ToolDigest` now deserialize through a validating `TryFrom<String>` (#468).
+- **`mcp-execution-skill`**: `SkillMetadataError` gained `NameTooLong { len, limit }` and is now
+  `#[non_exhaustive]` with the new `FrontmatterTooComplex` variant (#419, #405).
+- **`mcp-execution-skill`**: block/folded YAML scalars in SKILL.md frontmatter now keep their
+  YAML-1.2-correct trailing newline (`serde-saphyr` is spec-correct where `serde_norway` was not); an
+  alias-bomb-shaped input now fails with `FrontmatterTooComplex` instead of parsing (#405).
+- **`mcp-execution-core`**: `ServerId::new`/`ToolName::new` now enforce a UTS #39
+  `Identifier_Status=Allowed` invariant, closing a spoofing class where a hostile MCP server could publish
+  a tool name using invisible/confusable characters near-identical to a legitimate one. Both error types
+  gained `DisallowedCharacter { id/name, code_point }`. **Compatibility risk**: a tool named with a space
+  or `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright (#430, #433).
+- **`mcp-execution-core`**: removed `Error::is_connection_error()`/`is_timeout()` — no real call sites
+  anywhere in the workspace (#427).
+- **`mcp-execution-skill`**: `GenerateSkillResult::output_path` renamed to `default_output_path_hint` —
+  also an MCP JSON wire-format break for the `generate_skill` tool's response (#436).
 
 ### Fixed
 
-- **`mcp-execution-cli`**: the `setup` command's executable-bit walk now descends recursively into
-  every nested subdirectory under each server-id directory (e.g. `{server-id}/_runtime/`) instead
-  of stopping two levels deep, so `.ts` files that aren't direct children of the server-id
-  directory are made executable too. The symlink-rejection guard from #476 now applies uniformly
-  at every recursion depth, including intermediate subdirectories, and a symlinked directory is
-  never descended into, which also rules out symlink-induced cycles (#489). Separately, a
-  transient read error mid-iteration over a directory's entries (`next_entry()` failing after the
-  directory itself opened successfully) is now logged as a warning and skipped, consistent with
-  the existing skip-and-warn handling of a directory that fails to open outright, rather than
-  aborting the whole `setup` run — this applies below the walk's root at every depth. The root
-  directory (`~/.claude/servers/` itself) failing to *open* remains a fatal error, since there are
-  no sibling directories at the root to protect by tolerating it (#490).
-- **`mcp-execution-cli`**: `--header` is no longer silently discarded when combined with
-  `--from-config`. It now conflicts with `--from-config` at clap parse time, matching the
-  existing treatment of the other non-selector flags (`--arg`, `--env`, `--cwd`, the two
-  timeout overrides) (#492).
-- **`mcp-execution-server`**: `save_skill`'s file write no longer follows a symlink planted at the
-  target path after `resolve_skill_output_path`'s confinement check but before the write. The
-  check deliberately never creates the terminal path component (the caller writes it), leaving a
-  window a plain `tokio::fs::write` would fall into — the new `mcp_execution_core::write_confined_file`
-  closes it for that exact path on Unix by opening with `O_CREAT | O_TRUNC | O_NOFOLLOW` inside a
-  single `spawn_blocking` call, so there is no separate check-then-write step left to race, and the
-  write keeps the same disconnect-safe atomicity `tokio::fs::write` already had. Windows has no
-  usable equivalent flag for this open (the candidate, `FILE_FLAG_OPEN_REPARSE_POINT`, cannot be
-  combined with the create+truncate open this function needs), so it relies on a `symlink_metadata`
-  pre-check that remains TOCTOU against a racing process — documented as such rather than claimed
-  as closed. Overwrite semantics for a pre-existing regular file are unchanged. This closes the
-  race for the terminal path only on Unix — a symlink swapped in for a parent directory (e.g.
-  `{server_id}/` itself) after the check, or a hardlink at the target, are documented residual gaps
-  on every platform, not silently claimed as closed (#496).
-- **`mcp-execution-core`**: `resolve_confined_path` no longer fails one of two callers racing to
-  resolve the same not-yet-existing confined directory. `create_dir`'s `ErrorKind::AlreadyExists`
-  is now tolerated for both the segment directory and each lenient intermediate directory, and the
-  concurrent winner's directory is re-validated under the exact same confinement rule the loser
-  would have applied had it already existed at call time — this closes the race without weakening
-  either directory-kind's symlink-rejection guarantee (#491).
-- **`mcp-execution-server`**: `list_generated_servers`'s `tool_count` no longer over-reports by
-  one for every generated server. The directory-scan filter counted every `.ts` file not starting
-  with `_`, which included `index.ts` — the package's always-present re-export entry point,
-  itself not a tool — alongside the actual per-tool `.ts` files. The exclusion now also covers
-  `index.ts`, compared case-insensitively to match `disambiguate_output_filename`'s existing
-  case-insensitive handling of `index` (#312). The filename itself now lives in a single shared
-  `mcp_execution_core::metadata::INDEX_FILE_NAME` constant, replacing a bare string literal in
-  `mcp-execution-codegen` and a locally-scoped duplicate constant in `mcp-execution-skill` (#477).
-- **`mcp-execution-skill`, `mcp-execution-cli`**: the `skill` command's `--hint` flag now has a
-  real effect on the generated `SKILL.md`. Previously, use-case hints only ever reached the
-  LLM-facing `generation_prompt` field, which `mcp-cli skill` never reads (it renders
-  `render_skill_md` directly, with no LLM in the loop) — so `--hint` silently produced
-  byte-identical output whether supplied or not. `GenerateSkillResult` gained a
-  `use_case_hints: Vec<String>` field, populated by `build_skill_context` with the same
-  sanitized/capped hints fed to `generation_prompt`, and `skill-md.hbs` now renders it as a
-  deterministic "## Use Cases" section (one bullet per hint) between the intro and "## Usage" —
-  omitted entirely when no hints are supplied, preserving prior output byte-for-byte. A hint
-  dropped past the 20-hint cap or truncated past the 500-character per-hint cap is no longer
-  silent either: both now produce a human-readable entry on `GenerateSkillResult::warnings`
-  (`mcp-cli`'s `--format json` output, the same channel `.ts`-file drift warnings already use).
-  This is also a JSON wire-format change for the `generate_skill` MCP tool, not just a
-  CLI/Rust-source one: `GenerateSkillResult` is serialized verbatim as that tool's response, so
-  `use_case_hints` is a new key in the response JSON and the tool's declared `JsonSchema` output
-  changes to match (additive, so existing deserializers are unaffected). A caller sending
-  `"use_case_hints": []` also sees a small `generation_prompt` shape change: the previously
-  emitted, fully-empty `### Use Case Hints` wrapped block no longer appears (#473).
-- **`mcp-execution-cli`**: `setup`'s `check_files_executable` no longer follows symlinks while
-  walking `~/.claude/servers/` to `chmod` generated `.ts` files. Two vectors were closed: a
-  symlinked server-id directory previously let the walk descend into and `chmod` an arbitrary
-  directory elsewhere on disk, and — not covered by the original report — a symlinked `.ts` file
-  inside an otherwise legitimate server directory previously let `chmod` land on its target
-  anywhere the process could reach. Both levels of the walk now check entry kind via
-  `DirEntry::file_type()` (which does not traverse symlinks) and skip symlinked entries instead of
-  following them, mirroring the guard semantics `mcp_execution_core::confinement` already uses.
-  `SetupResult` gained a `skipped_entries: usize` field (breaking change, acceptable pre-1.0.0) so
-  a planted symlink is surfaced to the user rather than silently ignored; the walk itself is now
-  exposed as `check_files_executable_in(servers_dir: &Path)` for testing without `HOME` mutation
-  (#476).
-- **`mcp-execution-cli`**: `server validate` no longer labels every configuration-lookup failure
-  as "Server not found in configuration", even when `~/.claude/mcp.json` itself is missing or
-  malformed — the same class of mislabeling #304 fixed for entries present but failing security
-  validation, left unaddressed for the file-load path. `get_mcp_server_entry` is now split into
-  `load_mcp_config` and `lookup_server_entry`, letting `validate_command` report a config-load
-  failure with its true cause and reserve the "not found" message for a genuinely absent server
-  name, matching the framing `generate --from-config`, `server list`, and `server info` already
-  use for the same three underlying conditions (#479).
-- **`mcp-execution-server`**: a `categorized_tools` entry whose `name` cannot be resolved to a raw
-  introspected tool now reports which of two distinct causes applies, instead of one message
-  covering both regardless of which occurred: "not found in introspected tools" when no raw tool
-  produces that display key at all, versus a separate "ambiguous" message when the key is shared
-  by two or more raw tools whose display forms collided (only reachable via
-  `sanitize_untrusted_text`'s truncation, per `validate_categorized_tools`'s S3 doc comment).
-  Not-found remains the common case for a genuinely mistyped or stale name; distinguishing it from
-  the rare ambiguous case just gives the caller a more actionable message either way (#456).
-- **`mcp-execution-core`**: `ConfinementError::InvalidSegment` (#452), `mcp-execution-server`'s
-  `OutputDirError::InvalidServerId` (#450), and `mcp-execution-skill`'s
-  `OutputPathError::InvalidServerId` (#451) now sanitize their rejected segment/`server_id` field
-  with `untrusted::sanitize_untrusted_inline` before storing it — the same helper and
-  construction-time pattern `ServerIdError`/`ToolNameError` adopted below (see the "Security"
-  section for that change), closing the same `&`/`<`/`>`-smuggling gap at the three sites that
-  change didn't already cover. Each `#[error(...)]` attribute keeps its pre-existing `{field:?}`
-  (`Debug`) formatting unchanged, for the same reason documented on `ServerIdError`.
-- **`mcp-execution-core`**: `validate_env_name` now rejects any environment variable name that
-  does not match the conventional POSIX/Windows identifier charset `[A-Za-z_][A-Za-z0-9_]*`,
-  before the forbidden-name comparison runs. The prior ASCII-case-insensitive comparison (#428)
-  only folds ASCII letters, but Windows' own environment-name comparison folds case using the
-  OS's Unicode uppercase table, which is broader — e.g. `ı` (U+0131, Turkish dotless i)
-  uppercases to `I` and `ſ` (U+017F, long s) uppercases to `S` on Windows. A forbidden name
-  spelled with one of these in place of the ASCII letter (e.g. `NODE_OPTıONS`) previously passed
-  the ASCII-only comparison in this validator, yet would still resolve as the forbidden name once
-  handed to the OS environment block on a real Windows host. Closing this via an input-charset
-  invariant avoids having to chase every such Unicode case-confusable individually (#438). As a
-  behavior change, this now rejects outright any environment variable name that was never a
-  valid identifier to begin with — including legitimate-looking names that fall outside
-  `[A-Za-z_][A-Za-z0-9_]*`, such as Windows' `ProgramFiles(x86)` or a bash `BASH_FUNC_x%%`
-  function-export name. This is acceptable pre-1.0.0 per this project's compatibility policy.
-- **`mcp-execution-core`**: `validate_env_name` now compares environment variable names against
-  `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` (`DYLD_`) with an ASCII-case-insensitive match
-  instead of an exact byte comparison. Windows treats environment variable names as
-  case-insensitive at the OS/`CreateProcess` level, so a case-varied spelling such as `Path` or
-  `path` previously bypassed the forbidden-name check entirely while still overriding `PATH` for
-  the spawned subprocess (#428). As a behavior change, a POSIX-legal but distinctly-cased name
-  that is not the canonical spelling (e.g. `path`, `node_options`, `ld_preload`) is now rejected
-  too, even on platforms where env var names are case-sensitive, so the check behaves
-  identically regardless of host OS.
-- **`mcp-execution-codegen`**: the generated runtime bridge's `validateEnvName` (rendered into
-  `_runtime/mcp-bridge.ts`) now mirrors the same case-insensitive comparison, closing the
-  matching gap in the TypeScript copy of this check (#428).
-- **`mcp-execution-skill`**: `render_skill_md`'s YAML frontmatter (`name`, `description`) is
-  now serialized as a whole via `serde-saphyr`'s emitter instead of hand-rolled escaping applied
-  only to `description`. The previous escaper covered just `\`, `"`, and `\n`/`\r`, leaving other
-  C0 control characters (NUL, BEL, ESC, ...) unescaped, and left `name` (`skill_name`, also
-  attacker-controlled) completely unencoded and open to frontmatter key injection (#398). As a
-  side effect, a generated SKILL.md's `description:` line is no longer always double-quoted — it
-  may now be plain, single-quoted, or a block literal depending on content (including a folded
-  `>-` scalar for a single-line value over 80 characters), which changes the byte size of a
-  frontmatter block near the existing `MAX_FRONTMATTER_SIZE` (8 KiB) cap. `serde-saphyr` is also
-  YAML-1.2-correct, so a `U+2028`/`U+2029` separator now round-trips exactly for strict external
-  YAML-1.2 consumers instead of being rendered as a literal line break with a 2-space fold
-  indent.
-- **`mcp-execution-core`**: `sanitize_path_for_error`'s home-directory redaction on Windows/macOS
-  missed non-ASCII usernames (e.g. Cyrillic, Greek) that differed only by case: `components_match`
-  compared components with `eq_ignore_ascii_case`, and `replace_case_aware`'s username-scrubbing
-  fallback lowercased with `to_ascii_lowercase`, both of which only fold ASCII bytes, so a
-  same-username-different-case path silently skipped redaction and leaked the username verbatim
-  in error messages. Both now case-fold with full Unicode semantics via `str::to_lowercase`, kept
-  consistent between the two functions so they agree on Unicode's context-sensitive folding rules
-  (e.g. Greek final sigma: `"ΣΑΣ".to_lowercase() == "σας"`); `replace_case_aware` was rewritten
-  around a windowed comparison that only ever slices at `haystack`'s own (unmodified) char
-  boundaries, rather than lowering a copy and reusing its byte offsets, so it stays correct when
-  `str::to_lowercase()` changes a character's encoded byte length, e.g. Turkish "İ" (#406).
-- **`mcp-execution-skill`**: `render_skill_md`'s Markdown body heading (`# {{{skill_name}}}`)
-  now sanitizes `skill_name` with the same `sanitize_untrusted_text` defense already applied to
-  tool names/descriptions/categories, before splicing it in. `skill_name` is attacker-controlled
-  (the CLI's `--skill-name` flag or an MCP tool call argument) and, while #398 made it YAML-safe
-  in the frontmatter, a value safe as a YAML scalar can still contain a newline that opens a new
-  heading, fenced code block, or list item in the body — the same class of injection #298 closed
-  for tool descriptions (#410).
-- **`mcp-execution-skill`**: `build_generation_prompt`'s "**Skill Name**: ..." line moved from
-  the prompt's trusted "Context" preamble into the same `wrap_untrusted_block` boundary tool
-  metadata already gets, instead of only being sanitized while still spliced into the trusted
-  preamble. `skill_name` is exactly as attacker-controlled as tool metadata (the CLI's
-  `--skill-name` flag or an MCP tool call argument) — `sanitize_untrusted_text` alone stops
-  structural Markdown breakout but not the text *reading* as an instruction to the LLM, which is
-  what the explicit boundary additionally guards against (issue #288's original rationale). The
-  prompt's frontmatter instructions no longer claim `description` "MUST be double-quoted" (no
-  longer true post-#398, where the direct-render path's quoting style varies by content); the
-  instructions now describe the actual requirement — quote when the value contains `:`, `#`, a
-  leading `-`, or a line break. `render_generation_prompt` (the `skill-generation.hbs`-backed
-  alternate prompt path) now sanitizes `skill_name` and renders it with triple-stash, matching
-  `render_skill_md`'s body heading, instead of splicing it in raw via plain double-stash
-  interpolation (#411).
-- **`mcp-execution-skill`**: added `validate_skill_name`/`MAX_SKILL_NAME_LENGTH` (200 `char`s,
-  not bytes — matching `GenerateSkillParams::skill_name`'s `#[schemars(length(max = ..))]`
-  annotation, which JSON Schema also counts in Unicode code points; counting bytes instead would
-  have let the declared schema and the runtime validator disagree on a multi-byte name), and
-  rejects an empty/whitespace-only name (`SkillNameError::Empty`) — `extract_skill_metadata`
-  rejects a blank `name` unconditionally, so accepting one here would have reproduced the exact
-  round-trip failure this validator exists to prevent. Mirrors `validate_server_id`'s
-  bound-checking style. `skill_name` previously had no length bound at all, so an oversized
-  custom name would render and get written to disk only for `extract_skill_metadata`'s
-  `MAX_FRONTMATTER_SIZE` (8 KiB) check to reject the resulting file on
-  the next read. Both the CLI's `skill` command and the `generate_skill` MCP tool now validate a
-  custom `skill_name` up front and fail fast with a clear error instead (#413).
-- **`mcp-execution-skill`**: `HANDLEBARS` now enables `set_strict_mode(true)`, matching
-  `mcp-execution-codegen`'s `TemplateEngine`. Without it, a template referencing a typo'd or
-  removed field silently rendered an empty string instead of failing at render time.
-- **`mcp-execution-server`**: `save_categorized_tools` no longer discards its session on a
-  post-consume failure. `categorized_tools` validation now runs via the new
-  `StateManager::take_if`, which consumes the session only once validation passes, without the
-  full session clone the previous `get`-then-`take` pair paid on every failed retry (#378).
-  `output_dir` resolution, codegen, VFS build, and export now all run *after* that consumption,
-  against the session `save_categorized_tools` alone owns; a failure at any of those stages
-  calls `StateManager::restore` to re-insert the session under its original `session_id` and
-  `expires_at` before returning the error. Previously, any failure past the point the session was
-  consumed (codegen, VFS build, the export `spawn_blocking` join, or the export itself)
-  permanently burned the session even for a transient cause (a momentary disk-full or I/O error),
-  forcing the caller back to `introspect_server` just to retry (#379).
-- **`mcp-execution-server`**: `save_categorized_tools` no longer destroys its pending session
-  on a `categorized_tools` validation failure. A failed validation leaves the session in place,
-  at its original expiry, for the caller to retry with the same `session_id` instead of a
-  single bad entry (typo'd tool name, duplicate, too many entries) permanently burning it (#371).
-- **`mcp-execution-core`**: `redact_urls_in_text` could produce invalid JSON in structured
-  (`--log-format json`) logging mode when a redacted URL appeared inside a `serde_json`-escaped
-  string (e.g. a quoted URL in error prose): the trailing-punctuation trim applied to the
-  matched token absorbed and deleted the backslash `serde_json` inserts before an escaped `"`,
-  leaving a bare, unescaped quote behind. The trim set now includes `\` so that backslash is
-  left untouched and re-emitted verbatim (#399).
-- **`mcp-execution-skill`**: `extract_skill_metadata` now enforces `MAX_SKILL_NAME_LENGTH` (200
-  chars) on the frontmatter `name` it parses, via `validate_skill_name`. The two `generate` call
-  sites (`mcp-cli`'s `skill` command, `mcp-server`'s `generate_skill` tool) already bounded a
-  custom `skill_name` this way before rendering, but `save_skill` writes caller-supplied
-  `SKILL.md` content straight through to `extract_skill_metadata` without ever calling
-  `validate_skill_name` — so `name` was bounded only by `MAX_FRONTMATTER_SIZE` (8 KiB) on that
-  path, letting an oversized name reach the always-loaded skill index (#419).
-- **`mcp-execution-skill`**: `context.rs`'s "### Categories and Tools" heading was emitted twice
-  in `build_generation_prompt` — once in the trusted preamble, once inside the
-  `wrap_untrusted_block`-wrapped section. Dropped the preamble copy; the wrapped one is the
-  correct placement, since the content it heads is untrusted (#419).
-- **`mcp-execution-core`**: `sanitize_path_for_error`'s home-directory redaction on Windows/macOS
-  missed usernames that differed only by Unicode composition form: `components_match` and
-  `replace_case_aware`'s case-fold comparison (#406) compared components/windows as-is, so a
-  precomposed (NFC) username and its decomposed (NFD) equivalent — the same rendered text, e.g.
-  "José" as "e" + U+00E9 vs. "e" + "e" + U+0301 combining acute accent — were not recognized as
-  the same value and could skip redaction. Both functions now NFC-normalize (new
-  `unicode-normalization` dependency, scoped to the Windows/macOS target so other platforms don't
-  link it) alongside the existing case fold. `replace_case_aware` normalizes `haystack` and
-  `needle` as whole strings before windowing (not per-window, which left a raw-char-count
-  mismatch between an already-normalized needle and a differently-sized normalized haystack span);
-  every slice point used to build the output is still that normalized `haystack`'s own char
-  boundary, so it cannot panic or mis-slice even though normalization can change a character's
-  encoded byte length. The shared fold-then-normalize helper also re-normalizes *after* folding,
-  not just before, since `str::to_lowercase` can turn an already-NFC string into a non-NFC one for
-  a character whose lowercase has a precomposed form but whose uppercase does not (#416).
-- **`mcp-execution-core`**: `sanitize_untrusted_text` did not neutralize Unicode
-  bidirectional-formatting characters — the explicit embedding/override controls U+202A-U+202E
-  (including U+202E RIGHT-TO-LEFT OVERRIDE), the isolate controls U+2066-U+2069, and the
-  directional marks U+200E/U+200F/U+061C. None of these are covered by `char::is_control` (they
-  are Unicode `Cf` format characters), so an attacker-controlled tool name or description could
-  use them to visually reorder or relabel surrounding text for a human reviewer without changing
-  its logical byte order — the "Trojan Source" class of attack. The embedding/override and
-  isolate controls are now flattened to a space, alongside the control characters and line
-  separators this function already neutralized; the weaker directional marks (which cannot
-  reorder or join text on their own) are removed entirely rather than replaced with a space, so
-  legitimate RTL text containing one isn't split with a spurious word break (#422).
-- **`mcp-execution-core`**: `sanitize_untrusted_text` still did not neutralize the Unicode Tags
-  block (U+E0000-U+E007F: U+E0001 LANGUAGE TAG plus the U+E0020-U+E007F TAG characters, which
-  mirror ASCII 0x20-0x7F), U+FEFF (ZERO WIDTH NO-BREAK SPACE / BOM), the invisible-operator run
-  U+2060-U+2064 (WORD JOINER, FUNCTION APPLICATION, INVISIBLE TIMES, INVISIBLE SEPARATOR, INVISIBLE
-  PLUS), or U+200B (ZERO WIDTH SPACE). None of these are covered by `char::is_control` or by
-  #422's bidi-character handling, and all render as nothing in every mainstream font, so an
-  attacker-controlled tool name or description could use the Tags block to encode an entire ASCII
-  payload — invisible to a human reviewer, but present in the string an LLM tokenizer reads — a
-  known prompt-injection smuggling technique, or use the other characters as a simpler invisible
-  channel. The Tags block, U+FEFF, and the U+2060-U+2064 run are now removed entirely, since none
-  of them has a glyph to preserve a visible gap for or denotes a break opportunity. U+200B is
-  instead flattened to a space, not removed: unlike those characters, it is itself a genuine
-  Unicode line-break opportunity and the conventional word separator in Thai/Lao/Khmer/Japanese
-  text, so removing it outright would reproduce the exact token-joining hazard #422's bidi
-  embedding/override controls are spaced (rather than removed) to avoid. U+200C/U+200D (ZWNJ/ZWJ)
-  are deliberately left untouched, since — unlike every character above — they are
-  orthographically load-bearing in Persian/Indic scripts and in emoji ZWJ sequences (#425).
-- **`mcp-execution-skill`**, **`mcp-execution-server`**, **`mcp-execution-cli`**: a caller-supplied
-  `skill_name` passed to `generate_skill` (or the CLI's `--skill-name` flag) was reflected in the
-  response's `skill_name` field but never reached `generation_prompt`, which always embedded the
-  `{server_id}-progressive` default in its `**Skill Name**` line — so an LLM faithfully following
-  the prompt wrote the default name into `SKILL.md`'s frontmatter regardless of the requested
-  custom name. `build_skill_context` now takes the (validated) custom name directly, flattens it
-  with the same `sanitize_untrusted_text` treatment `generation_prompt` applies, and bakes that
-  flattened name into both the response's `skill_name` field and the prompt, so the two are always
-  textually consistent rather than the response field carrying the raw, unflattened name while the
-  prompt showed a flattened one; validation of an oversized/blank name now also happens before
-  `generation_prompt` is built, not after (#435).
-- **`mcp-execution-skill`**, **`mcp-execution-server`**: `save_skill`'s `output_path` parameter
-  silently accepted a value containing a literal `~` path component — notably
-  `generate_skill`'s own informational `output_path` response field
-  (`~/.claude/skills/{server_id}/SKILL.md`), which a client could plausibly echo straight back in
-  — treating `~` as an ordinary directory name and creating a nonsensical nested directory tree
-  with `success: true`. `resolve_skill_output_path` now rejects any `~` path component (leading
-  or not) with a dedicated `OutputPathError::TildeComponent` error, surfaced the same way as the
-  existing `AbsolutePath`/`ParentTraversal` rejections. Doc comments on both `output_path` fields
-  now cross-reference their incompatible semantics (#434).
-- **`mcp-execution-cli`**: `prepare_skill_context` no longer writes the `skill` command's
-  resolved write path back into `GenerateSkillResult::default_output_path_hint`. That field is
-  a non-authoritative display hint `build_skill_context` computes and documents as "never
-  resolved or written to" — overwriting it here reproduced the exact field-reuse-across-semantics
-  pattern #436 eliminated from the MCP `generate_skill`/`save_skill` tool pair. `prepare_skill_context`
-  now returns `(GenerateSkillResult, PathBuf)`, with the resolved path returned separately
-  instead of round-tripped through the DTO (#436).
-- **`mcp-execution-codegen`**: the generated TypeScript runtime bridge's `validateServerConfig`
-  now enforces the same denial-of-service size/count ceilings as
-  `mcp_execution_core::validate_server_config` — `MAX_ARG_COUNT`, `MAX_ARG_LEN`, `MAX_ENV_COUNT`,
-  `MAX_ENV_VALUE_LEN`, `MAX_URL_LEN`, `MAX_HEADER_COUNT`, `MAX_HEADER_VALUE_LEN` — before any
-  command-injection-specific check runs, mirroring the Rust source of truth's ordering. A
-  hostile or hand-edited `~/.claude/mcp.json` entry with e.g. thousands of arguments or a
-  multi-megabyte env value previously reached `spawn()` unbounded; the bridge now rejects it the
-  same way the Rust CLI/server already do (#471). `BridgeContext` renders all seven constants
-  directly from `mcp_execution_core::command`, so the two validators cannot drift apart. A
-  non-string `env`/header value (only possible via a hand-edited `mcp.json`, since JSON Schema
-  cannot express this today) is now also rejected outright rather than silently exempted from
-  the length check, since `spawn()`'s `env` option coerces a non-string value via `String()`
-  and would otherwise let it carry arbitrarily more data than the new ceiling permits.
-- **`mcp-execution-codegen`**: the generated bridge's `validateEnvName` now rejects any
-  environment variable name outside the `[A-Za-z_][A-Za-z0-9_]*` identifier charset, mirroring
-  `mcp_execution_core::validate_env_name`'s #438 fix. Previously this function had no charset
-  check at all and relied entirely on `String.prototype.toUpperCase()`'s incidental Unicode case
-  folding, so a name JavaScript's mapping did not happen to fold onto a forbidden entry passed
-  through unrejected even though the Rust source of truth already rejected it outright (#467).
-  The check is rendered from a new `mcp_execution_core::env_name_charset_pattern()` accessor, for
-  the same anti-drift reason as the existing `forbidden_chars`/`forbidden_env_names` rendering.
-  **Behavior change**: an already-generated bridge pointed at a live `~/.claude/mcp.json` that
-  declares an env var name outside this charset (e.g. containing a hyphen or dot, such as
-  Windows' `ProgramFiles(x86)`-style names) will now fail at connection time where it previously
-  did not — this brings the bridge in line with what `mcp_execution_core::validate_server_config`
-  has rejected since #438, not a new restriction relative to the Rust CLI/server.
+- **`mcp-execution-cli`**: `setup`'s executable-bit walk now recurses into every nested subdirectory
+  (previously stopped two levels deep), with the symlink-rejection guard applying at every depth; a
+  transient read error mid-iteration is now skip-and-warned rather than aborting the whole run (the root
+  directory failing to open remains fatal) (#489, #490).
+- **`mcp-execution-cli`**: `--header` now conflicts with `--from-config` at clap parse time instead of
+  being silently discarded (#492).
+- **`mcp-execution-server`**: `save_skill`'s write no longer follows a symlink planted at the target path
+  after the confinement check (`O_CREAT|O_TRUNC|O_NOFOLLOW` via `write_confined_file` on Unix; Windows
+  keeps a documented, narrower `symlink_metadata` pre-check) (#496).
+- **`mcp-execution-core`**: `resolve_confined_path` no longer fails one of two callers racing to create
+  the same not-yet-existing confined directory — `AlreadyExists` is now tolerated and the winner's
+  directory re-validated under the same confinement rule (#491).
+- **`mcp-execution-server`**: `list_generated_servers`'s `tool_count` no longer double-counts `index.ts`;
+  the filename now lives in a shared `mcp_execution_core::metadata::INDEX_FILE_NAME` constant (#477).
+- **`mcp-execution-skill`**, **`mcp-execution-cli`**: the `skill` command's `--hint` flag now actually
+  affects the rendered SKILL.md (a deterministic "## Use Cases" section); a hint dropped or truncated past
+  its cap now surfaces a warning instead of disappearing silently. Also adds `use_case_hints` to
+  `generate_skill`'s JSON response (#473).
+- **`mcp-execution-cli`**: `setup`'s executable-bit walk no longer follows symlinked server-id directories
+  or `.ts` files; `SetupResult` gained `skipped_entries: usize` (#476).
+- **`mcp-execution-cli`**: `server validate` no longer mislabels every config-lookup failure as "Server not
+  found" — `load_mcp_config` and `lookup_server_entry` are now split so a config-load failure reports its
+  true cause (#479).
+- **`mcp-execution-server`**: a `categorized_tools` entry with an unresolvable name now distinguishes
+  "not found" from "ambiguous" instead of one shared message (#456).
+- **`mcp-execution-core`**, **`mcp-execution-server`**, **`mcp-execution-skill`**: `ConfinementError::InvalidSegment`,
+  `OutputDirError::InvalidServerId`, and `OutputPathError::InvalidServerId` now sanitize the rejected
+  segment before storing it (#450, #451, #452).
+- **`mcp-execution-core`**: `validate_env_name` now rejects names outside `[A-Za-z_][A-Za-z0-9_]*` before
+  the forbidden-name check, closing a Windows Unicode-case-folding bypass (e.g. Turkish dotless i), and
+  compares against `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` case-insensitively, closing a
+  case-varied-spelling bypass (e.g. `Path` vs `PATH`). The generated TypeScript bridge's `validateEnvName`
+  mirrors both fixes (#428, #438).
+- **`mcp-execution-skill`**: `render_skill_md`'s frontmatter (`name`, `description`) is now serialized via
+  `serde-saphyr`'s emitter instead of a hand-rolled escaper that missed several control characters and
+  left `name` entirely unescaped (#398).
+- **`mcp-execution-core`**: `sanitize_path_for_error`'s home-directory redaction now case-folds with full
+  Unicode semantics (was ASCII-only) and NFC-normalizes before/after folding, closing gaps where a
+  non-ASCII or differently-composed username (e.g. Cyrillic, decomposed "José") skipped redaction (#406,
+  #416).
+- **`mcp-execution-skill`**: `render_skill_md`'s Markdown heading and `build_generation_prompt`'s prompt
+  now sanitize and boundary-wrap `skill_name` consistently, closing a newline-based Markdown/instruction
+  injection gap #398 didn't fully cover; a duplicated "### Categories and Tools" heading was also removed
+  (#410, #411, #419).
+- **`mcp-execution-skill`**: added `validate_skill_name`/`MAX_SKILL_NAME_LENGTH` (200 chars); both the CLI
+  and `generate_skill` now validate a custom `skill_name` up front instead of failing later at write time,
+  and `extract_skill_metadata` enforces the same bound on the `save_skill` path (#413, #419). Handlebars
+  strict mode is now enabled for `mcp-execution-skill`'s templates too, matching `mcp-execution-codegen`.
+- **`mcp-execution-server`**: `save_categorized_tools` no longer discards its pending session on a
+  post-consume failure or a `categorized_tools` validation failure — consumption now runs through
+  `StateManager::take_if`/`restore` so a transient failure is retriable under the same `session_id` (#371,
+  #378, #379).
+- **`mcp-execution-core`**: `redact_urls_in_text` could emit invalid JSON in `--log-format json` mode by
+  stripping the backslash `serde_json` inserts before an escaped quote; the trim set now excludes `\`
+  (#399).
+- **`mcp-execution-core`**: `sanitize_untrusted_text` now neutralizes Unicode bidi-formatting characters
+  (closing a Trojan-Source-style visual-reordering gap), the Unicode Tags block, `U+FEFF`, the
+  `U+2060`-`U+2064` invisible-operator run, and `U+200B` (closing an invisible-ASCII-payload smuggling
+  channel) — ZWNJ/ZWJ are deliberately left untouched as script-load-bearing (#422, #425).
+- **`mcp-execution-skill`**, **`mcp-execution-server`**, **`mcp-execution-cli`**: a custom `skill_name` now
+  actually reaches `generation_prompt` (previously always embedded the default name regardless of the
+  caller's request) (#435).
+- **`mcp-execution-skill`**, **`mcp-execution-server`**: `save_skill`'s `output_path` now rejects a literal
+  `~` path component instead of treating it as an ordinary directory name (#434).
+- **`mcp-execution-cli`**: `prepare_skill_context` no longer round-trips the `skill` command's resolved
+  write path back through the display-only `GenerateSkillResult::default_output_path_hint` field (#436).
+- **`mcp-execution-codegen`**: the generated bridge's `validateServerConfig` now enforces the same DoS
+  size/count ceilings as the Rust validator before its injection-specific checks run, and rejects
+  non-string `env`/header values outright (#471).
 
 ### Documentation
 
-- **`mcp-execution-skill`**: added `# Examples` doc-test sections to `GenerateSkillResult`,
-  `SkillCategory`, `SkillTool`, `ToolExample`, `SaveSkillResult`, and `SkillMetadata` (#440).
-- **`mcp-execution-server`**: added `# Examples` doc-test sections to `IntrospectServerResult`,
-  `IntrospectedToolSummary`, `SaveCategorizedToolsResult`, `ToolGenerationError`,
-  `ListGeneratedServersParams`, `ListGeneratedServersResult`, `GeneratedServerInfo`, and
-  `PendingGeneration` (#440).
-- **`mcp-execution-server`**: clarified in the spec that `validate_categorized_tools` checks a
-  `categorized_tools` entry's `name` against `MAX_CATEGORIZED_TOOL_NAME_LEN` only after resolving
-  it through `display_to_raw`, so an oversized `name` that matches no introspected tool is
-  reported as not-found rather than too-long — an intentional, truthful trade-off, not a defect
-  (#462).
-- **`mcp-execution-server`**, **`mcp-execution-cli`**: added `# Examples` doc-test sections to
-  `relative_subpath`, `resolve_output_dir`, and `generate::run`. `output_dir::relative_subpath`,
-  `output_dir::resolve_output_dir`, and `OutputDirError` are now re-exported from
-  `mcp-execution-server`'s crate root — the `output_dir` module is private, so these `pub fn`
-  items were otherwise unreachable outside the crate, mirroring the existing
-  `resolve_skill_output_path`/`OutputPathError` re-export pattern in `mcp-execution-skill`
-  (#472).
+- **`mcp-execution-skill`**, **`mcp-execution-server`**: added `# Examples` doc-tests across both crates'
+  public result/summary types (#440); re-exported `output_dir::{relative_subpath, resolve_output_dir,
+  OutputDirError}` from `mcp-execution-server`'s crate root alongside their new doc-tests (#472).
+- **`mcp-execution-server`**: clarified in the spec that `validate_categorized_tools`'s length check runs
+  only after display-to-raw resolution (#462).
 
 ### Testing
 
-- **`mcp-execution-server`**: added characterization tests pinning `GeneratorService`'s
-  protocol-version advertisement. `supported_protocol_versions()` and `discover()` are not
-  overridden, so rmcp's defaults apply: the server currently advertises every protocol version
-  the SDK knows (`ProtocolVersion::KNOWN_VERSIONS`, all five entries, checked against an
-  explicit expected list rather than the constant itself), not just the `2025-06-18` fallback
-  `get_info()` pins for unrecognized-version negotiation. One test drives the real `server/discover`
-  RPC handler end to end over an in-process duplex transport, not just its default method-level
-  logic. No behavior changed — these tests exist so a future rmcp version bump that substitutes
-  or clamps the advertised set fails loudly instead of silently drifting (#381).
-- **`mcp-execution-server`**: collapsed five near-identical `save_categorized_tools` tests
-  (~350 lines) that had each pinned the same post-#433 behavior — display key equals raw name —
-  under different historical labels (plain name, formerly-ampersand, formerly-angle-bracket,
-  single-display-form) into one end-to-end test plus one direct `display_tool_name` unit
-  assertion, following the `display_forms` removal above (#447).
-- **`mcp-execution-codegen`**: added
-  `test_generate_with_categories_wraps_non_object_schema_as_script_generation_error`, an
-  integration test driving a real per-tool failure through the public
-  `generate_with_categories` entry point rather than only through unit tests calling the private
-  `wrap_tool_generation_error`/`add_tracked` helpers directly. Of the three `emit_tool_files`
-  stages the error wrapper covers, `extract property schema` can't fail through this entry point
-  (`extract_properties` always yields well-typed `name`/`type` strings); `render tool template`
-  and `track generated tool file` are both reachable, but only from a structurally invalid
-  `ServerInfo` a real MCP server round-trip can never produce (`mcp-introspector` always builds
-  `input_schema` as a JSON object, and bounds schema size far below what `track` needs to trip) —
-  i.e. only from a direct library caller hand-building a `ToolInfo`. The test exercises `render`:
-  a JSON-array `input_schema` fails `tool.ts.hbs`'s `{{#if input_schema.description}}` path
-  navigation under Handlebars strict mode, reaching the wrapper at effectively no cost, unlike
-  forcing `track`'s byte-count check (#458).
+- **`mcp-execution-server`**: added characterization tests pinning `GeneratorService`'s rmcp-default
+  protocol-version advertisement, so a future `rmcp` bump that narrows it fails loudly instead of silently
+  drifting (#381).
+- **`mcp-execution-server`**: collapsed five near-identical `save_categorized_tools` tests (~350 lines)
+  pinning the same post-#433 behavior into one end-to-end test plus one direct unit assertion (#447).
+- **`mcp-execution-codegen`**: added an integration test driving a real per-tool render failure through the
+  public `generate_with_categories` entry point (#458).
 
 ### Security
 
-- **`mcp-execution-server`**: the `tracing::warn!` logged for a dropped oversized or malformed
-  stdin line no longer formats a `JsonRpcMessageCodecError`'s raw `Display` output verbatim.
-  `serde_json`'s `unknown variant` error interpolates the offending value via `Display` rather
-  than `Debug`, so if such an error ever reached a `Serde` variant here, a crafted line could
-  carry an embedded newline (or other control characters) into the plain-text
-  (`--log-format text`) log stream and forge additional log lines. With the pinned `rmcp`
-  3.1.2, this is not reachable today — `RxJsonRpcMessage`'s request/notification payload types
-  are `#[serde(untagged)]`, so a mismatched inner variant's error is discarded before it can
-  carry attacker-controlled text this far. The reason is now sanitized as defense-in-depth
-  regardless, via `mcp-execution-core`'s existing `sanitize_untrusted_text` (control characters
-  replaced with spaces, capped at `MAX_UNTRUSTED_FIELD_LEN`) through a `Display` wrapper, since
-  `JsonRpcMessageCodecError` is `#[non_exhaustive]` and the untagged-enum error-swallowing is an
-  `rmcp` implementation detail this project does not control. Sanitization only runs if the
-  event is actually recorded, matching the laziness the surrounding code already relied on.
-  `--log-format json` is unaffected either way, since `serde_json` already escapes whatever
-  string ends up in the field (#415).
-- **`mcp-execution-server`**: `main`'s `EnvFilter` construction now caps `rmcp`'s own `tracing`
-  targets at `info` via a private `cap_rmcp_log_level` helper, closing the *debug-level, raw-line*
-  logging path. `rmcp` 3.1.2's transport layer logs raw, unsanitized peer input at `debug` (e.g. a
-  parse-failure line embeds the offending line verbatim), which previously fired inside this
-  binary's decode path *before* the #415 `SanitizedCodecError` mitigation could sanitize it — so a
-  broad `RUST_LOG=debug` streamed untrusted peer text into the log unfiltered. The cap is applied
-  to the *result* of `try_from_default_env().unwrap_or_else(...)`, not folded only into the
-  fallback string, which would have been dead code whenever `RUST_LOG` parsed successfully. An
-  operator who explicitly needs `rmcp` transport debug output can still get it via a target more
-  specific than the bare `rmcp` this cap sets, e.g. `RUST_LOG=rmcp::transport=debug` — directives
-  order by target specificity, so that survives the cap; an equally-specific `RUST_LOG=rmcp=debug`
-  does not; it is replaced by this cap's `rmcp=info`, not merged with it. This cap is level-based
-  only: `rmcp` also logs a `Debug`-formatted peer notification at `info`
-  (`tracing::info!(?notification, ...)`), which it does not and cannot suppress; that site is
-  mitigated by `Debug`-escaping control characters, not eliminated, and fires under the server's
-  default filter with no `RUST_LOG` at all (#421).
+- **`mcp-execution-server`**: the `warn!` logged for a dropped stdin line no longer formats
+  `JsonRpcMessageCodecError`'s raw `Display` output verbatim — sanitized as defense-in-depth against a
+  future `rmcp` change, since the type is `#[non_exhaustive]` (#415).
+- **`mcp-execution-server`**, **`mcp-execution-cli`**: `EnvFilter` construction (including the CLI's
+  `--verbose` branch) now caps `rmcp`'s own `tracing` targets at `info`, closing a debug-level path that
+  logged raw peer input; a more specific `RUST_LOG` target still overrides the cap (#421).
 - **`mcp-execution-core`**: `ServerId::new`/`ToolName::new` no longer echo a rejected input's raw
-  `&`/`<`/`>`/control/bidi-reordering characters into `ServerIdError`/`ToolNameError`. The stored
-  `id`/`name` field is now sanitized (`untrusted::sanitize_untrusted_inline`, capped at
-  `MAX_UNTRUSTED_FIELD_LEN`) and `&`/`<`/`>` entity-escaped before the error variant is
-  constructed, closing both the `Display` and `Debug` paths in one change. Previously an
-  attacker-controlled tool name or server id that failed validation could carry the raw offending
-  characters — including an unbounded length, since `ServerId::new` has no length cap of its own
-  — straight into LLM-facing error text or a `tracing`-logged error, letting a malicious MCP
-  server attempt to forge Markdown/HTML-like structure or a boundary delimiter such as
-  `wrap_untrusted_block`'s `</untrusted-data>`. The offending `code_point` reported alongside
-  `DisallowedCharacter` is unaffected — it is computed from the raw input before sanitization.
-  Same sanitization path applies uniformly to both the LLM- and human-facing surfaces: an
-  `mcp-execution-cli` user rejecting an id/name containing `&`/`<`/`>` now sees the entity-escaped
-  form in their terminal too (e.g. `invalid server id "my&amp;server"` rather than
-  `"my&server"`) — an accepted, intentional trade-off rather than a regression (#446).
-- **`mcp-execution-server`**: `save_categorized_tools`'s `validate_categorized_tools` no longer
-  echoes a rejected `categorized_tools` entry's `name` raw into `McpError::invalid_params` text.
-  At the not-found/ambiguous branch specifically, `cat_tool.name` has not yet passed the
-  `MAX_CATEGORIZED_TOOL_NAME_LEN` check — that runs later, only for entries that already resolved
-  to a raw tool — and the `#[schemars(length(max = 128))]` on `CategorizedTool::name` is schema
-  metadata that `serde` itself never enforces, so at this point the value is bounded by nothing
-  but the transport frame and `sanitize_untrusted_inline`'s own `MAX_UNTRUSTED_FIELD_LEN`
-  truncation (500 chars, up to 2500 once escaped). That not-found branch could previously carry
-  attacker-controlled markup or a boundary delimiter straight into the returned text, unbounded in
-  length. The other three sites this change also sanitizes — ambiguous-display-name,
-  duplicate-entry, and the per-field length-cap messages — are not reachable with hostile content
-  in practice, since reaching them requires `cat_tool.name` to already equal a `ToolName`-validated
-  display key (see the `seen_raw_names` code comment); they're sanitized anyway for a single
-  consistent code path. Every one of these messages now interpolates the same
-  `untrusted::sanitize_untrusted_inline` form #446 introduced for `ServerIdError`/`ToolNameError`,
-  applied once per entry and reused across all four error sites (#460).
-- **`mcp-execution-cli`**: `runner::init_logging` now applies the same `cap_rmcp_log_level`
-  treatment to both the non-verbose (`RUST_LOG`-driven) and `--verbose` branches. The `--verbose`
-  branch previously set a bare `EnvFilter::new("debug")` with no `RUST_LOG` involved at all —
-  since this crate is a *client* of third-party MCP servers, `--verbose` alone streamed an
-  untrusted server's raw stdout lines into stderr; `RedactingWriter` only rewrites embedded URLs
-  and does not neutralize this. Both branches now add an `rmcp=info` directive on top of their
-  base filter; the same `RUST_LOG=rmcp::transport=debug` escape hatch and `rmcp=debug`
-  replace-not-merge caveat noted above apply here too (#421).
-- **`mcp-execution-core`/`mcp-execution-codegen`**: closed a gap where a tool name (or server
-  id) carrying a Unicode-Tags-block-smuggled invisible payload could reach a generated
-  `callMCPTool('...')` string literal unsanitized. `sanitize_ts_string_literal` runs
-  `sanitize_untrusted_text`'s neutralization (invisible-payload characters plus the
-  variation-selector thresholds below) over both `ToolName`/`ServerId` and any hand-built
-  string reaching that function, and truncates its **raw** input to `MAX_UNTRUSTED_FIELD_LEN`
-  before escaping (neither newtype enforces a length bound itself), so the defense holds
-  regardless of which code path produced the string (#432). Truncating the raw input, not the
-  escaped output, is itself a fix for a regression an earlier draft of this change introduced
-  (critic finding C3): escaping can expand one input character into a multi-character output
-  sequence, so truncating the already-escaped string could cut such a sequence in half and leave
-  a dangling, odd-length run of trailing backslashes that escaped the generated template's own
-  closing quote, leaving the `callMCPTool('...')` string literal unterminated — invalid
-  generated TypeScript, not code injection (every quote in the escaped output is still
-  backslash-preceded). An earlier, unreleased draft of this change also added a `ToolName::new`
-  construction-time denylist gate rejecting the same character classes outright; it never
-  shipped, since it was superseded before merge by #444's UTS #39 `Identifier_Status=Allowed`
-  allowlist landing on the same constructor, which independently rejects every character the
-  denylist flagged (none of them carry `Identifier_Status=Allowed`) via
-  `ToolNameError`/`ServerIdError::DisallowedCharacter`. The denylist gate and its two supporting
-  predicates were removed rather than kept redundantly alongside the allowlist check.
-- **`mcp-execution-core`**: `sanitize_untrusted_text` now mitigates the variation-selector
-  invisible-payload channel (U+FE00-U+FE0F, U+E0100-U+E01EF), adjacent to the Unicode Tags
-  block and left unaddressed by the prior hardening since these characters carry genuine
-  rendering semantics (emoji-presentation selection, CJK Ideographic Variation Sequences). Two
-  checks now run, in order, on the *already-filtered* text (running before the existing
-  character filter, as an earlier draft of this fix did, let an attacker interleave a
-  removed-entirely character — e.g. a Tags-block byte — between selectors to split one long
-  run into sub-threshold pieces that silently re-joined once the filter deleted the
-  separators): a whole-value total (more than 16 variation selectors anywhere in the value, in
-  however many runs, drops every variation selector in it) and, only if the value stays under
-  that total, a per-run threshold (a run of more than 2 consecutive selectors is dropped in
-  full). The whole-value total specifically closes the case a per-run-only check cannot: a
-  payload distributed as many short runs across many different base characters, each
-  individually under the per-run threshold — measured during review at higher payload density
-  than the Tags-block channel this complements. The total threshold (16, raised from an initial
-  8 after critic review found 8 false-positived on a realistic 9-emoji tool description) trades
-  a small, fixed amount of smuggling capacity for tolerance of ordinary emoji-decorated text.
-  Documented residual limitations remain: the total is a count, not a semantic check, so it
-  cannot distinguish several independent legitimate emoji from an equal count of
-  payload-carrying selectors once crossed; and the allowance is per sanitized field, so a
-  response with many fields (tool names, descriptions, keywords, parameter descriptions) can
-  aggregate a larger surviving total across the whole introspection response — see
-  `specs/core/spec.md`'s "Known limitation" notes (#431).
-- **`mcp-execution-skill`**: `build_generation_prompt` now sanitizes and boundary-wraps
-  `use_case_hints` the same way every sibling field (tool metadata, `skill_name`) already is,
-  including the section's own "### Use Case Hints" heading inside the wrapped block (mirroring
-  how "### Categories and Tools" keeps its heading inside its block). Each hint previously
-  reached the LLM-facing prompt via a bare `format!("- {hint}\n")` loop, with no
-  `sanitize_untrusted_text` call and no `wrap_untrusted_block` boundary separating it from the
-  trusted `## Instructions` section that follows — allowing a hint to forge Markdown structure
-  or embed raw bidi-override characters. `GenerateSkillParams::use_case_hints` also gained a
-  per-entry `#[schemars(inner(length(max = ..)))]` bound (`MAX_USE_CASE_HINT_LENGTH`,
-  re-exported from `mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`) mirroring
-  `skill_name`'s existing declared-schema bound, plus a `#[schemars(length(max = ..))]` bound
-  on the collection itself (`MAX_USE_CASE_HINTS`, 20 entries — a per-entry length cap alone
-  does not stop an unbounded *number* of entries), enforced at runtime in
-  `build_generation_prompt` by truncating rather than erroring (#429).
-- **`mcp-execution-cli`**: the `skill` command's `write_skill_md` still writes `SKILL.md`
-  atomically (write-temp-file then `rename`), but the temp file itself is now written through
-  `mcp-execution-core`'s `write_confined_file` instead of a plain `std::fs::write`. The temp
-  file's path (`SKILL.md.tmp`) is predictable and previously had no `O_NOFOLLOW` guard, so a
-  symlink planted there ahead of time was followed, redirecting the write outside the intended
-  skills directory; `rename` itself was already safe, since it replaces whatever entry sits at
-  the final path rather than following it, so a pre-existing symlink at `SKILL.md` itself (e.g. a
-  dotfiles setup symlinking it into a repo) is still safely replaced by `--overwrite`, on both the
-  default and a custom `--output` path — unchanged from before this fix. This is the same
-  primitive that closed the equivalent race for the MCP server's `save_skill` handler's own write
-  step (#496); on Windows, the guard is a `symlink_metadata` pre-check rather than a
-  single-syscall `O_NOFOLLOW` open, the same accepted, narrower-but-not-eliminated race #496
-  already documents.
-  Separately, when no custom `--output` path is given, the default `~/.claude/skills/{server}`
-  segment *directory* is now resolved and created through a confined walk
-  (`mcp_execution_core::resolve_confined_path`), rejecting it outright if it already exists as a
-  symlink rather than letting a plain `create_dir_all` follow it — this closes a non-racy escape
-  that needed no TOCTOU window at all, independent of the temp-file fix above, and creates
-  `{server}/` before the `--overwrite` check and rendering, so a refused or otherwise failed run
-  can leave an empty `{server}/` directory behind (the same side effect `save_skill`'s own
-  resolution already has). Only the segment directory is confined this way; the terminal
-  `SKILL.md` component deliberately keeps its pre-existing behavior, per the paragraph above. A
-  custom `--output` path's directory creation is unaffected by any of this: confining a location
-  the operator chose themselves would not defend against anything an attacker able to plant a
-  symlink under it could not already do to any other path this process touches, so it keeps its
-  existing narrower, traversal-only validation (#501).
-- **`mcp-execution-files`**: `write_file_atomic`'s temp-file write — the `.tmp` staging path used
-  by its atomic-write path — now opens via `mcp_execution_core::open_confined_write` instead of a
-  plain `fs::File::create`, refusing to follow a symlink pre-planted at that path. Previously, a
-  symlink planted ahead of time at the predictable `{target}.tmp` location was followed by the
-  write, redirecting file content anywhere the process could write — reachable via
-  `FilesBuilder::build_and_export`'s top-level file writes (#504).
+  `&`/`<`/`>`/control/bidi characters into their error's `Display`/`Debug` — the stored field is now
+  sanitized and entity-escaped (#446). `mcp-execution-server`'s `validate_categorized_tools` applies the
+  same sanitization at all four of its error sites (#460).
+- **`mcp-execution-core`**, **`mcp-execution-codegen`**: `sanitize_ts_string_literal` now also runs
+  invisible-payload/variation-selector neutralization over tool names/server ids reaching a generated
+  `callMCPTool('...')` literal, truncating raw (not escaped) input to avoid a dangling-backslash
+  regression found in review (#432). `sanitize_untrusted_text` separately gained a variation-selector
+  mitigation (a 16-selector whole-value total plus a 2-selector per-run threshold, run before the existing
+  character filter to avoid a split-run bypass) (#431).
+- **`mcp-execution-skill`**: `build_generation_prompt` now sanitizes and boundary-wraps `use_case_hints`
+  like every sibling field; `GenerateSkillParams::use_case_hints` gained per-entry and collection-size
+  schema bounds (#429).
+- **`mcp-execution-cli`**, **`mcp-execution-files`**: the `skill` command's temp-file write and
+  `write_file_atomic`'s staging write now go through `write_confined_file`/`open_confined_write` instead
+  of a plain filesystem call, closing a symlink-follow race on the predictable `.tmp` path; `skill`'s
+  default output directory is also now created via a confined walk that rejects a pre-existing symlink
+  (#501, #504).
+- **`mcp-execution-codegen`**: the generated bridge's `validateEnvName` now rejects names outside the
+  identifier charset, mirroring #438 — a live `mcp.json` entry with a non-conforming env name now fails at
+  connection time (#467).
 
 ### Removed
 
-- **`mcp-execution-server`**: dropped the unused `regex` direct dependency — not referenced in
-  the crate's own source; `schemars_derive`'s `regex(pattern = ...)` attribute expands to a
-  plain string literal, not a path into the crate (#373).
-- **`mcp-execution-core`**: dropped the unused `async-trait`, `chrono`, `tracing`, and `uuid`
-  direct dependencies — none were referenced in the crate's own source. Side effect: `uuid`'s
-  `fast-rng` feature (declared only by `mcp-execution-core`, not by `mcp-execution-server`, which
-  also depends on `uuid`) is no longer unified across the workspace build, so
-  `mcp-execution-server`'s `Uuid::new_v4()` calls now use the default RNG path instead of the
-  faster one — a negligible, perf-only effect with no behavioral change.
-- **`mcp-execution-skill`**: dropped the unused `dirs` direct dependency — not referenced in the
-  crate's own source.
-- **`mcp-execution-cli`**: dropped clap's `env` and `cargo` features — neither an
-  `#[arg(env = ...)]` attribute nor any `crate_version!`/`crate_name!`/`crate_authors!`/
-  `crate_description!` macro is used anywhere in the crate (#414).
-- **`mcp-execution-core`**: removed `Error::is_duplicate_generated_file_path` — it had no
-  production call site anywhere in the workspace, only test call sites (its own doc-test and
-  unit test, plus `mcp-execution-codegen`'s `GeneratedCode::add_file` tests, which now match
-  `Error::DuplicateGeneratedFilePath` directly instead) (#445).
+- **`mcp-execution-server`**: dropped the unused `regex` direct dependency (#373).
+- **`mcp-execution-core`**: dropped the unused `async-trait`, `chrono`, `tracing`, and `uuid` direct
+  dependencies.
+- **`mcp-execution-skill`**: dropped the unused `dirs` direct dependency.
+- **`mcp-execution-cli`**: dropped clap's `env` and `cargo` features — unused (#414).
+- **`mcp-execution-core`**: removed `Error::is_duplicate_generated_file_path` — no production call site
+  anywhere in the workspace (#445).
 
 ## [0.9.0] - 2026-07-27
 

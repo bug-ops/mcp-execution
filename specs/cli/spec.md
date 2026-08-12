@@ -169,8 +169,9 @@ Every CLI-facing type that can carry a secret (`Cli`/`Commands` themselves,
 writes `Debug` rather than deriving it, applying `mcp-core`'s
 `RedactedItems`/`RedactedMapValues`/`RedactedUrl`/`sanitize_path_for_error`
 consistently — because `runner::report_and_classify` prints
-`format!("Error: {err:?}")` to stderr on any failure, and a `Commands`
-value routinely ends up inside that error's `anyhow::Context`. Regression
+`format!("Error: {}", sanitized_error_report(err))` to stderr on any
+failure, and a `Commands` value routinely ends up inside that error's
+`anyhow::Context`. Regression
 tests assert specific secret substrings (e.g. `sk-verySECRETtoken...`)
 never appear in `format!("{:?}", cli.command)` for `--env`/`--header`/
 `--http`/`--sse` inputs.
@@ -448,15 +449,54 @@ output file unless `--overwrite`.
 `build_skill_context` as that function's own `custom_name: Option<&str>`
 parameter — not patched onto the result afterward — so `generation_prompt`
 reflects a custom name the same way `mcp-server`'s `generate_skill` handler
-does (issues #435, #436). It separately resolves the actual path `SKILL.md` will
-be written to (`output_path` if supplied and traversal-validated via
-`validate_output_path`, else `{skills_dir}/{server}/SKILL.md`) and returns
-it as a plain `PathBuf`, *not* by writing it into
-`GenerateSkillResult::default_output_path_hint` — that field is
+does (issues #435, #436). It also validates a custom `--output` path (if
+supplied) via `validate_output_path`, returning it as `Some(PathBuf)`;
+`None` means the caller wants the default path. Resolving the confined
+default requires an async filesystem walk this (synchronous) function
+cannot perform itself, so `run` resolves it separately.
+
+`run` resolves the actual write path after `prepare_skill_context` returns
+(issue #501/#509): a custom `--output` path is used as-is (a CLI operator's
+own flag, evaluated with the operator's own filesystem permissions —
+confining it further would not defend against anything a symlink swapped
+in by a racing local process could not already do); the default path is
+resolved via `resolve_default_output_path(skills_dir, server)`, which
+confines and creates the `{server}/` segment directory through
+`mcp_execution_core::resolve_confined_path`, **rejecting it outright if it
+already exists as a symlink**, mirroring `mcp-server`'s `save_skill`
+default-path confinement. This has a side effect: the segment directory is
+created *before* the `--overwrite` check and before rendering, so a
+refused (existing file, no `--overwrite`) or otherwise failed run can leave
+an empty `{server}/` directory behind — the same side effect `save_skill`'s
+own default-path resolution has. A custom `--output` path's parent
+directory, by contrast, is created only *after* the `--overwrite` gate and
+rendering succeed.
+
+`write_skill_md` writes `SKILL.md` atomically (write-temp-file then
+`rename`). The temp file (`{output}.tmp`, a predictable path) is written
+through `mcp_execution_core::write_confined_file`, which opens it with
+`O_NOFOLLOW` on Unix, so a symlink pre-planted there is rejected instead of
+followed (issue #501/#509) — the same primitive `save_skill` uses for the
+equivalent race on its own write step (issue #496). The final
+`std::fs::rename` needs no equivalent guard: it replaces whatever directory
+entry sits at the final `SKILL.md` path rather than following it, so a
+pre-existing symlink there (e.g. a dotfiles setup symlinking `SKILL.md`
+into a repo) is safely replaced rather than followed or rejected, on both
+the default and a custom `--output` path.
+
+The resolved path is kept separate from `GenerateSkillResult` rather than
+written back into its `default_output_path_hint` field: that field is
 `build_skill_context`'s own non-authoritative display hint (see
 [[../skill/spec#2. Public API Surface]]), and overwriting it here would
 reintroduce the same field-reuse-across-semantics pattern issue #436
 eliminated from the MCP `generate_skill`/`save_skill` tool pair.
+
+`--hint` values are threaded into `GenerateSkillResult`'s `use_case_hints`
+field (sanitized; blank/whitespace-only entries filtered; capped at
+`mcp_execution_skill::types::MAX_USE_CASE_HINTS` entries) and render as a
+`## Use Cases` bullet list in the written `SKILL.md` — omitted entirely
+when no `--hint` is given, preserving byte-identical output for hint-less
+runs (issue #481).
 
 ## 9. `server` Command (`commands/server.rs`)
 
@@ -622,6 +662,7 @@ writing the script to stdout. Cannot fail (always returns
 
 ```rust
 pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<String>;
+pub fn emit<T: Serialize>(data: &T, format: OutputFormat, exit_code: ExitCode) -> Result<ExitCode>;
 pub fn escape_display(s: &str) -> String; // wraps s as a JSON string literal (quotes + backslash-escapes, including control chars)
 pub mod json; pub mod text; pub mod pretty;
 ```
@@ -632,6 +673,14 @@ ANSI/control escape sequences into the user's terminal via handshake or
 tool-metadata text. `pretty`'s own internal value formatter delegates to
 this same function for `String` values, so both call sites share one
 implementation and one guarantee.
+
+`emit` collapses the format/print/return-exit-code sequence every command
+handler branch repeated (`introspect`, `server`, `setup`, `skill`) into one
+call site: it formats `data` per `format`, prints it to stdout, and returns
+the caller-supplied `exit_code` unchanged (issue #368/#375). `generate`
+does not use it, since its `--dry-run`/success paths build freeform
+`Text`/`Pretty` lines via `escape_display` rather than serializing one
+struct through `format_output`.
 
 ## 13. Error Conditions
 

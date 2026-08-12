@@ -98,6 +98,12 @@ mcp-execution-cli generate <SERVER> [OPTIONS]
 - `--from-config <NAME>`: Load config from mcp.json
 - `--arg <ARG>`: Server command argument (repeatable)
 - `--env <KEY=VALUE>`: Environment variable (repeatable)
+- `--cwd <CWD>`: Working directory for the server process
+- `--http <URL>`: Use HTTP transport
+- `--sse <URL>`: Use SSE transport
+- `--header <KEY=VALUE>`: HTTP headers (repeatable; conflicts with `--from-config`)
+- `--connect-timeout-secs <SECS>`: Connection timeout (1-600s; conflicts with `--from-config`)
+- `--discover-timeout-secs <SECS>`: Tool discovery timeout (1-600s; conflicts with `--from-config`)
 - `--name <NAME>`: Custom server name for output directory
 - `--progressive-output <PATH>`: Custom output directory
 - `--dry-run`: Preview files that would be generated without writing to disk
@@ -147,12 +153,16 @@ mcp-execution-cli introspect <SERVER> [OPTIONS]
 - `--from-config <NAME>`: Load config from mcp.json
 - `--arg <ARG>`: Server command argument (repeatable)
 - `--env <KEY=VALUE>`: Environment variable (repeatable)
+- `--cwd <CWD>`: Working directory for the server process
+- `--http <URL>`: Use HTTP transport
+- `--sse <URL>`: Use SSE transport
+- `--header <KEY=VALUE>`: HTTP headers (repeatable; conflicts with `--from-config`)
+- `--connect-timeout-secs <SECS>`: Connection timeout (1-600s; conflicts with `--from-config`)
+- `--discover-timeout-secs <SECS>`: Tool discovery timeout (1-600s; conflicts with `--from-config`)
 - `--detailed`: Show full input/output schemas
 - `--format <FORMAT>`: Output format (json, text, pretty)
 - `--log-format <FORMAT>`: Diagnostic log format (text, json); falls back to
   `MCP_EXECUTION_LOG_FORMAT` when unset
-- `--http <URL>`: Use HTTP transport
-- `--sse <URL>`: Use SSE transport
 
 **Examples**:
 
@@ -166,9 +176,17 @@ mcp-execution-cli introspect docker \
   --arg=ghcr.io/github/github-mcp-execution-server \
   --env=GITHUB_TOKEN=ghp_xxx
 
-# HTTP transport
+# HTTP transport with headers
 mcp-execution-cli introspect --http https://api.example.com/mcp \
-  --header "Authorization=Bearer token"
+  --header "Authorization=Bearer token" \
+  --header "X-Custom-Header=value"
+
+# With custom timeouts
+mcp-execution-cli introspect docker \
+  --arg=run --arg=-i --arg=--rm \
+  --arg=ghcr.io/slow-server \
+  --connect-timeout-secs 60 \
+  --discover-timeout-secs 120
 ```
 
 ### `skill`

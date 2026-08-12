@@ -12,7 +12,7 @@ In-memory virtual filesystem for MCP tools organization and export.
 
 ```toml
 [dependencies]
-mcp-execution-files = "0.9"
+mcp-execution-files = "0.10"
 ```
 
 Or with cargo-add:

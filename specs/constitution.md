@@ -80,12 +80,20 @@ related:
 ## IV. Code Style
 
 - Clippy `all`, `cargo`, `nursery`, `pedantic` are `deny` at workspace level.
-  The only surviving `#[allow(...)]` suppressions are the two crate-level
-  ones in `mcp-cli` (`clippy::unused_async`, for handlers uniformly
-  dispatched through a single async entry point; `clippy::needless_collect`,
-  for a test-readability `collect()` that isn't reused as an iterator
-  afterward) — deliberately out of scope for the `#[expect]` migration below,
-  which covers item-level suppressions only.
+  The only surviving `#[allow(...)]` **attribute** suppressions are the two
+  crate-level ones in `mcp-cli` (`clippy::unused_async`, for handlers
+  uniformly dispatched through a single async entry point;
+  `clippy::needless_collect`, for a test-readability `collect()` that isn't
+  reused as an iterator afterward) — deliberately out of scope for the
+  `#[expect]` migration below, which covers item-level suppressions only.
+  Separately, the root `Cargo.toml`'s `[workspace.lints.clippy]` table pins
+  three lint IDs to `allow` at the TOML level rather than via an attribute —
+  `cargo_common_metadata`, `multiple_crate_versions`,
+  `needless_borrows_for_generic_args` — each with an inline rationale
+  comment (issue #442). This is a workspace-wide policy decision, not a
+  per-site suppression, so it is exempt from the `#[expect]`-over-`#[allow]`
+  convention below, which applies to attribute-level suppressions in source
+  files.
 - Convention: every item-level lint suppression uses
   `#[expect(lint, reason = "...")]` rather than `#[allow(lint)]` — `#[expect]`
   emits its own warning if the lint stops firing, which surfaces a

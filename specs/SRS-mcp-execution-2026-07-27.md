@@ -335,8 +335,11 @@ with N tools produces exactly N + 5 files.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-005
 - *Priority*: Must
 - *Acceptance criteria*:
-  1. `ProgressiveGenerator::generate`/`generate_with_categories` produce
-     exactly `tools.len() + 5` `GeneratedFile` entries for any valid input.
+  1. `ProgressiveGenerator::generate`/`generate_with_categories` (each
+     taking a `&ServerConfig` in addition to the discovered tools, since
+     #468/#497, so the generator can stamp generation provenance — see
+     FR-006) produce exactly `tools.len() + 5` `GeneratedFile` entries for
+     any valid input.
   2. Two tools sharing an identical raw name, or a tool named after a JS/TS
      reserved word (e.g. `delete`), receive distinct, valid TypeScript
      identifiers via `resolve_typescript_names`/`disambiguate_identifier`.
@@ -359,7 +362,15 @@ without parsing the generated TypeScript.
 - *Acceptance criteria*:
   1. Every `generate`/`generate_with_categories` call emits `_meta.json`
      conforming to `mcp_execution_core::metadata::ServerMetadata`, tagged
-     with `METADATA_SCHEMA_VERSION`.
+     with `METADATA_SCHEMA_VERSION` (`2`, since #468/#497). `ServerMetadata`
+     requires a `provenance: GenerationProvenance` field — `generated_at`
+     plus a SHA-256 `ConfigFingerprint` over the non-secret structure of the
+     `&ServerConfig` passed into `generate`/`generate_with_categories`, and a
+     SHA-256 `ToolDigest` over the discovered tool set — so a later run can
+     detect drift between the sidecar and live server state. A
+     `schema_version: 1` sidecar (pre-#468) is rejected before
+     `mcp-skill`'s parser attempts a typed deserialization
+     (`ScanError::UnsupportedSchema`, see [[skill/spec#9. Error Conditions]]).
   2. `_meta.json`'s parameter descriptions are the raw MCP-reported text,
      not JSDoc-sanitized (sanitization applies only to the `.ts` JSDoc
      copy).
