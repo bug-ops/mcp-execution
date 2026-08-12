@@ -786,6 +786,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the collection itself (`MAX_USE_CASE_HINTS`, 20 entries — a per-entry length cap alone
   does not stop an unbounded *number* of entries), enforced at runtime in
   `build_generation_prompt` by truncating rather than erroring (#429).
+- **`mcp-execution-cli`**: the `skill` command's `write_skill_md` still writes `SKILL.md`
+  atomically (write-temp-file then `rename`), but the temp file itself is now written through
+  `mcp-execution-core`'s `write_confined_file` instead of a plain `std::fs::write`. The temp
+  file's path (`SKILL.md.tmp`) is predictable and previously had no `O_NOFOLLOW` guard, so a
+  symlink planted there ahead of time was followed, redirecting the write outside the intended
+  skills directory; `rename` itself was already safe, since it replaces whatever entry sits at
+  the final path rather than following it, so a pre-existing symlink at `SKILL.md` itself (e.g. a
+  dotfiles setup symlinking it into a repo) is still safely replaced by `--overwrite`, on both the
+  default and a custom `--output` path — unchanged from before this fix. This is the same
+  primitive that closed the equivalent race for the MCP server's `save_skill` handler's own write
+  step (#496); on Windows, the guard is a `symlink_metadata` pre-check rather than a
+  single-syscall `O_NOFOLLOW` open, the same accepted, narrower-but-not-eliminated race #496
+  already documents.
+  Separately, when no custom `--output` path is given, the default `~/.claude/skills/{server}`
+  segment *directory* is now resolved and created through a confined walk
+  (`mcp_execution_core::resolve_confined_path`), rejecting it outright if it already exists as a
+  symlink rather than letting a plain `create_dir_all` follow it — this closes a non-racy escape
+  that needed no TOCTOU window at all, independent of the temp-file fix above, and creates
+  `{server}/` before the `--overwrite` check and rendering, so a refused or otherwise failed run
+  can leave an empty `{server}/` directory behind (the same side effect `save_skill`'s own
+  resolution already has). Only the segment directory is confined this way; the terminal
+  `SKILL.md` component deliberately keeps its pre-existing behavior, per the paragraph above. A
+  custom `--output` path's directory creation is unaffected by any of this: confining a location
+  the operator chose themselves would not defend against anything an attacker able to plant a
+  symlink under it could not already do to any other path this process touches, so it keeps its
+  existing narrower, traversal-only validation (#501).
 
 ### Removed
 
