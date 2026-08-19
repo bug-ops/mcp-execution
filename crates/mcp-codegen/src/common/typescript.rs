@@ -503,8 +503,8 @@ mod tests {
         });
 
         let result = json_schema_to_typescript(&schema);
-        // The `preserve_order` feature is enabled transitively (via schemars/rmcp), so
-        // `serde_json::Map` iterates in insertion order: "a-b" claims the base "a_b" first.
+        // The workspace enables `serde_json/preserve_order`, so `serde_json::Map` iterates
+        // in insertion order: "a-b" claims the base "a_b" first.
         assert_eq!(result.matches("a_b?: string").count(), 1, "{result}");
         assert_eq!(result.matches("a_b_2?: number").count(), 1, "{result}");
         assert_eq!(result.matches("a_b_3?: boolean").count(), 1, "{result}");
