@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Workspace now enables `serde_json/preserve_order` directly instead of relying on it being pulled in
+  transitively through `handlebars`'s `preserve_json_order` default feature. `handlebars` 6.4.4 dropped
+  that default, which would have made `serde_json::Map` fall back to sorted-key (`BTreeMap`) iteration
+  and broken the insertion-order guarantee `mcp-execution-codegen`'s sibling-key collision handling
+  depends on when generating TypeScript interfaces from JSON schemas.
+
 ## [0.10.0] - 2026-08-12
 
 ### Added
