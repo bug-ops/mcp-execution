@@ -30,11 +30,11 @@ impl ServerHandler for PaginatedServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> {
         let page_index = self.call_count.fetch_add(1, Ordering::SeqCst);
         let start = page_index * PAGE_SIZE;
 
@@ -44,7 +44,7 @@ impl ServerHandler for PaginatedServer {
 
         let mut result = ListToolsResult::with_all_items(tools);
         result.next_cursor = Some("more".to_string());
-        Ok(result)
+        std::future::ready(Ok(result))
     }
 }
 

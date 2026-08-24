@@ -67,9 +67,7 @@ fn resolve_log_format(log_format: Option<LogFormat>) -> LogFormat {
 /// [`LogFormat::resolve`]'s own doc comment on why that value isn't threaded through.
 fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
     log_format.is_none()
-        && std::env::var(LOG_FORMAT_ENV_VAR)
-            .ok()
-            .is_some_and(|raw| LogFormat::is_invalid_env_value(&raw))
+        && std::env::var(LOG_FORMAT_ENV_VAR).is_ok_and(|raw| LogFormat::is_invalid_env_value(&raw))
 }
 
 /// Caps `rmcp`'s own `tracing` targets at `info`, on top of whatever base filter is already in

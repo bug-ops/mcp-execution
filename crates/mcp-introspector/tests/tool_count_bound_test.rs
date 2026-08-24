@@ -58,11 +58,11 @@ impl ServerHandler for PaginatedFixtureHandler {
             .with_server_info(Implementation::new("paginated-fixture-server", "1.0.0"))
     }
 
-    async fn list_tools(
+    fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> {
         let page_index = self.call_count.fetch_add(1, Ordering::SeqCst);
         let start = page_index * PAGE_SIZE;
 
@@ -86,7 +86,7 @@ impl ServerHandler for PaginatedFixtureHandler {
 
         let mut result = ListToolsResult::with_all_items(tools);
         result.next_cursor = next_cursor;
-        Ok(result)
+        std::future::ready(Ok(result))
     }
 }
 
