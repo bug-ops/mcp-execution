@@ -1196,6 +1196,10 @@ impl GeneratorService {
     }
 }
 
+// `#[tool_handler]` (rmcp-macros) generates a `call_tool`/`list_tools` dispatch that clippy
+// 1.98's `unused_async_trait_impl` flags as not needing `async` -- the macro output isn't ours
+// to edit, and rmcp has no non-async alternative for this attribute.
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler]
 impl ServerHandler for GeneratorService {
     fn get_info(&self) -> ServerInfo {
