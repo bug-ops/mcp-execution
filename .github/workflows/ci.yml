@@ -90,7 +90,7 @@ jobs:
         run: cargo +nightly fmt --all -- --check
 
       - name: Install cargo-sort
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.0
         with:
           tool: cargo-sort
 
@@ -198,7 +198,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
 
       - name: Install nextest
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.0
         with:
           tool: nextest
 
@@ -237,12 +237,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install llvm-cov
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.0
         with:
           tool: cargo-llvm-cov
 
       - name: Install nextest
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.0
         with:
           tool: nextest
 
