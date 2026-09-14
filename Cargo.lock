@@ -2014,9 +2014,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42b6914fac0be956fe704a38239c3f44a9f841d1b06a5713d2f638065593f5b5"
+checksum = "b88db56b8ae316560e9e868b6b978ea940f27cb883323fc90e07435e44158f5c"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2047,9 +2047,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdf1c49bd4d52014b94db0877410db273c2008f01628b0252a2e9460ad9b7fda"
+checksum = "873b730df6f0a9b74b13eb514e0dca4c2db0d8b68b74af98a2e9bf3f9d436585"
 dependencies = [
  "darling 0.24.0",
  "proc-macro2",
@@ -2282,7 +2282,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3afb591f9cdb6223c88ba39269aff895620c7f0716dc42b705b5733d5c7c0823"
 dependencies = [
  "annotate-snippets",
- "base64 0.22.1",
+ "base64 0.23.1",
  "encoding_rs_io",
  "granit-parser",
  "nohash-hasher",
@@ -2860,9 +2860,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.26.0"
+version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
