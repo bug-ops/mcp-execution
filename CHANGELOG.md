@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Updated `rustls` to 0.23.45 to resolve RUSTSEC-2026-0285 (TLS 1.3 handshake messages incorrectly
+  accepted across encryption level boundaries).
+
 ### Fixed
 
 - Workspace now enables `serde_json/preserve_order` directly instead of relying on it being pulled in
