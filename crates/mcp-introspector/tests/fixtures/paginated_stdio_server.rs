@@ -9,7 +9,9 @@
 //! `map_list_tools_bounded_error`'s `Error::ResourceLimitExceeded` mapping was
 //! only ever exercised via HTTP.
 
-use rmcp::model::{ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool};
+use rmcp::model::{
+    InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, Tool,
+};
 use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
@@ -26,8 +28,8 @@ struct PaginatedServer {
 }
 
 impl ServerHandler for PaginatedServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     fn list_tools(

@@ -9,11 +9,13 @@ tags:
   - rmcp
 created: 2026-08-10
 status: accepted
+superseded-in-part-by: ADR-529
 review-date: 2026-11-10
 related:
   - "[[../constitution]]"
   - "[[../introspector/spec]]"
   - "[[../server/spec]]"
+  - "[[ADR-529-rmcp-3-5-latest-promotion-revisit]]"
 ---
 
 # ADR-369: Evaluate Adopting `rmcp`'s SEP-2575 Stateless Discover Lifecycle and SEP-2549 Cache Hints
@@ -164,7 +166,11 @@ the only path actually taken.
    command string and `"unknown"`, which then flows into generated
    `SKILL.md`. This is a genuinely new defect introduced by adoption, not
    a pre-existing bug it would merely expose.
-2. **Narrow fallback trigger.** `ClientLifecycleMode::Auto` falls back to
+2. **Narrow fallback trigger.** *(Obsolete since rmcp 3.2.0: `Auto` treats
+   any correlated non-modern error as legacy; since 3.4.1 (#1288) HTTP 4xx
+   discover rejections are re-correlated too — see
+   [[ADR-529-rmcp-3-5-latest-promotion-revisit]] §4 item 4. The text below
+   describes rmcp 3.1.2.)* `ClientLifecycleMode::Auto` falls back to
    the legacy handshake **only** on JSON-RPC `-32601` (`METHOD_NOT_FOUND`),
    at `service/client.rs:743`. Any server that answers an unknown
    pre-initialize request with a different error code, no response, or by
@@ -172,7 +178,9 @@ the only path actually taken.
    `ConnectionFailed`/`Timeout` instead. The target population is
    arbitrary user-configured servers from `~/.claude/mcp.json`, not a
    controlled fleet.
-3. **Timeout budget compression.** The single 30 s `connect_timeout`
+3. **Timeout budget compression.** *(Worse since rmcp 3.2.0: `Auto` adds a
+   10 s discover-timeout fallback before `initialize` — see
+   [[ADR-529-rmcp-3-5-latest-promotion-revisit]] §4 item 4.)* The single 30 s `connect_timeout`
    (`crates/mcp-core/src/server_config.rs:62`) would need to cover
    discover + N version retries + the legacy `initialize` fallback, where
    today it covers one `initialize` call. Same wall-clock budget, strictly
@@ -219,6 +227,12 @@ yields no `server_info` so risk 1 above is observable instead of silent.
   mechanism itself. Out of scope here → §7, item 1.
 
 ## 5. Measurable Gate for Revisiting A
+
+> [!note]
+> The gate below fired when rmcp 3.5.0 promoted `LATEST` (#527). It is
+> replaced by the ADR-529 gate (`test_adr_529_protocol_version_latest_gate`,
+> asserting `V_2026_07_28`); see [[ADR-529-rmcp-3-5-latest-promotion-revisit]].
+> The text below is the historical original.
 
 The gate must be an **executable, CI-failing assertion**, not an inferred
 or manually-tracked condition: `rmcp` version bumps arrive via dependabot
@@ -297,6 +311,9 @@ user-confirmed scope split in §1.
   (`service/server.rs:469-484`, `rmcp` 3.1.2) — not a cap. Any client
   requesting protocol 2026-07-28 gets it echoed back today via
   `initialize`, entirely independent of whether discover is ever used.
+  **Correction (2026-09-30):** true at rmcp 3.1.2, false since 3.2.0 — rmcp
+  never echoes a no-initialize version via `initialize`
+  ([[ADR-529-rmcp-3-5-latest-promotion-revisit]] §4 item 3).
 - **Narrowing `supported_protocol_versions()` is not a valid opt-out.**
   `handle_request` dispatches `DiscoverRequest` unconditionally
   (`handler/server.rs:108-110`; the neighboring `104-107` range is the
@@ -363,6 +380,11 @@ user-confirmed scope split in §1.
    tied to `rmcp`'s own version promotion rather than a one-time survey.
    Keep any such survey as optional supporting evidence only, not a
    prerequisite to revisiting A.
+   **Partially answered (2026-09-30, [[ADR-529-rmcp-3-5-latest-promotion-revisit]]
+   §4 item 5):** a live probe of the only real server in `~/.claude.json`
+   (`@sveltejs/mcp`) answered `server/discover` with `-32602` — 0 of 1
+   discover-capable. The population is still tiny; the survey stays a
+   revisit trigger.
 
 ## 9. See Also
 

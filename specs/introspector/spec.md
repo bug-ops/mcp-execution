@@ -100,7 +100,20 @@ concurrently-discovered servers' log output be correlated.
    Steps 3–5 below are that shared pipeline — timeout durations, error
    types/messages, and success output are unchanged from before the dedup.
 3. `client.serve(transport)` bounded by `config.connect_timeout()` →
-   `Error::Timeout { operation: "connect to {id}", .. }` on expiry.
+   `Error::Timeout { operation: "connect to {id}", .. }` on expiry. The
+   handshake is a legacy `initialize` request declaring rmcp's
+   `ProtocolVersion::LATEST` (`2026-07-28` as of rmcp 3.5.0, taken from
+   `().serve`'s default client config); `server/discover` and
+   `ClientLifecycleMode::Auto` are not used (deferred, ADR-529). Accepted
+   failure classes: a strict server that rejects the unknown requested
+   version instead of counter-offering yields `ConnectionFailed`; a server
+   that echoes `2026-07-28` via `initialize` makes rmcp switch to
+   per-request `_meta` semantics, which a legacy server may reject at
+   `tools/list`; an initialize-less server yields `ConnectionFailed`.
+   Guarded by `test_adr_529_protocol_version_latest_gate` (`lib.rs`) and
+   `test_discover_server_http_handshake_is_initialize_at_latest`
+   (`tests/http_transport_test.rs`); stdio shares the identical
+   `().serve` call and is not separately tested.
 4. `list_tools_bounded(&client)` — pages via `list_tools`, bailing out as
    soon as the running total exceeds `MAX_TOOL_COUNT` **without** buffering
    every page first (unlike `rmcp`'s own `list_all_tools`, which would hold
@@ -241,4 +254,6 @@ open until `rmcp` exposes a JSON-body size knob.
 
 - [[../core/spec]] — `ServerConfig`/security validation this crate re-checks
 - [[../codegen/spec]] — consumer of `ServerInfo`/`ToolInfo`
+- [[../decisions/ADR-529-rmcp-3-5-latest-promotion-revisit]] — handshake
+  protocol-version decision and revisit gate
 - [[../server/spec#introspect_server]] — MCP-tool-level wrapper around this crate

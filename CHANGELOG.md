@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`mcp-execution-introspector`**: the `initialize` handshake now requests MCP protocol 2026-07-28, following rmcp 3.5.0's default; ADR-369 §5 gate replaced by ADR-529 (#TBD).
+
+### Dependencies
+
+- Bumped `rmcp` to 3.5.0 and `thiserror` to 2.0.21 (#TBD).
+
 ### Security
 
 - Updated `rustls` to 0.23.45 to resolve RUSTSEC-2026-0285 (TLS 1.3 handshake messages incorrectly

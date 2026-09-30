@@ -29,7 +29,7 @@
 //! that `ServerConfig::env`/`ServerConfig::cwd` actually reach the spawned
 //! child process, rather than only being covered at the config-object level.
 
-use rmcp::model::{ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo};
+use rmcp::model::{InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities};
 use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
@@ -45,8 +45,8 @@ struct SlowServer {
 }
 
 impl ServerHandler for SlowServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn list_tools(
