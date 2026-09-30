@@ -129,7 +129,9 @@ unrecognized version, enables the tools capability, and provides an
 rmcp's defaults apply: the server advertises every protocol version the
 SDK knows (`ProtocolVersion::KNOWN_VERSIONS`), not just `2025-06-18`
 (characterized by tests in `crates/mcp-server/tests/integration_tests.rs`,
-issue #381).
+issue #381). rmcp never echoes a no-initialize version (`2026-07-28`) via
+`initialize`: negotiation falls back to an initialize-capable version
+(ADR-529).
 
 ### `introspect_server`
 

@@ -19,8 +19,8 @@ use axum::response::Response;
 use mcp_execution_core::{Error, ServerConfig, ServerId};
 use mcp_execution_introspector::Introspector;
 use rmcp::model::{
-    Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    Tool,
+    Implementation, InitializeRequestParams, InitializeResult, ListToolsResult,
+    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::{
@@ -38,15 +38,29 @@ const TEST_HEADER_NAME: &str = "x-test-header";
 /// Minimal MCP server exposing a single `echo` tool, used to exercise the
 /// HTTP/SSE client path end-to-end. `list_tools_delay` lets discover-timeout
 /// tests hang the `tools/list` response independently of the connect phase.
+/// `initialize_version` records the protocol version the client declared in
+/// its `initialize` request.
 #[derive(Clone)]
 struct FixtureHandler {
     list_tools_delay: Duration,
+    initialize_version: Arc<Mutex<Option<ProtocolVersion>>>,
 }
 
 impl ServerHandler for FixtureHandler {
     fn get_info(&self) -> InitializeResult {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("fixture-http-server", "9.9.9"))
+    }
+
+    fn negotiate_initialize(
+        &self,
+        request: &InitializeRequestParams,
+    ) -> Result<InitializeResult, McpError> {
+        // Answers a legacy-capable version explicitly: the default `get_info` version is LATEST.
+        *self.initialize_version.lock().unwrap() = Some(request.protocol_version.clone());
+        Ok(self
+            .get_info()
+            .with_protocol_version(ProtocolVersion::V_2025_06_18))
     }
 
     async fn list_tools(
@@ -99,11 +113,22 @@ async fn spawn_fixture_server(
     connect_delay: Duration,
     list_tools_delay: Duration,
 ) -> (String, CancellationToken, Arc<Mutex<Option<String>>>) {
+    let handler = FixtureHandler {
+        list_tools_delay,
+        initialize_version: Arc::default(),
+    };
+    spawn_fixture_server_with(handler, connect_delay).await
+}
+
+/// Like [`spawn_fixture_server`], but serves the caller-provided `handler`.
+async fn spawn_fixture_server_with(
+    handler: FixtureHandler,
+    connect_delay: Duration,
+) -> (String, CancellationToken, Arc<Mutex<Option<String>>>) {
     let ct = CancellationToken::new();
     let server_config =
         StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token());
 
-    let handler = FixtureHandler { list_tools_delay };
     let service: StreamableHttpService<FixtureHandler, LocalSessionManager> =
         StreamableHttpService::new(
             move || Ok(handler.clone()),
@@ -172,6 +197,41 @@ async fn test_discover_server_http_lists_tools_and_metadata() {
         captured_header.lock().unwrap().as_deref(),
         Some("propagated-value"),
         "the custom header configured via ServerConfig::header must reach the server"
+    );
+}
+
+/// The handshake must go through legacy `initialize` (not `server/discover`)
+/// and declare rmcp's `ProtocolVersion::LATEST`, per ADR-529. `None` means
+/// `serve()` stopped using `initialize`; a different version means rmcp's
+/// default handshake version changed — either needs an ADR-529 re-review.
+#[tokio::test]
+async fn test_discover_server_http_handshake_is_initialize_at_latest() {
+    let initialize_version = Arc::new(Mutex::new(None));
+    let handler = FixtureHandler {
+        list_tools_delay: Duration::ZERO,
+        initialize_version: initialize_version.clone(),
+    };
+    let (url, ct, _captured_header) = spawn_fixture_server_with(handler, Duration::ZERO).await;
+
+    let mut introspector = Introspector::new();
+    let config = ServerConfig::builder()
+        .http_transport(url)
+        .connect_timeout(Duration::from_secs(5))
+        .discover_timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    let result = introspector
+        .discover_server(ServerId::new("http-handshake-fixture").unwrap(), &config)
+        .await;
+
+    ct.cancel();
+
+    result.expect("discover_server should succeed against the HTTP fixture");
+    assert_eq!(
+        initialize_version.lock().unwrap().clone(),
+        Some(ProtocolVersion::LATEST),
+        "handshake must be an initialize request declaring ProtocolVersion::LATEST"
     );
 }
 
