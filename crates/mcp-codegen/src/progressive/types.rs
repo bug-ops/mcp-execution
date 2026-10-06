@@ -255,10 +255,10 @@ pub struct CategoryInfo {
 /// use mcp_execution_codegen::progressive::BridgeContext;
 ///
 /// let context = BridgeContext::default();
-/// assert!(!context.forbidden_chars().is_empty());
+/// assert_ne!(context.forbidden_chars(), [] as [String; 0]);
 /// assert!(context.forbidden_chars().contains(&";".to_string()));
-/// assert!(!context.forbidden_env_prefix().is_empty());
-/// assert!(!context.env_name_charset_pattern().is_empty());
+/// assert_ne!(context.forbidden_env_prefix(), "");
+/// assert_ne!(context.env_name_charset_pattern(), "");
 /// assert!(!context.env_name_charset_desc.is_empty());
 /// assert!(context.max_arg_count > 0);
 /// ```
@@ -483,10 +483,10 @@ mod tests {
         // list, since an empty `FORBIDDEN_CHARS` in the rendered bridge would make
         // `validateCommandString` accept every shell metacharacter. Same reasoning applies to
         // an empty `env_name_charset_pattern`: `new RegExp('')` matches every string.
-        assert!(!context.forbidden_chars().is_empty());
-        assert!(!context.forbidden_env_names().is_empty());
-        assert!(!context.forbidden_env_prefix().is_empty());
-        assert!(!context.env_name_charset_pattern().is_empty());
+        assert_ne!(context.forbidden_chars(), [] as [String; 0]);
+        assert_ne!(context.forbidden_env_names(), [] as [String; 0]);
+        assert_ne!(context.forbidden_env_prefix(), "");
+        assert_ne!(context.env_name_charset_pattern(), "");
 
         // #471: the DoS size/count ceilings must be populated from mcp_execution_core, not
         // left at zero (which would reject every config, silently breaking every generated

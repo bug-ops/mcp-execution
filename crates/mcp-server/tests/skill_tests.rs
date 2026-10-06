@@ -163,7 +163,7 @@ async fn test_build_skill_context_integration() {
     assert_eq!(context.skill_name, "github-progressive");
     assert_eq!(context.tool_count, 2);
     assert_eq!(context.categories.len(), 2);
-    assert!(!context.generation_prompt.is_empty());
+    assert_ne!(context.generation_prompt, "");
     assert!(context.generation_prompt.contains("CI/CD"));
 }
 

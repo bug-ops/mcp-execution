@@ -2118,7 +2118,7 @@ mod tests {
 
     #[test]
     fn test_parse_keywords_empty_string_yields_empty_vec() {
-        assert!(parse_keywords("").is_empty());
+        assert_eq!(parse_keywords(""), [] as [std::string::String; 0]);
     }
 
     // ========================================================================

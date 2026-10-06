@@ -301,7 +301,7 @@ mod tests {
 
         assert_eq!(meta.tools.len(), 1);
         assert!(meta.tools[0].category.is_none());
-        assert!(meta.tools[0].keywords.is_empty());
+        assert_eq!(meta.tools[0].keywords, Vec::<String>::new());
     }
 
     /// A genuine `schema_version: 1` sidecar has no `provenance` key at all — typed

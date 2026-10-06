@@ -639,7 +639,7 @@ fn test_server_capabilities_debug() {
     };
 
     let debug_str = format!("{caps:?}");
-    assert!(!debug_str.is_empty());
+    assert_ne!(debug_str, "");
 }
 
 /// Tests Introspector Debug

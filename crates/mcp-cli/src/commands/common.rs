@@ -1105,7 +1105,7 @@ mod tests {
                 command, args, env, ..
             } => {
                 assert_eq!(command, "python");
-                assert!(args.is_empty());
+                assert_eq!(args, &Vec::<String>::new());
                 assert!(env.is_empty());
             }
             other => panic!("expected Stdio transport, got {other:?}"),
@@ -1763,7 +1763,7 @@ mod tests {
 
         assert_eq!(id.as_str(), "simple-server");
         assert_eq!(config.command(), Some("simple-server"));
-        assert!(config.args().is_empty());
+        assert_eq!(config.args(), [] as [String; 0]);
         assert!(config.env().is_empty());
     }
 
