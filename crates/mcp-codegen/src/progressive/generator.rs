@@ -1553,7 +1553,7 @@ mod tests {
             .find(|t| t.name.as_str() == "update_issue")
             .unwrap();
         assert!(update_issue.category.is_none());
-        assert!(update_issue.keywords.is_empty());
+        assert_eq!(update_issue.keywords, Vec::<String>::new());
     }
 
     #[test]

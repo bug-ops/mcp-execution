@@ -901,7 +901,7 @@ mod tests {
             Some("A parameter".to_string()),
             "parameter descriptions must survive the sidecar round-trip"
         );
-        assert!(result.warnings.is_empty());
+        assert_eq!(result.warnings, Vec::<String>::new());
     }
 
     #[tokio::test]

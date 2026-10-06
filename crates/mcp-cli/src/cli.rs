@@ -992,7 +992,7 @@ mod tests {
             assert!(servers_dir.is_none());
             assert!(output.is_none());
             assert!(skill_name.is_none());
-            assert!(hints.is_empty());
+            assert_eq!(hints, Vec::<String>::new());
             assert!(!overwrite);
         } else {
             panic!("Expected Skill command");

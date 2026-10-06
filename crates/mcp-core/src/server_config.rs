@@ -1158,7 +1158,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(config.command(), Some("docker"));
-        assert!(config.args().is_empty());
+        assert_eq!(config.args(), [] as [String; 0]);
         assert!(config.env().is_empty());
         assert!(config.cwd().is_none());
     }
@@ -1515,7 +1515,7 @@ mod tests {
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
         assert!(config.headers().is_empty());
         assert!(config.command().is_none());
-        assert!(config.args().is_empty());
+        assert_eq!(config.args(), [] as [String; 0]);
         assert!(config.env().is_empty());
         assert_eq!(config.cwd(), None);
     }
@@ -1615,7 +1615,7 @@ mod tests {
         assert_eq!(config.url(), Some("https://api.example.com/sse"));
         assert!(config.headers().is_empty());
         assert!(config.command().is_none());
-        assert!(config.args().is_empty());
+        assert_eq!(config.args(), [] as [String; 0]);
         assert!(config.env().is_empty());
         assert_eq!(config.cwd(), None);
     }

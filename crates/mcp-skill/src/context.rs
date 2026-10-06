@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(context.skill_name, "github-progressive");
         assert_eq!(context.tool_count, 2);
         assert_eq!(context.categories.len(), 2);
-        assert!(!context.generation_prompt.is_empty());
+        assert_ne!(context.generation_prompt, "");
     }
 
     /// Issue #473: `use_case_hints` must land in `GenerateSkillResult::use_case_hints`,
@@ -623,15 +623,13 @@ mod tests {
     fn test_build_skill_context_no_hints_yields_empty_use_case_hints() {
         let tools = vec![create_test_tool("create_issue", Some("issues"))];
 
-        assert!(
-            build_skill_context("github", &tools, None, None)
-                .use_case_hints
-                .is_empty()
+        assert_eq!(
+            build_skill_context("github", &tools, None, None).use_case_hints,
+            Vec::<String>::new()
         );
-        assert!(
-            build_skill_context("github", &tools, Some(&[]), None)
-                .use_case_hints
-                .is_empty()
+        assert_eq!(
+            build_skill_context("github", &tools, Some(&[]), None).use_case_hints,
+            Vec::<String>::new()
         );
     }
 

@@ -1317,8 +1317,8 @@ mod tests {
         assert_eq!(info.status, ServerStatus::Unavailable);
         assert_eq!(info.id, "http-malformed");
         assert_eq!(info.name, "http-malformed");
-        assert!(info.tools.is_empty());
-        assert!(info.capabilities.is_empty());
+        assert_eq!(info.tools, []);
+        assert_eq!(info.capabilities, Vec::<String>::new());
 
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"status\":\"unavailable\""));
