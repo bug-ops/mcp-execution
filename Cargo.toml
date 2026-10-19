@@ -38,7 +38,7 @@ regex = "1.13"
 rmcp = "3.1"
 schemars = "1.2"
 serde = "1.0"
-serde-saphyr = { version = "1.0.1", default-features = false, features = ["deserialize", "serialize"] }
+serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize", "serialize"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 sha2 = { version = "0.11", default-features = false }
 tempfile = "3.27"
