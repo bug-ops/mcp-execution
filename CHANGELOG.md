@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 
 - Bumped `rmcp` to 3.5.0 and `thiserror` to 2.0.21 (#530).
+- Bumped `serde-saphyr` to 2.0.0; `mcp-execution-skill` frontmatter now emits multi-line values as quoted scalars so trailing newlines round-trip (#536).
 
 ### Security
 

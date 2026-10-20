@@ -73,34 +73,28 @@ impl Frontmatter<'_> {
     /// regression for strict YAML-1.2 external consumers).
     ///
     /// Injection safety (S3) rests on a structural property of the emitter, not on
-    /// escaping alone: every emitted block-scalar body line carries at least 2
+    /// escaping alone: every emitted continuation line carries at least 2
     /// (`indent_step`) leading spaces, so no attacker-controlled `description` can ever
     /// produce a line starting with `---` at column 0 that would prematurely close the
     /// frontmatter block. This is an internal property of `serde-saphyr`'s serializer
     /// with no stability contract, so it is pinned by a direct assertion on the emitted
     /// text in the round-trip test below rather than trusted blindly.
     ///
-    /// `serde_saphyr::to_string` always ends the document in exactly one `\n`. When
-    /// `description` (the last-declared, and so last-emitted, field) itself ends in
-    /// `\n`, that final `\n` is not a plain document terminator but part of the
-    /// scalar's semantic content — a multi-line value emitted as a YAML block literal
-    /// (`|`, `|-`, `|+`, ...) uses a trailing newline to signal "clip"/"keep"
-    /// chomping. No compensation is applied for this, and none is needed: it is
-    /// unobservable through our own round-trip, since `granit-parser` 1.0.1's scanner
-    /// (`scanner.rs:2981-2989`) applies EOF-chomping leniency to a block scalar
-    /// terminated by end-of-input, recovering the content newline regardless. It is
-    /// also unobservable by a plausible external YAML-1.2 consumer extracting the
-    /// frontmatter block by region-capture or by a classic
-    /// `^---\n([\s\S]*?)\n---` regex: `serde-saphyr` indents `|+` blank body lines
-    /// (unlike a libyaml-based emitter, which renders them truly empty), so the final
-    /// `\n` is never load-bearing under either extraction method.
+    /// Block scalars are disabled (`prefer_block_scalars: false`): multi-line values are
+    /// emitted as double-quoted scalars, so a `description` ending in one or more `\n`
+    /// round-trips exactly. Keep-chomped (`|+`) block literals terminated by the closing
+    /// `---` lose their final blank line in `granit-parser` 2.0, and no external consumer
+    /// is guaranteed to be any more lenient.
     fn to_yaml_block(&self) -> String {
         // PANIC: serializing two `&str` fields to YAML has no fallible step (no
         // recursion, no I/O) — this cannot fail. `serde-saphyr`'s only
         // `Error::custom` call site in the serializer (`ser/serializer.rs:766`) is
         // caught locally with a quoting fallback (`:877`); its remaining
         // `Error::custom` sites live in unused `Rc`/`Arc` recursive-wrapper code paths.
-        serde_saphyr::to_string(self).expect("YAML serialization of Frontmatter is infallible")
+        let mut options = serde_saphyr::SerializerOptions::default();
+        options.prefer_block_scalars = false;
+        serde_saphyr::to_string_with_options(self, options)
+            .expect("YAML serialization of Frontmatter is infallible")
     }
 }
 

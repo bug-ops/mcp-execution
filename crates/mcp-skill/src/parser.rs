@@ -635,8 +635,6 @@ fn frontmatter_options() -> (serde_saphyr::Options, Rc<Cell<Option<BudgetBreach>
             enforce_alias_anchor_ratio: true,
             alias_anchor_min_aliases: 100,
             alias_anchor_ratio_multiplier: 10,
-            // Default value; unreachable from an 8 KiB input, set explicitly for the record.
-            max_total_comment_bytes: 64 * 1024 * 1024,
             // Default value; reader-only, `from_str_with_options` never consults it for a
             // `&str` input, set explicitly for the record.
             max_reader_input_bytes: Some(256 * 1024 * 1024),
