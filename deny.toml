@@ -34,7 +34,9 @@ yanked = "deny"
 # Ignore specific advisories if needed (add RUSTSEC IDs here). A yanked
 # version can be allowed temporarily via "a-crate@x.y.z" or
 # { crate = "a-crate@x.y.z", reason = "..." }.
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained notice with no safe upgrade; also required transitively by rmcp and schemars, so removal needs an upstream change" },
+]
 
 [licenses]
 version = 2

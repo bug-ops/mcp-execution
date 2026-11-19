@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `cargo-deny` ignores RUSTSEC-2026-0543 (chrono unmaintained, no safe upgrade) in `deny.toml` (#547).
 - Workspace enables `serde_json/preserve_order` directly, keeping insertion-order iteration that codegen's sibling-key collision handling relies on after `handlebars` 6.4.4 dropped the transitive feature (#514).
 - Tests use `assert_eq`/`assert_ne` instead of `assert!(is_empty)` for clippy 1.99 (#532).
 
