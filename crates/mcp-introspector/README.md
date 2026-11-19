@@ -12,7 +12,7 @@ MCP server introspection using the official [rmcp](https://docs.rs/rmcp) SDK.
 
 ```toml
 [dependencies]
-mcp-execution-introspector = "0.10"
+mcp-execution-introspector = "0.11"
 ```
 
 Or with cargo-add:
@@ -105,7 +105,7 @@ let config = ServerConfig::builder()
 
 ## Features
 
-- **Official SDK**: Uses [rmcp](https://docs.rs/rmcp) for MCP communication
+- **Official SDK**: Uses [rmcp](https://docs.rs/rmcp) 3.5 for MCP communication (handshake requests protocol 2026-07-28)
 - **Tool Discovery**: Extract all tools from any MCP server
 - **Schema Extraction**: Get JSON schemas for tool parameters
 - **Capability Detection**: Discover tools, resources, prompts support

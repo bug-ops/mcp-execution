@@ -82,9 +82,9 @@ Or add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-mcp-execution-core = "0.10"
-mcp-execution-introspector = "0.10"
-mcp-execution-codegen = "0.10"
+mcp-execution-core = "0.11"
+mcp-execution-introspector = "0.11"
+mcp-execution-codegen = "0.11"
 ```
 
 > [!WARNING]

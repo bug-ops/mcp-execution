@@ -324,15 +324,15 @@ the template: a private `Frontmatter { name, description }` struct is built
 from `skill_name` and `server_description` (or the same default description
 string used previously when `server_description` is absent) and serialized
 as a single unit via `Frontmatter::to_yaml_block`, which delegates to
-`serde-saphyr`'s own YAML emitter (`serde_saphyr::to_string`, default
-`SerializerOptions`) instead of a hand-maintained escape table. Both fields
+`serde-saphyr`'s own YAML emitter (`serde_saphyr::to_string_with_options`,
+`SerializerOptions` with `prefer_block_scalars = false`) instead of a hand-maintained escape table. Both fields
 go through one emitter pass, so `skill_name` — attacker-controlled the same
 way `server_description` is — gets the same protection, closing a gap where
 only `description` was encoded. A `:`, a leading `-`, an embedded newline, or
 a C0 control character (NUL, BEL, ESC, ...) in either field cannot corrupt
 the frontmatter or inject a sibling YAML key (issue #398, S1+S3). This
 injection defense is structural, not just a property of escaping: every
-emitted block-scalar body line carries at least 2 leading spaces (the
+emitted continuation line carries at least 2 leading spaces (the
 serializer's `indent_step`), so no attacker-controlled value can ever
 produce a line starting with `---` at column 0 that would prematurely close
 the frontmatter block — an internal `serde-saphyr` property with no
@@ -342,11 +342,12 @@ a `U+2028`/`U+2029` line/paragraph separator is emitted as a `\L`/`\P`
 escape inside a double-quoted scalar, which round-trips exactly through
 both `serde-saphyr` and a libyaml-based reader — a net improvement over the
 previous emitter's YAML-1.1 literal-line-break encoding for strict external
-YAML-1.2 consumers. One cosmetic emission-style
-change: with default `SerializerOptions`, a single-line scalar longer than
-80 characters is folded (`>-`) instead of staying plain — verified safe
-across the round-trip suite (see
-[[../decisions/ADR-405-adopt-serde-saphyr]] §9).
+YAML-1.2 consumers. Block scalars are disabled
+(`prefer_block_scalars = false`): multi-line values are emitted as
+double-quoted scalars (see §6 below on trailing newlines), and the
+`>-` folding of single-line scalars longer than 80 characters that the
+default options applied (see [[../decisions/ADR-405-adopt-serde-saphyr]] §9)
+no longer applies (#536).
 
 `skill_name` is rendered a *second* time, independently of the frontmatter
 `Frontmatter` block above: as the body's `# {{{skill_name}}}` heading
@@ -362,16 +363,11 @@ the body gets a flattened one (issue #410).
 
 The rendered block is spliced into the template unmodified: no
 trailing-newline compensation is applied when `description` itself ends in
-`\n`. `serde-saphyr` renders a multi-line value as a YAML block literal
-(`|`, `|-`, `|+`, ...) whose own trailing newline can be part of the
-scalar's content (clip/keep chomping), not just a document terminator, but
-no post-processing is needed to preserve it for either consumer this crate
-cares about: this crate's own round-trip through §7's parser recovers the
-content newline via `granit-parser` 1.0.1's EOF-chomping leniency
-(`scanner.rs:2981-2989`) even without it, and `serde-saphyr` indents `|+`
-blank body lines rather than emitting them as truly empty, so the final `\n`
-is never load-bearing for a plausible external YAML-1.2 consumer either
-(issue #398, S2). Output is CRLF-normalized to LF for cross-platform
+`\n`. Because block scalars are disabled, a multi-line value is emitted as a
+double-quoted scalar and a `description` ending in one or more `\n`
+round-trips exactly; keep-chomped (`|+`) block literals terminated by the
+closing `---` lose their final blank line in `granit-parser` 2.0, and no
+external consumer is guaranteed to be more lenient (#536). Output is CRLF-normalized to LF for cross-platform
 (Windows CI) consistency.
 
 The shared `HANDLEBARS` instance (both this and `render_generation_prompt`
