@@ -255,6 +255,8 @@ the existing `deserialize` feature.
   `prefer_block_scalars` folds any single-line scalar longer than 80 characters instead of
   leaving it plain. Verified safe across the round-trip test suite (including a dedicated >80-char
   case with internal whitespace); this is a cosmetic emission-style change only.
+  *(Superseded in #536, `serde-saphyr` 2.0: `prefer_block_scalars` is now set to `false`, so
+  neither folding nor block literals are emitted; multi-line values become double-quoted scalars.)*
 - **Corrected lossy-family mechanism.** A `description` that is blank after trim (e.g. `"\n"` or
   `"\n\n"`) maps to `Err(SkillMetadataError::MissingField)` on read-back — matching the
   pre-migration behavior for blank values, so this remains non-observable at the API level. This

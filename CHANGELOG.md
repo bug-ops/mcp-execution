@@ -7,28 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-19
+
 ### Changed
 
-- **`mcp-execution-introspector`**: the `initialize` handshake now requests MCP protocol 2026-07-28, following rmcp 3.5.0's default; ADR-369 §5 gate replaced by ADR-529 (#530).
+- **`mcp-execution-introspector`**: `initialize` handshake now requests MCP protocol 2026-07-28 (rmcp 3.5.0 default); ADR-369 §5 gate replaced by ADR-529 (#530).
+- **`mcp-execution-skill`**: frontmatter emits multi-line values as quoted scalars so trailing newlines round-trip (#536).
 
 ### Dependencies
 
-- Bumped `rmcp` to 3.5.0 and `thiserror` to 2.0.21 (#530).
-- Bumped `serde-saphyr` to 2.0.0; `mcp-execution-skill` frontmatter now emits multi-line values as quoted scalars so trailing newlines round-trip (#536).
+- Bumped `rmcp` to 3.5.0, `thiserror` to 2.0.21, `serde-saphyr` to 2.0.0 and `dirs` to 7.0.0 (#530, #536, #522).
+- Routine minor/patch bumps (`handlebars` and others) and GitHub Actions updates (#511, #515, #517, #519, #521, #525, #533, #535, #538, #540, #542, #545).
 
 ### Security
 
-- Updated `rustls` to 0.23.45 to resolve RUSTSEC-2026-0285 (TLS 1.3 handshake messages incorrectly
-  accepted across encryption level boundaries) (#524).
-- Updated `rustix` to 1.1.6 to resolve RUSTSEC-2026-0486 (xattr functions mark unwritten bytes as initialized on zero-length buffers).
+- Updated `rustls` to 0.23.45 (RUSTSEC-2026-0285) (#524) and `rustix` to 1.1.6 (RUSTSEC-2026-0486) (#544).
 
 ### Fixed
 
-- Workspace now enables `serde_json/preserve_order` directly instead of relying on it being pulled in
-  transitively through `handlebars`'s `preserve_json_order` default feature. `handlebars` 6.4.4 dropped
-  that default, which would have made `serde_json::Map` fall back to sorted-key (`BTreeMap`) iteration
-  and broken the insertion-order guarantee `mcp-execution-codegen`'s sibling-key collision handling
-  depends on when generating TypeScript interfaces from JSON schemas.
+- Workspace enables `serde_json/preserve_order` directly, keeping insertion-order iteration that codegen's sibling-key collision handling relies on after `handlebars` 6.4.4 dropped the transitive feature (#514).
+- Tests use `assert_eq`/`assert_ne` instead of `assert!(is_empty)` for clippy 1.99 (#532).
 
 ## [0.10.0] - 2026-08-12
 
@@ -3353,7 +3351,9 @@ Phase 6 (Optimization) is currently OPTIONAL and DEFERRED because:
 
 ---
 
-[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/bug-ops/mcp-execution/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/bug-ops/mcp-execution/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/bug-ops/mcp-execution/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/bug-ops/mcp-execution/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/bug-ops/mcp-execution/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/bug-ops/mcp-execution/compare/v0.7.1...v0.7.2

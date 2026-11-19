@@ -212,7 +212,7 @@ impl ToolName {
 // ❌ BAD: Business logic in core
 impl ToolName {
     pub async fn execute(&self, params: Value) -> Result<Value> {
-        // This belongs in mcp-bridge, not mcp-execution-core!
+        // This belongs in a higher-level crate, not mcp-execution-core!
     }
 }
 ```

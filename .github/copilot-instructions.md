@@ -40,23 +40,20 @@ This document provides comprehensive guidelines for GitHub Copilot to generate h
 ```
 mcp-execution/
 ├── crates/
-│   ├── mcp-execution-core/          - Foundation: types, traits, errors
-│   ├── mcp-execution-introspector/  - MCP server analysis (rmcp v0.9)
-│   ├── mcp-execution-codegen/       - Code generation (wasm/skills features)
-│   ├── mcp-bridge/        - WASM ↔ MCP proxy (rmcp client)
-│   ├── mcp-wasm-runtime/  - Wasmtime sandbox (v39.0)
-│   ├── mcp-execution-files/           - Virtual filesystem
-│   ├── mcp-cli/           - CLI application
-│   ├── mcp-execution-skill-store/   - Skill management
-│   ├── mcp-execution-skill-generator/ - Skill generation
-│   └── mcp-examples/      - Usage examples
+│   ├── mcp-core/          - Foundation: types, errors, ServerConfig validation
+│   ├── mcp-introspector/  - MCP server analysis (rmcp 3.5)
+│   ├── mcp-codegen/       - TypeScript code generation (progressive loading)
+│   ├── mcp-files/         - Virtual filesystem and export
+│   ├── mcp-skill/         - SKILL.md generation
+│   ├── mcp-server/        - MCP server exposing progressive loading
+│   └── mcp-cli/           - CLI application
 └── .local/                - Detailed documentation (not in git)
 ```
 
 ### Technology Stack
 
-- **Rust Edition**: 2024 (MSRV: 1.89)
-- **MCP SDK**: rmcp v0.9 (official Rust SDK)
+- **Rust Edition**: 2024 (MSRV: 1.91)
+- **MCP SDK**: rmcp 3.5 (official Rust SDK)
 - **WASM Runtime**: Wasmtime v39.0
 - **Async Runtime**: Tokio v1.48
 - **Testing**: cargo-nextest, criterion
@@ -100,7 +97,7 @@ pub fn connect_server(server_id: u64) -> Result<Connection> { ... }
 
 ### 2. Official MCP SDK Usage
 
-**CRITICAL**: Use **rmcp v0.9** for all MCP communication.
+**CRITICAL**: Use **rmcp 3.5** for all MCP communication.
 
 ```rust
 // ✅ GOOD: Use rmcp client
@@ -292,11 +289,10 @@ async fn process() {
 **CRITICAL**: No circular dependencies allowed.
 
 ```
-mcp-cli → mcp-wasm-runtime → {mcp-bridge, mcp-execution-files, mcp-execution-codegen}
-                           ↘ mcp-execution-core
+mcp-cli → {mcp-introspector, mcp-codegen, mcp-files, mcp-skill, mcp-core}
+mcp-server → {mcp-introspector, mcp-codegen, mcp-files, mcp-skill, mcp-core}
 
-mcp-bridge → rmcp (official SDK)
-mcp-execution-introspector → rmcp
+mcp-introspector → {rmcp (official SDK), mcp-core}
 ```
 
 ### Module Organization
@@ -1015,7 +1011,7 @@ cargo outdated                     # Check for updates
 ## Additional Resources
 
 - **Microsoft Rust Guidelines**: https://microsoft.github.io/rust-guidelines/agents/all.txt
-- **rmcp Documentation**: https://docs.rs/rmcp/0.9
+- **rmcp Documentation**: https://docs.rs/rmcp
 - **MCP Specification**: https://github.com/modelcontextprotocol/specification
 - **Project Documentation**: `.local/` directory (not in git)
 - **Architecture Decisions**: `docs/adr/`
@@ -1027,7 +1023,7 @@ cargo outdated                     # Check for updates
 When generating code for this project:
 
 1. **Follow Microsoft Rust Guidelines strictly**
-2. **Use rmcp v0.9 for all MCP communication**
+2. **Use rmcp 3.5 for all MCP communication**
 3. **Use thiserror for libraries, anyhow only for CLI**
 4. **Write tests for all public functions (unit tests in same file)**
 5. **Document all public items with examples**

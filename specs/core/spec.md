@@ -527,7 +527,7 @@ Both digests are SHA-256 (via the `sha2` crate, `default-features = false`), hex
 lowercase via an explicit `{:02x}` loop (`sha2`'s digest type has no `LowerHex` impl). Preimages
 are never built from `Debug` output (no stability guarantee — the same objection that rules out
 `std::hash::DefaultHasher`) or from serializing a `serde_json::Value` (this workspace enables
-`serde_json/preserve_order` transitively via `handlebars`, and a `HashMap`-backed preimage would
+`serde_json/preserve_order` explicitly in the workspace manifest (#514; it was previously only transitive via `handlebars`), and a `HashMap`-backed preimage would
 vary by process regardless). Instead, one length-framing primitive (`u64` big-endian length ‖
 bytes) builds every preimage from an explicitly sorted, fixed field order.
 

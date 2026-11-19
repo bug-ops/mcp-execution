@@ -536,7 +536,7 @@ mcp-execution-files → mcp-execution-core
 
 ### Key Technologies
 
-- **rmcp 0.10+**: Official Rust MCP SDK (critical dependency)
+- **rmcp 3.5+**: Official Rust MCP SDK (critical dependency)
 - **Tokio**: Async runtime
 - **Handlebars**: Template engine for code generation
 - **Criterion**: Benchmarking framework
