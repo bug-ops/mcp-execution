@@ -15,7 +15,6 @@ related:
   - "[[../server/spec]]"
   - "[[../cli/spec]]"
   - "[[../codegen/spec]]"
-  - "[[../runtime/spec]]"
   - "[[../decisions/ADR-405-adopt-serde-saphyr]]"
   - "[[../decisions/ADR-581-code-mode-interoperability]]"
 ---
@@ -634,18 +633,67 @@ crate's error messages drift from `mcp-core`'s/`mcp-server`'s for identical inpu
   description text, verified by a dedicated regression test distinct from
   the tool-description case.
 
-## 12. Planned Changes (script-first direction, adopted 2026-11-24)
+## 12. Script-First Skill (as built)
 
-> [!warning] Not implemented
-> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
-> When a change lands, its content moves into the as-built sections above and the subsection is
-> removed in the same pull request.
+- **Shared text.** `templates/workflow.hbs` is the one partial that names
+  `mcp-execution-cli call --from-config <id> -- <tool> '<json>'` and `mcp-execution-cli run script.ts`, plus the
+  privileges statement. `skill-md.hbs` includes it, and `GENERATION_INSTRUCTIONS` in `context.rs` teaches the same
+  workflow (`__SERVER_ID__` is substituted). `skill-generation.hbs` was removed with `render_generation_prompt` in
+  wave 2.
+- **Bounded listing.** `template.rs` builds a `Listing` view of at most `MAX_LISTED_CATEGORIES` 12 categories times
+  `MAX_LISTED_TOOLS_PER_CATEGORY` 3 tools plus "and N more", so the body size does not depend on the tool count.
+  `ToolExample.cli_command` is the `call` form; a tool name outside `[A-Za-z0-9_.-]` is shown as `<tool>`.
+- **`SkillName`** replaces `validate_skill_name` (removed, no shim). `SkillName::in_directory` returns
+  `SkillDirectoryMismatch` (no text, no echo): a custom name must equal its directory (CLI default directory is the
+  server id; with `--output` it is the parent directory name, via `skill_directory_name(server_id, Option<&Path>)`
+  in `output_path.rs`, shared by CLI and server).
+- **Description limit.** `MAX_SKILL_DESCRIPTION_LENGTH` 1024, enforced in `extract_skill_metadata`
+  (`SkillMetadataError::DescriptionTooLong`) so every caller gets it.
+- **`build_skill_context`** takes `Option<&SkillName>` for the custom name (fixed in wave 2, architect ruling; wave 1
+  kept `Option<&str>`). Hostile-name cases moved into the `SkillName::new` rejection tests, since they can no longer be
+  constructed at this call.
+- **Breaking:** the default render no longer teaches per-file `node <tool>.ts`; `validate_skill_name` removed; a custom
+  skill name must equal its directory; a description over 1024 characters is rejected; `ToolExample.cli_command`
+  changed format.
+- **Removed in wave 2:** `render_generation_prompt` (the user approved the removal, U10) without a shim; changelog.
+- **FR-043.2:** the text names `run` and `call`, which exist in this feature set; no runtime probe was added.
+
+## 13. Saved Scripts (as built)
+
+- **Header** (ADR-579 option A, JSON in a leading block comment of `<name>.ts`): required keys `v` (must be 1), `name`,
+  `description`, `tools` (`"server/tool"` strings), `writes` (`read_only` or `writes`); optional `parameters`
+  (`[{name, description}]`); unknown keys refused; all tools on one server.
+- **Types and API** (`scripts.rs`, additive to the frozen W0 signatures): `RecipeName` is 1 to 64 of `[a-z0-9-]` with
+  no leading hyphen; `parse_header(&str) -> Result<ScriptHeader, ScriptError>` is the one header parser used by
+  `save`, `list`, `check` and by `run --save` (architect approved, on condition of one parser and a name re-check in
+  `save`); `ScriptHeader::server() -> Option<&ServerId>`; `ScriptError::TooManyScripts { limit }`.
+- **Bounds:** `MAX_SCRIPT_BYTES` 64 KiB, `MAX_HEADER_BYTES` 8 KiB, `MAX_SCRIPTS_PER_SKILL` 50,
+  `MAX_SCRIPT_PARAMETERS` 16, `MAX_SCRIPT_TOOLS` 64, `MAX_RECIPE_NAME_LENGTH` 64, `MAX_HEADER_TEXT_CHARS` 200
+  (description, parameter name and description; control characters refused).
+- **`save`:** size check, then header parse (name must equal the recipe; `save` re-checks it itself), `scripts/`
+  confined through `resolve_confined_path` plus an explicit symlink check (a symlinked `scripts/` or skill directory is
+  `NotConfined`); staged through an exclusively created, unpredictable temporary file (0600) via `write_confined_file`, then `hard_link` (Refuse; atomic, no
+  overwrite) or `rename` (Replace). Returns the logical path `<skill_dir>/scripts/<name>.ts`.
+- **`list` and `check`:** read at most 50 `*.ts` regular files (sorted), the whole file only up to 64 KiB, only the
+  header parsed; the header name must equal the file stem. `list` skips invalid files, `check` reports them; an
+  uninspectable `scripts/` is reported as one invalid entry `scripts`. `check` counts a tool of another server than the
+  recorded one as missing. Nothing is ever executed.
+- **Server:** `save_skill` is unchanged: it writes `SKILL.md` only and never touches `scripts/` (FR-043.14).
+- **Open:** `scripts check` has no `--servers-dir`; the sidecar readers are duplicated in `stats` and `drift`
+  (follow-ups).
+
+## 14. Script-First Requirements
+
+> [!success] Implemented
+> The requirements below were implemented in the script-first pull request (#569 accepted, option B). Each **Why**
+> paragraph describes the state before the change; the as-built sections above govern where they differ. Decisions
+> that are still open are marked.
 
 Two packages touch this block. Both are tracked under epic #558. The command-line side of saved scripts
-is in [[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]]; the tool-handler side of
-both packages is in [[../server/spec#13. Planned Changes (script-first direction, adopted 2026-11-24)]].
+is in [[../cli/spec#19. Script-First Requirements and Contracts]]; the tool-handler side of
+both packages is in [[../server/spec#14. Script-First Requirements]].
 
-### Planned: script-first skill (#578, closes #582)
+### script-first skill (#578, closes #582)
 
 **Why.** Both generation paths teach the workflow the project is moving away from, one tool file run per shell
 command with every result landing in the context. The deterministic render teaches listing the directory,
@@ -687,33 +735,26 @@ remain planned.
   `<untrusted-data>` boundary rule on both paths; no new text source bypasses it (§4, §5, §6).
 - Sizes and bounds derive from the layer below and are named constants; the body budget and the
   example-tool count are derived from the catalog bound and measured through the context-cost command
-  ([[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]]), not chosen independently.
+  ([[../cli/spec#19. Script-First Requirements and Contracts]]), not chosen independently.
 - Strong types: a validated skill-name type replaces the free-form `String` name across `mcp-skill`,
   `mcp-cli` and `mcp-server`; a discovery mode and an execution mode are closed enums detected at render time.
 - The deterministic path stays byte-identical for identical inputs.
 - Before v1.0.0 there is no compatibility shim: the default name, the name validation and the body shape are
   breaking changes and go into the changelog.
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: custom name that differs from the server id: reject it, or move the directory to match. Moving the directory would orphan saved scripts (see the saved-scripts subsection).]
+- Resolved: a custom skill name that differs from its directory is rejected (`SkillName::in_directory`); with `--output` the parent directory name must equal the skill name; `render_generation_prompt` and `skill-generation.hbs` were removed; one shared partial `templates/workflow.hbs` serves the template and the prompt; the body is bounded by a listing of 12 categories times 3 tools (section 12).
+- Deferred (follow-up, user-approved): load-time catalog insertion with a static fallback (FR-043.8).
 - [NEEDS CLARIFICATION: a server id that is a valid slug (`[a-z0-9-]`, at most 64 bytes, §2) but would break the Agent Skills rule if that rule also forbids leading, trailing or consecutive hyphens; confirm the exact rule from the specification text before implementing.]
-- [NEEDS CLARIFICATION: a custom `--output` that places the file outside `{skills}/{server_id}/`: require the parent directory name to equal the skill name?]
-- [NEEDS CLARIFICATION: wire `render_generation_prompt` and `skill-generation.hbs`, or remove them. Both are exported public API.]
-- [NEEDS CLARIFICATION: one shared workflow text fragment for the template and the prompt, or two texts with an equality test (FR-043.1).]
-- [NEEDS CLARIFICATION: body budget in bytes and the number of example tools; whether the optional catalog inclusion reads a file or invokes the binary.]
 - [NEEDS CLARIFICATION: whether the skill mentions the host's own code mode in one line or leaves that to the documentation (#560); see [[../decisions/ADR-581-code-mode-interoperability]].]
 
 Ask first: removing the exported prompt renderer; raising any body or catalog bound above its derived value;
 anything that changes where existing skills are written; whether the optional load-time inclusion ships at all.
 
-**Depends on / blocks.** Depends on the typed catalog (#566, implemented: `catalog.ts`, see
-[[../codegen/spec#13.4 Typed tool catalog (#566)]]) and the script runner (#571, not implemented): until
-the runner exists the rendered text may teach per-file discovery, the catalog and a direct run of one tool
-file with a JSON object argument, and must name no runner command or import form that is absent (FR-043.2). Closes #582. Blocks the
-saved-scripts mention in the skill text (#579). Context-cost numbers come from #562.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-### Planned: saved scripts (#579)
+### saved scripts (#579)
 
 **Why.** A script that took design effort is lost when the session ends. Where a saved script may live follows
 from how the two trees it could sit in are written today.
@@ -757,29 +798,22 @@ came from an MCP server.
   (`crates/mcp-server/src/service.rs:51`); where the shared bound lives is open.
 - Saved scripts that reference a tool a regenerated server no longer has are reported, never modified or deleted.
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: header format, where it lives (leading comment block, sidecar file, other) and the full field list; an ADR on recipe format and location precedes implementation.]
-- [NEEDS CLARIFICATION: numeric bounds (count, file size, header size, listing size) and the derivation of each; whether the shared bound lives in `mcp-core`.]
+- Resolved: the header format is [[../decisions/ADR-579-saved-script-format]] option A; the bounds are the constants of section 13; only `*.ts` regular files are read, invalid ones are skipped by `list` and reported by `check`; a script whose tools are on more than one server is refused (all tools on one server).
 - [NEEDS CLARIFICATION: first save for a skill whose directory does not exist: refuse, or create a directory with no `SKILL.md`.]
-- [NEEDS CLARIFICATION: files in the scripts directory that are not saved scripts: ignored by listing, or reported by the check.]
-- [NEEDS CLARIFICATION: a script that references tools of two servers: which skill directory owns it; cross-server runs do not exist before the Rust tool-call path (#574, #575).]
 - [NEEDS CLARIFICATION: credential-looking literals in a script: warn, refuse, or document only.]
 
 Ask first: the header format and location (decision record); a parser dependency for the header (check current
 versions, follow the YAML tooling rules); the numeric bounds; scripts that reference more than one server.
 
-**Depends on / blocks.** Depends on the script runner (#571) for the stable import form and the save hook. Interacts
-with the name rule of #578: moving a skill directory to match a differing name would orphan saved scripts.
-Command-line side: [[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]]; tool-handler
-side: [[../server/spec#13. Planned Changes (script-first direction, adopted 2026-11-24)]]. The drift check (#580)
-reports saved scripts that reference removed tools. Tracked under epic #558.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-## 13. See Also
+## 15. See Also
 
 - [[../core/spec]] — shared path-confinement and untrusted-text primitives
 - [[../server/spec]] — MCP-tool-level `generate_skill`/`save_skill` wrappers
 - [[../cli/spec#skill]] — CLI-level direct SKILL.md rendering
-- [[#12. Planned Changes (script-first direction, adopted 2026-11-24)]] — script-first skill (#578) and saved scripts (#579), not implemented
-- [[../runtime/spec]] — the script runner the skill teaches (planned)
+- [[#14. Script-First Requirements]] — requirements of the script-first skill (#578) and saved scripts (#579); as built in sections 12 and 13
+- [[../cli/spec]] — the script runner the skill teaches
 - [[../decisions/ADR-581-code-mode-interoperability]] — relationship to the host's code mode (proposed)

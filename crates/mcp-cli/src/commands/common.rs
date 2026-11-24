@@ -4,6 +4,7 @@
 //! and loading MCP server definitions from `~/.claude/mcp.json`.
 
 use anyhow::{Context, Result};
+use mcp_execution_core::helper_protocol::RUN_MARKER_ENV;
 use mcp_execution_core::{
     Error as CoreError, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl,
     ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
@@ -1033,6 +1034,27 @@ fn derive_server_id_from_url(url: &str) -> ServerId {
 /// construction.
 pub(crate) fn derive_server_id_from_path_or_name(raw: &str) -> ServerId {
     slugify(raw)
+}
+
+/// Refuses to run when this process was started inside `mcp-execution-cli run`.
+///
+/// `run` sets [`RUN_MARKER_ENV`] for the script and everything it starts. A nested `call` or
+/// `helper` would reach servers without the run's journal and dry-run policy, so it exits with
+/// invalid input before connecting to anything.
+///
+/// # Errors
+///
+/// Returns an invalid-input error when the marker is set to a non-empty value.
+pub(crate) fn refuse_inside_run() -> Result<()> {
+    if std::env::var_os(RUN_MARKER_ENV).is_some_and(|value| !value.is_empty()) {
+        return Err(anyhow::Error::new(
+            mcp_execution_core::Error::InvalidArgument(
+                "not supported inside `mcp-execution-cli run`; call tools from the main script"
+                    .to_string(),
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

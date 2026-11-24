@@ -33,11 +33,13 @@ related:
 > (market sizing, named stakeholders, budget, timeline), this is stated
 > explicitly rather than invented — see [[#Open Questions]].
 
-> [!warning] Planned content is not implemented
+> [!success] Direction implemented
 > Sections marked **Planned** or **Direction (adopted 2026-11-24)** record a
-> maintainer-accepted direction and its tracking issues. Nothing in them
-> exists in the code yet. Requirements FR-001 to FR-029 and every statement
-> not marked planned describe the released system.
+> maintainer-accepted direction and its tracking issues; FR-030 to FR-046 were
+> implemented in the script-first work (see the SRS and the block specs for the
+> deferrals: load-time catalog insertion, `--restrict` on Windows, the host
+> code-mode investigation). Requirements FR-001 to FR-029 describe the
+> pre-existing system.
 
 ## Executive Summary
 
@@ -166,9 +168,9 @@ records AI-agent-assisted development, not a human team roster.
 
 ## Direction (adopted 2026-11-24)
 
-> [!warning] Planned, not implemented
+> [!success] Implemented
 > This section states a direction the maintainer accepted, with tracking
-> issues. It does not describe the released system.
+> issues. It was implemented in the script-first work (2026-11-24).
 
 ### Positioning statement
 
@@ -476,11 +478,10 @@ shared between this BRD and the SRS for traceability.
 > implemented and described as built in
 > [[codegen/spec#13. Script-First Capabilities (implemented, #556)]]; their
 > entries below keep the original wording and status **Planned** as the
-> record of the request. FR-036 to FR-046 are accepted but not built. Detail
-> lives in the block specs'
-> "Planned Changes" sections and in the new [[runtime/spec]] block;
-> formal statements are in [[SRS-mcp-execution-2026-07-27#3.2.8 Planned: Script-First Capabilities]].
-> The runtime strategy (#569) gates FR-037, FR-038, FR-039, FR-040 and FR-041.
+> record of the request. FR-036 to FR-046 are built; detail lives in the block specs
+> and in [[cli/spec]] sections 16 to 19;
+> formal statements are in [[SRS-mcp-execution-2026-07-27#3.2.8 Script-First Capabilities]].
+> The runtime strategy (#569) was accepted as option B (the Rust binary is the single MCP client) and FR-036 to FR-046 are implemented.
 
 - **FR-030**: As a developer, I need the result type of a generated tool to
   reflect the tool's declared output schema and to prefer structured content,
@@ -489,7 +490,7 @@ shared between this BRD and the SRS for traceability.
     generated result type follows it and structured content is preferred over
     text; a tool without one keeps a generic result declaration.
   - *Priority*: Must
-  - *Status*: Planned (#482)
+  - *Status*: implemented (#482)
 - **FR-031**: As a developer, I need schema-to-TypeScript conversion to keep
   what the input schema says (allowed values, alternatives, nullability,
   local references), so that an agent does not pass invalid arguments and
@@ -498,7 +499,7 @@ shared between this BRD and the SRS for traceability.
     represented or fall back to an explicit unknown type with a recorded
     reason; conversion stays within named resource bounds.
   - *Priority*: Must
-  - *Status*: Planned (#565)
+  - *Status*: implemented (#565)
 - **FR-032**: As an agent, I need a typed catalog of a server's tools at
   three detail levels (names, catalog, full tool file), so that I can find the
   right tool for a few tens of tokens per tool.
@@ -507,7 +508,7 @@ shared between this BRD and the SRS for traceability.
     pass as the tool files and cannot disagree with them; its size is
     measured, not assumed.
   - *Priority*: Must
-  - *Status*: Planned (#566)
+  - *Status*: implemented (#566)
 - **FR-033**: As a developer, I need generated tool files without fixed
   boilerplate, and a shared command-line module, so that reading one tool costs
   only what is specific to it.
@@ -515,7 +516,7 @@ shared between this BRD and the SRS for traceability.
     behaviour of a single call is unchanged; the size reduction is measured on
     reference fixtures.
   - *Priority*: Should
-  - *Status*: Planned (#567)
+  - *Status*: implemented (#567)
 - **FR-034**: As a developer, I need the tool annotations a server reports
   (read-only, destructive, idempotent, open-world) captured at introspection and
   persisted in `_meta.json` version 3, so that later features can classify
@@ -524,7 +525,7 @@ shared between this BRD and the SRS for traceability.
     metadata schema moves to version 3 once, with one registry of fields; a
     version 2 directory is rejected with a message that says to regenerate.
   - *Priority*: Must
-  - *Status*: Planned (#568)
+  - *Status*: implemented (#568)
 - **FR-035**: As an agent, I need a single tool call to print only a compact
   result or a one-line structured error, so that one call per shell command
   does not flood the context.
@@ -532,7 +533,7 @@ shared between this BRD and the SRS for traceability.
     carry no stack trace unless debugging is requested; result text is
     handled under the untrusted-text rule decision (see Open Questions).
   - *Priority*: Must
-  - *Status*: Planned (#570)
+  - *Status*: implemented (#570)
 - **FR-036**: As an agent, I need a runner that executes a multi-call script
   with bounded output, so that intermediate data stays in the process and large
   output is spilled to a file instead of the context.
@@ -540,7 +541,7 @@ shared between this BRD and the SRS for traceability.
     output beyond a budget is replaced by a head, a path and a byte count;
     generated servers can be imported through a stable specifier.
   - *Priority*: Must
-  - *Status*: Planned (#571)
+  - *Status*: implemented (#571)
 - **FR-037**: As a developer, I need a journal of the calls a script made and a
   report of which completed when it fails, so that I do not repeat side effects
   on a rerun.
@@ -549,7 +550,7 @@ shared between this BRD and the SRS for traceability.
     calls that completed and treats every one as possibly state-changing unless
     the user's policy classes it as a read.
   - *Priority*: Should
-  - *Status*: Planned (#572); gated by #569
+  - *Status*: implemented (#572)
 - **FR-038**: As a developer, I need a dry run in which reads execute and
   intended writes are reported but not sent, so that one review replaces many
   approvals.
@@ -557,14 +558,14 @@ shared between this BRD and the SRS for traceability.
     unannotated tool counts as a write; a wrong read-only hint cannot cause a
     write to execute; a skipped write never returns a fabricated result.
   - *Priority*: Should
-  - *Status*: Planned (#573); gated by #569, blocked by #568
+  - *Status*: implemented (#573)
 - **FR-039**: As a developer, I need a one-shot tool call through the
   project's authoritative MCP client, so that a call does not depend on a
   second client implementation.
   - *Acceptance criteria*: the call reaches stdio, HTTP and SSE servers and
     prints budgeted output; no second validation or handshake path is added.
   - *Priority*: Should
-  - *Status*: Planned (#574); gated by #569
+  - *Status*: implemented (#574)
 - **FR-040**: As a developer, I need a per-script helper that reuses
   connections and replaces the generated bridge, so that one client implements
   the protocol.
@@ -572,7 +573,7 @@ shared between this BRD and the SRS for traceability.
     the bridge's own connection code, mirrored validation and fixed handshake
     version are removed.
   - *Priority*: Could
-  - *Status*: Planned (#575); gated by #569
+  - *Status*: implemented (#575)
 - **FR-041**: As a developer, I need an option to run scripts with reduced
   privileges, so that a model-written script cannot write files or spawn
   processes by default.
@@ -580,7 +581,7 @@ shared between this BRD and the SRS for traceability.
     process spawning are denied unless allowed; what the mode does not restrict
     is documented.
   - *Priority*: Could
-  - *Status*: Planned (#576); gated by #569
+  - *Status*: implemented (#576)
 - **FR-042**: As a developer, I need an optional typecheck of a script against
   the generated SDK before it runs, so that shape errors surface before any
   tool is called.
@@ -589,7 +590,7 @@ shared between this BRD and the SRS for traceability.
     failed check blocks the run or only warns is open; without a compiler the
     run proceeds and says the check was skipped.
   - *Priority*: Could
-  - *Status*: Planned (#577)
+  - *Status*: implemented (#577)
 - **FR-043**: As an agent, I need a generated skill that teaches the
   script-first workflow, with a name equal to its directory, so that the skill
   is short, valid and consistent with the runner.
@@ -599,7 +600,7 @@ shared between this BRD and the SRS for traceability.
     optional catalog injection at load time is bounded and has a static
     fallback; text from a server stays inert data in a rendered skill.
   - *Priority*: Must
-  - *Status*: Planned (#578, #582)
+  - *Status*: implemented (#578, #582)
 - **FR-044**: As a developer, I need to save a working script as a recipe that
   can be listed and run again, so that I do not pay design tokens twice.
   - *Acceptance criteria*: a recipe has a validated header, is confined to the
@@ -607,7 +608,7 @@ shared between this BRD and the SRS for traceability.
     automatically, and survives regeneration of the skill and of the server
     directory.
   - *Priority*: Should
-  - *Status*: Planned (#579)
+  - *Status*: implemented (#579)
 - **FR-045**: As a developer, I need to compare the live server's tool list
   with the provenance recorded at generation, so that I learn when a server
   changed.
@@ -616,7 +617,7 @@ shared between this BRD and the SRS for traceability.
     that files are out of date; naming a changed tool depends on per-tool
     digests (open decision).
   - *Priority*: Should
-  - *Status*: Planned (#580)
+  - *Status*: implemented (#580)
 - **FR-046**: As a maintainer and as a reader of the documentation, I need
   context-cost figures produced by a command anyone can rerun, so that no
   published number is a slogan.
@@ -625,7 +626,7 @@ shared between this BRD and the SRS for traceability.
     compares call patterns on in-repository mock servers; no output is
     labelled "savings".
   - *Priority*: Must
-  - *Status*: Planned (#562); the static report is blocked by #568
+  - *Status*: implemented (#562)
 
 ## Non-Functional Requirements
 
@@ -682,7 +683,7 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 - Security hardening: command-injection defense, resource-exhaustion (CWE-400)
   bounds, prompt-injection defense, debug-redaction, path confinement.
 - Independent publishing of five library crates to crates.io.
-- **Planned (not implemented):** the script-first capabilities FR-030 to
+- **Implemented in the script-first work:** the script-first capabilities FR-030 to
   FR-046: typed results and lossless types, a typed catalog, slimmer tool
   files, tool annotations in `_meta.json` version 3, quiet single-call output,
   a script runner with bounded output, a call journal, a dry run, a Rust
@@ -876,4 +877,4 @@ Questions only the maintainer can answer, raised by the planned direction:
 - [[constitution]] — reverse-engineered project principles
 - [[SRS-mcp-execution-2026-07-27]] — formal functional requirements derived from this BRD and the per-crate specs
 - [[NFR-mcp-execution-2026-07-27]] — formal non-functional/quality requirements
-- [[runtime/spec]] — planned script-runtime block (not implemented)
+- [[cli/spec]] — CLI and the script runtime (sections 16 to 19)

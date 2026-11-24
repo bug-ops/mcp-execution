@@ -48,5 +48,5 @@ pub mod template_engine;
 
 // Re-export main types
 pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
-pub use progressive::ProgressiveGenerator;
+pub use progressive::{ProgressiveGenerator, TSCONFIG_JSON};
 pub use template_engine::TemplateEngine;

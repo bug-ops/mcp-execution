@@ -190,11 +190,9 @@ pub async fn run(
         return Ok(ExitCode::SUCCESS);
     }
 
-    let server_dir_name = resolve_server_dir_name(&server_info, id_from_unvalidated_config_key)?;
+    let (base_dir, output_path) =
+        generated_location(&server_info.id, id_from_unvalidated_config_key, output_dir)?;
     let generated_code = generate_code(&server_info, &server_config, observed_jsonl.as_deref())?;
-
-    let base_dir = resolve_base_dir(output_dir)?;
-    let output_path = base_dir.join(&server_dir_name);
 
     if dry_run {
         return render_dry_run(&server_info, &generated_code, &output_path, output_format);
@@ -217,21 +215,7 @@ async fn discover_server_info(
     server_config: &ServerConfig,
     name: Option<&str>,
 ) -> Result<ServerInfo> {
-    // Validated up front, before spending a network round trip: unlike a
-    // stdio command (sanitized via `derive_server_id_from_path_or_name`
-    // because it commonly *is* a legitimate path), `--name` is documented as
-    // overriding the id to match an identity the caller already has in mind
-    // (typically an `mcp.json` key) — silently rewriting an invalid value
-    // (e.g. stripping `..`/`/`) would produce a directory name the caller
-    // didn't ask for and that may no longer match anything, so it is
-    // rejected outright instead.
-    let override_id = name
-        .map(|custom_name| {
-            validate_server_id(custom_name)
-                .with_context(|| format!("invalid --name '{custom_name}'"))?;
-            ServerId::new(custom_name).with_context(|| format!("invalid --name '{custom_name}'"))
-        })
-        .transpose()?;
+    let override_id = name_override(name)?;
 
     info!("Connecting to MCP server: {}", server_id);
 
@@ -353,10 +337,10 @@ fn generate_code(
 /// internal error, since reaching it would mean one of the other arms' own
 /// checks has a bug.
 fn resolve_server_dir_name(
-    server_info: &ServerInfo,
+    server_id: &ServerId,
     is_from_unvalidated_config_key: bool,
 ) -> Result<String> {
-    let server_dir_name = server_info.id.to_string();
+    let server_dir_name = server_id.to_string();
     validate_server_id(&server_dir_name).map_err(|source| {
         if is_from_unvalidated_config_key {
             let suggested_name = derive_server_id_from_path_or_name(&server_dir_name);
@@ -374,13 +358,50 @@ fn resolve_server_dir_name(
     Ok(server_dir_name)
 }
 
+/// Validates a `--name` override up front, before any network round trip.
+///
+/// Unlike a stdio command (sanitized via `derive_server_id_from_path_or_name` because it commonly
+/// *is* a legitimate path), `--name` is documented as overriding the id to match an identity the
+/// caller already has in mind (typically an `mcp.json` key): silently rewriting an invalid value
+/// would produce a directory name the caller didn't ask for, so it is rejected outright.
+///
+/// # Errors
+///
+/// Returns an error if `name` is not a valid server id.
+pub(crate) fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
+    name.map(|custom_name| {
+        validate_server_id(custom_name)
+            .with_context(|| format!("invalid --name '{custom_name}'"))?;
+        ServerId::new(custom_name).with_context(|| format!("invalid --name '{custom_name}'"))
+    })
+    .transpose()
+}
+
+/// Where `generate` writes the server `server_id`: the base directory and the server directory
+/// inside it. The single derivation shared with `drift`.
+///
+/// # Errors
+///
+/// Returns an error if the id is not a valid directory name (see `resolve_server_dir_name`) or the
+/// base directory cannot be resolved.
+pub(crate) fn generated_location(
+    server_id: &ServerId,
+    is_from_unvalidated_config_key: bool,
+    output_dir: Option<PathBuf>,
+) -> Result<(PathBuf, PathBuf)> {
+    let dir_name = resolve_server_dir_name(server_id, is_from_unvalidated_config_key)?;
+    let base_dir = resolve_base_dir(output_dir)?;
+    let server_dir = base_dir.join(dir_name);
+    Ok((base_dir, server_dir))
+}
+
 /// Resolves the base directory generated servers are exported under, defaulting to
 /// `~/.claude/servers` when `output_dir` is not set.
 ///
 /// # Errors
 ///
 /// Returns an error if `output_dir` is `None` and the home directory cannot be determined.
-fn resolve_base_dir(output_dir: Option<PathBuf>) -> Result<PathBuf> {
+pub(crate) fn resolve_base_dir(output_dir: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(custom_dir) = output_dir {
         Ok(custom_dir)
     } else {
@@ -983,7 +1004,7 @@ mod tests {
     fn test_resolve_server_dir_name_accepts_valid_id() {
         let server_info = create_mock_server_info();
         assert_eq!(
-            resolve_server_dir_name(&server_info, false).unwrap(),
+            resolve_server_dir_name(&server_info.id, false).unwrap(),
             "test-server"
         );
     }
@@ -1014,7 +1035,7 @@ mod tests {
             let mut server_info = create_mock_server_info();
             server_info.id = ServerId::new(bad_id).unwrap();
 
-            let result = resolve_server_dir_name(&server_info, false);
+            let result = resolve_server_dir_name(&server_info.id, false);
             assert!(result.is_err(), "expected id {bad_id:?} to be rejected");
         }
     }
@@ -1029,7 +1050,7 @@ mod tests {
         let mut server_info = create_mock_server_info();
         server_info.id = ServerId::new("UPPER_CASE").unwrap();
 
-        let err = resolve_server_dir_name(&server_info, false).unwrap_err();
+        let err = resolve_server_dir_name(&server_info.id, false).unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("internal error"), "got: {err_msg}");
         assert!(!err_msg.contains("mcp.json"), "got: {err_msg}");
@@ -1045,7 +1066,7 @@ mod tests {
         let mut server_info = create_mock_server_info();
         server_info.id = ServerId::new("claude_ai_Gmail").unwrap();
 
-        let err = resolve_server_dir_name(&server_info, true).unwrap_err();
+        let err = resolve_server_dir_name(&server_info.id, true).unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("mcp.json"), "got: {err_msg}");
         assert!(err_msg.contains("--name claude-ai-gmail"), "got: {err_msg}");

@@ -13,7 +13,6 @@ related:
   - "[[../constitution]]"
   - "[[../core/spec]]"
   - "[[../codegen/spec]]"
-  - "[[../runtime/spec]]"
 ---
 
 # Block: MCP Server Introspection (`mcp-execution-introspector`)
@@ -282,15 +281,40 @@ value. The sidecar field that persists the values is in
 
 Ask first: making any consumer read a hint for a decision (that belongs to the dry-run policy, #573).
 
-## 10. Planned Changes (script-first direction, adopted 2026-11-24)
+## 10. `Session` and `discover` (as built)
 
-> [!warning] Not implemented
-> The annotation capture of #568 is implemented and described in
-> [[#9. Annotation Capture (#568)]]. Nothing in this section exists in the code yet. Each subsection
-> names its tracking issue. When a change lands, its content moves into the as-built sections above
-> and the subsection is removed in the same pull request.
+- **One connect path.** `connect_and_list_tools` is split into `connect_bounded` (connect timeout and error mapping)
+  and `list_discovery`. Stdio uses `stdio_halves` and `take_child_stdio`, HTTP uses `connect_http_client`;
+  `spawn_introspection_child`, `connect_bounded`, `connect_http_client`, `stdio_halves` and `take_child_stdio` are
+  `pub(crate)`. `discover` and `connect` both use them, so validation, timeouts and errors are identical.
+- **`Introspector::discover`** returns `Discovery{info, hints}` (`ListingHints{ttl, cache_scope}`, most conservative
+  across pages, absent when absent, never used to skip a request); `discover_server` is `discover().map(|d| d.info)`.
+- **`Session`** (`session.rs`) holds the rmcp `RunningService` and the optional child (`kill_on_drop` is the
+  backstop). `call_tool` runs `call_tool_once` under `tokio::time::timeout` and `classify` (the FR-030 extraction,
+  structured first, content fallback). `close` waits `CLOSE_GRACE` 2 s, then kills the child.
+- **Outcomes.** Timeout is `Error::Timeout{operation: "call <id>.<tool>"}` and leaves the session usable; a transport
+  failure or an unsupported reply is `ConnectionFailed`; a JSON-RPC error is `ToolCallOutcome::RpcError{code}`, not
+  `Err`. Server text is bounded with `sanitize_untrusted_text` at `MAX_UNTRUSTED_FIELD_LEN` (500) and a `truncated`
+  flag.
+- **Oversized stdio response line (wave 3).** A stdio response line over the bound ends the `Session` with a new
+  `ResourceKind` variant, and the helper pool evicts that session, so the next call reconnects rather than reading a
+  desynchronised stream. Architect ruling (D18): this applies to session streams only; the flag is raised, the pending
+  call fails at once with `ResourceLimitExceeded` / `ResourceKind::ResponseLine`, the session is poisoned and the pool
+  evicts it via `Arc::ptr_eq`. Discovery passes no flag, so `discover_server` is unchanged (FR-039.33). `actual` is set to
+  the limit plus 1, a lower bound and not the observed size; `Session::is_poisoned` reports the state.
+- **Limitation.** Multi-round-trip (MRTR) and task replies are `ConnectionFailed`: the client handler is `()` and
+  cannot answer input requests (verified against rmcp 3.11.0).
+- **Measured cost.** See [[../decisions/ADR-569-runtime-strategy-single-mcp-client]] section 5a for the per-call and cold
+  figures.
 
-### Planned: keep the freshness hints of a tools listing (#580)
+## 11. Script-First Requirements
+
+> [!success] Implemented
+> The requirements below were implemented in the script-first pull request (#569 accepted, option B). Each **Why**
+> paragraph describes the state before the change; the as-built sections above govern where they differ. Decisions
+> that are still open are marked.
+
+### keep the freshness hints of a tools listing (#580)
 
 **Why.** The drift check (FR-045) compares a live listing with the recorded provenance and should
 report how long the server says the listing stays fresh and who may cache it. The pinned SDK's
@@ -315,15 +339,14 @@ a guarantee. Exposing them changes public fields of `ServerInfo`, which derives 
 is constructed by struct literal in downstream crates, so the change is ask-first. Paging stays
 bounded exactly as in [[#3. Discovery Flow (`discover_server`)]].
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: Which page's hints are kept when pages differ: first page, last page, or the most conservative combination (smallest freshness, most restrictive scope).]
-- [NEEDS CLARIFICATION: Whether the hints are fields of `ServerInfo` or of a separate listing-metadata value returned alongside it.]
+- Resolved: the hints of the most conservative combination across pages are kept (smallest freshness, most restrictive cache scope, absent when absent) and are returned beside `ServerInfo` in `Discovery{info, hints}` (section 10).
 - Ask first: changing any public field of `ServerInfo` or `ToolInfo`; adding a dependency.
 
-**Depends on / blocks.** Blocks the freshness part of #580. Independent of the v3 bump.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-### Planned: a shared connect step for tool calls (#574)
+### a shared connect step for tool calls (#574)
 
 **Why.** Today the client connects, lists tools and is dropped: `connect_and_list_tools` builds the
 `RunningService`, pages the listing under the discover timeout and returns only the tool list and
@@ -345,27 +368,25 @@ project avoids.
 | FR-039.34 | WHEN the call ends, fails or times out THE SYSTEM SHALL terminate any server process it started | must |
 
 **Constraints.** The call path itself, its output bounds and its exit codes are specified in the
-new block [[../runtime/spec]] and in [[../cli/spec]]; this block owns only the shared connect
+[[../cli/spec]] (sections 16 to 19); this block owns only the shared connect
 step. The known unbounded HTTP JSON response gap ([[#5. Known Gap: HTTP JSON Response Size]]) is
 inherited by the call path and stated there, not hidden. The `2024-11-05` handshake pin of the
 generated bridge is not copied; negotiation follows the existing connect step and the
 protocol-version decision record.
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: Shape of the shared step: a public type or function in this crate, or crate-private with the call path inside this crate.]
-- [NEEDS CLARIFICATION: Whether the connection is returned to the caller for reuse across several calls (needed by the per-script helper, #575) or consumed by one call.]
+- Resolved: `Introspector::connect` is public and returns a `Session` that the caller keeps across calls (`call_tool`, `close`); the shared connect step exists once (section 10).
 - Ask first: new public API on this crate; moving the step into another crate; any change to timeouts, bounds or handshake behaviour; adding a dependency.
 
-**Depends on / blocks.** Gated by the runtime decision record #569 (if the generated bridge stays
-the only client, a Rust call path would be a second way to call tools). Blocks #574 and #575.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-## 10. See Also
+## 12. See Also
 
 - [[../core/spec]] — `ServerConfig`/security validation this crate re-checks
 - [[../codegen/spec]] — consumer of `ServerInfo`/`ToolInfo`
 - [[../decisions/ADR-529-rmcp-3-5-latest-promotion-revisit]] — handshake
   protocol-version decision and revisit gate
 - [[../server/spec#introspect_server]] — MCP-tool-level wrapper around this crate
-- [[#10. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — freshness hints, shared connect step; [[#9. Annotation Capture (#568)]] — implemented
-- [[../runtime/spec]] — the planned tool-call path that reuses the shared connect step
+- [[#11. Script-First Requirements]] — freshness hints, shared connect step; [[#10. `Session` and `discover` (as built)]] and [[#9. Annotation Capture (#568)]] — implemented
+- [[../cli/spec]] — the tool-call path that reuses the shared connect step

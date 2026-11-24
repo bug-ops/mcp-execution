@@ -182,6 +182,32 @@ impl ExitCode {
     /// ```
     pub const TIMEOUT: Self = Self(4);
 
+    /// A check ran to completion and found problems, e.g. drift or a broken saved script (exit
+    /// code 5).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::CHECK_FAILED.as_i32(), 5);
+    /// ```
+    pub const CHECK_FAILED: Self = Self(5);
+
+    /// A script run by `run` exited non-zero or was killed by a signal (exit code 6).
+    ///
+    /// Distinct from the runner's own failure codes, so a script's `process.exit(4)` can never
+    /// be mistaken for a runner timeout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::SCRIPT_FAILED.as_i32(), 6);
+    /// ```
+    pub const SCRIPT_FAILED: Self = Self(6);
+
     /// Creates an exit code from an integer value.
     ///
     /// Returns `None` if `code` falls outside `0..=255`. This is not a universal OS-level
@@ -562,6 +588,23 @@ impl FromStr for ServerConnectionString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_exit_codes_are_distinct_and_in_range() {
+        let codes = [
+            ExitCode::SUCCESS,
+            ExitCode::ERROR,
+            ExitCode::INVALID_INPUT,
+            ExitCode::SERVER_ERROR,
+            ExitCode::TIMEOUT,
+            ExitCode::CHECK_FAILED,
+            ExitCode::SCRIPT_FAILED,
+        ];
+        for (i, code) in codes.iter().enumerate() {
+            assert_eq!(usize::try_from(code.as_i32()).unwrap(), i);
+            assert_eq!(ExitCode::from_i32(code.as_i32()), Some(*code));
+        }
+    }
 
     // OutputFormat tests
     #[test]

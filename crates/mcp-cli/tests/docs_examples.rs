@@ -196,3 +196,50 @@ fn user_scripts_are_not_shown_inside_the_generated_server_directory() {
     }
     assert!(violations.is_empty(), "{}", violations.join("\n"));
 }
+
+#[test]
+fn docs_never_call_a_measurement_savings() {
+    let mut violations = Vec::new();
+    for doc in documents() {
+        let text = fs::read_to_string(&doc).expect("readable document");
+        for (number, line) in text.lines().enumerate() {
+            if line.to_lowercase().contains("saving") {
+                violations.push(format!(
+                    "{}:{}: figures are sizes and estimates, never labelled savings (ADR-562)",
+                    doc.display(),
+                    number + 1
+                ));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn documented_commands_are_real_subcommands() {
+    use clap::CommandFactory as _;
+
+    let names: Vec<String> = mcp_execution_cli::cli::Cli::command()
+        .get_subcommands()
+        .map(|c| c.get_name().to_owned())
+        .collect();
+    let mut violations = Vec::new();
+    for doc in documents() {
+        let text = fs::read_to_string(&doc).expect("readable document");
+        for (number, line) in text.lines().enumerate() {
+            let Some(rest) = line.trim_start().strip_prefix("mcp-execution-cli ") else {
+                continue;
+            };
+            let word = rest.split_whitespace().next().unwrap_or_default();
+            let is_command_word = word.starts_with(|c: char| c.is_ascii_lowercase());
+            if is_command_word && !names.iter().any(|name| name == word) {
+                violations.push(format!(
+                    "{}:{}: `{word}` is not a subcommand",
+                    doc.display(),
+                    number + 1
+                ));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}

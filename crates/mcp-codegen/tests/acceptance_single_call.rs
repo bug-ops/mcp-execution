@@ -41,7 +41,7 @@ fn thing_server() -> mcp_execution_introspector::ServerInfo {
 fn install(root: &Path, pkg_dir: &Path, reply: &str) -> PathBuf {
     std::fs::create_dir_all(pkg_dir).expect("create package dir");
     write_package(&generate(&thing_server()), pkg_dir);
-    write_home(root, &acceptance_support::fake_server_js(reply))
+    write_home(root, &acceptance_support::fake_helper_js(reply))
 }
 
 fn assert_tool_ran(run: &Run) {

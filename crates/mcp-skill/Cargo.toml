@@ -22,7 +22,7 @@ serde = { workspace = true, features = ["derive"] }
 serde-saphyr = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

@@ -1396,6 +1396,7 @@ name = "mcp-execution-cli"
 version = "0.11.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "clap_complete",
  "colored",
@@ -1406,13 +1407,17 @@ dependencies = [
  "mcp-execution-files",
  "mcp-execution-introspector",
  "mcp-execution-skill",
+ "rmcp",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "which",
 ]
 

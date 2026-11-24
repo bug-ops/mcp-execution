@@ -386,3 +386,52 @@ async fn test_discover_server_http_reserved_header_collision_is_legible() {
         other => panic!("expected Error::ConnectionFailed, got {other:?}"),
     }
 }
+
+/// `connect` shares discovery's transport setup, so a configured header reaches the server and
+/// the same handshake succeeds.
+#[tokio::test]
+async fn test_connect_http_propagates_custom_headers() {
+    let (url, ct, captured_header) = spawn_fixture_server(Duration::ZERO, Duration::ZERO).await;
+    let config = ServerConfig::builder()
+        .http_transport(url)
+        .header(TEST_HEADER_NAME.to_string(), "propagated-value".to_string())
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    let session = Introspector::new()
+        .connect(ServerId::new("http-connect").unwrap(), &config)
+        .await
+        .expect("connect should succeed against the HTTP fixture");
+    session.close().await;
+    ct.cancel();
+
+    assert_eq!(
+        captured_header.lock().unwrap().as_deref(),
+        Some("propagated-value")
+    );
+}
+
+/// `connect` honours the connect timeout exactly like discovery.
+#[tokio::test]
+async fn test_connect_http_connect_timeout_fires() {
+    let (url, ct, _captured_header) =
+        spawn_fixture_server(Duration::from_secs(30), Duration::ZERO).await;
+    let config = ServerConfig::builder()
+        .http_transport(url)
+        .connect_timeout(Duration::from_millis(150))
+        .build()
+        .unwrap();
+
+    let started = Instant::now();
+    let result = Introspector::new()
+        .connect(ServerId::new("http-connect-timeout").unwrap(), &config)
+        .await;
+    ct.cancel();
+
+    assert!(
+        matches!(&result, Err(Error::Timeout { operation, .. }) if operation.starts_with("connect")),
+        "expected a connect timeout, got {result:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}

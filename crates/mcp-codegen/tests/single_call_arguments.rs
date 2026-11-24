@@ -32,7 +32,7 @@ fn run_tool_with_an_empty_argument_sends_empty_arguments() {
     write_package(&generate(&server), &pkg);
     let home = write_home(
         root.path(),
-        &acceptance_support::fake_server_js(REPLY_ECHO_ARGUMENTS),
+        &acceptance_support::fake_helper_js(REPLY_ECHO_ARGUMENTS),
     );
 
     let run = run_node(&pkg.join("getThing.ts"), root.path(), &home, Some(""), &[]);

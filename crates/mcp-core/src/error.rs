@@ -74,6 +74,11 @@ pub enum ResourceKind {
     GeneratedOutputSize,
     /// Total number of files produced by one `generate` call.
     GeneratedFileCount,
+    /// Length of one response line a stdio server sent while a call was in flight.
+    ResponseLine {
+        /// The server that sent the oversized line.
+        server_id: ServerId,
+    },
 }
 
 impl fmt::Display for ResourceKind {
@@ -92,6 +97,9 @@ impl fmt::Display for ResourceKind {
             }
             Self::GeneratedOutputSize => f.write_str("generated output size"),
             Self::GeneratedFileCount => f.write_str("generated file count"),
+            Self::ResponseLine { server_id } => {
+                write!(f, "response line from server '{server_id}'")
+            }
         }
     }
 }
@@ -380,6 +388,13 @@ mod tests {
         assert_eq!(
             ResourceKind::GeneratedOutputSize.to_string(),
             "generated output size"
+        );
+        assert_eq!(
+            ResourceKind::ResponseLine {
+                server_id: ServerId::new("github").unwrap()
+            }
+            .to_string(),
+            "response line from server 'github'"
         );
         assert_eq!(
             ResourceKind::GeneratedFileCount.to_string(),

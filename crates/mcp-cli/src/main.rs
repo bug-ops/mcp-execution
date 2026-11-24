@@ -30,7 +30,7 @@ use mcp_execution_cli::runner;
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    runner::init_logging(cli.verbose, cli.log_format)?;
+    runner::init_logging(cli.verbose, cli.log_format, cli.command.log_profile())?;
 
     // `--format` is typed as `OutputFormat` directly (a `PossibleValuesParser`-based value
     // parser, see `cli.rs`), so an invalid value (e.g. `--format xml`) is already rejected by

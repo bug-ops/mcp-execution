@@ -99,6 +99,12 @@ When a server declares an output schema, `CreateIssueResult` is its converted ty
 `| undefined` (an empty success), and the function asks the bridge for the result's
 `structuredContent`.
 
+## Runtime Bridge
+
+`_runtime/mcp-bridge.ts` is a thin client of the `mcp-execution-cli` helper, not an MCP client. It frames each `callMCPTool(serverId, toolName, params, resultSource?)` call as a line of JSON on a channel and maps the response, so connections, validation, result extraction and limits live in one Rust implementation. The channel is the one `mcp-execution-cli run` registers for a script or, for a tool file run directly with `node`, a hidden `mcp-execution-cli helper` process (binary: `$MCP_EXECUTION_CLI`, else `mcp-execution-cli` on `PATH`; a set but unusable value is an error with no fallback).
+
+The bridge throws only `McpToolError` (`kind`: `tool_error`, `rpc_error`, `call_failed`, `write_skipped`); server text is in `serverMessage`. `closeAllConnections`, the SIGINT and SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are gone. `MCPBRIDGE_DEBUG=1` prints diagnostics to stderr and `MCPBRIDGE_OBSERVE_SHAPES=<file>` records result shapes for `generate --observed-shapes`. Generated output from an earlier release must be regenerated.
+
 ## Features
 
 - **One File Per Tool**: Separate TypeScript file for each MCP tool

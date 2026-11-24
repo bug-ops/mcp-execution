@@ -5,7 +5,7 @@
 
 use crate::parser::ParsedToolFile;
 use crate::types::{
-    GenerateSkillResult, MAX_USE_CASE_HINTS, SkillCategory, SkillTool, ToolExample,
+    GenerateSkillResult, MAX_USE_CASE_HINTS, SkillCategory, SkillName, SkillTool, ToolExample,
 };
 use mcp_execution_core::untrusted::{
     MAX_UNTRUSTED_FIELD_LEN, is_bare_identifier, sanitize_untrusted_text, wrap_untrusted_block,
@@ -19,18 +19,14 @@ use std::collections::HashMap;
 /// * `server_id` - Server identifier (e.g., "github")
 /// * `tools` - Parsed tool files from `scan_tools_directory`
 /// * `use_case_hints` - Optional hints about intended use cases
-/// * `custom_name` - Optional caller-supplied skill name. Callers MUST validate this with
-///   [`crate::validate_skill_name`] before passing it in — this function does not validate it
-///   itself, matching `server_id`, which callers likewise validate upstream. When `None`, the
+/// * `custom_name` - Optional caller-supplied skill name, already validated by
+///   [`crate::SkillName`] (so it holds no control characters or markup). When `None`, the
 ///   name defaults to `server_id`, the skill's directory name. Either way, the resulting name is
 ///   flattened with [`sanitize_untrusted_text`] before being stored in
-///   `GenerateSkillResult::skill_name` — the same flattening `generation_prompt`'s
-///   `**Skill Name**` line applies to it — so the two never disagree on control characters,
-///   invisible Unicode, or length truncation (issue #435). The
-///   prompt's `**Skill Name**` line additionally passes through `wrap_untrusted_block`'s
-///   `<`/`>`/`&` boundary-escaping, applied to the entire untrusted-data block as an
-///   injection defense (issue #411, S1) — that escaping is a prompt-rendering concern, not part
-///   of the name's identity, so it is not applied to `GenerateSkillResult::skill_name`.
+///   `GenerateSkillResult::skill_name`, so it matches the `**Skill Name**` line of
+///   `generation_prompt` (issue #435). That line additionally passes through
+///   `wrap_untrusted_block`'s `<`/`>`/`&` boundary-escaping (issue #411, S1), a prompt-rendering
+///   concern that is not applied to `GenerateSkillResult::skill_name`.
 ///
 /// # Returns
 ///
@@ -39,7 +35,7 @@ use std::collections::HashMap;
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_skill::{build_skill_context, ParsedToolFile, ParsedParameter};
+/// use mcp_execution_skill::{build_skill_context, ParsedToolFile, ParsedParameter, SkillName};
 ///
 /// let tools: Vec<ParsedToolFile> = vec![]; // Parsed from scan_tools_directory
 /// let context = build_skill_context("github", &tools, None, None);
@@ -47,16 +43,17 @@ use std::collections::HashMap;
 /// assert_eq!(context.server_id, "github");
 /// assert_eq!(context.skill_name, "github");
 ///
-/// let custom = build_skill_context("github", &tools, None, Some("my-custom-skill"));
-/// assert_eq!(custom.skill_name, "my-custom-skill");
-/// assert!(custom.generation_prompt.contains("my-custom-skill"));
+/// let name = SkillName::new("github").unwrap();
+/// let custom = build_skill_context("github", &tools, None, Some(&name));
+/// assert_eq!(custom.skill_name, "github");
+/// assert!(custom.generation_prompt.contains("github"));
 /// ```
 #[must_use]
 pub fn build_skill_context(
     server_id: &str,
     tools: &[ParsedToolFile],
     use_case_hints: Option<&[String]>,
-    custom_name: Option<&str>,
+    custom_name: Option<&SkillName>,
 ) -> GenerateSkillResult {
     let tool_count = tools.len();
 
@@ -341,10 +338,21 @@ fn build_tool_example(tool: &ParsedToolFile) -> ToolExample {
 
     // Compact JSON inside single quotes: example values never contain a single quote
     // (`safe_string_literal`), so the shell quoting cannot be closed early.
+    // ASSUMPTION: `ParsedToolFile::name` is the MCP tool name `call` expects; a name outside
+    // the shell-safe set falls back to a placeholder instead of being quoted.
+    let tool_arg = if !tool.name.is_empty()
+        && tool
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    {
+        tool.name.as_str()
+    } else {
+        "<tool>"
+    };
     let cli_command = format!(
-        "node ~/.claude/servers/{}/{}.ts '{}'",
+        "mcp-execution-cli call --from-config {} -- {tool_arg} '{}'",
         tool.server_id,
-        tool.typescript_name,
         serde_json::to_string(&params).unwrap_or_else(|_| "{}".to_string())
     );
 
@@ -633,7 +641,8 @@ fn build_generation_prompt(
         prompt.push('\n');
     }
 
-    prompt.push_str(GENERATION_INSTRUCTIONS);
+    // `server_id` is a validated slug, so substituting it cannot inject structure.
+    prompt.push_str(&GENERATION_INSTRUCTIONS.replace("__SERVER_ID__", server_id));
 
     prompt
 }
@@ -661,34 +670,23 @@ Generate a SKILL.md file with the following structure:
    - Key capabilities in bullet points
    - When to use this skill
 
-3. **Quick Start** (numbered steps):
-   - How to discover available tools
-   - How to execute a tool
-   - Example with a common use case
+3. **Workflow** (numbered steps, exactly these three):
+   - Find tools in `~/.claude/servers/__SERVER_ID__/catalog.ts` first
+   - One lookup, one or two sequential calls, or a small catalog: call the tool directly with
+     `mcp-execution-cli call --from-config __SERVER_ID__ -- <tool> '<json params>'`
+   - Anything larger: write one script that imports from `mcp:__SERVER_ID__` and run it with
+     `mcp-execution-cli run script.ts`, printing only what answers the question
 
-4. **Common Tasks** (3-5 sections):
-   - Organize by USE CASE, not by tool
-   - Each section should solve a real problem
-   - Include natural language examples that trigger tool usage
-   - Show CLI commands where helpful
+4. **Privileges**: state that scripts run with the user's privileges and without a sandbox.
 
-5. **Tool Reference** (organized by category):
-   - List all tools by category
-   - Brief description of each
-   - Key parameters
-
-6. **Troubleshooting** (3-5 items):
-   - Common errors and solutions
-   - Authentication issues
-   - Connection problems
+5. **Tools** (a few example tools per category, not every tool; point at `catalog.ts`).
 
 ## Guidelines
 
 - Write for AI agents (Claude), not humans
 - Focus on WHEN to use tools, not just HOW
-- Use natural language examples: "Create an issue about the login bug"
-- Keep descriptions concise but informative
-- Include path references: ~/.claude/servers/{server_id}/
+- Use exactly the commands above; invent no others
+- Keep the size independent of the number of tools
 
 ## Output Format
 
@@ -882,7 +880,9 @@ mod tests {
     fn test_build_skill_context_honors_custom_name_in_prompt() {
         let tools = vec![create_test_tool("create_issue", Some("issues"))];
 
-        let context = build_skill_context("github", &tools, None, Some("my-custom-skill"));
+        let name = SkillName::new("my-custom-skill").unwrap();
+
+        let context = build_skill_context("github", &tools, None, Some(&name));
 
         assert_eq!(context.skill_name, "my-custom-skill");
         assert!(
@@ -894,29 +894,6 @@ mod tests {
             !context
                 .generation_prompt
                 .contains("**Skill Name**: github\n")
-        );
-    }
-
-    /// Issue #435, S1: `GenerateSkillResult::skill_name` must hold exactly the same
-    /// control-character-flattened, length-truncated text as the name embedded in
-    /// `generation_prompt`'s `**Skill Name**` line — not the raw, unflattened custom name. A
-    /// hostile name with an embedded newline is the sharpest test: the pre-fix code stored the
-    /// raw (newline-containing) name in `skill_name` while the prompt showed the flattened
-    /// (space-joined) version, so the two visibly disagreed.
-    #[test]
-    fn test_build_skill_context_skill_name_matches_flattened_prompt_name() {
-        let tools = vec![create_test_tool("create_issue", Some("issues"))];
-        let hostile_name = "evil\nname";
-
-        let context = build_skill_context("github", &tools, None, Some(hostile_name));
-
-        assert!(!context.skill_name.contains('\n'), "{}", context.skill_name);
-        assert!(
-            context
-                .generation_prompt
-                .contains(&format!("**Skill Name**: {}", context.skill_name)),
-            "the exact text stored in `skill_name` must be the text embedded in the prompt: {}",
-            context.generation_prompt
         );
     }
 

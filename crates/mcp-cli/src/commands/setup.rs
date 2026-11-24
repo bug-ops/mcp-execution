@@ -13,8 +13,10 @@ use serde::Serialize;
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Stdio;
-use tokio::process::Command;
+
+use crate::runtime::helper::{CliBinary, discover_cli_binary};
+use crate::runtime::node::check_node_version;
+use mcp_execution_core::helper_protocol::CLI_PATH_ENV;
 
 /// Structured result of the environment setup checks.
 ///
@@ -27,6 +29,8 @@ use tokio::process::Command;
 /// ```
 /// use mcp_execution_cli::commands::setup::SetupResult;
 ///
+/// use mcp_execution_cli::runtime::helper::CliBinary;
+///
 /// let result = SetupResult {
 ///     node_version: "20.10.0".to_string(),
 ///     mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
@@ -34,6 +38,7 @@ use tokio::process::Command;
 ///     servers_dir_found: true,
 ///     files_made_executable: 3,
 ///     skipped_entries: 0,
+///     helper_binary: CliBinary::NotFound,
 /// };
 ///
 /// assert_eq!(result.files_made_executable, 3);
@@ -57,6 +62,9 @@ pub struct SetupResult {
     /// intermediate subdirectory, or a file) encountered at any depth.
     /// Always `0` on non-Unix platforms.
     pub skipped_entries: usize,
+    /// The `mcp-execution-cli` binary a generated tool run outside `run` would start as its
+    /// helper (`MCP_EXECUTION_CLI`, else `PATH`), or why none is usable.
+    pub helper_binary: CliBinary,
 }
 
 /// Runs the setup command.
@@ -70,6 +78,8 @@ pub struct SetupResult {
 ///    installed, the first versions that run generated `.ts` files without a flag
 /// 2. **File permissions**: Makes TypeScript files executable (Unix only)
 /// 3. **Configuration**: Checks if ~/.claude/mcp.json exists
+/// 4. **Helper binary**: Reports whether generated tools run outside `run` can find
+///    `mcp-execution-cli` (`MCP_EXECUTION_CLI`, else `PATH`); a miss is a warning, not an error
 ///
 /// # Examples
 ///
@@ -114,6 +124,7 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
         servers_dir_found,
         files_made_executable,
         skipped_entries,
+        helper_binary: discover_cli_binary(),
     };
 
     if output_format == OutputFormat::Pretty {
@@ -173,6 +184,20 @@ fn print_pretty_summary(result: &SetupResult) {
         }
     }
 
+    match &result.helper_binary {
+        CliBinary::Found(path) => println!("✓ Helper binary found: {}", path.display()),
+        CliBinary::OverrideInvalid => println!(
+            "⚠ {CLI_PATH_ENV} is set but is not an absolute path to an executable file; \
+             generated tools run outside 'run' will not find the helper"
+        ),
+        CliBinary::NotFound => {
+            println!("⚠ No mcp-execution-cli binary found for generated tools run outside 'run'");
+            println!(
+                "  Put it on PATH or set {CLI_PATH_ENV} to its absolute path; 'run' does not need it"
+            );
+        }
+    }
+
     println!("\n✓ Runtime setup complete");
     println!("  Claude Code can now execute MCP tools via:");
     println!("  node ~/.claude/servers/<server>/<tool>.ts '{{\"param\":\"value\"}}'");
@@ -180,134 +205,6 @@ fn print_pretty_summary(result: &SetupResult) {
     println!("  1. Generate tools: mcp-execution-cli generate <server>");
     println!("  2. Configure servers in ~/.claude/mcp.json");
     println!("  3. Execute tools autonomously via Node.js");
-}
-
-/// Parsed Node.js version, as printed by `node --version`.
-///
-/// Exists so the "can run `.ts` files unflagged" rule lives in one typed place
-/// instead of an ad-hoc major-version comparison.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct NodeVersion {
-    major: u32,
-    minor: u32,
-    patch: u32,
-}
-
-impl NodeVersion {
-    /// First release on each release line that runs `.ts` files without a flag, ascending by
-    /// major. Every later major runs them too. The check and the message both derive from this.
-    const FIRST_NATIVE_TS: [Self; 2] = [
-        Self {
-            major: 22,
-            minor: 18,
-            patch: 0,
-        },
-        Self {
-            major: 23,
-            minor: 6,
-            patch: 0,
-        },
-    ];
-
-    /// Human-readable minimum shown in messages, e.g. `22.18.0 (23.6.0 on the 23 line)`.
-    fn minimum_text() -> String {
-        let [first, second] = Self::FIRST_NATIVE_TS;
-        format!("{first} ({second} on the {} line)", second.major)
-    }
-
-    /// Parses `v22.18.0` or `22.18.0`; a pre-release suffix on the patch is ignored.
-    fn parse(raw: &str) -> Option<Self> {
-        let mut parts = raw.trim().trim_start_matches('v').split('.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = parts.next()?.parse().ok()?;
-        let patch_digits: String = parts
-            .next()?
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        let patch = patch_digits.parse().ok()?;
-        Some(Self {
-            major,
-            minor,
-            patch,
-        })
-    }
-
-    /// Whether Node.js executes `.ts` files without `--experimental-strip-types`: at or after
-    /// the first native release of its own line (see [`Self::FIRST_NATIVE_TS`]), or on a later
-    /// major than any listed line.
-    fn runs_typescript_natively(self) -> bool {
-        let newest_listed = Self::FIRST_NATIVE_TS[Self::FIRST_NATIVE_TS.len() - 1].major;
-        self.major > newest_listed
-            || Self::FIRST_NATIVE_TS
-                .iter()
-                .any(|first| first.major == self.major && self >= *first)
-    }
-}
-
-impl std::fmt::Display for NodeVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
-}
-
-/// Checks Node.js version requirement.
-///
-/// Verifies that a Node.js able to run generated `.ts` files without a flag
-/// is installed (22.18.0 or later; 23.6.0 or later on the 23 line) and
-/// accessible, and returns its version string without the leading `v`.
-///
-/// # Errors
-///
-/// Returns error if:
-/// - Node.js command not found in PATH
-/// - Node.js version cannot be determined
-/// - Node.js cannot execute `.ts` files without a flag
-async fn check_node_version() -> Result<String> {
-    // Check if node command exists
-    let output = Command::new("node")
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .with_context(|| {
-            format!(
-                "Node.js not found in PATH.\n\
-                 \n\
-                 Node.js {}+ is required to run generated TypeScript tools.\n\
-                 Install from: https://nodejs.org\n\
-                 \n\
-                 Or use a version manager:\n\
-                 - nvm: https://github.com/nvm-sh/nvm\n\
-                 - fnm: https://github.com/Schniz/fnm",
-                NodeVersion::FIRST_NATIVE_TS[0]
-            )
-        })?;
-
-    if !output.status.success() {
-        anyhow::bail!("Node.js is installed but not working correctly");
-    }
-
-    let version_str = String::from_utf8_lossy(&output.stdout);
-    let version_str = version_str.trim().trim_start_matches('v');
-    let version = NodeVersion::parse(version_str).context("Failed to parse Node.js version")?;
-
-    if !version.runs_typescript_natively() {
-        anyhow::bail!(
-            "Node.js version {version_str} cannot run generated TypeScript tools.\n\
-             \n\
-             Required: Node.js {minimum} or higher\n\
-             Current:  Node.js {version_str}\n\
-             \n\
-             Please upgrade Node.js:\n\
-             - Download: https://nodejs.org\n\
-             - Or use nvm: nvm install 22",
-            minimum = NodeVersion::minimum_text(),
-        );
-    }
-
-    Ok(version.to_string())
 }
 
 /// Checks for and makes TypeScript files executable (Unix only).
@@ -522,75 +419,6 @@ fn get_servers_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn node_version_floor_matches_native_typescript_support() {
-        let runs = |raw: &str| NodeVersion::parse(raw).unwrap().runs_typescript_natively();
-        for rejected in [
-            "18.20.4", "20.19.0", "21.7.3", "22.6.0", "22.17.1", "23.0.0", "23.5.0",
-        ] {
-            assert!(!runs(rejected), "{rejected} must be rejected");
-        }
-        for accepted in [
-            "22.18.0", "22.20.1", "23.6.0", "23.11.0", "24.0.0", "26.1.2",
-        ] {
-            assert!(runs(accepted), "{accepted} must be accepted");
-        }
-    }
-
-    #[test]
-    fn node_version_minimum_text_and_check_share_the_constants() {
-        assert_eq!(
-            NodeVersion::minimum_text(),
-            "22.18.0 (23.6.0 on the 23 line)"
-        );
-        for first in NodeVersion::FIRST_NATIVE_TS {
-            assert!(first.runs_typescript_natively(), "{first} must be accepted");
-            let before = NodeVersion {
-                minor: first.minor - 1,
-                patch: 99,
-                ..first
-            };
-            assert!(
-                !before.runs_typescript_natively(),
-                "{before} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn node_version_parses_prefix_and_prerelease() {
-        assert_eq!(
-            NodeVersion::parse("v22.18.0"),
-            Some(NodeVersion {
-                major: 22,
-                minor: 18,
-                patch: 0
-            })
-        );
-        assert_eq!(
-            NodeVersion::parse("24.1.2-nightly2025").map(|v| v.patch),
-            Some(2)
-        );
-        assert_eq!(NodeVersion::parse("22.18"), None);
-        assert_eq!(NodeVersion::parse("garbage"), None);
-    }
-
-    #[tokio::test]
-    async fn test_check_node_version() {
-        // Passes when a suitable Node.js is installed; otherwise the error must be helpful
-        let result = check_node_version().await;
-
-        // We can't assert success because Node.js might not be installed
-        // in CI environment, but we can verify error messages are helpful
-        if let Err(e) = result {
-            let error_msg = e.to_string();
-            assert!(
-                error_msg.contains("Node.js") || error_msg.contains("version"),
-                "Error message should be helpful: {error_msg}"
-            );
-        }
-    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -957,6 +785,7 @@ mod tests {
             servers_dir_found: true,
             files_made_executable: 3,
             skipped_entries: 0,
+            helper_binary: CliBinary::NotFound,
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -974,6 +803,7 @@ mod tests {
             servers_dir_found: true,
             files_made_executable: 7,
             skipped_entries: 0,
+            helper_binary: CliBinary::NotFound,
         };
 
         let formatted =
@@ -995,6 +825,7 @@ mod tests {
             servers_dir_found: false,
             files_made_executable: 0,
             skipped_entries: 0,
+            helper_binary: CliBinary::NotFound,
         };
 
         let formatted =

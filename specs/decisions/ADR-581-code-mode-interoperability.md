@@ -14,7 +14,6 @@ review-date: 2027-02-24
 related:
   - "[[../constitution]]"
   - "[[../skill/spec]]"
-  - "[[../runtime/spec]]"
   - "[[../cli/spec]]"
 ---
 
@@ -26,12 +25,24 @@ related:
 > decides nothing about a native target and authorises no code change. Its status stays `proposed` until a
 > maintainer accepts it.
 
+## 0. Status of the Script-First Pass (2026-11-24)
+
+- Status stays `proposed`; option (a) is the posture in effect for this pass because nothing generated depends on
+  the undocumented surface.
+- The section 5 investigation is **deferred by the maintainer** and tracked as a follow-up (human-run, interactive
+  terminal only; agents cannot run it). Facts 3 and 9 to 13 therefore stay unobserved.
+- This pass publishes `examples/host-code-mode.md` (#581): documented facts only (1, 2, 4 to 8), each re-fetched
+  from its source and dated at publication, per section 4. It makes no token claim and describes nothing from
+  facts 3 or 9 to 13.
+- The `run` command of [[../cli/spec]] is the runner the guidance describes; the shell helper (fact 2) is the
+  only documented way to reach it from the host's mode.
+
 ## 1. Context
 
 The host (Claude Code) has an experimental mode in which the model writes JavaScript that calls the host's
 tools instead of emitting one tool call per turn. That is the pattern this project's script-first direction
-([[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]],
-[[../runtime/spec]]) is built on, so users will ask how the two fit together and the project must say
+([[../skill/spec#14. Script-First Requirements]],
+[[../cli/spec]]) is built on, so users will ask how the two fit together and the project must say
 something true. The mode's script API for MCP tools is largely undocumented, which makes it an unstable
 surface: building on it risks breaking with any host release, and writing guidance about it risks stating
 things that are not so.
@@ -47,13 +58,13 @@ before it is published anywhere (section 4, rule 1).
 
 | # | Fact | Label |
 |---|------|-------|
-| 1 | Opt-in through the environment variable `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`, set in the shell or in the `env` block of user settings; project settings cannot enable it; organisations can block it through managed settings | documented |
-| 2 | Code runs through a tool named `REPL`; the documented helpers are `$` (a shell helper used as a tagged template) and `edit()` | documented |
+| 1 | Opt-in through the environment variable `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`, set in the shell or in the `env` block of user settings; project settings cannot enable it; organisations can block it by setting the variable's value to `0` in managed settings (there is no separate block flag). Re-read 2026-11-24 | documented |
+| 2 | Code runs through a tool named `REPL`; `$` (used as a tagged template) and `edit()` appear in the page's examples only, not as a documented helper API. Re-read 2026-11-24 | documented as examples only |
 | 3 | The changelog dates the introduction to v2.1.323 and also names `tools`, `log`, `preview`, `sleep`, `write()`, top-level `await` and `return`, and variables that persist between scripts | changelog-only |
 | 4 | Nested tool calls are permission-checked and hooked under their usual names (`Bash`, `Edit`, `mcp__server__tool`); in auto mode a classifier reviews a script once, not each nested call | documented |
-| 5 | Limits: 10 minutes in the foreground, 2 hours in the background; long output is cut and a path to the full text is returned | documented |
+| 5 | Limits: 10 minutes in the foreground, 2 hours in the background. The page states no general rule that long output is cut with a path returned; it names only `uncutOutputNote`, from v2.1.331. Re-read 2026-11-24 | documented (limits); the output-cut rule is not stated beyond `uncutOutputNote` |
 | 6 | Sandbox settings cover shell commands only; the JavaScript and its file, web and MCP calls run outside the sandbox | documented |
-| 7 | Surface: interactive terminal sessions only (not the desktop app, the VS Code panel, cloud sessions or Remote Control); a fixed list of models. The documentation still excludes Bedrock, Vertex and Foundry while the v2.1.331 changelog adds them | documented; documentation lags the changelog |
+| 7 | Surface: interactive terminal sessions only (not the desktop app, the VS Code panel, cloud sessions or Remote Control); a fixed list of models: Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.2. The page names no provider exclusions; Bedrock, Vertex and Foundry are supported from v2.1.331. Re-read 2026-11-24 | documented |
 | 8 | Stated benefits: parallel independent commands, chaining results, returning only what is needed, filtering before the model reads; no token figures are published | documented |
 | 9 | How MCP tools are invoked from a script | undocumented |
 | 10 | The shape of MCP results inside a script | undocumented |
@@ -63,6 +74,14 @@ before it is published anywhere (section 4, rule 1).
 
 Facts 9 to 13 are exactly what a generator would need in order to target the mode natively, and exactly what
 the host does not document.
+
+> [!note] Corrections of 2026-11-24 (SDD-2)
+> Facts 1, 2, 5 and 7 were corrected against the page re-fetched on 2026-11-24 (source:
+> `https://code.claude.com/docs/en/code-mode.md`, fetched by developer-e for `examples/host-code-mode.md`). The
+> earlier wording was not re-verified when this record was first written. Consequences: the shell helper `$` is an
+> example, not a documented API, so option (a)'s "documented shell helper" is weaker than first stated; and there is no
+> documented general output-cut rule, so the guidance does not claim one (section 3, rule 4). Facts 3, 4, 6, 8 and
+> 9 to 13 were not re-read in this pass.
 
 ## 2. The Decision To Make
 
@@ -118,9 +137,10 @@ These rules hold regardless of how the open decision ends:
 2. Nothing shipped depends on the undocumented API: no generated file, skill text, saved script or command
    calls, documents or teaches it, while the decision is "no native target".
 3. The guidance makes no token-saving claim about the host's mode; none is published (fact 8).
-4. The guidance tells the reader that the host's own long-output cut (fact 5) applies in addition to the
-   runner's output budget, and that scripts in the mode run outside the sandbox except shell commands (fact 6)
-   while nested calls remain permission-checked (fact 4).
+4. The guidance states the runner's own output budget and, for the host, only what fact 5 documents (the time limits
+   and `uncutOutputNote` from v2.1.331); it makes no claim of a general host output cut (corrected 2026-11-24). It also
+   tells the reader that scripts in the mode run outside the sandbox except shell commands (fact 6) while nested
+   calls remain permission-checked (fact 4).
 5. If the decision ever becomes "native target", a separate specification is written first; this record
    authorises no implementation.
 
@@ -200,7 +220,7 @@ The decision "no native target" is revisited when all of the following hold:
 3. The mode has left experimental status, or a maintainer records why that is not required (open).
 4. The investigation has an observation or an explicit "unknown" for every question, and the observations agree
    with the documentation.
-5. A measurement from the context-cost command ([[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]])
+5. A measurement from the context-cost command ([[../cli/spec#19. Script-First Requirements and Contracts]])
    shows a benefit the runner does not already give; without one, the criterion of a second path is not met.
 
 A maintainer decides whether to reopen the decision when these hold. The new decision is recorded as a new
@@ -223,6 +243,6 @@ against the exit criteria of section 6. Nothing in sections 3 and 4 depends on t
 ## 9. See Also
 
 - [[../constitution]] — the rules on secrets and untrusted text this record applies
-- [[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]] — the skill text that may mention the mode
-- [[../runtime/spec]] — the runner the guidance describes
-- [[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]] — the context-cost command used by exit criterion 5
+- [[../skill/spec#14. Script-First Requirements]] — the skill text that may mention the mode
+- [[../cli/spec]] — the runner the guidance describes
+- [[../cli/spec#19. Script-First Requirements and Contracts]] — the context-cost command used by exit criterion 5

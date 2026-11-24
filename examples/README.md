@@ -8,6 +8,7 @@ Complete examples and guides for generating a typed TypeScript SDK from an MCP s
 |----------|-------------|----------|
 | [progressive-loading-usage.md](./progressive-loading-usage.md) | Complete usage tutorial | Learning how the generated SDK is used |
 | [mcp.json.example](./mcp.json.example) | MCP server configurations | Configuring your MCP servers |
+| [host-code-mode.md](./host-code-mode.md) | What the host documents about its own code execution mode | Deciding how it relates to `run` |
 
 ## Getting Started
 
@@ -110,6 +111,42 @@ configs keep working unchanged.
 
 For a single lookup or one or two sequential calls, a direct tool call is cheaper than a script; see [progressive-loading-usage.md](./progressive-loading-usage.md#script-or-direct-call).
 
+## From Generation to a Saved Script
+
+Every server below is read from `~/.claude/mcp.json` (see [mcp.json.example](./mcp.json.example)). The commands and their flags are described in [progressive-loading-usage.md](./progressive-loading-usage.md).
+
+```bash
+# 1. Generate, then read the catalog: one type-only signature per tool
+mcp-execution-cli generate --from-config github
+cat ~/.claude/servers/github/catalog.ts
+
+# 2. One lookup: call the tool directly (the tool name follows `--`)
+mcp-execution-cli call --from-config github -- list_issues '{"owner":"myorg","repo":"myrepo"}'
+
+# 3. Many calls: write a script in ~/scripts/ (imports use `mcp:github`) and run it
+mcp-execution-cli run ~/scripts/triage.mts
+
+# 4. Optional checks before a run that changes things
+mcp-execution-cli run ~/scripts/triage.mts --typecheck
+mcp-execution-cli run ~/scripts/triage.mts --dry-run --policy ~/policy.json
+mcp-execution-cli run ~/scripts/triage.mts --restrict          # Unix only
+
+# 5. Keep a script that worked (it needs an `mcp-script` header), then find it again
+mcp-execution-cli run ~/scripts/triage.mts --save triage
+mcp-execution-cli scripts list --server github
+mcp-execution-cli scripts check --server github
+
+# 6. Measure the context cost and check the server has not changed
+mcp-execution-cli stats github
+mcp-execution-cli drift --from-config github
+```
+
+`~/policy.json` for the dry run lists the calls allowed to execute, for example `{"reads":["github/list_issues"]}`; every other call is skipped.
+
+> **Warning:** `run` is not a sandbox. Scripts run with your user privileges, they cannot read their own stdin under `run`, and `--restrict` narrows network access only on Node.js 25 and later.
+
+After upgrading `mcp-execution-cli`, regenerate every server (`generate` again): the generated bridge and the metadata schema changed. A tool file run directly with `node` finds the helper through `MCP_EXECUTION_CLI` or `PATH`.
+
 ## File Structure After Generation
 
 ```
@@ -120,8 +157,11 @@ For a single lookup or one or two sequential calls, a direct tool call is cheape
 ├── createPullRequest.ts
 ├── getAuthenticatedUser.ts
 ├── ... (one file per remaining tool)
+├── _meta.json                  # Metadata sidecar (schema version 3)
+├── package.json
+├── tsconfig.json
 └── _runtime/
-    ├── mcp-bridge.ts           # Runtime helper for MCP calls
+    ├── mcp-bridge.ts           # Thin client of the mcp-execution-cli helper
     └── cli.ts                  # Single-call entry point shared by the tool files
 ```
 
@@ -143,6 +183,8 @@ mcp-execution-cli generate docker \
 
 # 3. Use with Claude Code
 # "Create an issue in myorg/myrepo about fixing the login bug"
+# Claude reads catalog.ts, then uses `mcp-execution-cli call` for one tool
+# or `mcp-execution-cli run` for a script
 ```
 
 ### Workflow 2: Multiple Servers
@@ -261,6 +303,11 @@ cargo bench --profile bench-fast -p mcp-execution-codegen -p mcp-execution-files
 - Verify `~/.claude/mcp.json` configuration
 - Check environment variables are set correctly
 - Ensure Node.js is 22.18.0 or newer (23.6.0 or newer on the 23 line): `node --version`
+- Run `mcp-execution-cli setup`: it also reports whether the helper binary is found; set `MCP_EXECUTION_CLI` to its path if it is not on `PATH`
+- A "schema version ... regenerate" error means the directory predates this release: run `generate` again
+
+**"Exit code 6 from `run`"**
+- The script exited non-zero or was killed by a signal; read the `script_status` line and the call summary. Exit 4 is the runner's own timeout
 
 ### Getting Help
 

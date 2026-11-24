@@ -18,6 +18,7 @@ pub mod cli;
 pub mod commands;
 pub mod formatters;
 pub mod runner;
+pub mod runtime;
 
 // Re-export action types for convenience
 pub use actions::ServerAction;

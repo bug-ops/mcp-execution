@@ -293,6 +293,30 @@ pub async fn resolve_skill_output_path(
     .map_err(Into::into)
 }
 
+/// Name of the directory a skill file is written into: the parent of a custom `output_path`, or
+/// `server_id` when the default path is used.
+///
+/// A skill's frontmatter `name` must equal this (see [`crate::SkillName::in_directory`]).
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_skill::skill_directory_name;
+/// use std::path::Path;
+///
+/// assert_eq!(skill_directory_name("github", None), "github");
+/// assert_eq!(skill_directory_name("github", Some(Path::new("SKILL.md"))), "github");
+/// assert_eq!(skill_directory_name("github", Some(Path::new("alt/SKILL.md"))), "alt");
+/// ```
+#[must_use]
+pub fn skill_directory_name<'a>(server_id: &'a str, output_path: Option<&'a Path>) -> &'a str {
+    output_path
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(OsStr::to_str)
+        .unwrap_or(server_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

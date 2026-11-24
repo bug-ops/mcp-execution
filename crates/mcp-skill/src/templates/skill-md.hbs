@@ -3,7 +3,7 @@
 
 # {{{skill_name}}}
 
-Progressive loading skill for the `{{server_id}}` MCP server ({{tool_count}} tools).
+Skill for the `{{server_id}}` MCP server ({{tool_count}} tools).
 
 {{#if use_case_hints}}
 ## Use Cases
@@ -13,37 +13,25 @@ Progressive loading skill for the `{{server_id}}` MCP server ({{tool_count}} too
 {{/each}}
 
 {{/if}}
-## Usage
+{{> workflow}}
 
-**Discover tools:**
-```bash
-ls ~/.claude/servers/{{server_id}}/
-```
+## Tools
 
-**Load a tool:**
-```bash
-cat ~/.claude/servers/{{server_id}}/<tool>.ts
-```
+{{tool_count}} tools; `catalog.ts` lists every one with its parameter and result types. Examples by category:
 
-**Execute:**
-```bash
-node ~/.claude/servers/{{server_id}}/<tool>.ts '<json params>'
-```
-
-**Search by keyword:**
-```bash
-grep -l "<keyword>" ~/.claude/servers/{{server_id}}/*.ts
-```
-
-## Tools by Category
-
-{{#each categories}}
-### {{display_name}}
+{{#each listing.categories}}
+### {{display_name}} ({{tool_count}} tools)
 
 {{#each tools}}
 - `{{typescript_name}}` — {{{description}}}
 {{/each}}
+{{#if more_tools}}
+- and {{more_tools}} more
+{{/if}}
 
 {{else}}
 No tools categorized.
 {{/each}}
+{{#if listing.more_categories}}
+And {{listing.more_categories}} more categories.
+{{/if}}

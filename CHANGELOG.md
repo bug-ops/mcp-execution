@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-codegen`**: `_meta.json` stores `result_type`, its origin and `manifest_size_bytes` per tool (#603)
 - **`mcp-execution-core`**: `resolve_confined_existing`, a read-only confinement check used by the server listing, and one shared `is_bare_identifier` predicate (#614)
 - **`mcp-execution-cli`**: an unavailable server in `server info` carries its reason; `docs_examples` test guards README and rustdoc against drift (#614)
+- **`mcp-execution-introspector`**: `Introspector::connect` returns a `Session` with `call_tool`, and `discover` returns tools with listing hints, so one client serves discovery and calls; issue #569 (#631)
+- **`mcp-execution-cli`**: `run` executes a TypeScript script with bounded output, a private spill file and a token-anchored `script_status` trailer; issue #571 (#631)
+- **`mcp-execution-cli`**: `run` prints a value-free call summary after a failed run; issue #572 (#631)
+- **`mcp-execution-cli`**: `run --dry-run` and `--policy` execute only the tools a policy lists as reads and report the skipped writes; issue #573 (#631)
+- **`mcp-execution-cli`**: `call --from-config|--http|--sse|SERVER -- TOOL [JSON]` calls one tool of a stdio, HTTP or SSE server; issue #574 (#631)
+- **`mcp-execution-cli`**: scripts import `mcp:<server-id>` and `mcp:helpers` and reach every transport through one helper channel and a per-run connection pool, with a hidden `helper` command for tool files run directly; issue #575 (#631)
+- **`mcp-execution-cli`**: `run --restrict` narrows file, process and (Node.js 25+) network access on Unix; help and docs state that `run` is not a sandbox; issue #576 (#631)
+- **`mcp-execution-cli`**: `run --typecheck` runs `tsc --noEmit` before the script and exits 2 on a type error; issue #577 (#631)
+- **`mcp-execution-skill`**: generated `SKILL.md` teaches the catalog, `call` for one lookup and `run` for larger tasks; issue #578 (#631)
+- **`mcp-execution-skill`**: saved scripts with an `mcp-script` header (`run --save`, `scripts list`, `scripts check`); issue #579 (#631)
+- **`mcp-execution-cli`**: `stats` prints bytes and estimated tokens (bytes/4) per discovery level, and an offline harness compares K calls with one script; issue #562 (#631)
+- **`mcp-execution-cli`**: `drift` compares the live tool list with the metadata recorded at generation and exits 5 on a difference; issue #580 (#631)
+- **Decisions**: ADR-588 keeps Claude Code the only host target, ADR-589 adds no search or execute tool to `mcp-execution-server`, ADR-590 adds no connections that persist across runs, ADR-591 adds no ranked catalog search; issues #588, #589, #590, #591 close by these records (#631)
+- **Documentation**: README, usage guide, examples and crate READMEs cover the catalog, `call`, `run`, saved scripts, `stats`, `drift` and the privilege level, with measured figures; issue #613 (#631)
 
 ### Breaking
 
@@ -32,6 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-skill`**: the default skill name is `{id}` instead of `{id}-progressive`, names are limited to 1-64 characters of `[a-z0-9-]`, `MAX_TOOL_FILES` is 1000, and `ScanError::MetadataEscapesDirectory` is new (#614)
 - **`mcp-execution-cli`**: `ServerInfo.status` has the new type `ServerAvailability` that carries the unavailable reason (JSON output keeps `status` and `reason`), and `setup` requires Node.js 22.18.0 or newer (23.6.0 on the 23 line) (#614)
 - **Workspace**: the `dhat-heap` feature and the `homepage` manifest field are removed (#614)
+- **`mcp-execution-codegen`**: the generated bridge is a thin client of the `mcp-execution-cli` helper and holds no MCP connection; regenerate every server directory, and a tool file run with `node` needs `mcp-execution-cli` on `PATH` or `MCP_EXECUTION_CLI`, which never falls back to `PATH` when set but unusable (#569, #575, #631)
+- **`mcp-execution-codegen`**: `closeAllConnections`, the bridge's SIGINT and SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are removed, and `BridgeContext` fields changed with the bridge shrink (#569, #631)
+- **`mcp-execution-skill`**: `render_generation_prompt`, its `skill-generation.hbs` template and `validate_skill_name` are removed (use `SkillName::new`), `build_skill_context` takes `Option<&SkillName>`, and a custom skill name must equal its directory name (#578, #612, #631)
+- **`mcp-execution-cli`**: `call` takes the tool after a `--` separator (`call --from-config github -- create_issue '{...}'`); `introspect`, `generate` and `drift` keep their positional server (#574, #631)
+- **`mcp-execution-cli`**: exit code 5 means a check found problems (`drift`, `scripts check`) and exit code 6 means a script run by `run` exited non-zero or was killed by a signal (#571, #579, #580, #631)
+- **`mcp-execution-cli`**: `call`, `run` and the hidden `helper` log at `warn` by default; `--verbose` or `RUST_LOG` restores the standard output (#574, #631)
+- **`mcp-execution-core`**: `ResourceKind` gains the variant `ResponseLine`, which breaks exhaustive matches on the public enum (#575, #631)
+- **`mcp-execution-cli`**: `runner::init_logging` takes a third `LogProfile` argument (#574, #631)
+- **`mcp-execution-cli`**: `drift` takes `--name` and `--progressive-output` like `generate`, and `setup` also checks for the helper binary (`SetupResult.helper_binary` in JSON output) (#580, #631)
 
 ### Changed
 
@@ -42,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Documentation**: README and usage guide are script-first, show runnable commands and imports, and no longer quote unmeasured token figures (#614)
 - **Workspace**: `unsafe_code`, `unwrap_used` and `expect_used` are denied workspace-wide and local builds deny warnings (#614)
 - **`mcp-execution-codegen`**: handshake server name and version are truncated before storage; nested unions are flattened in typed index signatures (#614)
+- **`mcp-execution-skill`**: a custom skill name that differs from the skill directory is rejected with a clear error instead of written unchecked; issue #612 (#631)
 
 ### Fixed
 

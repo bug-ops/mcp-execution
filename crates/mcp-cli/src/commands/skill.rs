@@ -11,8 +11,8 @@ use anyhow::{Context, Result, bail};
 use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_skill::{
-    GenerateSkillResult, ParsedToolFile, ScanResult, build_skill_context, render_skill_md,
-    scan_tools_directory, validate_server_id, validate_skill_name,
+    GenerateSkillResult, ParsedToolFile, ScanResult, SkillName, build_skill_context,
+    render_skill_md, scan_tools_directory, skill_directory_name, validate_server_id,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -308,12 +308,18 @@ fn prepare_skill_context(
     // #435).
     let hints_ref: Option<Vec<String>> = if hints.is_empty() { None } else { Some(hints) };
 
-    if let Some(name) = skill_name {
-        validate_skill_name(name)
-            .map_err(|e| CoreError::InvalidArgument(format!("Invalid skill name: {e}")))?;
-    }
+    // The skill is written into one directory, and a custom name must equal that directory's
+    // name (FR-043.6): the default path's directory is `server`.
+    let skill_name = skill_name
+        .map(|name| {
+            SkillName::new(name)
+                .map_err(|e| CoreError::InvalidArgument(format!("Invalid skill name: {e}")))?
+                .in_directory(skill_directory_name(server, output_path.as_deref()))
+                .map_err(|e| CoreError::InvalidArgument(format!("Invalid skill name: {e}")))
+        })
+        .transpose()?;
 
-    let context = build_skill_context(server, tools, hints_ref.as_deref(), skill_name);
+    let context = build_skill_context(server, tools, hints_ref.as_deref(), skill_name.as_ref());
 
     if let Some(path) = &output_path {
         validate_output_path(path)?;
@@ -935,7 +941,7 @@ mod tests {
         write_meta_sidecar(&server_dir, "github", "create_issue");
 
         // Use custom output path to avoid conflicts with real files
-        let output_path = temp.path().join("SKILL.md");
+        let output_path = temp.path().join("github-advanced").join("SKILL.md");
 
         let result = run(
             "github".to_string(),
@@ -973,8 +979,14 @@ mod tests {
     fn test_prepare_skill_context_with_custom_skill_name_reflects_it_in_generation_prompt() {
         let tools = vec![];
 
-        let (context, _output_path) =
-            prepare_skill_context("github", &tools, vec![], Some("github-advanced"), None).unwrap();
+        let (context, _output_path) = prepare_skill_context(
+            "github",
+            &tools,
+            vec![],
+            Some("github-advanced"),
+            Some(PathBuf::from("github-advanced/SKILL.md")),
+        )
+        .unwrap();
 
         assert_eq!(context.skill_name, "github-advanced");
         assert!(
