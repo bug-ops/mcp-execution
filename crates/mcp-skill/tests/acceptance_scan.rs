@@ -1,5 +1,9 @@
 //! Acceptance tests for #566, #568 and #584 on the skill side: the catalog is not a tool, the v3
 //! sidecar and its size cap are enforced, and raw property keys are displayed safely.
+#![expect(
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use mcp_execution_core::metadata::{
     CATALOG_FILE_NAME, MAX_METADATA_FILE_BYTES, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION,

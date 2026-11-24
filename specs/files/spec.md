@@ -209,6 +209,14 @@ process between the check and the open. A pre-existing *regular* file at
 the temp path is still opened and truncated normally; only a symlink at
 that exact path is rejected.
 
+The same primitive guards the other two predictable-path writes in this
+crate: `write_file_atomic`'s direct (`atomic == false`) branch opens the
+target itself through it (issue #506), and `touch_dir`'s
+`.mtime-touch-{pid}` marker file instead unlinks any pre-existing entry
+(without following it) and creates the marker with `create_new` (`O_EXCL`),
+since a marker never needs truncation: a planted symlink or hardlink can
+neither redirect the write nor have its target truncated (issue #505).
+
 ### Non-goals / accepted gaps
 
 - On non-Unix platforms, the symlink guard on `write_file_atomic`'s
@@ -341,6 +349,10 @@ is outside the base" (#311).
   exact same staging/atomic-rename mechanism, writing files via `rayon`
   instead — faster for >50 files, may not preserve write order (order
   doesn't matter for a flat file tree).
+- `vfs_to_disk_path` is the single VFS-to-disk resolver (`pub(crate)`):
+  `FilesBuilder::build_and_export`'s bare top-level files go through it too,
+  so the `..` check and Windows separator handling are not duplicated
+  (issue #474).
 - `vfs_to_disk_path`'s defense-in-depth `..`-traversal check (a safety net
   behind `FilePath::new`'s own validation) used to `assert!` on a match,
   panicking the whole process if a `..` ever reached it. It now returns
@@ -369,7 +381,7 @@ rendered degraded). Derivation and proof: [[../codegen/spec#9. Resource-Exhausti
 |----|-------------|--------|
 | FR-032.F1 | WHEN a fixed generated file is added or removed (#566, #567, #571, #575) THE SYSTEM SHALL keep `MAX_EXPORT_FILES` equal to `MAX_GENERATED_FILES`, through the existing derivation and not an independent number | implemented for #566 and #567 (7 fixed files); still applies to #571 and #575 |
 | FR-032.F2 | WHEN the generated-bytes bound is re-derived (for example to count an output schema per tool, or the catalog) THE SYSTEM SHALL keep `MAX_EXPORT_BYTES` equal to `MAX_GENERATED_BYTES` | implemented for #482/#566 |
-| FR-032.F3 | WHEN a package changes either generated bound THE SYSTEM SHALL cover it with a test that generates at `MAX_TOOL_COUNT` tools and exports the result without a bound error | partly covered: a codegen test generates at `MAX_TOOL_COUNT` (file count `MAX_TOOL_COUNT + FIXED_FILE_COUNT`, compact sidecar under the scan cap); no test exports that output, and the export half rests on the constants' equality by derivation |
+| FR-032.F3 | WHEN a package changes either generated bound THE SYSTEM SHALL cover it with a test that generates at `MAX_TOOL_COUNT` tools and exports the result without a bound error | covered: a codegen test generates at `MAX_TOOL_COUNT` (file count `MAX_TOOL_COUNT + FIXED_FILE_COUNT`, compact sidecar under the scan cap), and `test_export_of_output_generated_at_the_maximum_tool_count_succeeds` (`crates/mcp-files/tests/integration_filesystem.rs`, #602) exports that output without a bound error and checks every file on disk |
 | FR-032.F4 | THE SYSTEM SHALL update, in the same pull request, the as-built text of this block that cites the bounds ([[#2. Public API Surface]] and [[#8. Cross-Crate Contracts]]) when a bound's derivation changes | done: the doc comments on `MAX_EXPORT_FILES`/`MAX_EXPORT_BYTES` describe the 7 fixed files and the per-tool bound |
 
 The IDs above carry the FR-032 prefix but serve every capability that adds or removes a fixed file

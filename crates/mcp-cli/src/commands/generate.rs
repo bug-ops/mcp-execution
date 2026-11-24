@@ -235,7 +235,7 @@ async fn discover_server_info(
 
     info!("Connecting to MCP server: {}", server_id);
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let mut server_info = introspector
         .discover_server(server_id, server_config)
         .await

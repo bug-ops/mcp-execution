@@ -1,16 +1,16 @@
-//! Progressive loading code generation for MCP tools.
+//! TypeScript SDK generation for MCP tools.
 //!
-//! This crate generates TypeScript files for progressive loading pattern,
-//! where each MCP tool is a separate file. This enables Claude Code to
-//! discover and load tools on-demand, achieving 98% token savings.
+//! This crate turns an MCP server's tool definitions into a typed TypeScript
+//! SDK: one file per tool, a type-only catalog and a runtime bridge. A model
+//! programs against the SDK, so loops, joins and large results stay in code
+//! and only the answer reaches its context.
 //!
 //! # Architecture
 //!
-//! The progressive loading pattern works as follows:
-//!
-//! 1. **Tool Discovery**: Claude Code lists files in `~/.claude/servers/{server-id}/`
-//! 2. **Selective Loading**: Claude Code reads only the tools it needs
-//! 3. **Execution**: Generated TypeScript code calls MCP tools via bridge
+//! 1. **Discovery**: a model lists or reads `catalog.ts` in `~/.claude/servers/{server-id}/`
+//! 2. **Selection**: it reads only the tool files it needs
+//! 3. **Execution**: generated TypeScript calls MCP tools through the runtime bridge, either
+//!    as a single call (`node tool.ts '{"param":"value"}'`) or from a script
 //!
 //! # Example
 //!
@@ -31,19 +31,14 @@
 //! ```text
 //! ~/.claude/servers/github/
 //! ├── index.ts              # Re-exports all tools
-//! ├── createIssue.ts       # Individual tool file
-//! ├── updateIssue.ts       # Individual tool file
+//! ├── catalog.ts            # One type-only signature per tool
+//! ├── createIssue.ts        # Individual tool file
+//! ├── updateIssue.ts        # Individual tool file
 //! └── _runtime/
-//!     └── mcp-bridge.ts    # Runtime helper
+//!     ├── mcp-bridge.ts     # Runtime helper
+//!     └── cli.ts            # Single-call entry point
 //! ```
-//!
-//! # Token Savings
-//!
-//! - **Traditional**: Load all 30 tools upfront = 30,000 tokens
-//! - **Progressive**: Load on-demand = ~2,000 tokens per tool
-//! - **Savings**: 93-98%
 
-#![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
 // Core modules (always available)

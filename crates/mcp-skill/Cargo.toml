@@ -6,7 +6,6 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "SKILL.md generation for Claude Code integration with MCP tools"
 keywords = ["mcp", "skill", "claude-code", "codegen"]
 categories = ["development-tools"]
@@ -27,5 +26,7 @@ tokio = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+mcp-execution-codegen = { workspace = true }
+mcp-execution-introspector = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

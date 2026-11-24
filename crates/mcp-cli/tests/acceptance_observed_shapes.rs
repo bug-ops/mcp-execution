@@ -3,6 +3,11 @@
 //!
 //! Drives the real binary against a scriptable stdio MCP server run by Node, with `$HOME`
 //! pointed at a temp directory. Skips locally, and hard-fails in CI, when Node is unavailable.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use std::path::Path;
 use std::process::{Command, Output};

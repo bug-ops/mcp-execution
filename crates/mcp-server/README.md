@@ -6,7 +6,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
-MCP server for generating progressive loading TypeScript files. Achieves **98% token savings** by leveraging Claude's natural language understanding for tool categorization.
+MCP server that generates a typed TypeScript SDK from MCP servers, leaning on the calling model's natural language understanding for tool categorization.
 
 ## Installation
 
@@ -107,7 +107,7 @@ Generate TypeScript files using Claude's categorization.
 
 ### `list_generated_servers`
 
-List all servers with generated progressive loading files.
+List all servers with generated SDK files.
 
 ### `generate_skill`
 
@@ -132,7 +132,7 @@ introspect_server → Claude categorizes → save_categorized_tools → TypeScri
 
 - **5 MCP Tools**: Complete workflow from introspection to skill generation
 - **No LLM API Required**: Claude handles categorization in conversation
-- **98% Token Savings**: Progressive loading pattern reduces context usage
+- **Typed SDK Generation**: One TypeScript file per tool, a type-only catalog and a runtime bridge
 - **Type-Safe**: Full TypeScript types from MCP JSON schemas
 - **Session Management**: Automatic 30-minute session expiry
 

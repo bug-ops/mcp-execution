@@ -26,13 +26,11 @@ This document provides comprehensive guidelines for GitHub Copilot to generate h
 
 ### Project Overview
 
-**MCP Execution** is a Rust workspace implementing the Code Execution pattern for Model Context Protocol (MCP) using WebAssembly for secure, isolated code execution.
+**MCP Execution** is a Rust workspace that turns Model Context Protocol (MCP) servers into typed TypeScript SDKs: it introspects a server and generates one TypeScript file per tool, a type-only catalog and a runtime bridge that scripts import.
 
-**Key Metrics**:
-- 90%+ token reduction target
-- <50ms execution overhead
-- Zero sandbox escapes
-- 314+ tests (100% passing)
+**Key Properties**:
+- Generated TypeScript runs directly on Node.js (22.18.0+)
+- Server-controlled text is sanitized before it reaches generated code or output
 - Cross-platform support (Linux, macOS, Windows)
 
 ### Workspace Structure
@@ -42,10 +40,10 @@ mcp-execution/
 ├── crates/
 │   ├── mcp-core/          - Foundation: types, errors, ServerConfig validation
 │   ├── mcp-introspector/  - MCP server analysis (rmcp 3.5)
-│   ├── mcp-codegen/       - TypeScript code generation (progressive loading)
+│   ├── mcp-codegen/       - TypeScript code generation (typed SDK, catalog, runtime bridge)
 │   ├── mcp-files/         - Virtual filesystem and export
 │   ├── mcp-skill/         - SKILL.md generation
-│   ├── mcp-server/        - MCP server exposing progressive loading
+│   ├── mcp-server/        - MCP server exposing SDK generation
 │   └── mcp-cli/           - CLI application
 └── .local/                - Detailed documentation (not in git)
 ```
@@ -54,7 +52,6 @@ mcp-execution/
 
 - **Rust Edition**: 2024 (MSRV: 1.91)
 - **MCP SDK**: rmcp 3.5 (official Rust SDK)
-- **WASM Runtime**: Wasmtime v39.0
 - **Async Runtime**: Tokio v1.48
 - **Testing**: cargo-nextest, criterion
 - **CI/CD**: GitHub Actions with cargo-deny
@@ -69,7 +66,7 @@ mcp-execution/
 
 **Key Requirements**:
 
-- **Strong Types Over Primitives**: Use `ServerId`, `ToolName`, `SessionId`, etc., not `String` or `u64`
+- **Strong Types Over Primitives**: Use `ServerId`, `ToolName`, etc., not `String` or `u64`
 - **Error Handling**: `thiserror` for library crates, `anyhow` only for CLI (`mcp-cli`)
 - **Public Types**: Must implement `Send + Sync + Debug`
 - **Documentation**: Every public item needs doc comments with examples
@@ -112,10 +109,9 @@ let client = rmcp::client::Client::new(transport);
 
 ### 3. Security First
 
-- WASM sandbox with memory/CPU limits
-- No network access from WASM (only via MCP Bridge)
-- WASI preopened directories only
-- Rate limiting on all tool calls
+- Validate server configuration (`ServerConfig`) before spawning any process
+- Treat all MCP server output as untrusted text; sanitize before interpolating into generated code
+- Confine file writes to the target directory (no path traversal, no symlink following)
 - No hardcoded secrets
 - Input validation on all external data
 
@@ -144,7 +140,7 @@ let client = rmcp::client::Client::new(transport);
 
 **What NOT to commit**:
 - ❌ Working documents and drafts (→ use `.local/`)
-- ❌ Build artifacts (`target/`, `*.wasm`)
+- ❌ Build artifacts (`target/`)
 - ❌ IDE files (`.vscode/`, `.idea/`)
 - ❌ Temporary files (`*.tmp`, `*.swp`, `*.bak`)
 - ❌ Sensitive data (`.env`, credentials)
@@ -313,24 +309,24 @@ pub use types::{ServerId, ToolName};
 
 ```rust
 // ✅ GOOD: Builder for structs with >3 fields
-pub struct WasmConfig {
+pub struct ConnectionConfig {
     max_memory: usize,
     timeout: Duration,
-    preopened_dirs: Vec<PathBuf>,
+    env: Vec<(String, String)>,
 }
 
-pub struct WasmConfigBuilder {
+pub struct ConnectionConfigBuilder {
     max_memory: usize,
     timeout: Duration,
-    preopened_dirs: Vec<PathBuf>,
+    env: Vec<(String, String)>,
 }
 
-impl WasmConfigBuilder {
+impl ConnectionConfigBuilder {
     pub fn new() -> Self {
         Self {
             max_memory: 64 * 1024 * 1024, // 64MB
             timeout: Duration::from_secs(30),
-            preopened_dirs: Vec::new(),
+            env: Vec::new(),
         }
     }
 
@@ -344,11 +340,11 @@ impl WasmConfigBuilder {
         self
     }
 
-    pub fn build(self) -> WasmConfig {
-        WasmConfig {
+    pub fn build(self) -> ConnectionConfig {
+        ConnectionConfig {
             max_memory: self.max_memory,
             timeout: self.timeout,
-            preopened_dirs: self.preopened_dirs,
+            env: self.env,
         }
     }
 }
@@ -366,7 +362,7 @@ impl WasmConfigBuilder {
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum BridgeError {
+pub enum IntrospectionError {
     #[error("failed to connect to MCP server")]
     ConnectionFailed(#[source] std::io::Error),
 
@@ -380,12 +376,12 @@ pub enum BridgeError {
     InvalidInput(String),
 }
 
-pub type Result<T> = std::result::Result<T, BridgeError>;
+pub type Result<T> = std::result::Result<T, IntrospectionError>;
 
 // Usage in functions
 pub fn call_tool(name: &str, args: Value) -> Result<Value> {
     let tool = registry.find(name)
-        .ok_or_else(|| BridgeError::ToolNotFound {
+        .ok_or_else(|| IntrospectionError::ToolNotFound {
             name: name.to_string()
         })?;
 
@@ -556,22 +552,15 @@ mod tests {
 ```rust
 // tests/integration_test.rs
 
-use mcp_bridge::{Bridge, BridgeConfig};
+use mcp_execution_codegen::progressive::ProgressiveGenerator;
 
-#[tokio::test]
-async fn test_full_bridge_workflow() {
-    // Setup
-    let config = BridgeConfig::default();
-    let bridge = Bridge::new(config).await.unwrap();
-
-    // Execute
-    let result = bridge.call_tool("test_tool", json!({})).await.unwrap();
+#[test]
+fn test_generator_constructs() {
+    // Setup and execute
+    let generator = ProgressiveGenerator::new();
 
     // Verify
-    assert!(result.is_object());
-
-    // Cleanup
-    bridge.shutdown().await.unwrap();
+    assert!(generator.is_ok());
 }
 ```
 
@@ -696,7 +685,7 @@ pub struct ToolInput {
 
 pub fn process_tool_input(input: ToolInput) -> Result<Tool> {
     input.validate()
-        .map_err(|e| BridgeError::ValidationFailed(e.to_string()))?;
+        .map_err(|e| IntrospectionError::ValidationFailed(e.to_string()))?;
 
     Ok(Tool::new(input.name, Duration::from_millis(input.timeout_ms)))
 }
@@ -777,7 +766,7 @@ pub unsafe fn bytes_to_str_unchecked(bytes: &[u8]) -> &str {
 ```rust
 /// Represents a tool in the MCP system.
 ///
-/// Tools are executable units that can be invoked through the MCP bridge.
+/// Tools are executable units that can be invoked through an MCP server.
 /// Each tool has a unique name and schema defining its input parameters.
 ///
 /// # Examples
@@ -927,11 +916,12 @@ let result: Result<Tool, _> = maybe_tool
     .ok_or_else(|| Error::ToolNotFound)?;
 
 // Add context to errors
-bridge.call_tool(name, args)
-    .context("failed to call MCP tool")?;
+introspector.discover_server(server_id, &config)
+    .await
+    .context("failed to introspect MCP server")?;
 
 // Map errors
-io_result.map_err(|e| BridgeError::IoError(e))?;
+io_result.map_err(|e| IntrospectionError::IoError(e))?;
 ```
 
 ### Collection Patterns

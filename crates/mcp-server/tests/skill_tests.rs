@@ -1,4 +1,8 @@
 //! Integration tests for skill generation.
+#![expect(
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use mcp_execution_core::metadata::{
     METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
@@ -164,7 +168,7 @@ async fn test_build_skill_context_integration() {
     let context = build_skill_context("github", &tools, Some(&use_case_hints), None);
 
     assert_eq!(context.server_id, "github");
-    assert_eq!(context.skill_name, "github-progressive");
+    assert_eq!(context.skill_name, "github");
     assert_eq!(context.tool_count, 2);
     assert_eq!(context.categories.len(), 2);
     assert_ne!(context.generation_prompt, "");

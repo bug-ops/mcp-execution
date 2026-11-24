@@ -3,11 +3,11 @@
 //! Defines data structures used during progressive code generation,
 //! where each tool is generated as a separate file.
 
-use crate::common::typescript::TS_IDENTIFIER_PATTERN;
 use crate::progressive::observed::{
     OBSERVED_SHAPE_MAX_DEPTH, OBSERVED_SHAPE_MAX_KEY_LEN, OBSERVED_SHAPE_MAX_KEYS,
     OBSERVED_SHAPE_MAX_LINE_BYTES,
 };
+use mcp_execution_core::untrusted::BARE_IDENTIFIER_PATTERN;
 use serde::{Deserialize, Serialize};
 
 /// How the generated tool function asks the runtime bridge for a tool's result.
@@ -447,7 +447,7 @@ impl Default for BridgeContext {
             observed_shape_max_key_len: OBSERVED_SHAPE_MAX_KEY_LEN,
             observed_shape_max_line_bytes: OBSERVED_SHAPE_MAX_LINE_BYTES,
             identifier_pattern: crate::progressive::generator::sanitize_ts_string_literal(
-                TS_IDENTIFIER_PATTERN,
+                BARE_IDENTIFIER_PATTERN,
             ),
         }
     }

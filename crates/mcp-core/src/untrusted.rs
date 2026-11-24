@@ -442,6 +442,43 @@ pub fn sanitize_untrusted_inline(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Anchored pattern source (JavaScript `RegExp` syntax) matching a bare ASCII identifier, the
+/// property-key form that needs no quoting.
+///
+/// The single definition of the rule: [`is_bare_identifier`] is the same predicate in Rust, and
+/// the generated runtime bridge receives this text so the recorder agrees with the converter and
+/// the skill's parameter display.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::untrusted::BARE_IDENTIFIER_PATTERN;
+///
+/// assert_eq!(BARE_IDENTIFIER_PATTERN, "^[A-Za-z_$][A-Za-z0-9_$]*$");
+/// ```
+pub const BARE_IDENTIFIER_PATTERN: &str = "^[A-Za-z_$][A-Za-z0-9_$]*$";
+
+/// Whether `s` matches [`BARE_IDENTIFIER_PATTERN`]: an ASCII identifier usable as a bare
+/// property key.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::untrusted::is_bare_identifier;
+///
+/// assert!(is_bare_identifier("_private"));
+/// assert!(!is_bare_identifier("per-page"));
+/// assert!(!is_bare_identifier(""));
+/// ```
+#[must_use]
+pub fn is_bare_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

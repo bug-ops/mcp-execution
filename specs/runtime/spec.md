@@ -69,7 +69,7 @@ fixes them.
 | The bridge has no output bound, no call record and no write policy (it only has the opt-in observed-shape recorder of #587, which records types and never values) | `runtime-bridge.ts.hbs` (`callMCPTool`) |
 | The CLI has no subcommand that runs a script or calls a tool | [[../cli/spec]] section 2 |
 | Exit codes: success 0, error 1, invalid input 2, server error 3, timeout 4 | `crates/mcp-core/src/cli.rs:139-183`; [[../cli/spec]] section 5 |
-| `setup` accepts Node.js 18 and later | `crates/mcp-cli/src/commands/setup.rs:229` |
+| `setup` accepts Node.js 22.18.0 and later (23.6.0 on the 23 line), the first versions that run `.ts` files without a flag | `crates/mcp-cli/src/commands/setup.rs` (`NodeVersion::runs_typescript_natively`) |
 
 The consequence is that the project has two MCP clients with different
 validation, transports and protocol negotiation, and the second is the one that
@@ -108,8 +108,8 @@ pasted into the context; the introspector's response cap protects against a
 hostile server and is not a context budget ([[../introspector/spec]] sections
 4 and 5). Experiments on Node 26 showed that a TypeScript script from standard
 input with top-level `await` runs, that an absolute-path import of a `.ts`
-module works, and that `module.registerHooks` exists; `setup` still accepts
-Node 18 (`setup.rs:229`), so the Node floor is open.
+module works, and that `module.registerHooks` exists; `setup` now requires
+Node 22.18.0 (23.6.0 on the 23 line, #564), the first versions that run `.ts` files without a flag; whether the runner needs a higher floor is open.
 
 ### Requirements
 
@@ -150,14 +150,17 @@ Node 18 (`setup.rs:229`), so the Node floor is open.
 
 - [NEEDS CLARIFICATION: command name, flags, and how file versus standard input is selected (working name `run`).]
 - [NEEDS CLARIFICATION: the stable import specifier and its mechanism (registered resolution hook, generated alias directory, rewriting); only `module.registerHooks` on Node 26 was verified.]
-- [NEEDS CLARIFICATION: minimum Node version, and whether `.ts` execution works at all on Node 18 and 20 (not verified).]
+- [NEEDS CLARIFICATION: whether the runner needs a Node floor above `setup`'s 22.18.0 (23.6.0 on the 23 line).]
 - [NEEDS CLARIFICATION: spill location, retention, count and size caps, permission bits; whether a failed spill write fails the run or continues truncated.]
 - [NEEDS CLARIFICATION: how notices stay off the script's channel (stderr, a delimiter with a per-run unpredictable token, a file descriptor).]
 - [NEEDS CLARIFICATION: default budget and time limit, and whether the budget is bytes or estimated tokens.]
 - [NEEDS CLARIFICATION: whether the bridge's classified failures map onto exit codes 3 and 4.]
 - [NEEDS CLARIFICATION: helper API shape and whether the helpers are a fixed generated file or ship with the CLI.]
 
-Ask first: the Node floor and any change to `setup`'s accepted versions; a new
+Resolved: the Node floor of 22.18.0 (23.6.0 on the 23 line) was approved by the user on 2026-11-24 (#564);
+capability detection instead of version numbers, and Bun and Deno, are tracked in #605.
+
+Ask first: any change to `setup`'s accepted versions; a new
 dependency (process groups, temporary files); any generation change that forces
 regeneration; default budget and time limit.
 
@@ -481,7 +484,7 @@ not gated. Tracked under epic #557.
 | Decision | Section | Owner |
 |----------|---------|-------|
 | Runtime strategy: who is the MCP client at run time | 3 | Maintainer, ADR-569 |
-| Run command name, flags, import specifier, Node floor | 4 | Maintainer, ask first |
+| Run command name, flags, import specifier | 4 | Maintainer, ask first |
 | Spill and journal locations, retention and bounds | 4, 5 | Implementer, documented |
 | Notice channel that scripts cannot forge | 4 | Implementer, reviewed |
 | Digest construction and keying | 5 | Maintainer, ask first |

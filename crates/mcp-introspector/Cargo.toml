@@ -6,7 +6,6 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "MCP server introspection and tool discovery using rmcp SDK"
 keywords = ["mcp", "introspection", "rmcp", "tools"]
 categories = ["development-tools"]

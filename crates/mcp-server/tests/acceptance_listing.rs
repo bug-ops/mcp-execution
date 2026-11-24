@@ -3,6 +3,10 @@
 //!
 //! Drives the real binary over stdio with `$HOME` pointed at a temp directory, since the tool
 //! handlers are private.
+#![expect(
+    clippy::expect_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use serde_json::Value;
 use std::io::{BufRead as _, BufReader, Write as _};

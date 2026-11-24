@@ -16,10 +16,11 @@ use crate::commands::common::{ServerSource, TransportArgs};
 use mcp_execution_core::cli::{LogFormat, OutputFormat};
 use mcp_execution_core::{Error as CoreError, RedactedItems, RedactedUrl, sanitize_path_for_error};
 
-/// MCP Code Execution - Secure WASM-based MCP tool execution.
+/// MCP Code Execution - typed TypeScript SDK generation for MCP servers.
 ///
-/// This CLI provides secure execution of MCP tools in a WebAssembly sandbox,
-/// achieving 90-98% token savings through progressive tool loading.
+/// This CLI introspects an MCP server and generates one TypeScript file per
+/// tool, a type-only catalog and a runtime bridge, so a model can script
+/// against the server.
 ///
 /// # Examples
 ///
@@ -450,7 +451,7 @@ pub enum Commands {
 
         /// Custom skill name
         ///
-        /// Default: {server}-progressive
+        /// Default: {server}
         #[arg(long)]
         skill_name: Option<String>,
 
@@ -540,7 +541,7 @@ pub enum Commands {
     /// Validate runtime environment for MCP tool execution.
     ///
     /// Checks that the system is ready to execute generated MCP tools:
-    /// - Verifies Node.js 18+ is installed
+    /// - Verifies a Node.js that runs `.ts` files without a flag (22.18.0+) is installed
     /// - Checks MCP configuration exists
     /// - Makes TypeScript files executable (Unix only)
     ///

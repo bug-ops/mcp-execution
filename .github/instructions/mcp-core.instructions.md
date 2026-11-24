@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/mcp-execution-core/**/*.rs"
+applyTo: "crates/mcp-core/**/*.rs"
 ---
 
 # Copilot Instructions: mcp-execution-core
@@ -10,7 +10,7 @@ This crate is the **foundation** of the workspace. It defines core types, traits
 
 `mcp-execution-core` provides:
 
-- **Strong types** (ServerId, ToolName, SessionId, etc.)
+- **Strong types** (ServerId, ToolName, etc.)
 - **Common traits** (shared interfaces)
 - **Error types** (base errors for the workspace)
 - **No external dependencies** (except basic ones)
@@ -84,16 +84,6 @@ pub struct ServerId(String);
 /// Name of a tool in an MCP server.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ToolName(String);
-
-/// Unique session identifier for WASM execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SessionId(u64);
-
-/// Cache key for tool results.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CacheKey {
-    hash: [u8; 32],  // Blake3 hash
-}
 ```
 
 ## Trait Design
@@ -154,40 +144,6 @@ pub struct Runtime {
 pub struct Tool {
     name: String,
     // ... no #[derive(Debug)]
-}
-```
-
-## Stats and Metrics
-
-Provide observability types:
-
-```rust
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Statistics for the MCP bridge.
-#[derive(Debug, Default)]
-pub struct BridgeStats {
-    pub total_calls: AtomicU64,
-    pub cache_hits: AtomicU64,
-    pub cache_misses: AtomicU64,
-    pub errors: AtomicU64,
-}
-
-impl BridgeStats {
-    pub fn increment_calls(&self) {
-        self.total_calls.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn get_cache_hit_rate(&self) -> f64 {
-        let hits = self.cache_hits.load(Ordering::Relaxed) as f64;
-        let total = self.total_calls.load(Ordering::Relaxed) as f64;
-
-        if total == 0.0 {
-            0.0
-        } else {
-            hits / total
-        }
-    }
 }
 ```
 
@@ -321,15 +277,6 @@ mod tests {
         map.insert(ServerId::new("test"), 42);
 
         assert_eq!(map.get(&ServerId::new("test")), Some(&42));
-    }
-
-    #[test]
-    fn test_stats_increment() {
-        let stats = BridgeStats::default();
-        stats.increment_calls();
-        stats.increment_calls();
-
-        assert_eq!(stats.total_calls.load(Ordering::Relaxed), 2);
     }
 }
 ```

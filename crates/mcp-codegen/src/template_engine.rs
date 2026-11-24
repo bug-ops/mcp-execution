@@ -191,6 +191,10 @@ impl<'a> TemplateEngine<'a> {
 }
 
 impl Default for TemplateEngine<'_> {
+    #[expect(
+        clippy::expect_used,
+        reason = "embedded templates are validated by tests"
+    )]
     fn default() -> Self {
         Self::new().expect("Failed to create default TemplateEngine")
     }

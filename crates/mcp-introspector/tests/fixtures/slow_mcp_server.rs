@@ -28,6 +28,10 @@
 //! directory on the second. This lets `tests/timeout_test.rs` assert
 //! that `ServerConfig::env`/`ServerConfig::cwd` actually reach the spawned
 //! child process, rather than only being covered at the config-object level.
+#![expect(
+    clippy::expect_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use rmcp::model::{InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities};
 use rmcp::service::RequestContext;

@@ -141,19 +141,80 @@ pub struct ServerList {
     pub servers: Vec<ServerEntry>,
 }
 
+/// Why `server info` reports a server as unavailable.
+///
+/// The message is passed through [`escape_error_text`] before it is stored, so it is safe to
+/// print and carries no credentials embedded in URLs. Serializes adjacently tagged, e.g.
+/// `{"kind":"invalid_configuration","message":"..."}`.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::UnavailableReason;
+///
+/// let reason = UnavailableReason::IntrospectionFailed("connection refused".to_string());
+/// assert_eq!(
+///     serde_json::to_string(&reason).unwrap(),
+///     r#"{"kind":"introspection_failed","message":"connection refused"}"#
+/// );
+/// ```
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "message", rename_all = "snake_case")]
+pub enum UnavailableReason {
+    /// The `mcp.json` entry failed configuration validation, so no connection was attempted.
+    InvalidConfiguration(String),
+    /// The configuration was valid but connecting to or introspecting the server failed.
+    IntrospectionFailed(String),
+}
+
+/// Availability of a server in `server info`, with the reason carried by the unavailable case.
+///
+/// Makes "available with a reason" and "unavailable without one" unrepresentable. Serializes
+/// flat when used as [`ServerInfo::status`]: `{"status":"available"}` or
+/// `{"status":"unavailable","reason":{...}}`.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::server::{ServerAvailability, UnavailableReason};
+///
+/// let down = ServerAvailability::Unavailable {
+///     reason: UnavailableReason::IntrospectionFailed("timeout".to_string()),
+/// };
+/// assert_eq!(
+///     serde_json::to_string(&down).unwrap(),
+///     r#"{"status":"unavailable","reason":{"kind":"introspection_failed","message":"timeout"}}"#
+/// );
+/// assert_eq!(
+///     serde_json::to_string(&ServerAvailability::Available).unwrap(),
+///     r#"{"status":"available"}"#
+/// );
+/// ```
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum ServerAvailability {
+    /// The server connected and was introspected.
+    Available,
+    /// The server could not be used, and why.
+    Unavailable {
+        /// Why the server is unavailable.
+        reason: UnavailableReason,
+    },
+}
+
 /// Detailed server information for output.
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_cli::commands::server::{ServerInfo, ServerStatus, ToolSummary};
+/// use mcp_execution_cli::commands::server::{ServerAvailability, ServerInfo, ToolSummary};
 ///
 /// let info = ServerInfo {
 ///     id: "github".to_string(),
 ///     name: "GitHub MCP".to_string(),
 ///     version: "1.0.0".to_string(),
 ///     command: "github-mcp-server".to_string(),
-///     status: ServerStatus::Available,
+///     status: ServerAvailability::Available,
 ///     tools: vec![],
 ///     capabilities: vec!["tools".to_string()],
 /// };
@@ -170,8 +231,9 @@ pub struct ServerInfo {
     pub version: String,
     /// Command used to start the server.
     pub command: String,
-    /// Current server status.
-    pub status: ServerStatus,
+    /// Current server status; flattened into `status` plus, when unavailable, `reason`.
+    #[serde(flatten)]
+    pub status: ServerAvailability,
     /// Available tools.
     pub tools: Vec<ToolSummary>,
     /// Server capabilities.
@@ -336,13 +398,17 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
     let server_config = match build_core_config(&entry) {
         Ok(config) => config,
         Err(e) => {
+            let message = escape_error_text(&e.to_string());
             warn!(
                 "Server '{}' has an invalid configuration: {}",
-                server,
-                escape_error_text(&e.to_string())
+                server, message
             );
             return crate::formatters::emit(
-                &unavailable_server_info(server, command),
+                &unavailable_server_info(
+                    server,
+                    command,
+                    UnavailableReason::InvalidConfiguration(message),
+                ),
                 output_format,
                 ExitCode::ERROR,
             );
@@ -351,7 +417,7 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
 
     info!("Introspecting server '{}'...", server);
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     match introspector
         .discover_server(server_id, &server_config)
         .await
@@ -382,7 +448,7 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
                 name: introspected.name,
                 version: introspected.version,
                 command,
-                status: ServerStatus::Available,
+                status: ServerAvailability::Available,
                 tools,
                 capabilities,
             };
@@ -390,14 +456,15 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
             crate::formatters::emit(&server_info, output_format, ExitCode::SUCCESS)
         }
         Err(e) => {
-            warn!(
-                "Failed to introspect server '{}': {}",
-                server,
-                escape_error_text(&e.to_string())
-            );
+            let message = escape_error_text(&e.to_string());
+            warn!("Failed to introspect server '{}': {}", server, message);
 
             crate::formatters::emit(
-                &unavailable_server_info(server, command),
+                &unavailable_server_info(
+                    server,
+                    command,
+                    UnavailableReason::IntrospectionFailed(message),
+                ),
                 output_format,
                 ExitCode::ERROR,
             )
@@ -407,14 +474,19 @@ async fn show_server_info(server: String, output_format: OutputFormat) -> Result
 
 /// Builds the `"status": "unavailable"` [`ServerInfo`] shared by `show_server_info`'s two failure
 /// branches — invalid configuration and failed introspection — so both report through the same
-/// structured shape.
-fn unavailable_server_info(server: String, command: String) -> ServerInfo {
+/// structured shape, carrying the `reason` the caller would otherwise have to re-derive with
+/// `server validate` (#480).
+fn unavailable_server_info(
+    server: String,
+    command: String,
+    reason: UnavailableReason,
+) -> ServerInfo {
     ServerInfo {
         id: server.clone(),
         name: server,
         version: "unknown".to_string(),
         command,
-        status: ServerStatus::Unavailable,
+        status: ServerAvailability::Unavailable { reason },
         tools: Vec::new(),
         capabilities: Vec::new(),
     }
@@ -501,7 +573,7 @@ async fn validate_command(server_name: String, output_format: OutputFormat) -> R
         }
     };
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     match introspector
         .discover_server(server_id, &server_config)
         .await
@@ -670,6 +742,13 @@ async fn discover_within(name: &str, config: &ServerConfig, timeout: Duration) -
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+    )
+)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
@@ -1018,7 +1097,7 @@ mod tests {
             name: "Test Server".to_string(),
             version: "1.0.0".to_string(),
             command: "test-cmd".to_string(),
-            status: ServerStatus::Available,
+            status: ServerAvailability::Available,
             tools: vec![ToolSummary {
                 name: "test_tool".to_string(),
                 description: "A test tool".to_string(),
@@ -1031,6 +1110,7 @@ mod tests {
         assert!(json.contains("Test Server"));
         assert!(json.contains("capabilities"));
         assert!(json.contains("tools"));
+        assert!(!json.contains("reason"));
     }
 
     #[test]
@@ -1312,9 +1392,18 @@ mod tests {
         // helper, so asserting its output here confirms the JSON body actually carries
         // `"status": "unavailable"` — the ExitCode-only end-to-end tests above cannot observe
         // this crate's `println!`-only output (see `with_home_pointed_at` test comments).
-        let info = unavailable_server_info("http-malformed".to_string(), "curl".to_string());
+        let info = unavailable_server_info(
+            "http-malformed".to_string(),
+            "curl".to_string(),
+            UnavailableReason::InvalidConfiguration("bad scheme".to_string()),
+        );
 
-        assert_eq!(info.status, ServerStatus::Unavailable);
+        assert_eq!(
+            info.status,
+            ServerAvailability::Unavailable {
+                reason: UnavailableReason::InvalidConfiguration("bad scheme".to_string())
+            }
+        );
         assert_eq!(info.id, "http-malformed");
         assert_eq!(info.name, "http-malformed");
         assert_eq!(info.tools, []);
@@ -1322,6 +1411,20 @@ mod tests {
 
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"status\":\"unavailable\""));
+        assert!(
+            json.contains(r#""reason":{"kind":"invalid_configuration","message":"bad scheme"}"#)
+        );
+    }
+
+    #[test]
+    fn test_unavailable_reason_distinguishes_failure_kinds() {
+        let invalid =
+            serde_json::to_string(&UnavailableReason::InvalidConfiguration("a".into())).unwrap();
+        let failed =
+            serde_json::to_string(&UnavailableReason::IntrospectionFailed("a".into())).unwrap();
+        assert_ne!(invalid, failed);
+        assert!(invalid.contains("invalid_configuration"));
+        assert!(failed.contains("introspection_failed"));
     }
 
     // ── validate_command config-load vs. name-lookup error paths (#479) ──

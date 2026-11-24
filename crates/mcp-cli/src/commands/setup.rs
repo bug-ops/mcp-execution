@@ -1,7 +1,7 @@
 //! Setup command implementation.
 //!
 //! Validates the runtime environment for MCP tool execution:
-//! - Checks Node.js 18+ is installed
+//! - Checks a Node.js that runs `.ts` files without a flag (22.18.0+) is installed
 //! - Verifies generated files are executable
 //! - Provides helpful error messages and suggestions
 
@@ -66,7 +66,8 @@ pub struct SetupResult {
 ///
 /// # Checks Performed
 ///
-/// 1. **Node.js version**: Ensures Node.js 18.0.0 or higher is installed
+/// 1. **Node.js version**: Ensures Node.js 22.18.0 or higher (23.6.0 or higher on the 23 line) is
+///    installed, the first versions that run generated `.ts` files without a flag
 /// 2. **File permissions**: Makes TypeScript files executable (Unix only)
 /// 3. **Configuration**: Checks if ~/.claude/mcp.json exists
 ///
@@ -90,7 +91,7 @@ pub struct SetupResult {
 ///
 /// Returns an error if:
 /// - Node.js is not installed
-/// - Node.js version is less than 18.0.0
+/// - Node.js version cannot run `.ts` files without a flag (below 22.18.0, or 23.0.0 to 23.5.x)
 /// - Home directory cannot be determined
 /// - Output formatting fails (serialization error)
 pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
@@ -181,17 +182,87 @@ fn print_pretty_summary(result: &SetupResult) {
     println!("  3. Execute tools autonomously via Node.js");
 }
 
+/// Parsed Node.js version, as printed by `node --version`.
+///
+/// Exists so the "can run `.ts` files unflagged" rule lives in one typed place
+/// instead of an ad-hoc major-version comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct NodeVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+impl NodeVersion {
+    /// First release on each release line that runs `.ts` files without a flag, ascending by
+    /// major. Every later major runs them too. The check and the message both derive from this.
+    const FIRST_NATIVE_TS: [Self; 2] = [
+        Self {
+            major: 22,
+            minor: 18,
+            patch: 0,
+        },
+        Self {
+            major: 23,
+            minor: 6,
+            patch: 0,
+        },
+    ];
+
+    /// Human-readable minimum shown in messages, e.g. `22.18.0 (23.6.0 on the 23 line)`.
+    fn minimum_text() -> String {
+        let [first, second] = Self::FIRST_NATIVE_TS;
+        format!("{first} ({second} on the {} line)", second.major)
+    }
+
+    /// Parses `v22.18.0` or `22.18.0`; a pre-release suffix on the patch is ignored.
+    fn parse(raw: &str) -> Option<Self> {
+        let mut parts = raw.trim().trim_start_matches('v').split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch_digits: String = parts
+            .next()?
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let patch = patch_digits.parse().ok()?;
+        Some(Self {
+            major,
+            minor,
+            patch,
+        })
+    }
+
+    /// Whether Node.js executes `.ts` files without `--experimental-strip-types`: at or after
+    /// the first native release of its own line (see [`Self::FIRST_NATIVE_TS`]), or on a later
+    /// major than any listed line.
+    fn runs_typescript_natively(self) -> bool {
+        let newest_listed = Self::FIRST_NATIVE_TS[Self::FIRST_NATIVE_TS.len() - 1].major;
+        self.major > newest_listed
+            || Self::FIRST_NATIVE_TS
+                .iter()
+                .any(|first| first.major == self.major && self >= *first)
+    }
+}
+
+impl std::fmt::Display for NodeVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
 /// Checks Node.js version requirement.
 ///
-/// Verifies that Node.js 18.0.0 or higher is installed and accessible, and
-/// returns the detected version string (without the leading `v`).
+/// Verifies that a Node.js able to run generated `.ts` files without a flag
+/// is installed (22.18.0 or later; 23.6.0 or later on the 23 line) and
+/// accessible, and returns its version string without the leading `v`.
 ///
 /// # Errors
 ///
 /// Returns error if:
 /// - Node.js command not found in PATH
 /// - Node.js version cannot be determined
-/// - Node.js version is less than 18.0.0
+/// - Node.js cannot execute `.ts` files without a flag
 async fn check_node_version() -> Result<String> {
     // Check if node command exists
     let output = Command::new("node")
@@ -200,46 +271,43 @@ async fn check_node_version() -> Result<String> {
         .stderr(Stdio::piped())
         .output()
         .await
-        .context(
-            "Node.js not found in PATH.\n\
-             \n\
-             Node.js 18+ is required for MCP tool execution.\n\
-             Install from: https://nodejs.org\n\
-             \n\
-             Or use a version manager:\n\
-             - nvm: https://github.com/nvm-sh/nvm\n\
-             - fnm: https://github.com/Schniz/fnm",
-        )?;
+        .with_context(|| {
+            format!(
+                "Node.js not found in PATH.\n\
+                 \n\
+                 Node.js {}+ is required to run generated TypeScript tools.\n\
+                 Install from: https://nodejs.org\n\
+                 \n\
+                 Or use a version manager:\n\
+                 - nvm: https://github.com/nvm-sh/nvm\n\
+                 - fnm: https://github.com/Schniz/fnm",
+                NodeVersion::FIRST_NATIVE_TS[0]
+            )
+        })?;
 
     if !output.status.success() {
         anyhow::bail!("Node.js is installed but not working correctly");
     }
 
-    // Parse version
     let version_str = String::from_utf8_lossy(&output.stdout);
     let version_str = version_str.trim().trim_start_matches('v');
+    let version = NodeVersion::parse(version_str).context("Failed to parse Node.js version")?;
 
-    // Extract major version
-    let major_version = version_str
-        .split('.')
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-        .context("Failed to parse Node.js version")?;
-
-    if major_version < 18 {
+    if !version.runs_typescript_natively() {
         anyhow::bail!(
-            "Node.js version {version_str} is too old.\n\
+            "Node.js version {version_str} cannot run generated TypeScript tools.\n\
              \n\
-             Required: Node.js 18.0.0 or higher\n\
+             Required: Node.js {minimum} or higher\n\
              Current:  Node.js {version_str}\n\
              \n\
              Please upgrade Node.js:\n\
              - Download: https://nodejs.org\n\
-             - Or use nvm: nvm install 18"
+             - Or use nvm: nvm install 22",
+            minimum = NodeVersion::minimum_text(),
         );
     }
 
-    Ok(version_str.to_string())
+    Ok(version.to_string())
 }
 
 /// Checks for and makes TypeScript files executable (Unix only).
@@ -299,16 +367,16 @@ async fn check_files_executable() -> Result<(bool, usize, usize)> {
 ///
 /// # Errors
 ///
-/// Returns an error if `servers_dir` cannot be canonicalized, the root
-/// directory itself cannot be opened for reading, an entry's file type
-/// cannot be determined, or a `.ts` file's permissions cannot be read or
-/// changed. A root-open failure is fatal (there are no sibling directories
-/// to protect at the root, so tolerating it would only hide a real error).
-/// Below the root, a directory that fails to open, or a read error
-/// encountered mid-iteration over any directory's entries (root included),
-/// is not propagated: it is logged as a warning and the walk moves on (to
-/// the next sibling entry, or simply stops if the affected directory is the
-/// walk's root) rather than aborting the whole `setup` run.
+/// Returns an error if `servers_dir` cannot be canonicalized or the root
+/// directory itself cannot be opened for reading. A root-open failure is
+/// fatal (there are no sibling directories to protect at the root, so
+/// tolerating it would only hide a real error). Every other failure is not
+/// propagated but logged as a warning, and the walk moves on rather than
+/// aborting the whole `setup` run: a directory below the root that fails to
+/// open, a read error mid-iteration over any directory's entries (root
+/// included; the affected directory's remaining entries are skipped), an
+/// entry whose file type cannot be determined, and a `.ts` file whose
+/// permissions cannot be read or changed (such a file is not counted).
 #[cfg(unix)]
 async fn check_files_executable_in(servers_dir: &Path) -> Result<(bool, usize, usize)> {
     use tokio::fs;
@@ -370,9 +438,6 @@ async fn walk_entries(
     count: &mut usize,
     skipped: &mut usize,
 ) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    use tokio::fs;
-
     loop {
         let entry = match entries.next_entry().await {
             Ok(Some(entry)) => entry,
@@ -388,7 +453,17 @@ async fn walk_entries(
         };
 
         let path = entry.path();
-        let file_type = entry.file_type().await?;
+        let file_type = match entry.file_type().await {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                tracing::warn!(
+                    path = %sanitize_path_for_error(&path),
+                    %error,
+                    "skipping entry whose file type cannot be determined"
+                );
+                continue;
+            }
+        };
         if file_type.is_symlink() {
             tracing::warn!(
                 path = %sanitize_path_for_error(&path),
@@ -407,14 +482,28 @@ async fn walk_entries(
             continue;
         }
 
-        let metadata = fs::metadata(&path).await?;
-        let mut perms = metadata.permissions();
-        perms.set_mode(0o755); // rwxr-xr-x
-        fs::set_permissions(&path, perms).await?;
-        *count += 1;
+        match make_executable(&path).await {
+            Ok(()) => *count += 1,
+            Err(error) => tracing::warn!(
+                path = %sanitize_path_for_error(&path),
+                %error,
+                "skipping file whose permissions cannot be changed"
+            ),
+        }
     }
 
     Ok(())
+}
+
+/// Sets `path` to `0o755` (rwxr-xr-x).
+#[cfg(unix)]
+async fn make_executable(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::fs;
+
+    let mut perms = fs::metadata(path).await?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).await
 }
 
 /// Gets the path to ~/.claude/mcp.json
@@ -424,6 +513,7 @@ fn get_mcp_config_path() -> Result<PathBuf> {
 }
 
 /// Gets the path to ~/.claude/servers/
+#[cfg(unix)]
 fn get_servers_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Failed to get home directory")?;
     Ok(home.join(".claude").join("servers"))
@@ -433,10 +523,62 @@ fn get_servers_dir() -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn node_version_floor_matches_native_typescript_support() {
+        let runs = |raw: &str| NodeVersion::parse(raw).unwrap().runs_typescript_natively();
+        for rejected in [
+            "18.20.4", "20.19.0", "21.7.3", "22.6.0", "22.17.1", "23.0.0", "23.5.0",
+        ] {
+            assert!(!runs(rejected), "{rejected} must be rejected");
+        }
+        for accepted in [
+            "22.18.0", "22.20.1", "23.6.0", "23.11.0", "24.0.0", "26.1.2",
+        ] {
+            assert!(runs(accepted), "{accepted} must be accepted");
+        }
+    }
+
+    #[test]
+    fn node_version_minimum_text_and_check_share_the_constants() {
+        assert_eq!(
+            NodeVersion::minimum_text(),
+            "22.18.0 (23.6.0 on the 23 line)"
+        );
+        for first in NodeVersion::FIRST_NATIVE_TS {
+            assert!(first.runs_typescript_natively(), "{first} must be accepted");
+            let before = NodeVersion {
+                minor: first.minor - 1,
+                patch: 99,
+                ..first
+            };
+            assert!(
+                !before.runs_typescript_natively(),
+                "{before} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn node_version_parses_prefix_and_prerelease() {
+        assert_eq!(
+            NodeVersion::parse("v22.18.0"),
+            Some(NodeVersion {
+                major: 22,
+                minor: 18,
+                patch: 0
+            })
+        );
+        assert_eq!(
+            NodeVersion::parse("24.1.2-nightly2025").map(|v| v.patch),
+            Some(2)
+        );
+        assert_eq!(NodeVersion::parse("22.18"), None);
+        assert_eq!(NodeVersion::parse("garbage"), None);
+    }
+
     #[tokio::test]
     async fn test_check_node_version() {
-        // This test will pass if Node.js 18+ is installed
-        // Otherwise it will fail, which is the expected behavior
+        // Passes when a suitable Node.js is installed; otherwise the error must be helpful
         let result = check_node_version().await;
 
         // We can't assert success because Node.js might not be installed
@@ -450,6 +592,21 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn make_executable_sets_mode_and_reports_missing_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tool.ts");
+        std::fs::write(&file, "x").unwrap();
+        make_executable(&file).await.unwrap();
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+
+        assert!(make_executable(&dir.path().join("gone.ts")).await.is_err());
+    }
+
     #[test]
     fn test_get_mcp_config_path() {
         let path = get_mcp_config_path();
@@ -461,6 +618,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_get_servers_dir() {
         let path = get_servers_dir();
         assert!(path.is_ok());
@@ -580,6 +738,92 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o755);
+    }
+
+    /// Collects formatted log output in memory for assertions.
+    #[cfg(unix)]
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    #[cfg(unix)]
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // A directory without the search bit still lists its entries (`read_dir`, `d_type`) but
+    // fails `metadata()` on each one, so it forces a per-entry failure inside the walk.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_warns_and_continues_when_a_file_cannot_be_chmodded() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        let good_tool_path = servers_dir.path().join("good.ts");
+        tokio::fs::write(&good_tool_path, "// tool").await.unwrap();
+
+        let stat_locked_dir = servers_dir.path().join("stat-locked");
+        tokio::fs::create_dir_all(&stat_locked_dir).await.unwrap();
+        tokio::fs::write(stat_locked_dir.join("bad.ts"), "// tool")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&stat_locked_dir, std::fs::Permissions::from_mode(0o600))
+            .await
+            .unwrap();
+
+        // Root bypasses permission checks, so the property under test does not hold there.
+        if tokio::fs::metadata(stat_locked_dir.join("bad.ts"))
+            .await
+            .is_ok()
+        {
+            tokio::fs::set_permissions(&stat_locked_dir, std::fs::Permissions::from_mode(0o755))
+                .await
+                .unwrap();
+            return;
+        }
+
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let logs = logs.clone();
+                move || logs.clone()
+            })
+            .with_ansi(false)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let result = check_files_executable_in(servers_dir.path()).await;
+        drop(guard);
+
+        tokio::fs::set_permissions(&stat_locked_dir, std::fs::Permissions::from_mode(0o755))
+            .await
+            .unwrap();
+
+        let (servers_dir_found, files_made_executable, skipped_entries) = result.unwrap();
+        assert!(servers_dir_found);
+        assert_eq!(
+            files_made_executable, 1,
+            "only the healthy file counts; the failing one is not counted"
+        );
+        assert_eq!(skipped_entries, 0);
+
+        let mode = tokio::fs::metadata(&good_tool_path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+
+        let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            output.contains("permissions cannot be changed"),
+            "expected a skip warning, got: {output}"
+        );
     }
 
     #[cfg(unix)]

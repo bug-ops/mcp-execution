@@ -920,7 +920,9 @@ fn validate_env_name(name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::io::Write;
 
     #[test]

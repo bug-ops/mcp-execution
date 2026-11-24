@@ -421,18 +421,7 @@ fn expand_tilde(path: &Path) -> Result<PathBuf> {
 /// Returns an error if `vfs_path` contains a `..` component, or if I/O
 /// operations fail.
 fn write_file_atomic(base_path: &Path, vfs_path: &str, content: &str) -> Result<()> {
-    // Remove leading slash and validate
-    let relative_path = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
-
-    // Security: Check for directory traversal
-    if relative_path.contains("..") {
-        return Err(FilesError::InvalidPathComponent {
-            path: vfs_path.to_string(),
-        });
-    }
-
-    // Construct full disk path
-    let disk_path = base_path.join(relative_path);
+    let disk_path = FileSystem::vfs_to_disk_path(vfs_path, base_path)?;
 
     // Create parent directories
     if let Some(parent) = disk_path.parent() {

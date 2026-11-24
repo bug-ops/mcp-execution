@@ -1,12 +1,12 @@
 # Examples
 
-Complete examples and guides for using MCP Code Execution with progressive loading.
+Complete examples and guides for generating a typed TypeScript SDK from an MCP server and scripting against it.
 
 ## Quick Navigation
 
 | Document | Description | Best For |
 |----------|-------------|----------|
-| [progressive-loading-usage.md](./progressive-loading-usage.md) | Complete usage tutorial | Learning how progressive loading works |
+| [progressive-loading-usage.md](./progressive-loading-usage.md) | Complete usage tutorial | Learning how the generated SDK is used |
 | [mcp.json.example](./mcp.json.example) | MCP server configurations | Configuring your MCP servers |
 
 ## Getting Started
@@ -23,7 +23,7 @@ mcp-execution
 mcp-execution-cli generate --from-config github
 ```
 
-Then ask Claude Code to execute MCP tools autonomously.
+Then ask Claude Code to call the generated tools, directly or from a script.
 
 ### 2. For CLI Users
 
@@ -33,7 +33,7 @@ If you're using the CLI directly, start with [progressive-loading-usage.md](./pr
 # Generate TypeScript files for GitHub server
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-execution-server \
+  --arg=ghcr.io/github/github-mcp-server \
   --name=github
 ```
 
@@ -104,31 +104,25 @@ setting `"type"` and `"url"` instead of `"command"`:
 `"type"` defaults to `"stdio"` when `"command"` is set, so existing stdio-only
 configs keep working unchanged.
 
-## What is Progressive Loading?
+## What Does Generation Produce?
 
-Progressive loading generates one TypeScript file per MCP tool, enabling AI agents to load only the tools they need:
+`generate` writes one TypeScript file per MCP tool, a type-only `catalog.ts` with one signature per tool, and a runtime bridge. A model reads the signatures it needs, then writes a script that calls the tools and prints only the answer. Loops, joins and large results stay in the script.
 
-**Before (Traditional):**
-```
-Load all 40 tools → 30,000 tokens → Every request
-```
-
-**After (Progressive Loading):**
-```
-Load 1 specific tool → 500 tokens → 98% savings
-```
+For a single lookup or one or two sequential calls, a direct tool call is cheaper than a script; see [progressive-loading-usage.md](./progressive-loading-usage.md#script-or-direct-call).
 
 ## File Structure After Generation
 
 ```
 ~/.claude/servers/github/
 ├── index.ts                    # Re-exports all tools
-├── createIssue.ts              # Individual tool (loaded on-demand)
-├── createPullRequest.ts        # Individual tool (loaded on-demand)
-├── getAuthenticatedUser.ts     # Individual tool (loaded on-demand)
-├── ... (40+ more tool files)
+├── catalog.ts                  # One type-only signature per tool
+├── createIssue.ts              # One file per tool
+├── createPullRequest.ts
+├── getAuthenticatedUser.ts
+├── ... (one file per remaining tool)
 └── _runtime/
-    └── mcp-bridge.ts           # Runtime helper for MCP calls
+    ├── mcp-bridge.ts           # Runtime helper for MCP calls
+    └── cli.ts                  # Single-call entry point shared by the tool files
 ```
 
 ## Example Workflows
@@ -140,7 +134,7 @@ Load 1 specific tool → 500 tokens → 98% savings
 mcp-execution-cli generate docker \
   --arg=run --arg=-i --arg=--rm \
   --arg=-e --arg=GITHUB_PERSONAL_ACCESS_TOKEN \
-  --arg=ghcr.io/github/github-mcp-execution-server \
+  --arg=ghcr.io/github/github-mcp-server \
   --env=GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_YOUR_TOKEN \
   --name=github
 
@@ -172,7 +166,7 @@ mcp-execution-cli generate docker --arg=... --name=slack
 # Inspect server capabilities before generating
 mcp-execution-cli introspect docker \
   --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-execution-server \
+  --arg=ghcr.io/github/github-mcp-server \
   --detailed
 
 # Shows all available tools, their parameters, and schemas
@@ -180,7 +174,7 @@ mcp-execution-cli introspect docker \
 
 ### Workflow 4: Using MCP Server Tools
 
-The `mcp-execution` binary provides an MCP server with 5 tools for progressive loading generation:
+The `mcp-execution` binary provides an MCP server with 5 tools for SDK generation:
 
 ```bash
 # Add to your mcp.json
@@ -206,7 +200,7 @@ The `mcp-execution` binary provides an MCP server with 5 tools for progressive l
 **Example: Generate GitHub Tools via MCP**
 
 ```
-User: "Generate progressive loading files for GitHub"
+User: "Generate the SDK for GitHub"
 
 Claude uses:
 1. introspect_server(server_id: "github") → Discovers 40 tools
@@ -226,7 +220,7 @@ Claude uses:
 
 ## Supported MCP Servers
 
-Progressive loading works with any MCP-compliant server:
+Generation works with any MCP-compliant server:
 
 ### Official Servers
 - **GitHub** - Repository management, issues, PRs, code search
@@ -241,36 +235,13 @@ Progressive loading works with any MCP-compliant server:
 ### Custom Servers
 Any server implementing the [MCP specification](https://github.com/modelcontextprotocol/specification)
 
-## Token Savings Calculation
+## Performance
 
-### Example: GitHub MCP Server (40 tools)
+Generation and export timings come from the Criterion benchmarks:
 
-**Traditional Approach:**
+```bash
+cargo bench --profile bench-fast -p mcp-execution-codegen -p mcp-execution-files
 ```
-Load all tools: 40 × 750 tokens = 30,000 tokens
-Every request:  30,000 tokens
-```
-
-**Progressive Loading:**
-```
-Load 1 tool:    1 × 500 tokens = 500 tokens
-Savings:        29,500 tokens (98%)
-```
-
-### Real-World Impact
-
-| Server | Tools | Traditional | Progressive | Savings |
-|--------|-------|-------------|-------------|---------|
-| GitHub | 40 | 30,000 tokens | 500 tokens | 98% |
-| Google Drive | 25 | 18,750 tokens | 500 tokens | 97% |
-| Slack | 30 | 22,500 tokens | 500 tokens | 98% |
-
-## Performance Metrics
-
-- **Generation Time**: 2-3ms per tool
-- **File Size**: 2-5KB per tool file
-- **Type Safety**: 100% (full TypeScript types from JSON schemas)
-- **Compatibility**: Works with all MCP-compliant servers
 
 ## Troubleshooting
 
@@ -289,7 +260,7 @@ Savings:        29,500 tokens (98%)
 **"Tool execution fails"**
 - Verify `~/.claude/mcp.json` configuration
 - Check environment variables are set correctly
-- Ensure MCP SDK is installed: `npm list @modelcontextprotocol/sdk`
+- Ensure Node.js is 22.18.0 or newer (23.6.0 or newer on the 23 line): `node --version`
 
 ### Getting Help
 

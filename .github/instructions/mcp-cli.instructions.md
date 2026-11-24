@@ -112,15 +112,15 @@ When using library crates from this workspace:
 
 ```rust
 // ✅ GOOD: Library crates return their own Result types
-use mcp_bridge::Bridge;
-use mcp_execution_core::ServerId;
+use mcp_execution_core::{ServerConfig, ServerId};
+use mcp_execution_introspector::{Introspector, ServerInfo};
 
-async fn connect_server(id: ServerId) -> Result<Bridge> {
-    let bridge = Bridge::new(1000);
-    bridge.connect(id, "server-cmd")
+async fn discover(id: ServerId, config: &ServerConfig) -> Result<ServerInfo> {
+    let mut introspector = Introspector::new();
+    introspector
+        .discover_server(id, config)
         .await
-        .context("failed to connect to MCP server")?;
-    Ok(bridge)
+        .context("failed to introspect MCP server")
 }
 ```
 

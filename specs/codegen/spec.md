@@ -108,7 +108,7 @@ impl BridgeContext {
     pub fn forbidden_env_names(&self) -> &[String];
     pub fn forbidden_env_prefix(&self) -> &str;
     pub fn env_name_charset_pattern(&self) -> &str;
-    pub fn identifier_pattern(&self) -> &str; // TS_IDENTIFIER_PATTERN, escaped via sanitize_ts_string_literal
+    pub fn identifier_pattern(&self) -> &str; // core::untrusted::BARE_IDENTIFIER_PATTERN, escaped via sanitize_ts_string_literal
 }
 impl Default for BridgeContext { /* populates every field from mcp_execution_core: forbidden_chars()/forbidden_env_names()/forbidden_env_prefix()/env_name_charset_pattern()/env_name_charset_desc() and the MAX_* constants — hand-written, so it can never render a fail-open (empty) bridge. forbidden_chars, env_name_charset_pattern, and env_name_charset_desc are each passed through sanitize_ts_string_literal before storing, so a future Rust-side value containing `'`/`\` renders as a valid (and correct) TS string literal rather than breaking or silently changing what it matches. */ }
 
@@ -606,7 +606,7 @@ size budget counts the `Declaration` form, so the `Compact` form always fits. Th
 | ID | Requirement | Status |
 |----|-------------|--------|
 | FR-031.1 | `enum`/`const`: a union of the literal members (or the single literal) in declared order, deduplicated. An enum over `MAX_UNION_MEMBERS` renders its base primitive when all members share one JSON type, otherwise `unknown`, plus `UnionTooLarge` | implemented |
-| FR-031.2 | `oneOf`/`anyOf`: a union. `allOf`: an intersection up to `MAX_INTERSECTION_MEMBERS` (8), `unknown` plus `IntersectionTooLarge` beyond. A node with several parts renders their intersection | implemented |
+| FR-031.2 | `oneOf`/`anyOf`: a union; member unions are flattened and deduplicated (#601), and a flattened union over `MAX_UNION_MEMBERS` is `unknown` plus `UnionTooLarge`. `allOf`: an intersection up to `MAX_INTERSECTION_MEMBERS` (8), `unknown` plus `IntersectionTooLarge` beyond. A node with several parts renders their intersection | implemented |
 | FR-031.3 | `type` as an array: the union of the listed types; `null` renders `null`; optional (member may be absent) stays distinct from nullable | implemented |
 | FR-031.4 | A local `$ref` (JSON Pointer into the same document) is resolved with cycle detection and an expansion bound | implemented |
 | FR-031.5 | A non-local ref renders `unknown` plus `NonLocalRef`, an unresolvable one `UnresolvedRef`; nothing is fetched. A cyclic ref is cut at its first re-entry (the ref is already on the expansion stack) with `unknown` plus `CyclicRef`; non-cyclic refs count against `MAX_REF_EXPANSIONS` (64 per root), beyond it `RefExpansionLimit` | implemented |
@@ -638,7 +638,7 @@ smallest node plus one diagnostic, never an error or a hang.
 
 **Typed index signature (S1).** WHEN an object schema has representable properties and an
 `additionalProperties` schema THE SYSTEM SHALL render a single object type whose index signature
-value is the deduplicated union of the converted `additionalProperties` type, followed by each
+value is the flattened, deduplicated union (member unions are flattened first, so no member repeats) of the converted `additionalProperties` type, followed by each
 property type in declared order, followed by `undefined` when any property is optional (e.g. `{ a?:
 string; [key: string]: number | string | undefined }`). It SHALL NOT render an intersection for
 this case (`{a?: string} & {[k: string]: number}` cannot be satisfied). The index value SHALL be
@@ -812,7 +812,7 @@ UUIDs used as map keys never reach the record. Nesting stops at depth 4. A line 
 **including the trailing newline** is not recorded. Every bound is a Rust constant in
 `progressive/observed.rs` (`OBSERVED_SHAPE_MAX_DEPTH` = 4, `OBSERVED_SHAPE_MAX_KEYS` = 16,
 `OBSERVED_SHAPE_MAX_KEY_LEN` = 32, `OBSERVED_SHAPE_MAX_LINE_BYTES` = 8192) and the identifier
-pattern is `TS_IDENTIFIER_PATTERN`; all are rendered into the bridge from Rust through
+pattern is `core::untrusted::BARE_IDENTIFIER_PATTERN`; all are rendered into the bridge from Rust through
 `BridgeContext` (the pattern through `sanitize_ts_string_literal`, private with an accessor), so
 the TypeScript recorder hand-copies no bound. The shared vectors file (`observed_key_rule`) runs the
 recorder and the Rust reader against the same cases.

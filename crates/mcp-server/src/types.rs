@@ -212,9 +212,9 @@ pub struct SaveCategorizedToolsParams {
     ///
     /// The session-specific cap enforced at runtime is `min(introspected tool count,
     /// MAX_TOOL_FILES)`, tighter than the flat limit below in nearly all cases; `MAX_TOOL_FILES`
-    /// (`mcp_execution_skill`, 500) is still the absolute ceiling regardless of session, so it
+    /// (`mcp_execution_skill`, 1000) is still the absolute ceiling regardless of session, so it
     /// is what's mirrored here as a literal (schemars attributes cannot reference a `const`).
-    #[schemars(length(max = 500))]
+    #[schemars(length(max = 1000))]
     pub categorized_tools: Vec<CategorizedTool>,
 }
 

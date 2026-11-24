@@ -6,6 +6,11 @@
 //! Requires the `test-fixtures` feature (implied by `--all-features`).
 
 #![cfg(feature = "test-fixtures")]
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use axum::Router;
 use mcp_execution_core::annotations::{Hint, ToolAnnotations};

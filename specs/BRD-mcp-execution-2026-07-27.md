@@ -256,6 +256,8 @@ shared between this BRD and the SRS for traceability.
   round-trips are avoided.
   - *Acceptance criteria*: `Introspector` exposes `get_server`/`list_servers`
     over an in-process cache keyed by server id.
+  - *Status*: superseded by #470. The cache and its accessors were removed
+    because no production caller used them; `Introspector` is stateless.
   - *Priority*: Should
 
 ### Progressive Loading Code Generation
@@ -759,7 +761,7 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 - No `unsafe` code anywhere in the workspace (`#![deny(unsafe_code)]` in
   every crate except the two binaries, which don't need it).
 - Workspace-wide Clippy `all`/`cargo`/`nursery`/`pedantic` set to `deny`.
-- Generated output executes via Node.js 18+ (checked by `setup`), `tsx`, or
+- Generated output executes via Node.js 22.18.0 (23.6.0 on the 23 line) or later (checked by `setup`), `tsx`, or
   `deno` — not bundled with this project, and not verified by this
   project's own CI beyond generating syntactically valid TypeScript.
 
@@ -854,8 +856,6 @@ Questions only the maintainer can answer, raised by the planned direction:
   write during a dry run, and may a user policy relax a classification? (#573)
 - [ ] Is the typed catalog a new generated file or an extension of `index.ts`?
   (#566)
-- [ ] What is the minimum supported Node.js version? `setup` accepts 18 today
-  (#564).
 - [ ] Does the documentation check also cover unknown subcommands and flags in
   fenced blocks, or only commands that exist? (#563)
 

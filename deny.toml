@@ -35,7 +35,7 @@ yanked = "deny"
 # version can be allowed temporarily via "a-crate@x.y.z" or
 # { crate = "a-crate@x.y.z", reason = "..." }.
 ignore = [
-    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained notice with no safe upgrade; also required transitively by rmcp and schemars, so removal needs an upstream change" },
+    { id = "RUSTSEC-2026-0543", reason = "accepted risk (#549): chrono has no safe upgrade and rmcp and schemars depend on it, so migrating the direct uses cannot remove it from the tree; revisit when rmcp drops chrono" },
 ]
 
 [licenses]

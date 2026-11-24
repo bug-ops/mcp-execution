@@ -958,6 +958,10 @@ pub(crate) fn resolve_server_config(source: ServerSource) -> Result<(ServerId, S
 /// which is what makes this safe to use directly on untrusted filesystem-path-shaped
 /// input. Falls back to [`FALLBACK_SERVER_ID_SLUG`] if the result would
 /// otherwise be empty, and truncates to `MAX_SERVER_ID_LENGTH`.
+#[expect(
+    clippy::expect_used,
+    reason = "slugify only produces valid path-segment ids"
+)]
 fn slugify(input: &str) -> ServerId {
     let mut slug = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -1032,6 +1036,13 @@ pub(crate) fn derive_server_id_from_path_or_name(raw: &str) -> ServerId {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+    )
+)]
 mod tests {
     use super::*;
     use std::io::Write;

@@ -34,7 +34,7 @@ This project adheres to a code of conduct that we expect all contributors to fol
 **Required:**
 - Rust 1.91 or higher (Edition 2024)
 - Cargo (comes with Rust)
-- Node.js 18+ (for testing generated TypeScript code)
+- Node.js 22.18.0+ (23.6.0+ on the 23 line; for testing generated TypeScript code)
 - Git
 
 **Recommended:**

@@ -3,6 +3,11 @@
 //! Tests the full pipeline from `ServerInfo` to generated TypeScript files
 //! for progressive loading pattern. Tests that execute the generated runtime bridge live in
 //! `runtime_bridge.rs`.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod support;
 

@@ -9,8 +9,8 @@
 //! The introspector connects to MCP servers via stdio (subprocess) or
 //! Streamable HTTP transport (used for both `Transport::Http` and
 //! `Transport::Sse`) and uses rmcp's `ServiceExt` trait to query server
-//! capabilities. Discovered information is stored locally for subsequent
-//! code generation phases.
+//! capabilities. Discovery results are returned to the caller, which feeds them to
+//! the code generation phases.
 //!
 //! # Examples
 //!
@@ -19,7 +19,7 @@
 //! use mcp_execution_core::{ServerId, ServerConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut introspector = Introspector::new();
+//! let introspector = Introspector::new();
 //!
 //! // Connect to github server
 //! let server_id = ServerId::new("github").unwrap();
@@ -41,7 +41,6 @@
 //! # }
 //! ```
 
-#![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
 use futures_util::StreamExt;
@@ -71,10 +70,8 @@ use tokio_util::codec::{Decoder, FramedRead, FramedWrite};
 /// Maximum number of tools accepted from a single MCP server's `list_all_tools` response
 /// (denial-of-service protection, CWE-400).
 ///
-/// An MCP server is untrusted input: without this cap, a malicious or misbehaving server
-/// could return an unbounded tool list, which downstream codegen turns into one `.ts` file
-/// per tool. 1000 is generous headroom over any real-world server's tool count while still
-/// bounding the worst case.
+/// Re-exported from `mcp-execution-core`, where it is shared with the skill scan so the two
+/// bounds cannot drift.
 ///
 /// # Examples
 ///
@@ -83,7 +80,7 @@ use tokio_util::codec::{Decoder, FramedRead, FramedWrite};
 ///
 /// assert_eq!(MAX_TOOL_COUNT, 1000);
 /// ```
-pub const MAX_TOOL_COUNT: usize = 1000;
+pub use mcp_execution_core::metadata::MAX_TOOL_COUNT;
 
 /// Maximum byte length for a single tool's `name`, as reported by the server.
 ///
@@ -106,6 +103,34 @@ pub const MAX_TOOL_NAME_LEN: usize = 256;
 /// assert!(MAX_TOOL_DESCRIPTION_LEN > 0);
 /// ```
 pub const MAX_TOOL_DESCRIPTION_LEN: usize = 8 * 1024;
+
+/// Maximum byte length kept of the server `name` reported in the MCP handshake.
+///
+/// Longer values are truncated at a character boundary rather than rejected: the name is
+/// display-only, and a verbose server should stay usable. Bounding it here keeps `_meta.json`
+/// inside the size the skill scan accepts.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::MAX_SERVER_NAME_LEN;
+///
+/// assert!(MAX_SERVER_NAME_LEN > 0);
+/// ```
+pub const MAX_SERVER_NAME_LEN: usize = 256;
+
+/// Maximum byte length kept of the server `version` reported in the MCP handshake.
+///
+/// Truncated, not rejected, for the same reasons as [`MAX_SERVER_NAME_LEN`].
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::MAX_SERVER_VERSION_LEN;
+///
+/// assert!(MAX_SERVER_VERSION_LEN > 0);
+/// ```
+pub const MAX_SERVER_VERSION_LEN: usize = 64;
 
 /// Maximum serialized JSON byte size for a single tool's `input_schema`, as reported by the
 /// server.
@@ -280,9 +305,10 @@ pub struct ServerCapabilities {
 
 /// MCP server introspector.
 ///
-/// Discovers and caches information about MCP servers using the official
-/// rmcp SDK. Multiple servers can be discovered and their information
-/// retrieved later for code generation.
+/// Discovers the tools of MCP servers using the official rmcp SDK.
+///
+/// The introspector is stateless: each [`discover_server`](Self::discover_server) call connects,
+/// lists the tools and returns the result without retaining it.
 ///
 /// # Thread Safety
 ///
@@ -296,36 +322,19 @@ pub struct ServerCapabilities {
 /// use mcp_execution_core::{ServerId, ServerConfig};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut introspector = Introspector::new();
+/// let introspector = Introspector::new();
 ///
-/// // Discover multiple servers
-/// let server1 = ServerId::new("server1").unwrap();
-/// let config1 = ServerConfig::builder()
+/// let server_id = ServerId::new("server1").unwrap();
+/// let config = ServerConfig::builder()
 ///     .command("server1-cmd".to_string())
 ///     .build()?;
-/// introspector.discover_server(server1.clone(), &config1).await?;
-///
-/// let server2 = ServerId::new("server2").unwrap();
-/// let config2 = ServerConfig::builder()
-///     .command("server2-cmd".to_string())
-///     .build()?;
-/// introspector.discover_server(server2.clone(), &config2).await?;
-///
-/// // Retrieve information
-/// if let Some(info) = introspector.get_server(&server1) {
-///     println!("Server 1 has {} tools", info.tools.len());
-/// }
-///
-/// // List all servers
-/// let all_servers = introspector.list_servers();
-/// println!("Total servers discovered: {}", all_servers.len());
+/// let info = introspector.discover_server(server_id, &config).await?;
+/// println!("Server has {} tools", info.tools.len());
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
-pub struct Introspector {
-    servers: HashMap<ServerId, ServerInfo>,
-}
+#[derive(Debug, Default)]
+pub struct Introspector;
 
 impl Introspector {
     /// Creates a new introspector.
@@ -335,14 +344,11 @@ impl Introspector {
     /// ```
     /// use mcp_execution_introspector::Introspector;
     ///
-    /// let introspector = Introspector::new();
-    /// assert_eq!(introspector.list_servers().len(), 0);
+    /// let _introspector = Introspector::new();
     /// ```
     #[must_use]
-    pub fn new() -> Self {
-        Self {
-            servers: HashMap::new(),
-        }
+    pub const fn new() -> Self {
+        Self
     }
 
     /// Connects to an MCP server via stdio and discovers its capabilities.
@@ -406,7 +412,7 @@ impl Introspector {
     /// use mcp_execution_core::{ServerId, ServerConfig};
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut introspector = Introspector::new();
+    /// let introspector = Introspector::new();
     /// let server_id = ServerId::new("github").unwrap();
     /// let config = ServerConfig::builder()
     ///     .command("github-server".to_string())
@@ -422,7 +428,7 @@ impl Introspector {
     /// ```
     #[tracing::instrument(skip_all, fields(server_id = %server_id))]
     pub async fn discover_server(
-        &mut self,
+        &self,
         server_id: ServerId,
         config: &ServerConfig,
     ) -> Result<ServerInfo> {
@@ -446,145 +452,9 @@ impl Introspector {
 
         let info = build_server_info(&server_id, discovery.peer_meta, discovery.tools)?;
 
-        // Keyed by `info.id` (not the `server_id` parameter above) so the map key is
-        // structurally derived from the value's own identity — the two cannot drift apart,
-        // rather than merely happening to agree because both were built from the same
-        // `server_id` local.
-        self.servers.insert(info.id.clone(), info.clone());
-
         tracing::info!("Successfully discovered {} tools", info.tools.len());
 
         Ok(info)
-    }
-
-    /// Gets information about a previously discovered server.
-    ///
-    /// Returns `None` if the server has not been discovered yet.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use mcp_execution_introspector::Introspector;
-    /// use mcp_execution_core::{ServerId, ServerConfig};
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut introspector = Introspector::new();
-    /// let server_id = ServerId::new("test").unwrap();
-    ///
-    /// // Not discovered yet
-    /// assert!(introspector.get_server(&server_id).is_none());
-    ///
-    /// // Discover it
-    /// let config = ServerConfig::builder()
-    ///     .command("test-cmd".to_string())
-    ///     .build()?;
-    /// introspector.discover_server(server_id.clone(), &config).await?;
-    ///
-    /// // Now available
-    /// assert!(introspector.get_server(&server_id).is_some());
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn get_server(&self, server_id: &ServerId) -> Option<&ServerInfo> {
-        self.servers.get(server_id)
-    }
-
-    /// Lists all discovered servers.
-    ///
-    /// Returns a vector of references to server information in no
-    /// particular order.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_introspector::Introspector;
-    ///
-    /// let introspector = Introspector::new();
-    /// let servers = introspector.list_servers();
-    /// assert_eq!(servers.len(), 0);
-    /// ```
-    #[must_use]
-    pub fn list_servers(&self) -> Vec<&ServerInfo> {
-        self.servers.values().collect()
-    }
-
-    /// Returns the number of discovered servers.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_introspector::Introspector;
-    ///
-    /// let introspector = Introspector::new();
-    /// assert_eq!(introspector.server_count(), 0);
-    /// ```
-    #[must_use]
-    pub fn server_count(&self) -> usize {
-        self.servers.len()
-    }
-
-    /// Removes a server from the cache.
-    ///
-    /// Returns `true` if the server was present and removed.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use mcp_execution_introspector::Introspector;
-    /// use mcp_execution_core::{ServerId, ServerConfig};
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut introspector = Introspector::new();
-    /// let server_id = ServerId::new("test").unwrap();
-    /// let config = ServerConfig::builder()
-    ///     .command("test-cmd".to_string())
-    ///     .build()?;
-    ///
-    /// introspector.discover_server(server_id.clone(), &config).await?;
-    /// assert_eq!(introspector.server_count(), 1);
-    ///
-    /// let removed = introspector.remove_server(&server_id);
-    /// assert!(removed);
-    /// assert_eq!(introspector.server_count(), 0);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn remove_server(&mut self, server_id: &ServerId) -> bool {
-        self.servers.remove(server_id).is_some()
-    }
-
-    /// Clears all discovered servers from the cache.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use mcp_execution_introspector::Introspector;
-    /// use mcp_execution_core::{ServerId, ServerConfig};
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut introspector = Introspector::new();
-    ///
-    /// let config1 = ServerConfig::builder().command("cmd1".to_string()).build()?;
-    /// let config2 = ServerConfig::builder().command("cmd2".to_string()).build()?;
-    ///
-    /// introspector.discover_server(ServerId::new("s1").unwrap(), &config1).await?;
-    /// introspector.discover_server(ServerId::new("s2").unwrap(), &config2).await?;
-    /// assert_eq!(introspector.server_count(), 2);
-    ///
-    /// introspector.clear();
-    /// assert_eq!(introspector.server_count(), 0);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn clear(&mut self) {
-        self.servers.clear();
-    }
-}
-
-impl Default for Introspector {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -1108,8 +978,10 @@ async fn discover_via_stdio(
 /// or [`Error::ResourceLimitExceeded`] if the accumulated tool count exceeds
 /// [`MAX_TOOL_COUNT`].
 async fn discover_via_http(server_id: &ServerId, config: &ServerConfig) -> Result<DiscoveryResult> {
-    // `ServerConfigBuilder::build` already guarantees `url` is `Some` for
-    // Http/Sse transports — no `ServerConfig` can exist otherwise.
+    #[expect(
+        clippy::expect_used,
+        reason = "ServerConfigBuilder::build guarantees url for Http/Sse"
+    )]
     let url = config
         .url()
         .expect("url validated as present by ServerConfigBuilder::build");
@@ -1351,7 +1223,7 @@ fn extract_peer_meta(
     config: &ServerConfig,
     peer_info: Option<&rmcp::model::ServerPeerInfo>,
 ) -> PeerMeta {
-    peer_info.map_or_else(
+    let meta = peer_info.map_or_else(
         || PeerMeta {
             server_name: fallback_server_name(config),
             server_version: "unknown".to_string(),
@@ -1372,7 +1244,20 @@ fn extract_peer_meta(
             has_resources: info.capabilities.resources.is_some(),
             has_prompts: info.capabilities.prompts.is_some(),
         },
-    )
+    );
+    PeerMeta {
+        server_name: truncate_to_bytes(meta.server_name, MAX_SERVER_NAME_LEN),
+        server_version: truncate_to_bytes(meta.server_version, MAX_SERVER_VERSION_LEN),
+        ..meta
+    }
+}
+
+/// Cuts `s` to at most `max_bytes` bytes, never splitting a character.
+fn truncate_to_bytes(mut s: String, max_bytes: usize) -> String {
+    if s.len() > max_bytes {
+        s.truncate(s.floor_char_boundary(max_bytes));
+    }
+    s
 }
 
 /// Picks a display name for a server that sent no `peer_info` on handshake.
@@ -2020,19 +1905,6 @@ mod tests {
     }
 
     #[test]
-    fn test_introspector_new() {
-        let introspector = Introspector::new();
-        assert_eq!(introspector.list_servers().len(), 0);
-        assert_eq!(introspector.server_count(), 0);
-    }
-
-    #[test]
-    fn test_introspector_default() {
-        let introspector = Introspector::default();
-        assert_eq!(introspector.server_count(), 0);
-    }
-
-    #[test]
     fn test_server_info_debug() {
         let info = ServerInfo {
             id: ServerId::new("test").unwrap(),
@@ -2076,111 +1948,6 @@ mod tests {
         assert!(caps.supports_tools);
         assert!(caps.supports_resources);
         assert!(!caps.supports_prompts);
-    }
-
-    #[test]
-    fn test_get_server_not_found() {
-        let introspector = Introspector::new();
-        let server_id = ServerId::new("nonexistent").unwrap();
-        assert!(introspector.get_server(&server_id).is_none());
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut introspector = Introspector::new();
-
-        // Add some fake server data
-        let info = ServerInfo {
-            id: ServerId::new("test").unwrap(),
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
-            },
-        };
-
-        introspector
-            .servers
-            .insert(ServerId::new("test").unwrap(), info);
-        assert_eq!(introspector.server_count(), 1);
-
-        introspector.clear();
-        assert_eq!(introspector.server_count(), 0);
-    }
-
-    #[test]
-    fn test_remove_server() {
-        let mut introspector = Introspector::new();
-        let server_id = ServerId::new("test").unwrap();
-
-        // Add fake server data
-        let info = ServerInfo {
-            id: server_id.clone(),
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
-            },
-        };
-
-        introspector.servers.insert(server_id.clone(), info);
-        assert_eq!(introspector.server_count(), 1);
-
-        // Remove existing server
-        assert!(introspector.remove_server(&server_id));
-        assert_eq!(introspector.server_count(), 0);
-
-        // Remove non-existent server
-        assert!(!introspector.remove_server(&server_id));
-    }
-
-    #[test]
-    fn test_list_servers() {
-        let mut introspector = Introspector::new();
-
-        // Empty list
-        assert_eq!(introspector.list_servers().len(), 0);
-
-        // Add servers
-        let info1 = ServerInfo {
-            id: ServerId::new("server1").unwrap(),
-            name: "Server 1".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
-            },
-        };
-
-        let info2 = ServerInfo {
-            id: ServerId::new("server2").unwrap(),
-            name: "Server 2".to_string(),
-            version: "2.0.0".to_string(),
-            tools: vec![],
-            capabilities: ServerCapabilities {
-                supports_tools: false,
-                supports_resources: true,
-                supports_prompts: false,
-            },
-        };
-
-        introspector
-            .servers
-            .insert(ServerId::new("server1").unwrap(), info1);
-        introspector
-            .servers
-            .insert(ServerId::new("server2").unwrap(), info2);
-
-        let servers = introspector.list_servers();
-        assert_eq!(servers.len(), 2);
     }
 
     #[test]
@@ -2258,6 +2025,39 @@ mod tests {
 
         assert_eq!(meta.server_version, "3.1.4");
         assert_ne!(meta.server_version, "unknown");
+    }
+
+    /// #599 — an oversized handshake name and version are capped, not copied verbatim
+    #[test]
+    fn test_extract_peer_meta_caps_name_and_version() {
+        let config = test_config("cmd");
+        let peer = make_peer_info(
+            &"n".repeat(MAX_SERVER_NAME_LEN * 100),
+            &"v".repeat(MAX_SERVER_VERSION_LEN * 100),
+            false,
+            false,
+        );
+
+        let meta = extract_peer_meta(&config, Some(&peer));
+
+        assert_eq!(meta.server_name.len(), MAX_SERVER_NAME_LEN);
+        assert_eq!(meta.server_version.len(), MAX_SERVER_VERSION_LEN);
+    }
+
+    /// #599 — values at the cap are kept whole; a cut never splits a multi-byte character
+    #[test]
+    fn test_extract_peer_meta_cap_keeps_boundary_values_and_char_boundaries() {
+        let config = test_config("cmd");
+        let at_cap = "a".repeat(MAX_SERVER_NAME_LEN);
+        let multi_byte = "я".repeat(MAX_SERVER_NAME_LEN);
+        let peer = make_peer_info(&at_cap, "1.0.0", false, false);
+        assert_eq!(extract_peer_meta(&config, Some(&peer)).server_name, at_cap);
+
+        let peer = make_peer_info(&multi_byte, "1.0.0", false, false);
+        let name = extract_peer_meta(&config, Some(&peer)).server_name;
+
+        assert!(name.len() <= MAX_SERVER_NAME_LEN);
+        assert_eq!(name, "я".repeat(MAX_SERVER_NAME_LEN / 2));
     }
 
     /// #80 — `supports_resources` reflects `capabilities.resources` being `Some`

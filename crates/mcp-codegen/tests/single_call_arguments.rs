@@ -1,5 +1,10 @@
 //! A tool file run directly keeps the argument conventions of the inline block it replaced:
 //! a missing or empty argument means `{}`.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod acceptance_support;
 mod support;

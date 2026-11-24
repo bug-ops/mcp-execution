@@ -6,9 +6,8 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
-description = "TypeScript code generation with progressive loading for MCP tools"
-keywords = ["mcp", "codegen", "typescript", "progressive-loading"]
+description = "TypeScript SDK generation from MCP tool definitions"
+keywords = ["mcp", "codegen", "typescript", "sdk"]
 categories = ["development-tools"]
 
 [lints]

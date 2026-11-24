@@ -1,5 +1,10 @@
 //! Acceptance test for #568 / S3: the v3 `_meta.json` is no larger than the v2 sidecar master
 //! produced for the same fixture, and stays under the shared scan cap.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod acceptance_support;
 

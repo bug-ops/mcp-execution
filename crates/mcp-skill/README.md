@@ -6,7 +6,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
-Skill generation for MCP progressive loading. Generates Claude Code skill files (SKILL.md) from TypeScript tool files.
+Skill generation for generated MCP tool SDKs. Generates Claude Code skill files (SKILL.md) from TypeScript tool files.
 
 ## Installation
 

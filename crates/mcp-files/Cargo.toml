@@ -6,7 +6,6 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "Virtual filesystem for MCP code generation and organization"
 keywords = ["mcp", "filesystem", "vfs", "codegen"]
 categories = ["development-tools", "filesystem"]
@@ -15,11 +14,9 @@ categories = ["development-tools", "filesystem"]
 workspace = true
 
 [features]
-dhat-heap = ["dhat"]
 parallel = ["dep:rayon"]
 
 [dependencies]
-dhat = { workspace = true, optional = true }
 dirs.workspace = true
 mcp-execution-codegen.workspace = true
 mcp-execution-core.workspace = true
@@ -29,6 +26,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
+dhat.workspace = true
+mcp-execution-introspector.workspace = true
+serde_json.workspace = true
 
 [[bench]]
 name = "vfs_benchmarks"
@@ -37,7 +37,3 @@ harness = false
 [[bench]]
 name = "filesystem_export"
 harness = false
-
-[[example]]
-name = "profile_memory"
-required-features = ["dhat-heap"]

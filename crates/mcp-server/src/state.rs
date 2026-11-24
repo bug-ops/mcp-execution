@@ -419,6 +419,10 @@ impl StateManager {
 
         let outcome = match validate(&entry.generation) {
             Ok(value) => {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "entry was just looked up under the same held write lock"
+                )]
                 let entry = table
                     .entries
                     .remove(&session_id)

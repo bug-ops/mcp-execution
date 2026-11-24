@@ -1,6 +1,11 @@
 //! Acceptance test for #566 / #578-style injection defence: untrusted tool descriptions and
 //! categorization short descriptions reach `catalog.ts` neutralized, end to end through
 //! `generate_with_categories`.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod acceptance_support;
 

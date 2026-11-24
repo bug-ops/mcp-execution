@@ -896,7 +896,16 @@ impl FileSystem {
     fn touch_dir(dir: &Path) {
         if dir.is_dir() {
             let marker = dir.join(format!(".mtime-touch-{}", std::process::id()));
-            if fs::File::create(&marker).is_ok() {
+            // `remove_file` unlinks a stale or planted entry without following it, and
+            // `create_new` (`O_EXCL`) then refuses any entry that reappears, so neither a
+            // symlink nor a hardlink at the marker path can redirect or truncate anything.
+            let _ = fs::remove_file(&marker);
+            if fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&marker)
+                .is_ok()
+            {
                 let _ = fs::remove_file(&marker);
             }
         } else if let Ok(file) = fs::OpenOptions::new().write(true).open(dir) {
@@ -1021,13 +1030,15 @@ impl FileSystem {
 
     /// Converts VFS path to disk path.
     ///
-    /// Strips leading '/' and joins with base path.
+    /// Strips leading '/' and joins with base path. Shared by every export path
+    /// (including [`crate::builder::FilesBuilder::build_and_export`]'s bare top-level
+    /// files) so the traversal check and platform separator handling live in one place.
     ///
     /// # Errors
     ///
     /// Returns `FilesError::InvalidPathComponent` if `vfs_path` contains `..` (path traversal
     /// attempt). This is defense-in-depth since `FilePath::new()` also validates.
-    fn vfs_to_disk_path(vfs_path: &str, base: &Path) -> Result<PathBuf> {
+    pub(crate) fn vfs_to_disk_path(vfs_path: &str, base: &Path) -> Result<PathBuf> {
         // Strip leading '/' from VFS path
         let relative = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
 
@@ -1139,9 +1150,9 @@ impl Default for ExportOptions {
 /// its own bare top-level files, rather than duplicating a weaker (no-`fsync`) atomic
 /// write helper.
 ///
-/// The temp file is opened via [`open_confined_write`], which refuses to follow a symlink
-/// planted at the predictable `.tmp` path ahead of time, rather than a plain `fs::File::create`
-/// (issue #504).
+/// The temp file (atomic mode) or the target itself (direct mode) is opened via
+/// [`open_confined_write`], which refuses to follow a symlink planted at that path ahead of
+/// time, rather than a plain `fs::File::create`/`fs::write` (issues #504, #506).
 pub(crate) fn write_file_atomic(path: &Path, content: &str, atomic: bool) -> Result<()> {
     if atomic {
         // Atomic write: temp file + rename
@@ -1172,9 +1183,13 @@ pub(crate) fn write_file_atomic(path: &Path, content: &str, atomic: bool) -> Res
         })?;
     } else {
         // Direct write (faster, but not atomic)
-        fs::write(path, content).map_err(|e| FilesError::InvalidPath {
+        let mut file = open_confined_write(path).map_err(|e| FilesError::InvalidPath {
             path: format!("Failed to write {}: {}", path.display(), e),
         })?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| FilesError::InvalidPath {
+                path: format!("Failed to write {}: {}", path.display(), e),
+            })?;
     }
 
     Ok(())
@@ -2056,5 +2071,74 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!outside_file.exists());
+    }
+
+    /// Direct (non-atomic) mode must reject a symlink planted at the target itself (issue #506).
+    #[test]
+    #[cfg(unix)]
+    fn test_write_file_atomic_non_atomic_rejects_a_symlink_planted_at_the_target() {
+        let base = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("real.ts");
+        std::fs::write(&outside_file, "original").unwrap();
+
+        let target_path = base.path().join("tool.ts");
+        std::os::unix::fs::symlink(&outside_file, &target_path).unwrap();
+
+        let result = write_file_atomic(&target_path, "attacker-controlled", false);
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "original");
+    }
+
+    #[test]
+    fn test_write_file_atomic_non_atomic_overwrites_regular_file() {
+        let base = TempDir::new().unwrap();
+        let target_path = base.path().join("tool.ts");
+        std::fs::write(&target_path, "old content that is longer").unwrap();
+
+        write_file_atomic(&target_path, "new", false).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "new");
+    }
+
+    /// A symlink planted at the predictable `.mtime-touch-{pid}` marker path must not be
+    /// followed, so the file it points at is not truncated (issue #505).
+    #[test]
+    #[cfg(unix)]
+    fn test_touch_dir_does_not_follow_a_symlink_planted_at_the_marker_path() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("victim.txt");
+        std::fs::write(&outside_file, "precious").unwrap();
+
+        let marker = dir
+            .path()
+            .join(format!(".mtime-touch-{}", std::process::id()));
+        std::os::unix::fs::symlink(&outside_file, &marker).unwrap();
+
+        FileSystem::touch_dir(dir.path());
+
+        assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "precious");
+    }
+
+    /// A hardlink planted at the marker path must not be truncated either (issue #505).
+    #[test]
+    #[cfg(unix)]
+    fn test_touch_dir_does_not_truncate_a_hardlink_planted_at_the_marker_path() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("victim.txt");
+        std::fs::write(&outside_file, "precious").unwrap();
+
+        let marker = dir
+            .path()
+            .join(format!(".mtime-touch-{}", std::process::id()));
+        std::fs::hard_link(&outside_file, &marker).unwrap();
+
+        FileSystem::touch_dir(dir.path());
+
+        assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "precious");
+        assert!(!marker.exists());
     }
 }

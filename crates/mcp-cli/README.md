@@ -6,7 +6,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
-Command-line interface for MCP Code Execution progressive loading. Achieves **98% token savings** by generating one TypeScript file per MCP tool.
+Command-line interface that turns an MCP server into a typed TypeScript SDK a model programs against, so loops, joins and large results stay in code and only the answer reaches the context.
 
 ## Installation
 
@@ -44,20 +44,20 @@ cargo install --path crates/mcp-cli
 
 ## Usage
 
-### Generate Progressive Loading Files
+### Generate the SDK
 
 ```bash
 # From config file (recommended)
 mcp-execution-cli generate --from-config github
 
 # With manual configuration
-mcp-execution-cli generate github-mcp-execution-server --env GITHUB_TOKEN=ghp_xxx
+mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
 ```
 
 > [!TIP]
 > Use `--from-config` to load server configuration from `~/.claude/mcp.json`.
 
-### Discover Available Tools
+### Discover and Call Tools
 
 ```bash
 # List available servers
@@ -66,8 +66,14 @@ ls ~/.claude/servers/
 # List tools in a server
 ls ~/.claude/servers/github/
 
-# Load one tool (98% token savings!)
+# Read the compact signature of every tool
+cat ~/.claude/servers/github/catalog.ts
+
+# Read one tool in full
 cat ~/.claude/servers/github/createIssue.ts
+
+# Call one tool: the single argument is a JSON object
+node ~/.claude/servers/github/createIssue.ts '{"owner":"myorg","repo":"myrepo","title":"Bug"}'
 ```
 
 ### Shell Completions
@@ -87,7 +93,7 @@ mcp-execution-cli completions fish > ~/.config/fish/completions/mcp-execution-cl
 
 ### `generate`
 
-Generate TypeScript files with progressive loading:
+Generate the TypeScript SDK (one file per tool, a catalog and a runtime bridge):
 
 ```bash
 mcp-execution-cli generate <SERVER> [OPTIONS]
@@ -145,7 +151,7 @@ mcp-execution-cli introspect <SERVER> [OPTIONS]
 
 2. Manual configuration:
    ```bash
-   mcp-execution-cli introspect github-mcp-execution-server --arg=stdio
+   mcp-execution-cli introspect github-mcp-server --arg=stdio
    ```
 
 **Options**:
@@ -173,7 +179,7 @@ mcp-execution-cli introspect --from-config github --detailed
 # Manual with Docker
 mcp-execution-cli introspect docker \
   --arg=run --arg=-i --arg=--rm \
-  --arg=ghcr.io/github/github-mcp-execution-server \
+  --arg=ghcr.io/github/github-mcp-server \
   --env=GITHUB_TOKEN=ghp_xxx
 
 # HTTP transport with headers
@@ -191,7 +197,7 @@ mcp-execution-cli introspect docker \
 
 ### `skill`
 
-Generate Claude Code skill files (SKILL.md) from progressive loading tools:
+Generate Claude Code skill files (SKILL.md) from generated tools:
 
 ```bash
 mcp-execution-cli skill --server <SERVER_ID> [OPTIONS]
@@ -255,7 +261,7 @@ mcp-execution-cli setup
 # ✓ Runtime setup complete
 ```
 
-Checks that Node.js 18+ is installed, `~/.claude/mcp.json` exists, and makes generated TypeScript files executable (Unix only).
+Checks that Node.js 22.18.0 or newer is installed (23.6.0 or newer on the 23 line; generated tools run as `.ts` files), `~/.claude/mcp.json` exists, and makes generated TypeScript files executable (Unix only).
 
 ### `completions`
 
@@ -270,22 +276,14 @@ mcp-execution-cli completions <SHELL>
 
 ## Features
 
-- **Progressive Loading**: One TypeScript file per MCP tool
+- **Typed SDK**: One TypeScript file per MCP tool, plus a type-only catalog
 - **Type-Safe**: Full TypeScript interfaces from MCP schemas
 - **Multiple Transports**: stdio, HTTP, SSE, Docker
 - **Shell Completions**: bash, zsh, fish, PowerShell
-- **Fast**: ~2-3ms generation time per server
-
-## Token Savings
-
-| Approach | Tokens | Savings |
-|----------|--------|---------|
-| Traditional (all tools) | ~30,000 | - |
-| Progressive (1 tool) | ~500-1,500 | **98%** |
 
 ## Security
 
-- **No Code Execution**: Generated TypeScript is for type information only
+- **No Code Execution by the Generator**: `generate` writes files and never runs them; running a generated tool is your decision
 - **Command Injection Prevention**: All user input validated
 - **Path Validation**: Rejects malicious paths
 - **Template Security**: Handlebars escapes all user input

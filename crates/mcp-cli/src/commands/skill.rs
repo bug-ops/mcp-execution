@@ -55,7 +55,7 @@ const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
 /// * `server` - Server identifier (e.g., "github")
 /// * `servers_dir` - Base directory for generated servers (default: ~/.claude/servers)
 /// * `output_path` - Custom output path for SKILL.md (default: ~/.claude/skills/{server}/SKILL.md)
-/// * `skill_name` - Custom skill name (default: {server}-progressive)
+/// * `skill_name` - Custom skill name (default: {server})
 /// * `hints` - Use case hints for skill generation
 /// * `overwrite` - Whether to overwrite existing SKILL.md file
 /// * `output_format` - Output format (json, text, pretty)
@@ -965,7 +965,7 @@ mod tests {
 
     /// Issue #436: a custom `--skill-name` must be threaded into `build_skill_context` as a
     /// constructor input, not patched onto the result afterward — so `generation_prompt`
-    /// reflects the requested name instead of the stale `{server}-progressive` default.
+    /// reflects the requested name instead of a stale default.
     /// `test_run_with_custom_skill_name` above only inspects the rendered `SKILL.md` file (which
     /// goes through `render_skill_md`, not `generation_prompt`); this test inspects
     /// `prepare_skill_context`'s returned `generation_prompt` directly.

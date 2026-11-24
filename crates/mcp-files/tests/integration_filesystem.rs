@@ -506,3 +506,62 @@ mod windows_tests {
         assert!(file_path.exists(), "Deep file should exist on Windows");
     }
 }
+
+/// FR-032.F3 — output generated at `MAX_TOOL_COUNT` tools must pass the export bounds
+/// (`MAX_EXPORT_FILES`, `MAX_EXPORT_BYTES`) and reach the disk intact.
+#[test]
+fn test_export_of_output_generated_at_the_maximum_tool_count_succeeds() {
+    use mcp_execution_codegen::ProgressiveGenerator;
+    use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+    use mcp_execution_introspector::{MAX_TOOL_COUNT, ServerCapabilities, ServerInfo, ToolInfo};
+    use serde_json::json;
+
+    let tools = (0..MAX_TOOL_COUNT)
+        .map(|i| ToolInfo {
+            name: ToolName::new(format!("tool_{i:04}")).unwrap(),
+            description: format!("Tool {i}"),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository"},
+                    "page": {"type": "integer"},
+                    "state": {"enum": ["open", "closed"]}
+                },
+                "required": ["repo"]
+            }),
+            output_schema: None,
+            annotations: None,
+        })
+        .collect();
+    let server = ServerInfo {
+        id: ServerId::new("acme").unwrap(),
+        name: "Acme".to_string(),
+        version: "1.0.0".to_string(),
+        tools,
+        capabilities: ServerCapabilities {
+            supports_tools: true,
+            supports_resources: false,
+            supports_prompts: false,
+        },
+    };
+    let config = ServerConfig::builder()
+        .command("test-command".to_string())
+        .build()
+        .unwrap();
+    let code = ProgressiveGenerator::new()
+        .unwrap()
+        .generate(&server, &config)
+        .expect("generation at the maximum tool count succeeds");
+    let generated_paths: Vec<String> = code.files.iter().map(|f| f.path.clone()).collect();
+    assert!(generated_paths.len() > MAX_TOOL_COUNT);
+
+    let temp_dir = TempDir::new().unwrap();
+    let vfs = FilesBuilder::from_generated_code(code, "/")
+        .build_and_export(temp_dir.path())
+        .expect("export at the maximum tool count must not hit a bound error");
+
+    assert_eq!(vfs.file_count(), generated_paths.len());
+    for path in &generated_paths {
+        assert!(temp_dir.path().join(path).is_file(), "{path} not exported");
+    }
+}
