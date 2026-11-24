@@ -513,6 +513,7 @@ fn get_mcp_config_path() -> Result<PathBuf> {
 }
 
 /// Gets the path to ~/.claude/servers/
+#[cfg(unix)]
 fn get_servers_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Failed to get home directory")?;
     Ok(home.join(".claude").join("servers"))
@@ -617,6 +618,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_get_servers_dir() {
         let path = get_servers_dir();
         assert!(path.is_ok());
