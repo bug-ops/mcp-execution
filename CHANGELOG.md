@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Specifications**: `specs/` records the script-first direction: planned requirements FR-030 to FR-046, a planned `runtime` block and two proposed decision records (ADR-569, ADR-581).
+- **Specifications**: `specs/` records the script-first direction: planned requirements FR-030 to FR-046, a planned `runtime` block and two proposed decision records (ADR-569, ADR-581) (#594).
 
 ### Security
 
