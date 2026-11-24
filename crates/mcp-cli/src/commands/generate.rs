@@ -511,6 +511,7 @@ mod tests {
                     }
                 }),
                 output_schema: None,
+                annotations: None,
             }],
             capabilities: ServerCapabilities {
                 supports_tools: true,

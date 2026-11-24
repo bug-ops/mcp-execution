@@ -42,6 +42,7 @@ fn create_simple_tool(index: usize) -> ToolInfo {
             "required": ["id"]
         }),
         output_schema: None,
+        annotations: None,
     }
 }
 
@@ -71,6 +72,7 @@ fn create_moderate_tool(index: usize) -> ToolInfo {
                 "code": {"type": "number"}
             }
         })),
+        annotations: None,
     }
 }
 
@@ -143,6 +145,7 @@ fn create_complex_tool(index: usize) -> ToolInfo {
                 }
             }
         })),
+        annotations: None,
     }
 }
 

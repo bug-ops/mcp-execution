@@ -25,10 +25,12 @@
 //! ```text
 //! ~/.claude/servers/github/
 //! ├── index.ts                    # Re-exports all tools
+//! ├── catalog.ts                  # One type-only signature per tool
 //! ├── createIssue.ts              # Individual tool (loaded on-demand)
 //! ├── updateIssue.ts              # Individual tool (loaded on-demand)
 //! └── _runtime/
-//!     └── mcp-bridge.ts           # Runtime helper for MCP calls
+//!     ├── mcp-bridge.ts           # Runtime helper for MCP calls
+//!     └── cli.ts                  # Single-call entry point shared by every tool file
 //! ```
 //!
 //! # Examples
@@ -91,7 +93,10 @@
 //! mcp-codegen = { version = "0.1", features = ["progressive"] }
 //! ```
 
+mod annotations;
+mod catalog;
 pub mod generator;
+mod observed;
 pub mod types;
 
 // Re-export main types

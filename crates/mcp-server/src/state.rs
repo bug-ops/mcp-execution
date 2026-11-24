@@ -595,6 +595,7 @@ mod tests {
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({}),
                 output_schema: None,
+                annotations: None,
             }],
         };
         let config = ServerConfig::builder()

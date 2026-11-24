@@ -197,6 +197,8 @@ pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Longest run of variation selectors [`sanitize_untrusted_text`] keeps.
+///
 /// Maximum number of consecutive Unicode variation selectors (U+FE00-U+FE0F "VS1-VS16" and
 /// U+E0100-U+E01EF "Variation Selectors Supplement") [`sanitize_untrusted_text`] leaves
 /// untouched after a single base character before treating the run as payload smuggling.
@@ -227,8 +229,18 @@ pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String {
 /// it counts consecutive variation-selector characters wherever they occur, including a run at
 /// the very start of a value with no preceding base character at all — fail-safe, not
 /// fail-open, since a baseless run is treated the same as any other run and is still capped.
-const MAX_VARIATION_SELECTOR_RUN: usize = 2;
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::untrusted::MAX_VARIATION_SELECTOR_RUN;
+///
+/// assert_eq!(MAX_VARIATION_SELECTOR_RUN, 2);
+/// ```
+pub const MAX_VARIATION_SELECTOR_RUN: usize = 2;
 
+/// Most variation selectors [`sanitize_untrusted_text`] keeps across a whole value.
+///
 /// Maximum total number of variation selectors [`sanitize_untrusted_text`] leaves in a value,
 /// summed across every run, regardless of how the attacker distributes them across base
 /// characters.
@@ -258,7 +270,15 @@ const MAX_VARIATION_SELECTOR_RUN: usize = 2;
 /// under this per-field bound, can still accumulate) is documented in `specs/core/spec.md`'s
 /// "Known limitation" note and does not get worse as this constant grows — only the per-field
 /// contribution does.
-const MAX_TOTAL_VARIATION_SELECTORS: usize = 16;
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::untrusted::MAX_TOTAL_VARIATION_SELECTORS;
+///
+/// assert_eq!(MAX_TOTAL_VARIATION_SELECTORS, 16);
+/// ```
+pub const MAX_TOTAL_VARIATION_SELECTORS: usize = 16;
 
 /// Returns `true` for the Unicode variation selectors [`MAX_VARIATION_SELECTOR_RUN`] and
 /// [`MAX_TOTAL_VARIATION_SELECTORS`] rate-limit: VS1-VS16 (U+FE00-U+FE0F) and the Variation

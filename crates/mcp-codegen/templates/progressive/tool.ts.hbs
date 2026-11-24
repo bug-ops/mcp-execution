@@ -31,6 +31,9 @@ import { callMCPTool } from './_runtime/mcp-bridge.ts';
 {{#if keywords}}
  * @keywords {{keywords}}
 {{/if}}
+{{#each annotation_tags}}
+ * {{this}}
+{{/each}}
  *
  * @param params - Tool parameters
  * @returns Tool execution result

@@ -229,6 +229,7 @@ pub struct ServerInfo {
 ///         "required": ["chat_id", "text"]
 ///     }),
 ///     output_schema: None,
+///     annotations: None,
 /// };
 ///
 /// assert_eq!(tool.name.as_str(), "send_message");
@@ -243,6 +244,9 @@ pub struct ToolInfo {
     pub input_schema: serde_json::Value,
     /// Optional JSON Schema for tool output (if provided by server)
     pub output_schema: Option<serde_json::Value>,
+    /// Annotations the server advertised for the tool, if any
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<mcp_execution_core::annotations::ToolAnnotations>,
 }
 
 /// Server capabilities.
@@ -1297,6 +1301,7 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
         description,
         input_schema,
         output_schema,
+        annotations: None,
     })
 }
 
@@ -1997,6 +2002,7 @@ mod tests {
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             output_schema: None,
+            annotations: None,
         };
 
         assert_eq!(tool.name.as_str(), "test_tool");
@@ -2129,6 +2135,7 @@ mod tests {
             description: "Test".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             output_schema: Some(serde_json::json!({"type": "string"})),
+            annotations: None,
         };
 
         // Serialize to JSON

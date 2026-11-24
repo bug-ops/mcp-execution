@@ -52,6 +52,10 @@ async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
                         description: None,
                     },
                 ],
+                annotations: None,
+                result_type: None,
+                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
             })
             .collect(),
         provenance: test_provenance(),
@@ -434,6 +438,10 @@ async fn test_scan_directory_file_too_large() {
             keywords: vec!["large".to_string()],
             description: Some(String::new()),
             parameters: vec![],
+            annotations: None,
+            result_type: None,
+            result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+            manifest_size_bytes: 0,
         }],
         provenance: test_provenance(),
     };

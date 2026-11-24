@@ -172,6 +172,24 @@ pub fn sanitize_ts_identifier(s: &str) -> String {
     result
 }
 
+/// Anchored pattern source (JavaScript `RegExp` syntax) matching the ASCII identifiers that
+/// render as bare property keys.
+///
+/// Rendered into the generated runtime bridge so its observed-shape recorder applies the same
+/// predicate as the converter's bare-key rule instead of a hand-copied pattern.
+pub(crate) const TS_IDENTIFIER_PATTERN: &str = "^[A-Za-z_$][A-Za-z0-9_$]*$";
+
+/// Returns `s` as the body of a single-quoted TypeScript string literal that evaluates back to
+/// exactly `s`, or `None` when that cannot be guaranteed.
+///
+/// `None` above [`MAX_UNTRUSTED_FIELD_LEN`](mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN)
+/// characters, or when neutralizing the text would
+/// change it.
+#[cfg_attr(not(test), expect(dead_code, reason = "wired by Track 1 in this PR"))]
+pub(crate) const fn ts_string_literal_exact(_s: &str) -> Option<String> {
+    None
+}
+
 /// Disambiguates `base` against the `used` set by appending a numeric suffix
 /// (`_2`, `_3`, ...) until the candidate is not already present, then reserves the
 /// winning candidate by inserting it into `used`.
@@ -397,6 +415,12 @@ pub fn extract_properties(schema: &Value) -> Vec<serde_json::Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Keeps the stub reachable in test builds until Track 1 wires it.
+    #[test]
+    fn ts_string_literal_exact_stub_is_reachable() {
+        drop(ts_string_literal_exact("a"));
+    }
 
     #[test]
     fn test_to_camel_case() {

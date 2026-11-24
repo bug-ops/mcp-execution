@@ -31,6 +31,7 @@
 //! preimage — only structural signal (names, counts, the URL's scheme/authority/path) goes in.
 //! Rotating a credential must never register as configuration drift.
 
+use crate::annotations::ToolAnnotations;
 use crate::redact::{UrlTailKind, split_url};
 use crate::server_config::{ServerConfig, Transport};
 use crate::untrusted::sanitize_untrusted_inline;
@@ -443,6 +444,7 @@ fn push_url_and_headers(
 ///     description: "Creates a new issue",
 ///     input_schema: &schema,
 ///     output_schema: None,
+///     annotations: None,
 /// };
 /// assert_eq!(entry.name, "create_issue");
 /// ```
@@ -456,6 +458,8 @@ pub struct ToolDigestEntry<'a> {
     pub input_schema: &'a serde_json::Value,
     /// The tool's output JSON Schema, if the server reported one.
     pub output_schema: Option<&'a serde_json::Value>,
+    /// The tool's advertised annotations, if the server reported any.
+    pub annotations: Option<&'a ToolAnnotations>,
 }
 
 /// A stable digest of the discovered tool list (names, descriptions, and input/output schemas)
@@ -478,6 +482,7 @@ pub struct ToolDigestEntry<'a> {
 ///     description: "Creates a new issue",
 ///     input_schema: &schema,
 ///     output_schema: None,
+///     annotations: None,
 /// }];
 ///
 /// let digest = ToolDigest::compute(&entries);
@@ -519,8 +524,8 @@ impl ToolDigest {
     ///
     /// let schema_a = json!({"type": "object"});
     /// let schema_b = json!({"type": "string"});
-    /// let a = ToolDigestEntry { name: "a", description: "", input_schema: &schema_a, output_schema: None };
-    /// let b = ToolDigestEntry { name: "b", description: "", input_schema: &schema_b, output_schema: None };
+    /// let a = ToolDigestEntry { name: "a", description: "", input_schema: &schema_a, output_schema: None, annotations: None };
+    /// let b = ToolDigestEntry { name: "b", description: "", input_schema: &schema_b, output_schema: None, annotations: None };
     ///
     /// assert_eq!(
     ///     ToolDigest::compute(&[a, b]),
@@ -1125,6 +1130,7 @@ mod tests {
             description: "desc",
             input_schema: schema,
             output_schema: None,
+            annotations: None,
         }
     }
 
@@ -1147,12 +1153,14 @@ mod tests {
             description: "",
             input_schema: &schema_1,
             output_schema: None,
+            annotations: None,
         };
         let second = ToolDigestEntry {
             name: "dup",
             description: "",
             input_schema: &schema_2,
             output_schema: None,
+            annotations: None,
         };
 
         assert_eq!(
@@ -1218,12 +1226,14 @@ mod tests {
             description: "",
             input_schema: &input_schema,
             output_schema: None,
+            annotations: None,
         };
         let with_null = ToolDigestEntry {
             name: "t",
             description: "",
             input_schema: &input_schema,
             output_schema: Some(&null_schema),
+            annotations: None,
         };
 
         assert_ne!(

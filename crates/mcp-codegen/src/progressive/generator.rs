@@ -35,6 +35,8 @@ use crate::common::typescript::{
     MAX_SCHEMA_RECURSION_DEPTH, disambiguate_identifier, extract_properties,
     sanitize_ts_identifier, to_camel_case,
 };
+use crate::progressive::annotations::jsdoc_tags;
+use crate::progressive::catalog::{CATALOG_ENTRY_MAX_BYTES, render_catalog};
 use crate::progressive::types::{
     BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolCategorization, ToolContext,
     ToolSummary,
@@ -42,8 +44,8 @@ use crate::progressive::types::{
 use crate::template_engine::TemplateEngine;
 use mcp_execution_core::ResourceKind;
 use mcp_execution_core::metadata::{
-    INDEX_FILE_NAME, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata,
-    ServerMetadata, ToolMetadata,
+    CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION,
+    ParameterMetadata, ResultTypeOrigin, ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::provenance::{GenerationProvenance, ToolDigestEntry};
 use mcp_execution_core::{Error, Result, ServerConfig};
@@ -51,9 +53,9 @@ use mcp_execution_introspector::{ServerInfo, ToolInfo};
 use std::collections::{HashMap, HashSet};
 
 /// Files emitted by every `generate`/`generate_with_categories` call regardless of tool
-/// count: `index.ts`, the runtime bridge, `package.json`, `tsconfig.json`, and the `_meta.json`
-/// sidecar.
-const FIXED_FILE_COUNT: usize = 5;
+/// count: `index.ts`, `catalog.ts`, the runtime bridge, `_runtime/cli.ts`, `package.json`,
+/// `tsconfig.json`, and the `_meta.json` sidecar.
+const FIXED_FILE_COUNT: usize = 7;
 
 /// Maximum number of files a single `generate`/`generate_with_categories` call will produce
 /// (denial-of-service protection, CWE-400).
@@ -77,16 +79,89 @@ const FIXED_FILE_COUNT: usize = 5;
 pub const MAX_GENERATED_FILES: usize =
     mcp_execution_introspector::MAX_TOOL_COUNT + FIXED_FILE_COUNT;
 
+/// Worst-case expansion of one input byte when escaped for a string literal or JSON, such as a
+/// control character written as `\u00XX`.
+const ESCAPE_EXPANSION: usize = 6;
+
+/// Bytes assumed for a tool's categorization (category, keywords, short description) before
+/// escaping, matching `mcp-execution-server`'s own caps.
+const CATEGORIZATION_BYTES_MAX: usize = 1024;
+
+/// Worst-case bytes of a sanitized tool title: the sanitizer's character cap at four UTF-8 bytes
+/// per character.
+const TITLE_BYTES_MAX: usize = mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN * 4;
+
+/// Fixed template text of one tool file, excluding every server-supplied value.
+const TOOL_FILE_FIXED_BYTES: usize = 8 * 1024;
+
+/// Fixed JSON structure of one `_meta.json` tool entry, excluding every server-supplied value.
+const META_ENTRY_FIXED_BYTES: usize = 2 * 1024;
+
+/// Maximum bytes one tool contributes across the per-tool files and the shared files that
+/// list it: twice today's per-tool share, since `_meta.json` re-embeds the raw name,
+/// description and schemas next to the rendered `.ts` file.
+pub(crate) const PER_TOOL_BYTES_MAX: usize = 2
+    * (mcp_execution_introspector::MAX_TOOL_NAME_LEN
+        + mcp_execution_introspector::MAX_TOOL_DESCRIPTION_LEN
+        + mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES);
+
+/// Maximum bytes one tool's line in `index.ts` may take.
+pub(crate) const INDEX_ENTRY_MAX_BYTES: usize = 4096;
+
+/// Bytes available to one tool's own file plus its `_meta.json` entry before the generator
+/// degrades the tool to the generic form.
+pub(crate) const PER_TOOL_RENDER_BUDGET: usize =
+    PER_TOOL_BYTES_MAX - CATALOG_ENTRY_MAX_BYTES - INDEX_ENTRY_MAX_BYTES;
+
+/// Maximum bytes of a result or parameter type text stored in `_meta.json`; longer text is
+/// stored as absent.
+pub(crate) const STORED_TYPE_TEXT_MAX_BYTES: usize = 1024;
+
+/// Upper bound on a fully degraded tool file, built only from capped inputs: the fixed
+/// template text, the tool name in three places, the sanitized description and short
+/// description, the categorization, and the title in two places.
+pub(crate) const TOOL_FILE_DEGRADED_MAX: usize = TOOL_FILE_FIXED_BYTES
+    + 3 * mcp_execution_introspector::MAX_TOOL_NAME_LEN * ESCAPE_EXPANSION
+    + 2 * 256 * 4
+    + CATEGORIZATION_BYTES_MAX * ESCAPE_EXPANSION
+    + 2 * TITLE_BYTES_MAX;
+
+/// Upper bound on a fully degraded `_meta.json` tool entry, built only from capped inputs: the
+/// fixed JSON structure, the raw name and TypeScript name, the raw description, the
+/// categorization and the title.
+pub(crate) const META_ENTRY_DEGRADED_MAX: usize = META_ENTRY_FIXED_BYTES
+    + 2 * mcp_execution_introspector::MAX_TOOL_NAME_LEN * ESCAPE_EXPANSION
+    + mcp_execution_introspector::MAX_TOOL_DESCRIPTION_LEN * ESCAPE_EXPANSION
+    + CATEGORIZATION_BYTES_MAX * ESCAPE_EXPANSION
+    + 2 * TITLE_BYTES_MAX;
+
+/// Upper bound on every file that does not scale with the tool count: the runtime bridge,
+/// `_runtime/cli.ts`, `package.json`, `tsconfig.json`, and the headers of `index.ts`,
+/// `catalog.ts` and `_meta.json`.
+///
+/// ASSUMPTION: 256 KiB covers these files with room to spare; Track 1 checks it against the
+/// real output.
+pub(crate) const FIXED_FILES_BYTES_MAX: usize = 256 * 1024;
+
+// This checks the arithmetic over the modelled constants only: whether those constants really
+// bound the rendered output is proven by the adversarial-fixture tests, not by this assertion.
+const _: () = assert!(
+    TOOL_FILE_DEGRADED_MAX
+        + META_ENTRY_DEGRADED_MAX
+        + CATALOG_ENTRY_MAX_BYTES
+        + INDEX_ENTRY_MAX_BYTES
+        <= PER_TOOL_BYTES_MAX
+        && STORED_TYPE_TEXT_MAX_BYTES < PER_TOOL_RENDER_BUDGET
+);
+
 /// Maximum total bytes across every file in a single `generate`/`generate_with_categories`
 /// call's output (denial-of-service protection, CWE-400).
 ///
-/// Derived from `mcp_execution_introspector`'s own per-tool bounds — up to `MAX_TOOL_COUNT`
-/// tools, each up to `MAX_TOOL_NAME_LEN` + `MAX_TOOL_DESCRIPTION_LEN` + `MAX_SCHEMA_SIZE_BYTES`
-/// — rather than chosen independently, so a `ServerInfo` that already cleared introspection's
-/// own bounds can never be deterministically rejected here for simply being "as large as
-/// introspection already allows" (issue #198 M1). The 2x multiplier accounts for `_meta.json`
-/// re-embedding every tool's raw name/description/schema alongside the already-rendered `.ts`
-/// file content, roughly doubling the total.
+/// Derived from the per-tool bound [`PER_TOOL_BYTES_MAX`] — up to `MAX_TOOL_COUNT` tools, each
+/// within it — plus the files that do not scale with the tool count, rather than chosen
+/// independently, so a `ServerInfo` that already cleared introspection's own bounds can never
+/// be deterministically rejected here for simply being "as large as introspection already
+/// allows" (issue #198 M1).
 ///
 /// # Examples
 ///
@@ -95,11 +170,8 @@ pub const MAX_GENERATED_FILES: usize =
 ///
 /// assert!(MAX_GENERATED_BYTES > 0);
 /// ```
-pub const MAX_GENERATED_BYTES: usize = 2
-    * mcp_execution_introspector::MAX_TOOL_COUNT
-    * (mcp_execution_introspector::MAX_TOOL_NAME_LEN
-        + mcp_execution_introspector::MAX_TOOL_DESCRIPTION_LEN
-        + mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES);
+pub const MAX_GENERATED_BYTES: usize =
+    mcp_execution_introspector::MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX;
 
 /// Contents of the generated `package.json`.
 ///
@@ -207,6 +279,24 @@ impl ProgressiveGenerator<'_> {
     pub fn new() -> Result<Self> {
         let engine = TemplateEngine::new()?;
         Ok(Self { engine })
+    }
+
+    /// Supplies observed result shapes recorded by a past run of the generated runtime bridge.
+    ///
+    /// `jsonl` holds one JSON object per line. The caller bounds its size. Shapes only ever
+    /// describe tools without a declared output schema. Without this call the output is
+    /// unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::progressive::ProgressiveGenerator;
+    ///
+    /// let generator = ProgressiveGenerator::new().unwrap().with_observed_shapes("");
+    /// ```
+    #[must_use]
+    pub const fn with_observed_shapes(self, _jsonl: &str) -> Self {
+        self
     }
 
     /// Generates progressive loading files for a server.
@@ -379,6 +469,8 @@ impl ProgressiveGenerator<'_> {
             &mut total_bytes,
         )?;
 
+        Self::emit_catalog_file(server_info, &mut code, &mut total_bytes)?;
+
         self.emit_scaffolding_files(&mut code, &mut total_bytes)?;
 
         // Generate _meta.json sidecar with structured tool metadata
@@ -506,8 +598,25 @@ impl ProgressiveGenerator<'_> {
         Ok(())
     }
 
-    /// Emits the tool-independent scaffolding files: the runtime bridge, `package.json`, and
-    /// `tsconfig.json`.
+    /// Renders `catalog.ts`, tracking it into `code`.
+    fn emit_catalog_file(
+        server_info: &ServerInfo,
+        code: &mut GeneratedCode,
+        total_bytes: &mut usize,
+    ) -> Result<()> {
+        add_tracked(
+            code,
+            total_bytes,
+            render_catalog(&sanitize_jsdoc(&server_info.name, 256), Vec::new())?,
+        )?;
+
+        tracing::debug!("Generated {}", CATALOG_FILE_NAME);
+
+        Ok(())
+    }
+
+    /// Emits the tool-independent scaffolding files: the runtime bridge, `_runtime/cli.ts`,
+    /// `package.json`, and `tsconfig.json`.
     fn emit_scaffolding_files(
         &self,
         code: &mut GeneratedCode,
@@ -529,6 +638,17 @@ impl ProgressiveGenerator<'_> {
         )?;
 
         tracing::debug!("Generated _runtime/mcp-bridge.ts");
+
+        add_tracked(
+            code,
+            total_bytes,
+            GeneratedFile {
+                path: "_runtime/cli.ts".to_string(),
+                content: self.engine.render("progressive/cli", &())?,
+            },
+        )?;
+
+        tracing::debug!("Generated _runtime/cli.ts");
 
         // Generate package.json for ES module identification and the @types/node devDependency
         // needed for the runtime bridge to type-check (see PACKAGE_JSON doc comment)
@@ -603,6 +723,7 @@ impl ProgressiveGenerator<'_> {
             category: categorization.map(|c| sanitize_jsdoc(&c.category, 128)),
             keywords: categorization.map(|c| render_keywords_for_jsdoc(&c.keywords)),
             short_description,
+            annotation_tags: tool.annotations.as_ref().map_or_else(Vec::new, jsdoc_tags),
         }
     }
 
@@ -844,6 +965,14 @@ impl ProgressiveGenerator<'_> {
                     description: raw_description,
                 })
                 .collect(),
+            annotations: tool.annotations.clone(),
+            result_type: None,
+            result_type_origin: if tool.output_schema.is_some() {
+                ResultTypeOrigin::Declared
+            } else {
+                ResultTypeOrigin::Undeclared
+            },
+            manifest_size_bytes: 0,
         }
     }
 
@@ -871,6 +1000,7 @@ impl ProgressiveGenerator<'_> {
                 description: &tool.description,
                 input_schema: &tool.input_schema,
                 output_schema: tool.output_schema.as_ref(),
+                annotations: tool.annotations.as_ref(),
             })
             .collect();
         let provenance = GenerationProvenance::capture(server_config, &digest_entries);
@@ -985,7 +1115,7 @@ fn add_tracked(
 /// deleting/collapsing that character afterward would reopen the comment. Truncation to
 /// `max_len` runs last, after escaping, so a `*/` straddling the truncation boundary is
 /// already widened to `*\/` and cannot be split back into a bare `*/` by the cut.
-fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
+pub(crate) fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
     let neutralized = mcp_execution_core::untrusted::sanitize_untrusted_text(s, usize::MAX);
     let sanitized = neutralized.replace("*/", "*\\/");
     if sanitized.chars().count() > max_len {
@@ -1120,7 +1250,7 @@ const RESERVED_WORDS: &[&str] = &[
 /// two differ): a tool whose sanitized name matches one of these would otherwise silently
 /// overwrite this generator's own fixed output file (issue #312) instead of being disambiguated
 /// like any other name collision.
-const RESERVED_OUTPUT_NAMES: &[&str] = &["index"];
+const RESERVED_OUTPUT_NAMES: &[&str] = &["index", "catalog"];
 
 /// Resolves a collision-free TypeScript identifier for each tool, in tool order.
 ///
@@ -1251,6 +1381,9 @@ fn sanitize_schema_jsdoc_value(value: &mut serde_json::Value, depth: usize, cap_
 }
 
 #[cfg(test)]
+mod acceptance_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use mcp_execution_core::{ServerId, ToolName};
@@ -1281,6 +1414,7 @@ mod tests {
                         "required": ["title"]
                     }),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("update_issue").unwrap(),
@@ -1295,6 +1429,7 @@ mod tests {
                         "required": ["id"]
                     }),
                     output_schema: None,
+                    annotations: None,
                 },
             ],
             capabilities: ServerCapabilities {
@@ -1328,11 +1463,13 @@ mod tests {
         // Should generate:
         // - 2 tool files
         // - 1 index.ts
+        // - 1 catalog.ts
         // - 1 runtime bridge
+        // - 1 single-call entry point (_runtime/cli.ts)
         // - 1 package.json
         // - 1 tsconfig.json
         // - 1 _meta.json
-        assert_eq!(code.file_count(), 7);
+        assert_eq!(code.file_count(), 9);
 
         // Check tool files exist
         let tool_files: Vec<_> = code.files.iter().map(|f| f.path.as_str()).collect();
@@ -1453,7 +1590,7 @@ mod tests {
         assert!(title.required);
     }
 
-    /// The `_meta.json` sidecar carries `schema_version: 2` and 64-hex-char provenance fields,
+    /// The `_meta.json` sidecar carries the current schema version and 64-hex-char provenance fields,
     /// and two runs against identical input agree on the fingerprint and digest — only
     /// `generated_at` is allowed to differ between them.
     #[test]
@@ -1480,7 +1617,7 @@ mod tests {
             .unwrap();
         let second_meta: ServerMetadata = serde_json::from_str(&second_meta_file.content).unwrap();
 
-        assert_eq!(first_meta.schema_version, 2);
+        assert_eq!(first_meta.schema_version, METADATA_SCHEMA_VERSION);
         assert_eq!(first_meta.provenance.config_fingerprint.as_str().len(), 64);
         assert!(
             first_meta
@@ -1588,6 +1725,7 @@ mod tests {
                     "required": []
                 }),
                 output_schema: None,
+                annotations: None,
             }],
             capabilities: ServerCapabilities {
                 supports_tools: true,
@@ -1650,6 +1788,7 @@ mod tests {
                 "required": ["text"]
             }),
             output_schema: None,
+            annotations: None,
         };
 
         let categorization = ToolCategorization {
@@ -1693,6 +1832,7 @@ mod tests {
             description: String::new(),
             input_schema: json!({}),
             output_schema: None,
+            annotations: None,
         };
         let source = Error::ValidationError {
             field: "type".to_string(),
@@ -1732,6 +1872,7 @@ mod tests {
             description: String::new(),
             input_schema: json!({}),
             output_schema: None,
+            annotations: None,
         };
 
         let render_failure = ProgressiveGenerator::wrap_tool_generation_error(
@@ -1788,6 +1929,7 @@ mod tests {
                 "required": ["text"]
             }),
             output_schema: None,
+            annotations: None,
         };
 
         let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
@@ -1826,6 +1968,7 @@ mod tests {
                 "required": ["text"]
             }),
             output_schema: None,
+            annotations: None,
         };
 
         let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
@@ -1881,6 +2024,7 @@ mod tests {
                     "required": []
                 }),
                 output_schema: None,
+                annotations: None,
             }],
             capabilities: ServerCapabilities {
                 supports_tools: true,
@@ -1959,6 +2103,7 @@ mod tests {
                     "required": []
                 }),
                 output_schema: None,
+                annotations: None,
             }],
             capabilities: ServerCapabilities {
                 supports_tools: true,
@@ -2008,12 +2153,14 @@ mod tests {
                     description: "Capitalized".to_string(),
                     input_schema: json!({"type": "object", "properties": {}, "required": []}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("index").unwrap(),
                     description: "Lowercase".to_string(),
                     input_schema: json!({"type": "object", "properties": {}, "required": []}),
                     output_schema: None,
+                    annotations: None,
                 },
             ],
             capabilities: ServerCapabilities {
@@ -2061,12 +2208,14 @@ mod tests {
                     description: "snake_case".to_string(),
                     input_schema: json!({"type": "object", "properties": {}, "required": []}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("GetUser").unwrap(),
                     description: "PascalCase".to_string(),
                     input_schema: json!({"type": "object", "properties": {}, "required": []}),
                     output_schema: None,
+                    annotations: None,
                 },
             ],
             capabilities: ServerCapabilities {
@@ -2581,12 +2730,14 @@ mod tests {
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
             ToolInfo {
                 name: ToolName::new("foo.bar").unwrap(),
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
             ToolInfo {
                 // `ToolName::new`'s Unicode-identifier allowlist (issue #433) rejects a raw
@@ -2597,6 +2748,7 @@ mod tests {
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
         ];
 
@@ -2626,12 +2778,14 @@ mod tests {
                 description: "First".to_string(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
             ToolInfo {
                 name: ToolName::new("dup").unwrap(),
                 description: "Second".to_string(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
         ];
 
@@ -2648,6 +2802,7 @@ mod tests {
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             })
             .collect();
 
@@ -2682,6 +2837,7 @@ mod tests {
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             }];
 
             let resolved = resolve_typescript_names(&tools);
@@ -2706,6 +2862,7 @@ mod tests {
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
             // Must be a hyphen, not an underscore: `to_camel_case` only acts on `_` (it
             // capitalizes the following character and drops the underscore), so a raw name
@@ -2719,6 +2876,7 @@ mod tests {
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
         ];
 
@@ -2741,6 +2899,7 @@ mod tests {
             description: String::new(),
             input_schema: json!({}),
             output_schema: None,
+            annotations: None,
         }];
 
         let resolved = resolve_typescript_names(&tools);
@@ -2755,6 +2914,7 @@ mod tests {
             description: String::new(),
             input_schema: json!({}),
             output_schema: None,
+            annotations: None,
         }];
 
         let resolved = resolve_typescript_names(&tools);
@@ -2777,12 +2937,14 @@ mod tests {
                     description: String::new(),
                     input_schema: json!({}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new(second).unwrap(),
                     description: String::new(),
                     input_schema: json!({}),
                     output_schema: None,
+                    annotations: None,
                 },
             ]
         };
@@ -2813,6 +2975,7 @@ mod tests {
             description: String::new(),
             input_schema: json!({}),
             output_schema: None,
+            annotations: None,
         }];
 
         let resolved = resolve_typescript_names(&tools);
@@ -2832,12 +2995,14 @@ mod tests {
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
             ToolInfo {
                 name: ToolName::new("a--b").unwrap(),
                 description: String::new(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
         ];
 
@@ -2855,6 +3020,7 @@ mod tests {
             description: "Delete something".to_string(),
             input_schema: json!({}),
             output_schema: None,
+            annotations: None,
         }];
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -2878,12 +3044,14 @@ mod tests {
                 description: "First".to_string(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
             ToolInfo {
                 name: ToolName::new("foo.bar").unwrap(),
                 description: "Second".to_string(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
         ];
 
@@ -2928,12 +3096,14 @@ mod tests {
                 description: "First".to_string(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
             ToolInfo {
                 name: ToolName::new("dup").unwrap(),
                 description: "Second".to_string(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             },
         ];
 
@@ -3350,6 +3520,7 @@ mod tests {
                     description: String::new(),
                     input_schema: json!({}),
                     output_schema: None,
+                    annotations: None,
                 })
                 .collect(),
             capabilities: ServerCapabilities {

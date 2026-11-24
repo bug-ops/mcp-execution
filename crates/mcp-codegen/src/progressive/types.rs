@@ -3,6 +3,11 @@
 //! Defines data structures used during progressive code generation,
 //! where each tool is generated as a separate file.
 
+use crate::common::typescript::TS_IDENTIFIER_PATTERN;
+use crate::progressive::observed::{
+    OBSERVED_SHAPE_MAX_DEPTH, OBSERVED_SHAPE_MAX_KEY_LEN, OBSERVED_SHAPE_MAX_KEYS,
+    OBSERVED_SHAPE_MAX_LINE_BYTES,
+};
 use serde::{Deserialize, Serialize};
 
 /// Context for rendering a single tool template.
@@ -28,6 +33,7 @@ use serde::{Deserialize, Serialize};
 ///     category: Some("issues".to_string()),
 ///     keywords: Some("create,issue,new,bug".to_string()),
 ///     short_description: "Create a new issue".to_string(),
+///     annotation_tags: vec![],
 /// };
 ///
 /// assert_eq!(context.server_id, "github");
@@ -59,6 +65,8 @@ pub struct ToolContext {
     /// constructor falls back to `description` when no categorization short description is
     /// available, so `None` is not a state this type can represent.
     pub short_description: String,
+    /// `JSDoc` tag lines for the annotations the server stated, empty when none were
+    pub annotation_tags: Vec<String>,
 }
 
 /// Information about a single parameter property.
@@ -301,6 +309,28 @@ pub struct BridgeContext {
     /// Maximum byte length for a single HTTP header value
     /// (`mcp_execution_core::MAX_HEADER_VALUE_LEN`).
     pub max_header_value_len: usize,
+    /// Maximum length in code points of server-supplied message text kept in a tool error
+    /// (`mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`).
+    pub max_server_message_len: usize,
+    /// Longest run of variation selectors kept in server text
+    /// (`mcp_execution_core::untrusted::MAX_VARIATION_SELECTOR_RUN`).
+    pub max_variation_selector_run: usize,
+    /// Most variation selectors kept across a whole server text
+    /// (`mcp_execution_core::untrusted::MAX_TOTAL_VARIATION_SELECTORS`).
+    pub max_total_variation_selectors: usize,
+    /// Maximum nesting depth of a recorded observed shape.
+    pub observed_shape_max_depth: usize,
+    /// Maximum number of keys an object may have to be recorded key by key.
+    pub observed_shape_max_keys: usize,
+    /// Maximum length in characters of a recorded object key.
+    pub observed_shape_max_key_len: usize,
+    /// Maximum size in bytes of one recorded observed-shape line.
+    pub observed_shape_max_line_bytes: usize,
+    /// Anchored `RegExp` pattern source for the identifier keys a recorded shape may keep,
+    /// pre-escaped for embedding inside a single-quoted TypeScript string literal. Private
+    /// with an accessor for the same fail-open reason as `env_name_charset_pattern`: an empty
+    /// pattern would match every key.
+    identifier_pattern: String,
 }
 
 impl BridgeContext {
@@ -362,6 +392,21 @@ impl BridgeContext {
     pub fn env_name_charset_pattern(&self) -> &str {
         &self.env_name_charset_pattern
     }
+
+    /// Anchored `RegExp` pattern source for the identifier keys a recorded observed shape may
+    /// keep. Never empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::progressive::BridgeContext;
+    ///
+    /// assert!(!BridgeContext::default().identifier_pattern().is_empty());
+    /// ```
+    #[must_use]
+    pub fn identifier_pattern(&self) -> &str {
+        &self.identifier_pattern
+    }
 }
 
 impl Default for BridgeContext {
@@ -398,6 +443,17 @@ impl Default for BridgeContext {
             max_url_len: mcp_execution_core::MAX_URL_LEN,
             max_header_count: mcp_execution_core::MAX_HEADER_COUNT,
             max_header_value_len: mcp_execution_core::MAX_HEADER_VALUE_LEN,
+            max_server_message_len: mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN,
+            max_variation_selector_run: mcp_execution_core::untrusted::MAX_VARIATION_SELECTOR_RUN,
+            max_total_variation_selectors:
+                mcp_execution_core::untrusted::MAX_TOTAL_VARIATION_SELECTORS,
+            observed_shape_max_depth: OBSERVED_SHAPE_MAX_DEPTH,
+            observed_shape_max_keys: OBSERVED_SHAPE_MAX_KEYS,
+            observed_shape_max_key_len: OBSERVED_SHAPE_MAX_KEY_LEN,
+            observed_shape_max_line_bytes: OBSERVED_SHAPE_MAX_LINE_BYTES,
+            identifier_pattern: crate::progressive::generator::sanitize_ts_string_literal(
+                TS_IDENTIFIER_PATTERN,
+            ),
         }
     }
 }
@@ -421,6 +477,7 @@ mod tests {
             category: Some("issues".to_string()),
             keywords: Some("create,issue,new".to_string()),
             short_description: "Create a new issue".to_string(),
+            annotation_tags: vec![],
         };
 
         assert_eq!(context.server_id, "github");
@@ -487,6 +544,7 @@ mod tests {
         assert_ne!(context.forbidden_env_names(), [] as [String; 0]);
         assert_ne!(context.forbidden_env_prefix(), "");
         assert_ne!(context.env_name_charset_pattern(), "");
+        assert_ne!(context.identifier_pattern(), "");
 
         // #471: the DoS size/count ceilings must be populated from mcp_execution_core, not
         // left at zero (which would reject every config, silently breaking every generated

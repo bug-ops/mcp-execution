@@ -13,7 +13,8 @@
 //! needed at all.
 
 use mcp_execution_core::metadata::{
-    INDEX_FILE_NAME, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ServerMetadata,
+    CATALOG_FILE_NAME, INDEX_FILE_NAME, MAX_METADATA_FILE_BYTES, METADATA_FILE_NAME,
+    METADATA_SCHEMA_VERSION, ServerMetadata,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -28,8 +29,9 @@ use thiserror::Error;
 /// Maximum number of tools accepted from a single sidecar (denial-of-service protection).
 pub const MAX_TOOL_FILES: usize = 500;
 
-/// Maximum sidecar file size to read in bytes (1MB).
-pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
+/// Maximum sidecar file size to read in bytes, shared with the producer through
+/// [`MAX_METADATA_FILE_BYTES`].
+pub const MAX_FILE_SIZE: u64 = MAX_METADATA_FILE_BYTES;
 
 /// Maximum size of a `SKILL.md`'s extracted YAML frontmatter block, in bytes.
 ///
@@ -420,7 +422,10 @@ async fn verify_tool_files_on_disk(
         let Some(file_name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
             continue;
         };
-        if file_name == INDEX_FILE_NAME || expected_files.contains(file_name) {
+        if file_name == INDEX_FILE_NAME
+            || file_name == CATALOG_FILE_NAME
+            || expected_files.contains(file_name)
+        {
             continue;
         }
         tracing::warn!(
@@ -855,6 +860,10 @@ mod tests {
                         required: true,
                         description: Some("A parameter".to_string()),
                     }],
+                    annotations: None,
+                    result_type: None,
+                    result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                    manifest_size_bytes: 0,
                 })
                 .collect(),
             provenance: test_provenance(),
@@ -914,6 +923,10 @@ mod tests {
                 keywords: vec![],
                 description: None,
                 parameters: vec![],
+                annotations: None,
+                result_type: None,
+                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
             },
             ToolMetadata {
                 name: ToolName::new("alpha").unwrap(),
@@ -922,6 +935,10 @@ mod tests {
                 keywords: vec![],
                 description: None,
                 parameters: vec![],
+                annotations: None,
+                result_type: None,
+                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
             },
         ];
         write_metadata(temp_dir.path(), &meta).await;
@@ -1106,7 +1123,7 @@ mod tests {
     async fn test_scan_tools_directory_rejects_invalid_server_id_in_valid_json() {
         let temp_dir = TempDir::new().unwrap();
         let json = r#"{
-            "schema_version": 2,
+            "schema_version": 3,
             "server_id": "not/a/valid/id",
             "server_name": "GitHub",
             "server_version": "1.0.0",
@@ -1131,7 +1148,7 @@ mod tests {
     async fn test_scan_tools_directory_rejects_invalid_tool_name_in_valid_json() {
         let temp_dir = TempDir::new().unwrap();
         let json = r#"{
-            "schema_version": 2,
+            "schema_version": 3,
             "server_id": "github",
             "server_name": "GitHub",
             "server_version": "1.0.0",
@@ -1141,7 +1158,11 @@ mod tests {
                 "category": null,
                 "keywords": [],
                 "description": null,
-                "parameters": []
+                "parameters": [],
+                "annotations": null,
+                "result_type": null,
+                "result_type_origin": "undeclared",
+                "manifest_size_bytes": 0
             }],
             "provenance": {
                 "generated_at": "2026-01-01T00:00:00Z",

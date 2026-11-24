@@ -1057,6 +1057,9 @@ async function getConnection(serverId: string): Promise<ServerConnection> {
   }
 }
 
+/** Which part of a tool response carries the result a caller wants. */
+export type ResultSource = 'structured' | 'content';
+
 /**
  * Call an MCP tool on a server
  *
@@ -1069,6 +1072,7 @@ async function getConnection(serverId: string): Promise<ServerConnection> {
  * @param serverId - Server identifier (e.g., "github")
  * @param toolName - Tool name as defined by MCP server (e.g., "create_issue")
  * @param params - Tool parameters as object
+ * @param resultSource - Which part of the response carries the result (currently ignored)
  * @returns Tool execution result
  * @throws {Error} If tool execution fails or returns error
  *
@@ -1085,7 +1089,8 @@ async function getConnection(serverId: string): Promise<ServerConnection> {
 export async function callMCPTool(
   serverId: string,
   toolName: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  resultSource: ResultSource = 'content'
 ): Promise<unknown> {
   debug(`Calling tool: ${serverId}.${toolName}`, params);
 
