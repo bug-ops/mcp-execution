@@ -235,7 +235,16 @@ const PACKAGE_JSON: &str = "{\"type\":\"module\",\"devDependencies\":{\"@types/n
 ///   TypeScript's `noEmit` constraint, you may be able to bundle the generated files
 ///   alongside your code (consult your bundler's documentation for mixing `noEmit`
 ///   and emitting configurations).
-const TSCONFIG_JSON: &str = r#"{
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_codegen::TSCONFIG_JSON;
+///
+/// let parsed: serde_json::Value = serde_json::from_str(TSCONFIG_JSON).unwrap();
+/// assert_eq!(parsed["compilerOptions"]["noEmit"], true);
+/// ```
+pub const TSCONFIG_JSON: &str = r#"{
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
@@ -994,13 +1003,7 @@ impl ProgressiveGenerator<'_> {
         let digest_entries: Vec<ToolDigestEntry<'_>> = server_info
             .tools
             .iter()
-            .map(|tool| ToolDigestEntry {
-                name: tool.name.as_str(),
-                description: &tool.description,
-                input_schema: &tool.input_schema,
-                output_schema: tool.output_schema.as_ref(),
-                annotations: tool.annotations.as_ref(),
-            })
+            .map(ToolInfo::digest_entry)
             .collect();
         let provenance = GenerationProvenance::capture(server_config, &digest_entries);
 
@@ -3010,115 +3013,39 @@ mod tests {
         assert_eq!(sanitized.chars().count(), max_len);
     }
 
-    /// #221 item 3 — real drift guard: reads the names from
-    /// `mcp_execution_core::forbidden_env_names()` directly (not a hardcoded second copy),
-    /// so a future addition/removal in `command.rs`'s `FORBIDDEN_ENV_NAMES` is picked up here
-    /// automatically. Passing is guaranteed by construction (`BridgeContext`'s hand-written
-    /// `Default` impl renders from that same accessor), which is the point: since the rendered
-    /// TypeScript literal is generated from the Rust constant rather than hand-copied, the two
-    /// can no longer silently desynchronize the way a hand-maintained second copy could.
-    ///
-    /// This does NOT prove the validator is reachable or enforced at runtime — a
-    /// `grep`-style assertion can pass even against dead code (e.g. an unreachable function,
-    /// or one whose result is never checked). The actual behavioral regression guard for
-    /// #201 — that a hostile `~/.claude/mcp.json` is rejected before any subprocess is
-    /// spawned — lives in `crates/mcp-codegen/tests/progressive_generation.rs`
-    /// (`test_runtime_bridge_rejects_forbidden_env_var_before_spawn`), which compiles and
-    /// actually executes the rendered bridge under Node.
+    /// The bridge's protocol constants are rendered from `mcp_execution_core::helper_protocol`,
+    /// so the two ends of the helper protocol cannot drift. Name and value are asserted
+    /// together: the line bound and a bare number would otherwise match unrelated literals.
     #[test]
-    fn test_generate_runtime_bridge_declares_forbidden_env_var_list() {
-        let generator = ProgressiveGenerator::new().unwrap();
-        let server_info = create_test_server_info();
+    fn test_generate_runtime_bridge_renders_helper_protocol_constants() {
+        use mcp_execution_core::helper_protocol::{
+            CLI_PATH_ENV, HELPER_ENV, HELPER_PROTOCOL_VERSION, HELPER_TOKEN_ENV,
+            MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV,
+        };
 
-        let code = generator.generate(&server_info, &test_config()).unwrap();
+        let generator = ProgressiveGenerator::new().unwrap();
+        let code = generator
+            .generate(&create_test_server_info(), &test_config())
+            .unwrap();
         let bridge = code
             .files
             .iter()
             .find(|f| f.path == "_runtime/mcp-bridge.ts")
             .unwrap();
 
-        for forbidden_env in mcp_execution_core::forbidden_env_names() {
-            assert!(
-                bridge.content.contains(&format!("'{forbidden_env}'")),
-                "runtime bridge must list forbidden env var {forbidden_env}: {}",
-                bridge.content
-            );
-        }
-
-        for forbidden_char in mcp_execution_core::forbidden_chars() {
-            let escaped = sanitize_ts_string_literal(&forbidden_char.to_string());
-            assert!(
-                bridge.content.contains(&format!("'{escaped}'")),
-                "runtime bridge must list forbidden char {forbidden_char:?}: {}",
-                bridge.content
-            );
-        }
-
-        assert!(
-            bridge
-                .content
-                .contains(mcp_execution_core::forbidden_env_prefix()),
-            "runtime bridge must reference the forbidden env prefix: {}",
-            bridge.content
-        );
-    }
-
-    /// #471/#467 drift guard: the `DoS` size/count ceilings and the env-name charset pattern
-    /// must be rendered from `mcp_execution_core`'s constants/accessor, not hand-copied
-    /// literals — same "read from the accessor, not a hardcoded second copy" reasoning as
-    /// `test_generate_runtime_bridge_declares_forbidden_env_var_list` above, and the same
-    /// caveat: this proves the values are rendered, not that the checks are reachable or
-    /// enforced at runtime (see `crates/mcp-codegen/tests/progressive_generation.rs` for the
-    /// behavioral guards that compile and execute the rendered bridge under Node).
-    #[test]
-    fn test_generate_runtime_bridge_declares_dos_bounds_and_env_name_charset() {
-        let generator = ProgressiveGenerator::new().unwrap();
-        let server_info = create_test_server_info();
-
-        let code = generator.generate(&server_info, &test_config()).unwrap();
-        let bridge = code
-            .files
-            .iter()
-            .find(|f| f.path == "_runtime/mcp-bridge.ts")
-            .unwrap();
-
-        // Asserts name *and* value together — asserting only the value would pass even with
-        // `MAX_ENV_COUNT` deleted from the template entirely, since it collides with
-        // `MAX_ARG_COUNT` (both 256) and `MAX_URL_LEN`/`MAX_HEADER_VALUE_LEN` collide too (both
-        // 8192); see #471/#467 critique S4.
-        for (name, value) in [
-            ("MAX_ARG_COUNT", mcp_execution_core::MAX_ARG_COUNT),
-            ("MAX_ARG_LEN", mcp_execution_core::MAX_ARG_LEN),
-            ("MAX_ENV_COUNT", mcp_execution_core::MAX_ENV_COUNT),
-            ("MAX_ENV_VALUE_LEN", mcp_execution_core::MAX_ENV_VALUE_LEN),
-            ("MAX_URL_LEN", mcp_execution_core::MAX_URL_LEN),
-            ("MAX_HEADER_COUNT", mcp_execution_core::MAX_HEADER_COUNT),
-            (
-                "MAX_HEADER_VALUE_LEN",
-                mcp_execution_core::MAX_HEADER_VALUE_LEN,
-            ),
+        for declaration in [
+            format!("const HELPER_PROTOCOL_VERSION = {HELPER_PROTOCOL_VERSION};"),
+            format!("const MAX_HELPER_LINE_BYTES = {MAX_HELPER_LINE_BYTES};"),
+            format!("const HELPER_ENV = '{HELPER_ENV}';"),
+            format!("const HELPER_TOKEN_ENV = '{HELPER_TOKEN_ENV}';"),
+            format!("const CLI_PATH_ENV = '{CLI_PATH_ENV}';"),
+            format!("const RUN_MARKER_ENV = '{RUN_MARKER_ENV}';"),
         ] {
             assert!(
-                bridge.content.contains(&format!("const {name} = {value};")),
-                "runtime bridge must declare {name} = {value}: {}",
-                bridge.content
+                bridge.content.contains(&declaration),
+                "runtime bridge must declare `{declaration}`"
             );
         }
-
-        assert!(
-            bridge
-                .content
-                .contains(mcp_execution_core::env_name_charset_pattern()),
-            "runtime bridge must reference the env-name charset pattern: {}",
-            bridge.content
-        );
-        assert!(
-            bridge
-                .content
-                .contains(mcp_execution_core::env_name_charset_desc()),
-            "runtime bridge must reference the env-name charset description: {}",
-            bridge.content
-        );
     }
 
     #[test]

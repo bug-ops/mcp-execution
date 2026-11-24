@@ -43,10 +43,16 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod session;
+
+pub use session::{CallTimeout, ResultSource, ServerText, Session, ToolCall, ToolCallOutcome};
+
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
 use http::{HeaderName, HeaderValue};
 use mcp_execution_core::annotations::{AnnotationTitle, Hint, ToolAnnotations};
+use mcp_execution_core::helper_protocol::MAX_RESPONSE_LINE_BYTES;
+use mcp_execution_core::provenance::ToolDigestEntry;
 use mcp_execution_core::{
     Error, ResourceKind, Result, ServerConfig, ServerId, ToolName, Transport,
     validate_server_config,
@@ -61,7 +67,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
+use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio::process::Child;
 use tokio_util::bytes::BytesMut;
@@ -179,7 +188,7 @@ pub const MAX_SCHEMA_SIZE_BYTES: usize = 64 * 1024;
 /// already reserved, so an attacker's oversized line can push peak buffer capacity to roughly
 /// 4x this value before it is rejected — still strictly bounded, just not 1:1 with the cap
 /// (mirrors `mcp-execution-server`'s own documented behavior for the same codec).
-const MAX_RESPONSE_LINE_SIZE: usize = 4 * 1024 * 1024;
+const MAX_RESPONSE_LINE_SIZE: usize = MAX_RESPONSE_LINE_BYTES;
 
 /// Cap on a single SSE event's size for the HTTP/SSE transport (see
 /// [`Introspector::discover_server`]'s `# Security` docs for the JSON-body gap this
@@ -273,6 +282,126 @@ pub struct ToolInfo {
     /// Annotations the server advertised for the tool, if any
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
+}
+
+impl ToolInfo {
+    /// Maps this tool to the borrowed view the generation digest is computed over.
+    ///
+    /// The only tool-to-digest mapping in the workspace: `generate` records the digest through
+    /// it and `drift` recomputes it, so the two can never disagree about which fields count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ToolName;
+    /// use mcp_execution_introspector::ToolInfo;
+    /// use serde_json::json;
+    ///
+    /// let tool = ToolInfo {
+    ///     name: ToolName::new("send_message").unwrap(),
+    ///     description: "Sends a message".to_string(),
+    ///     input_schema: json!({"type": "object"}),
+    ///     output_schema: None,
+    ///     annotations: None,
+    /// };
+    ///
+    /// assert_eq!(tool.digest_entry().name, "send_message");
+    /// ```
+    #[must_use]
+    pub fn digest_entry(&self) -> ToolDigestEntry<'_> {
+        ToolDigestEntry {
+            name: self.name.as_str(),
+            description: &self.description,
+            input_schema: &self.input_schema,
+            output_schema: self.output_schema.as_ref(),
+            annotations: self.annotations.as_ref(),
+        }
+    }
+}
+
+/// Who may cache a server's tool listing, as the server stated it.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::CacheScope;
+///
+/// assert_ne!(CacheScope::Public, CacheScope::Private);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheScope {
+    /// Any client may cache and share the listing.
+    Public,
+    /// Only the requesting user's client may cache the listing.
+    Private,
+}
+
+/// Freshness hints a server attached to its `tools/list` pages.
+///
+/// Across pages the most conservative value wins: the smallest `ttl`, and `Private` over
+/// `Public`. A field is `None` when no page stated it. Hints are reported to the user and
+/// never used to skip a request.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_introspector::ListingHints;
+///
+/// let hints = ListingHints::default();
+/// assert!(hints.ttl.is_none() && hints.cache_scope.is_none());
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ListingHints {
+    /// How long the server says the listing stays fresh.
+    pub ttl: Option<Duration>,
+    /// Who the server says may cache the listing.
+    pub cache_scope: Option<CacheScope>,
+}
+
+impl ListingHints {
+    /// Folds one page's hints into the running most-conservative value.
+    fn absorb(&mut self, ttl_ms: Option<u64>, scope: Option<rmcp::model::CacheScope>) {
+        if let Some(ms) = ttl_ms {
+            let ttl = Duration::from_millis(ms);
+            self.ttl = Some(self.ttl.map_or(ttl, |current| current.min(ttl)));
+        }
+        if let Some(scope) = scope {
+            // `rmcp`'s scope enum is non-exhaustive: an unknown variant counts as private.
+            let page_scope = match scope {
+                rmcp::model::CacheScope::Public => CacheScope::Public,
+                _ => CacheScope::Private,
+            };
+            self.cache_scope = Some(match (self.cache_scope, page_scope) {
+                (Some(CacheScope::Private), _) | (_, CacheScope::Private) => CacheScope::Private,
+                _ => CacheScope::Public,
+            });
+        }
+    }
+}
+
+/// The result of [`Introspector::discover`]: the server description plus its listing hints.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mcp_execution_core::{ServerConfig, ServerId};
+/// use mcp_execution_introspector::Introspector;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let config = ServerConfig::builder().command("server".to_string()).build()?;
+/// let discovery = Introspector::new()
+///     .discover(ServerId::new("demo")?, &config)
+///     .await?;
+/// println!("{} tools, ttl {:?}", discovery.info.tools.len(), discovery.hints.ttl);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct Discovery {
+    /// The discovered server description.
+    pub info: ServerInfo,
+    /// Freshness hints the server attached to its listing.
+    pub hints: ListingHints,
 }
 
 /// Server capabilities.
@@ -426,12 +555,43 @@ impl Introspector {
     /// # Ok(())
     /// # }
     /// ```
-    #[tracing::instrument(skip_all, fields(server_id = %server_id))]
     pub async fn discover_server(
         &self,
         server_id: ServerId,
         config: &ServerConfig,
     ) -> Result<ServerInfo> {
+        self.discover(server_id, config)
+            .await
+            .map(|discovery| discovery.info)
+    }
+
+    /// Like [`discover_server`](Self::discover_server), but also returns the freshness hints
+    /// the server attached to its tool listing.
+    ///
+    /// Conditions, errors and security notes are those of `discover_server`. The hints are the
+    /// most conservative across pages and informational only: they never skip a request.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`discover_server`](Self::discover_server).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mcp_execution_core::{ServerConfig, ServerId};
+    /// use mcp_execution_introspector::Introspector;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = ServerConfig::builder().command("server".to_string()).build()?;
+    /// let discovery = Introspector::new()
+    ///     .discover(ServerId::new("demo")?, &config)
+    ///     .await?;
+    /// println!("ttl: {:?}", discovery.hints.ttl);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[tracing::instrument(skip_all, fields(server_id = %server_id))]
+    pub async fn discover(&self, server_id: ServerId, config: &ServerConfig) -> Result<Discovery> {
         tracing::info!("Discovering MCP server: {}", server_id);
 
         // Defense in depth: since #313, `ServerConfig` can only be obtained already validated
@@ -454,7 +614,10 @@ impl Introspector {
 
         tracing::info!("Successfully discovered {} tools", info.tools.len());
 
-        Ok(info)
+        Ok(Discovery {
+            info,
+            hints: discovery.hints,
+        })
     }
 }
 
@@ -489,6 +652,8 @@ struct DiscoveryResult {
     tools: Vec<rmcp::model::Tool>,
     /// Handshake-derived server metadata and capability flags.
     peer_meta: PeerMeta,
+    /// Listing freshness hints, most conservative across pages.
+    hints: ListingHints,
 }
 
 /// Spawns the MCP server subprocess used for a single introspection
@@ -513,7 +678,7 @@ struct DiscoveryResult {
 ///
 /// Returns [`Error::ConnectionFailed`] if the process cannot be spawned
 /// (e.g. the command does not exist or is not executable).
-fn spawn_introspection_child(
+pub(crate) fn spawn_introspection_child(
     server_id: &ServerId,
     command: &str,
     config: &ServerConfig,
@@ -537,6 +702,26 @@ fn spawn_introspection_child(
     })
 }
 
+/// Takes the piped stdout/stdin of a freshly spawned child.
+///
+/// # Errors
+///
+/// Returns [`Error::ConnectionFailed`] if either pipe was not captured.
+pub(crate) fn take_child_stdio(
+    server_id: &ServerId,
+    child: &mut Child,
+) -> Result<(tokio::process::ChildStdout, tokio::process::ChildStdin)> {
+    let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
+        server: server_id.to_string(),
+        source: Box::new(std::io::Error::other("child stdout was not captured")),
+    })?;
+    let stdin = child.stdin.take().ok_or_else(|| Error::ConnectionFailed {
+        server: server_id.to_string(),
+        source: Box::new(std::io::Error::other("child stdin was not captured")),
+    })?;
+    Ok((stdout, stdin))
+}
+
 /// Spawns the stdio introspection child, drives discovery over it, and tears
 /// it down afterward.
 ///
@@ -550,16 +735,9 @@ async fn discover_via_stdio_process(
     config: &ServerConfig,
 ) -> Result<DiscoveryResult> {
     let mut child = spawn_introspection_child(server_id, command, config)?;
-    let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
-        server: server_id.to_string(),
-        source: Box::new(std::io::Error::other("child stdout was not captured")),
-    })?;
-    let stdin = child.stdin.take().ok_or_else(|| Error::ConnectionFailed {
-        server: server_id.to_string(),
-        source: Box::new(std::io::Error::other("child stdin was not captured")),
-    })?;
+    let stdio = take_child_stdio(server_id, &mut child)?;
 
-    let discovery = discover_via_stdio(server_id, config, (stdout, stdin)).await;
+    let discovery = discover_via_stdio(server_id, config, stdio).await;
 
     // The child process is spawned solely for this discovery round-trip, so it
     // must be reaped here regardless of outcome. We deliberately kill it
@@ -601,8 +779,9 @@ impl From<rmcp::ServiceError> for ListToolsBoundedError {
 /// beyond [`MAX_TOOL_COUNT`] is ever held at once.
 async fn list_tools_bounded(
     client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
-) -> std::result::Result<Vec<rmcp::model::Tool>, ListToolsBoundedError> {
+) -> std::result::Result<(Vec<rmcp::model::Tool>, ListingHints), ListToolsBoundedError> {
     let mut tools = Vec::new();
+    let mut hints = ListingHints::default();
     let mut cursor = None;
     loop {
         let page = client
@@ -610,6 +789,7 @@ async fn list_tools_bounded(
                 rmcp::model::PaginatedRequestParams::default().with_cursor(cursor),
             ))
             .await?;
+        hints.absorb(page.ttl_ms, page.cache_scope);
         tools.extend(page.tools);
 
         if tools.len() > MAX_TOOL_COUNT {
@@ -621,7 +801,7 @@ async fn list_tools_bounded(
             break;
         }
     }
-    Ok(tools)
+    Ok((tools, hints))
 }
 
 /// Converts a [`ListToolsBoundedError`] (from a `tokio::time::timeout`-wrapped
@@ -832,9 +1012,25 @@ impl Decoder for BoundedResponseDecoder {
 ///   unparsable stdout line, and real MCP servers commonly log free-form text to stdout
 ///   alongside the protocol stream. Treating a parse failure as fatal here would regress
 ///   introspection against servers that work fine today.
+#[cfg(test)]
 fn bounded_response_stream<R>(
     reader: R,
     max_length: usize,
+) -> impl Stream<Item = RxJsonRpcMessage<RoleClient>> + Send + Unpin + 'static
+where
+    R: AsyncRead + Send + Unpin + 'static,
+{
+    bounded_response_stream_with(reader, max_length, None)
+}
+
+/// Like [`bounded_response_stream`], but when `end_on_oversize` is set an oversized line ends
+/// the stream (and raises the flag) instead of being dropped: a caller waiting for that line's
+/// response would otherwise wait out its whole timeout, so a [`Session`] closes the transport
+/// and the pending call fails at once.
+fn bounded_response_stream_with<R>(
+    reader: R,
+    max_length: usize,
+    end_on_oversize: Option<Arc<AtomicBool>>,
 ) -> impl Stream<Item = RxJsonRpcMessage<RoleClient>> + Send + Unpin + 'static
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -852,6 +1048,13 @@ where
             return match framed.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(Ok(message)))) => Poll::Ready(Some(message)),
                 Poll::Ready(Some(Ok(Err(error)))) => {
+                    if let (JsonRpcMessageCodecError::MaxLineLengthExceeded, Some(flag)) =
+                        (&error, &end_on_oversize)
+                    {
+                        tracing::error!(%error, "oversized response line from MCP server; ending the session");
+                        flag.store(true, Ordering::Release);
+                        return Poll::Ready(None);
+                    }
                     tracing::warn!(%error, "dropping oversized or malformed response line from MCP server");
                     continue;
                 }
@@ -866,32 +1069,24 @@ where
     })
 }
 
-/// Drives the connect / list-tools / peer-meta pipeline shared by
-/// [`discover_via_stdio`] and [`discover_via_http`] (issue #294): awaits
-/// `connect` bounded by `config.connect_timeout()`, then
-/// [`list_tools_bounded`] bounded by `config.discover_timeout()`, then
-/// extracts [`PeerMeta`] from the resulting client's handshake info. The two
-/// callers differ only in how `connect` builds its transport — both produce
-/// the same `RunningService<RoleClient, ()>` client type from that point on.
+/// Awaits `connect`, bounded by `config.connect_timeout()`.
+///
+/// Shared by discovery and [`Introspector::connect`] so both report the same errors.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Timeout`] if the connect or discovery step exceeds its
-/// configured timeout, [`Error::ConnectionFailed`] if `connect` or the
-/// tool-listing request fails, or [`Error::ResourceLimitExceeded`] if the
-/// accumulated tool count exceeds [`MAX_TOOL_COUNT`] (see
-/// [`list_tools_bounded`]).
-async fn connect_and_list_tools<F, T>(
+/// Returns [`Error::Timeout`] when the handshake exceeds the connect timeout and
+/// [`Error::ConnectionFailed`] when `connect` fails.
+pub(crate) async fn connect_bounded<F, T>(
     server_id: &ServerId,
     config: &ServerConfig,
     connect: F,
-) -> Result<DiscoveryResult>
+) -> Result<rmcp::service::RunningService<RoleClient, ()>>
 where
     F: Future<Output = std::result::Result<rmcp::service::RunningService<RoleClient, ()>, T>>,
     T: std::error::Error + Send + Sync + 'static,
 {
-    // Bounded by the connect timeout.
-    let client = tokio::time::timeout(config.connect_timeout(), connect)
+    tokio::time::timeout(config.connect_timeout(), connect)
         .await
         .map_err(|_elapsed| Error::Timeout {
             operation: format!("connect to {server_id}"),
@@ -900,17 +1095,33 @@ where
         .map_err(|e| Error::ConnectionFailed {
             server: server_id.to_string(),
             source: Box::new(e),
-        })?;
+        })
+}
 
+/// Lists the tools of a connected client and extracts its handshake metadata, bounded by
+/// `config.discover_timeout()` (issue #294).
+///
+/// # Errors
+///
+/// Returns [`Error::Timeout`] if the listing exceeds its timeout,
+/// [`Error::ConnectionFailed`] if the tool-listing request fails, or
+/// [`Error::ResourceLimitExceeded`] if the accumulated tool count exceeds [`MAX_TOOL_COUNT`]
+/// (see [`list_tools_bounded`]).
+async fn list_discovery(
+    server_id: &ServerId,
+    config: &ServerConfig,
+    client: &rmcp::service::RunningService<RoleClient, ()>,
+) -> Result<DiscoveryResult> {
     // List tools page by page, bounded by the discover timeout overall and bailing out early
     // if the accumulated count exceeds MAX_TOOL_COUNT (see `list_tools_bounded`'s docs).
-    let tool_list = tokio::time::timeout(config.discover_timeout(), list_tools_bounded(&client))
-        .await
-        .map_err(|_elapsed| Error::Timeout {
-            operation: format!("list_all_tools for {server_id}"),
-            duration_secs: config.discover_timeout().as_secs(),
-        })?
-        .map_err(|e| map_list_tools_bounded_error(server_id, e))?;
+    let (tool_list, hints) =
+        tokio::time::timeout(config.discover_timeout(), list_tools_bounded(client))
+            .await
+            .map_err(|_elapsed| Error::Timeout {
+                operation: format!("list_all_tools for {server_id}"),
+                duration_secs: config.discover_timeout().as_secs(),
+            })?
+            .map_err(|e| map_list_tools_bounded_error(server_id, e))?;
 
     // Extract name, version, and capabilities from the MCP handshake result.
     let peer_meta = extract_peer_meta(config, client.peer_info().as_deref());
@@ -918,6 +1129,7 @@ where
     Ok(DiscoveryResult {
         tools: tool_list,
         peer_meta,
+        hints,
     })
 }
 
@@ -938,18 +1150,30 @@ async fn discover_via_stdio(
     config: &ServerConfig,
     transport: (tokio::process::ChildStdout, tokio::process::ChildStdin),
 ) -> Result<DiscoveryResult> {
-    // The default `(ChildStdout, ChildStdin)` transport (`AsyncRwTransport`) reads
-    // lines via an unbounded `read_until`, bypassing `JsonRpcMessageCodec`'s
-    // `max_length` entirely (issue #225). Building the sink/stream pair explicitly
-    // routes stdout through `bounded_response_stream` instead.
-    let (stdout, stdin) = transport;
-    let sink = FramedWrite::new(
-        stdin,
-        JsonRpcMessageCodec::<TxJsonRpcMessage<RoleClient>>::new(),
-    );
-    let stream = bounded_response_stream(stdout, MAX_RESPONSE_LINE_SIZE);
+    let client =
+        connect_bounded(server_id, config, ().serve(stdio_halves(transport, None))).await?;
+    list_discovery(server_id, config, &client).await
+}
 
-    connect_and_list_tools(server_id, config, ().serve((sink, stream))).await
+/// Builds the bounded sink/stream pair over a child's stdio.
+///
+/// The default `(ChildStdout, ChildStdin)` transport (`AsyncRwTransport`) reads lines via an
+/// unbounded `read_until`, bypassing `JsonRpcMessageCodec`'s `max_length` entirely (issue
+/// #225); routing stdout through [`bounded_response_stream`] closes that.
+pub(crate) fn stdio_halves(
+    (stdout, stdin): (tokio::process::ChildStdout, tokio::process::ChildStdin),
+    end_on_oversize: Option<Arc<AtomicBool>>,
+) -> (
+    FramedWrite<tokio::process::ChildStdin, JsonRpcMessageCodec<TxJsonRpcMessage<RoleClient>>>,
+    impl Stream<Item = RxJsonRpcMessage<RoleClient>> + Send + Unpin + 'static,
+) {
+    (
+        FramedWrite::new(
+            stdin,
+            JsonRpcMessageCodec::<TxJsonRpcMessage<RoleClient>>::new(),
+        ),
+        bounded_response_stream_with(stdout, MAX_RESPONSE_LINE_SIZE, end_on_oversize),
+    )
 }
 
 /// Connects to an MCP server over Streamable HTTP and lists its tools, with
@@ -978,6 +1202,23 @@ async fn discover_via_stdio(
 /// or [`Error::ResourceLimitExceeded`] if the accumulated tool count exceeds
 /// [`MAX_TOOL_COUNT`].
 async fn discover_via_http(server_id: &ServerId, config: &ServerConfig) -> Result<DiscoveryResult> {
+    let client = connect_http_client(server_id, config).await?;
+    list_discovery(server_id, config, &client).await
+}
+
+/// Connects an rmcp client over Streamable HTTP, bounded by the connect timeout.
+///
+/// Used by discovery and by [`Introspector::connect`]; see [`discover_via_http`] for the
+/// transport notes.
+///
+/// # Errors
+///
+/// Returns [`Error::Timeout`] on a connect timeout and [`Error::ConnectionFailed`] if a header
+/// cannot be constructed or the connection fails.
+pub(crate) async fn connect_http_client(
+    server_id: &ServerId,
+    config: &ServerConfig,
+) -> Result<rmcp::service::RunningService<RoleClient, ()>> {
     #[expect(
         clippy::expect_used,
         reason = "ServerConfigBuilder::build guarantees url for Http/Sse"
@@ -1011,11 +1252,11 @@ async fn discover_via_http(server_id: &ServerId, config: &ServerConfig) -> Resul
             .max_sse_event_size(HTTP_MAX_SSE_EVENT_SIZE),
     );
 
-    // The client `connect_and_list_tools` builds internally is dropped when it returns, which
+    // The client built here is dropped by the discovery caller once listing finishes, which
     // triggers `WorkerTransport`'s drop guard, cancelling the worker task; a cancelled worker
     // cannot itself issue a session-DELETE request, so no explicit disconnect happens on this path —
     // the server-side session simply expires on its own timeout instead.
-    connect_and_list_tools(server_id, config, ().serve(transport)).await
+    connect_bounded(server_id, config, ().serve(transport)).await
 }
 
 /// Assembles a [`ServerInfo`] from the raw tool list and handshake metadata
@@ -1294,6 +1535,70 @@ mod tests {
     }
 
     use super::*;
+
+    // ── listing hints and digest mapping ─────────────────────────────────────
+
+    #[test]
+    fn listing_hints_stay_absent_when_no_page_states_them() {
+        let mut hints = ListingHints::default();
+        hints.absorb(None, None);
+        hints.absorb(None, None);
+        assert_eq!(hints, ListingHints::default());
+    }
+
+    #[test]
+    fn listing_hints_keep_the_smallest_ttl_across_pages() {
+        let mut hints = ListingHints::default();
+        hints.absorb(Some(5_000), None);
+        hints.absorb(None, None);
+        hints.absorb(Some(1_000), None);
+        hints.absorb(Some(9_000), None);
+        assert_eq!(hints.ttl, Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn listing_hints_let_private_win_over_public_in_any_order() {
+        for pages in [
+            [
+                rmcp::model::CacheScope::Public,
+                rmcp::model::CacheScope::Private,
+            ],
+            [
+                rmcp::model::CacheScope::Private,
+                rmcp::model::CacheScope::Public,
+            ],
+        ] {
+            let mut hints = ListingHints::default();
+            for scope in pages {
+                hints.absorb(None, Some(scope));
+            }
+            assert_eq!(hints.cache_scope, Some(CacheScope::Private));
+        }
+
+        let mut public_only = ListingHints::default();
+        public_only.absorb(None, Some(rmcp::model::CacheScope::Public));
+        assert_eq!(public_only.cache_scope, Some(CacheScope::Public));
+    }
+
+    #[test]
+    fn digest_entry_borrows_every_digested_field() {
+        let tool = ToolInfo {
+            name: ToolName::new("t").unwrap(),
+            description: "d".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: Some(serde_json::json!({"type": "string"})),
+            annotations: None,
+        };
+        let entry = tool.digest_entry();
+        assert_eq!(entry.name, "t");
+        assert_eq!(entry.description, "d");
+        assert!(std::ptr::eq(
+            entry.input_schema,
+            &raw const tool.input_schema
+        ));
+        assert_eq!(entry.output_schema, tool.output_schema.as_ref());
+        assert!(entry.annotations.is_none());
+    }
 
     // ── bounded_response_stream (issue #225) ─────────────────────────────────
 

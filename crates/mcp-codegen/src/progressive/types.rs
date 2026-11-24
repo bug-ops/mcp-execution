@@ -7,6 +7,10 @@ use crate::progressive::observed::{
     OBSERVED_SHAPE_MAX_DEPTH, OBSERVED_SHAPE_MAX_KEY_LEN, OBSERVED_SHAPE_MAX_KEYS,
     OBSERVED_SHAPE_MAX_LINE_BYTES,
 };
+use mcp_execution_core::helper_protocol::{
+    CLI_PATH_ENV, HELPER_CHANNEL_KEY, HELPER_ENV, HELPER_PROTOCOL_VERSION, HELPER_TOKEN_ENV,
+    MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV,
+};
 use mcp_execution_core::untrusted::BARE_IDENTIFIER_PATTERN;
 use serde::{Deserialize, Serialize};
 
@@ -224,33 +228,15 @@ pub struct CategoryInfo {
 
 /// Context for rendering the runtime bridge template.
 ///
-/// The forbidden-char/forbidden-env-name/charset-pattern fields are rendered directly from
-/// `mcp_execution_core`'s canonical lists so the generated bridge's copies structurally
-/// cannot drift from the Rust source of truth — see [`BridgeContext::default`], the only way
-/// to construct one, which populates them from `mcp_execution_core::forbidden_chars`/
-/// `forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern` rather than leaving
-/// them empty. This deliberately does *not* derive `Default`: an empty `forbidden_chars` would
-/// render a bridge whose `validateCommandString` accepts every shell metacharacter, and an
-/// empty `env_name_charset_pattern` would render `new RegExp('')`, which matches every string
-/// (fail-open on exactly the checks these exist to enforce) — so `Default` is hand-written to
-/// make "always populated" a property of the type rather than a convention callers must
-/// remember to uphold.
+/// The bridge is a thin client of the helper protocol, so everything it must agree on with the
+/// Rust helper is rendered from [`mcp_execution_core::helper_protocol`]: the protocol version,
+/// the line bound and the environment-variable names. The observed-shape recorder's limits come
+/// from this crate's `observed` constants. Nothing is hand-copied into the template, so a limit
+/// cannot drift between the two ends.
 ///
-/// Those four fields are private with read-only accessors for the same reason: `pub` fields
-/// would let `BridgeContext { forbidden_chars: vec![], .. }` bypass the invariant entirely and
-/// still compile, silently reintroducing the fail-open state `Default` exists to prevent.
-/// `Deserialize` is intentionally not derived — nothing in this codebase deserializes a
-/// `BridgeContext` from external input, and doing so would need to re-validate non-emptiness
-/// rather than trust the wire data.
-///
-/// The remaining fields — the denial-of-service size/count ceilings
-/// (`mcp_execution_core::MAX_ARG_COUNT` and siblings) and `env_name_charset_desc` (the
-/// human-readable charset description used only in a rejection message's text, not in the
-/// enforcement regex above) — are plain `pub` fields: unlike an emptied list or pattern, a
-/// wrong value here cannot fail open — at worst it makes the rendered bridge reject configs it
-/// should accept (a wrong `MAX_*`), or emit a confusing-but-still-rejecting error message (a
-/// wrong `env_name_charset_desc`), never silently accept something it shouldn't — so the extra
-/// accessor/invariant machinery above would be pure ceremony here.
+/// `identifier_pattern` is private with an accessor and [`Default`] is the only constructor:
+/// an empty pattern would render `new RegExp('')`, which matches every key, so "always populated"
+/// is a property of the type rather than a convention.
 ///
 /// # Examples
 ///
@@ -258,61 +244,33 @@ pub struct CategoryInfo {
 /// use mcp_execution_codegen::progressive::BridgeContext;
 ///
 /// let context = BridgeContext::default();
-/// assert_ne!(context.forbidden_chars(), [] as [String; 0]);
-/// assert!(context.forbidden_chars().contains(&";".to_string()));
-/// assert_ne!(context.forbidden_env_prefix(), "");
-/// assert_ne!(context.env_name_charset_pattern(), "");
-/// assert!(!context.env_name_charset_desc.is_empty());
-/// assert!(context.max_arg_count > 0);
+/// assert_eq!(context.helper_protocol_version, 1);
+/// assert!(context.max_helper_line_bytes > 0);
+/// assert_ne!(context.identifier_pattern(), "");
 /// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct BridgeContext {
-    /// Shell metacharacters forbidden in a command or argument string, each pre-escaped for
-    /// safe embedding inside a single-quoted TypeScript string literal.
-    forbidden_chars: Vec<String>,
-    /// Forbidden environment variable names (exact match).
-    forbidden_env_names: Vec<String>,
-    /// Environment-variable-name prefix rejected regardless of exact match (e.g. `DYLD_`).
-    forbidden_env_prefix: String,
-    /// POSIX/Windows environment-variable-name identifier charset, as an anchored JavaScript
-    /// `RegExp`-compatible pattern source (see `mcp_execution_core::env_name_charset_pattern`),
-    /// pre-escaped for safe embedding inside a single-quoted TypeScript string literal — same
-    /// treatment as `forbidden_chars`, and for the same reason: an unescaped pattern containing
-    /// a `'` or `\` would either break the generated `new RegExp('...')` call or silently change
-    /// what it matches.
-    env_name_charset_pattern: String,
-    /// Human-readable description of the charset above (`mcp_execution_core::env_name_charset_desc`,
-    /// e.g. `"[A-Za-z_][A-Za-z0-9_]*"`), pre-escaped like `env_name_charset_pattern` and
-    /// rendered into the bridge's own rejection message so that text isn't a second
-    /// hand-copied literal alongside the pattern.
-    pub env_name_charset_desc: String,
-    /// Maximum number of positional arguments (`mcp_execution_core::MAX_ARG_COUNT`).
-    pub max_arg_count: usize,
-    /// Maximum byte length for a command, argument, env-var name, or header name
-    /// (`mcp_execution_core::MAX_ARG_LEN`).
-    pub max_arg_len: usize,
-    /// Maximum number of environment variables (`mcp_execution_core::MAX_ENV_COUNT`).
-    pub max_env_count: usize,
-    /// Maximum byte length for a single environment variable value
-    /// (`mcp_execution_core::MAX_ENV_VALUE_LEN`).
-    pub max_env_value_len: usize,
-    /// Maximum byte length for the Http/Sse transport `url`
-    /// (`mcp_execution_core::MAX_URL_LEN`).
-    pub max_url_len: usize,
-    /// Maximum number of HTTP headers (`mcp_execution_core::MAX_HEADER_COUNT`).
-    pub max_header_count: usize,
-    /// Maximum byte length for a single HTTP header value
-    /// (`mcp_execution_core::MAX_HEADER_VALUE_LEN`).
-    pub max_header_value_len: usize,
-    /// Maximum length in code points of server-supplied message text kept in a tool error
-    /// (`mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`).
-    pub max_server_message_len: usize,
-    /// Longest run of variation selectors kept in server text
-    /// (`mcp_execution_core::untrusted::MAX_VARIATION_SELECTOR_RUN`).
-    pub max_variation_selector_run: usize,
-    /// Most variation selectors kept across a whole server text
-    /// (`mcp_execution_core::untrusted::MAX_TOTAL_VARIATION_SELECTORS`).
-    pub max_total_variation_selectors: usize,
+    /// Helper protocol version the bridge speaks
+    /// ([`mcp_execution_core::helper_protocol::HELPER_PROTOCOL_VERSION`]).
+    pub helper_protocol_version: u32,
+    /// Longest protocol line in either direction, in bytes
+    /// ([`mcp_execution_core::helper_protocol::MAX_HELPER_LINE_BYTES`]).
+    pub max_helper_line_bytes: usize,
+    /// Environment variable that announces a runner channel
+    /// ([`mcp_execution_core::helper_protocol::HELPER_ENV`]).
+    pub helper_env: &'static str,
+    /// Environment variable carrying the runner channel's token
+    /// ([`mcp_execution_core::helper_protocol::HELPER_TOKEN_ENV`]).
+    pub helper_token_env: &'static str,
+    /// Non-secret marker inherited by every process under `run`
+    /// ([`mcp_execution_core::helper_protocol::RUN_MARKER_ENV`]).
+    pub run_marker_env: &'static str,
+    /// Environment variable naming the binary spawned as the helper
+    /// ([`mcp_execution_core::helper_protocol::CLI_PATH_ENV`]).
+    pub cli_path_env: &'static str,
+    /// Global key under which the `run` preload registers the helper channel
+    /// ([`mcp_execution_core::helper_protocol::HELPER_CHANNEL_KEY`]).
+    pub helper_channel_key: &'static str,
     /// Maximum nesting depth of a recorded observed shape.
     pub observed_shape_max_depth: usize,
     /// Maximum number of keys an object may have to be recorded key by key.
@@ -322,72 +280,11 @@ pub struct BridgeContext {
     /// Maximum size in bytes of one recorded observed-shape line.
     pub observed_shape_max_line_bytes: usize,
     /// Anchored `RegExp` pattern source for the identifier keys a recorded shape may keep,
-    /// pre-escaped for embedding inside a single-quoted TypeScript string literal. Private
-    /// with an accessor for the same fail-open reason as `env_name_charset_pattern`: an empty
-    /// pattern would match every key.
+    /// pre-escaped for embedding inside a single-quoted TypeScript string literal.
     identifier_pattern: String,
 }
 
 impl BridgeContext {
-    /// Shell metacharacters forbidden in a command or argument string, each pre-escaped for
-    /// safe embedding inside a single-quoted TypeScript string literal. Never empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_codegen::progressive::BridgeContext;
-    ///
-    /// assert!(!BridgeContext::default().forbidden_chars().is_empty());
-    /// ```
-    #[must_use]
-    pub fn forbidden_chars(&self) -> &[String] {
-        &self.forbidden_chars
-    }
-
-    /// Forbidden environment variable names (exact match). Never empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_codegen::progressive::BridgeContext;
-    ///
-    /// assert!(!BridgeContext::default().forbidden_env_names().is_empty());
-    /// ```
-    #[must_use]
-    pub fn forbidden_env_names(&self) -> &[String] {
-        &self.forbidden_env_names
-    }
-
-    /// Environment-variable-name prefix rejected regardless of exact match (e.g. `DYLD_`).
-    /// Never empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_codegen::progressive::BridgeContext;
-    ///
-    /// assert!(!BridgeContext::default().forbidden_env_prefix().is_empty());
-    /// ```
-    #[must_use]
-    pub fn forbidden_env_prefix(&self) -> &str {
-        &self.forbidden_env_prefix
-    }
-
-    /// POSIX/Windows environment-variable-name identifier charset, as an anchored JavaScript
-    /// `RegExp`-compatible pattern source. Never empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_codegen::progressive::BridgeContext;
-    ///
-    /// assert!(!BridgeContext::default().env_name_charset_pattern().is_empty());
-    /// ```
-    #[must_use]
-    pub fn env_name_charset_pattern(&self) -> &str {
-        &self.env_name_charset_pattern
-    }
-
     /// Anchored `RegExp` pattern source for the identifier keys a recorded observed shape may
     /// keep. Never empty.
     ///
@@ -405,43 +302,16 @@ impl BridgeContext {
 }
 
 impl Default for BridgeContext {
-    /// Populates the forbidden-char/forbidden-env-name/charset-pattern fields directly from
-    /// `mcp_execution_core`'s canonical lists/constants, so `BridgeContext::default()` can
-    /// never render a bridge with an empty (fail-open) `FORBIDDEN_CHARS` or
-    /// `ENV_NAME_CHARSET_REGEX`. Each `forbidden_chars` entry and `env_name_charset_pattern`
-    /// itself are passed through `sanitize_ts_string_literal` (this crate's TS-string-literal
-    /// escaper) so they render as syntactically valid single-quoted TypeScript string literals
-    /// regardless of what the Rust source contains — critique #471/#467 S2: without this, a
-    /// future edit introducing a `'`/`\` into the Rust pattern would either break the generated
-    /// `new RegExp('...')` call or silently change what it matches.
+    /// Populates every field from its canonical source constant.
     fn default() -> Self {
         Self {
-            forbidden_chars: mcp_execution_core::forbidden_chars()
-                .iter()
-                .map(|c| crate::progressive::generator::sanitize_ts_string_literal(&c.to_string()))
-                .collect(),
-            forbidden_env_names: mcp_execution_core::forbidden_env_names()
-                .iter()
-                .map(|&s| s.to_string())
-                .collect(),
-            forbidden_env_prefix: mcp_execution_core::forbidden_env_prefix().to_string(),
-            env_name_charset_pattern: crate::progressive::generator::sanitize_ts_string_literal(
-                mcp_execution_core::env_name_charset_pattern(),
-            ),
-            env_name_charset_desc: crate::progressive::generator::sanitize_ts_string_literal(
-                mcp_execution_core::env_name_charset_desc(),
-            ),
-            max_arg_count: mcp_execution_core::MAX_ARG_COUNT,
-            max_arg_len: mcp_execution_core::MAX_ARG_LEN,
-            max_env_count: mcp_execution_core::MAX_ENV_COUNT,
-            max_env_value_len: mcp_execution_core::MAX_ENV_VALUE_LEN,
-            max_url_len: mcp_execution_core::MAX_URL_LEN,
-            max_header_count: mcp_execution_core::MAX_HEADER_COUNT,
-            max_header_value_len: mcp_execution_core::MAX_HEADER_VALUE_LEN,
-            max_server_message_len: mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN,
-            max_variation_selector_run: mcp_execution_core::untrusted::MAX_VARIATION_SELECTOR_RUN,
-            max_total_variation_selectors:
-                mcp_execution_core::untrusted::MAX_TOTAL_VARIATION_SELECTORS,
+            helper_protocol_version: HELPER_PROTOCOL_VERSION,
+            max_helper_line_bytes: MAX_HELPER_LINE_BYTES,
+            helper_env: HELPER_ENV,
+            helper_token_env: HELPER_TOKEN_ENV,
+            run_marker_env: RUN_MARKER_ENV,
+            cli_path_env: CLI_PATH_ENV,
+            helper_channel_key: HELPER_CHANNEL_KEY,
             observed_shape_max_depth: OBSERVED_SHAPE_MAX_DEPTH,
             observed_shape_max_keys: OBSERVED_SHAPE_MAX_KEYS,
             observed_shape_max_key_len: OBSERVED_SHAPE_MAX_KEY_LEN,
@@ -532,44 +402,17 @@ mod tests {
         let context = BridgeContext::default();
         let _serialized = serde_json::to_string(&context).unwrap();
 
-        // #221 critique S2: `Default` must never render a fail-open (empty) forbidden-char
-        // list, since an empty `FORBIDDEN_CHARS` in the rendered bridge would make
-        // `validateCommandString` accept every shell metacharacter. Same reasoning applies to
-        // an empty `env_name_charset_pattern`: `new RegExp('')` matches every string.
-        assert_ne!(context.forbidden_chars(), [] as [String; 0]);
-        assert_ne!(context.forbidden_env_names(), [] as [String; 0]);
-        assert_ne!(context.forbidden_env_prefix(), "");
-        assert_ne!(context.env_name_charset_pattern(), "");
+        assert_eq!(
+            context.helper_protocol_version, HELPER_PROTOCOL_VERSION,
+            "the protocol version is rendered from core"
+        );
+        assert_eq!(context.max_helper_line_bytes, MAX_HELPER_LINE_BYTES);
+        assert_eq!(context.helper_env, HELPER_ENV);
+        assert_eq!(context.helper_token_env, HELPER_TOKEN_ENV);
+        assert_eq!(context.run_marker_env, RUN_MARKER_ENV);
+        assert_eq!(context.cli_path_env, CLI_PATH_ENV);
+        assert_eq!(context.helper_channel_key, HELPER_CHANNEL_KEY);
+        // An empty pattern would render `new RegExp('')`, which matches every key.
         assert_ne!(context.identifier_pattern(), "");
-
-        // #471: the DoS size/count ceilings must be populated from mcp_execution_core, not
-        // left at zero (which would reject every config, silently breaking every generated
-        // server rather than failing open — a different but still real correctness bug).
-        assert_eq!(context.max_arg_count, mcp_execution_core::MAX_ARG_COUNT);
-        assert_eq!(context.max_arg_len, mcp_execution_core::MAX_ARG_LEN);
-        assert_eq!(context.max_env_count, mcp_execution_core::MAX_ENV_COUNT);
-        assert_eq!(
-            context.max_env_value_len,
-            mcp_execution_core::MAX_ENV_VALUE_LEN
-        );
-        assert_eq!(context.max_url_len, mcp_execution_core::MAX_URL_LEN);
-        assert_eq!(
-            context.max_header_count,
-            mcp_execution_core::MAX_HEADER_COUNT
-        );
-        assert_eq!(
-            context.max_header_value_len,
-            mcp_execution_core::MAX_HEADER_VALUE_LEN
-        );
-        // Escaping is a no-op on this quote/backslash-free pattern, so the sanitized copy
-        // still equals the raw Rust source of truth.
-        assert_eq!(
-            context.env_name_charset_pattern(),
-            mcp_execution_core::env_name_charset_pattern()
-        );
-        assert_eq!(
-            context.env_name_charset_desc,
-            mcp_execution_core::env_name_charset_desc()
-        );
     }
 }

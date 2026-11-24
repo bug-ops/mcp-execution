@@ -24,11 +24,18 @@ pub enum TemplateError {
     RegistrationFailed(#[from] handlebars::TemplateError),
 }
 
-/// Embedded Handlebars template for the LLM skill generation prompt.
-const SKILL_GENERATION_TEMPLATE: &str = include_str!("templates/skill-generation.hbs");
-
 /// Embedded Handlebars template that renders SKILL.md directly (no LLM required).
 const SKILL_MD_TEMPLATE: &str = include_str!("templates/skill-md.hbs");
+
+/// Embedded partial holding the workflow and privilege text shared by both templates, so the
+/// commands the render and the generation prompt teach cannot diverge.
+const WORKFLOW_PARTIAL: &str = include_str!("templates/workflow.hbs");
+
+/// Most categories the rendered `SKILL.md` lists; the catalog holds the rest.
+const MAX_LISTED_CATEGORIES: usize = 12;
+
+/// Most example tools listed per category.
+const MAX_LISTED_TOOLS_PER_CATEGORY: usize = 3;
 
 /// Handlebars instance with pre-registered templates.
 ///
@@ -44,14 +51,14 @@ static HANDLEBARS: LazyLock<Handlebars<'static>> = LazyLock::new(|| {
         clippy::expect_used,
         reason = "embedded template is validated by tests"
     )]
-    hb.register_template_string("skill", SKILL_GENERATION_TEMPLATE)
-        .expect("embedded skill-generation template must be valid Handlebars syntax");
+    hb.register_template_string("skill-md", SKILL_MD_TEMPLATE)
+        .expect("embedded skill-md template must be valid Handlebars syntax");
     #[expect(
         clippy::expect_used,
         reason = "embedded template is validated by tests"
     )]
-    hb.register_template_string("skill-md", SKILL_MD_TEMPLATE)
-        .expect("embedded skill-md template must be valid Handlebars syntax");
+    hb.register_partial("workflow", WORKFLOW_PARTIAL)
+        .expect("embedded workflow partial must be valid Handlebars syntax");
     hb
 });
 
@@ -110,69 +117,67 @@ impl Frontmatter<'_> {
     }
 }
 
-/// Render the skill generation prompt.
-///
-/// Takes the `GenerateSkillResult` context and renders it using
-/// the embedded Handlebars template.
-///
-/// # Arguments
-///
-/// * `context` - Skill generation context from `build_skill_context`
-///
-/// # Returns
-///
-/// Rendered prompt string for the LLM.
-///
-/// `skill_name` is rendered with triple-stash (`{{{skill_name}}}`), matching
-/// [`render_skill_md`]'s body heading, and sanitized with
-/// [`sanitize_untrusted_text`] before rendering for the same reason: it's
-/// attacker-controlled (the caller's `--skill-name` flag or an MCP tool call
-/// argument) and appears both as this example structure's `name:` line and as
-/// its `# {{{skill_name}}}` heading — a value containing a newline could
-/// otherwise inject Markdown structure into the prompt itself (issue #411).
-///
-/// # Errors
-///
-/// Returns `TemplateError` if template rendering fails, including when
-/// `context` is missing a field the template references — Handlebars strict
-/// mode is enabled, so a missing variable hard-fails instead of silently
-/// rendering an empty string.
-///
-/// # Panics
-///
-/// Does not panic in practice: `serde_json::to_value` is infallible for
-/// `GenerateSkillResult` because all fields are standard Rust types with
-/// derived `Serialize` implementations.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_skill::{build_skill_context, render_generation_prompt};
-///
-/// let context = build_skill_context("github", &[], None, None);
-/// let prompt = render_generation_prompt(&context).unwrap();
-/// ```
-pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String, TemplateError> {
-    #[expect(
-        clippy::expect_used,
-        reason = "GenerateSkillResult holds only primitive and std types, so to_value cannot fail"
-    )]
-    let mut value =
-        serde_json::to_value(context).expect("GenerateSkillResult serialization is infallible");
-    value["skill_name"] = serde_json::Value::String(sanitize_untrusted_text(
-        &context.skill_name,
-        MAX_UNTRUSTED_FIELD_LEN,
-    ));
+/// Bounded view of the tool listing: the rendered body must not grow with the number of tools.
+#[derive(Serialize)]
+struct Listing<'a> {
+    categories: Vec<ListedCategory<'a>>,
+    more_categories: usize,
+}
 
-    let rendered = HANDLEBARS.render("skill", &value)?;
-    Ok(rendered)
+/// One category line of the bounded listing.
+#[derive(Serialize)]
+struct ListedCategory<'a> {
+    display_name: &'a str,
+    tool_count: usize,
+    tools: Vec<ListedTool<'a>>,
+    more_tools: usize,
+}
+
+/// One example tool of a listed category.
+#[derive(Serialize)]
+struct ListedTool<'a> {
+    typescript_name: &'a str,
+    description: &'a str,
+}
+
+impl<'a> Listing<'a> {
+    fn new(context: &'a GenerateSkillResult) -> Self {
+        let categories = context
+            .categories
+            .iter()
+            .take(MAX_LISTED_CATEGORIES)
+            .map(|category| ListedCategory {
+                display_name: &category.display_name,
+                tool_count: category.tools.len(),
+                tools: category
+                    .tools
+                    .iter()
+                    .take(MAX_LISTED_TOOLS_PER_CATEGORY)
+                    .map(|tool| ListedTool {
+                        typescript_name: &tool.typescript_name,
+                        description: &tool.description,
+                    })
+                    .collect(),
+                more_tools: category
+                    .tools
+                    .len()
+                    .saturating_sub(MAX_LISTED_TOOLS_PER_CATEGORY),
+            })
+            .collect();
+        Self {
+            categories,
+            more_categories: context
+                .categories
+                .len()
+                .saturating_sub(MAX_LISTED_CATEGORIES),
+        }
+    }
 }
 
 /// Render SKILL.md content directly from skill context.
 ///
 /// Produces the final SKILL.md file content without requiring an LLM. Uses the
-/// embedded `skill-md.hbs` template with the same [`GenerateSkillResult`] context
-/// as [`render_generation_prompt`].
+/// embedded `skill-md.hbs` template with a [`GenerateSkillResult`] context.
 ///
 /// Tool descriptions are rendered with triple-stash (`{{{...}}}`) to avoid
 /// HTML-escaping characters such as `<`, `>`, and `&`.
@@ -242,6 +247,12 @@ pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, Template
             .unwrap_or(&default_description),
     };
     value["frontmatter_yaml"] = serde_json::Value::String(frontmatter.to_yaml_block());
+    #[expect(
+        clippy::expect_used,
+        reason = "Listing holds only strings and counts, so to_value cannot fail"
+    )]
+    let listing = serde_json::to_value(Listing::new(context)).expect("Listing is infallible");
+    value["listing"] = listing;
 
     // The frontmatter `name:` above is YAML-safe via `to_yaml_block`, but the body's
     // `# {{{skill_name}}}` heading is a separate splice point with a separate safety
@@ -296,39 +307,20 @@ mod tests {
         }
     }
 
+    /// FR-043.10: the prompt `build_skill_context` hands to the LLM names the same commands as
+    /// the deterministic render.
     #[test]
-    fn test_render_generation_prompt() {
-        let context = create_test_context();
-        let result = render_generation_prompt(&context);
+    fn test_built_generation_prompt_names_the_commands_of_the_render() {
+        let context = crate::build_skill_context("test", &[], None, None);
+        let md = render_skill_md(&context).unwrap();
 
-        match result {
-            Ok(prompt) => {
-                assert!(prompt.contains("test"));
-                assert!(prompt.contains("SKILL.md"));
-            }
-            Err(e) => panic!("Template rendering failed: {e}"),
+        for command in [
+            "mcp-execution-cli call --from-config test -- ",
+            "mcp-execution-cli run ",
+        ] {
+            assert!(md.contains(command), "{command}");
+            assert!(context.generation_prompt.contains(command), "{command}");
         }
-    }
-
-    /// Issue #411: `render_generation_prompt` (the "skill" `skill-generation.hbs` template)
-    /// must sanitize `skill_name` the same way `render_skill_md` does for its body heading —
-    /// it splices the value in twice (the example `name:` line and the `# {{{skill_name}}}`
-    /// heading), and previously did so via plain double-stash with no flattening at all.
-    #[test]
-    fn test_render_generation_prompt_sanitizes_hostile_skill_name() {
-        let mut context = create_test_context();
-        context.skill_name = "evil\n### Injected Heading\n```\ninjected block\n```".to_string();
-
-        let prompt = render_generation_prompt(&context).unwrap();
-
-        assert!(
-            !prompt.contains("\n### Injected Heading"),
-            "hostile skill_name must not introduce a new heading line: {prompt}"
-        );
-        assert!(
-            prompt.contains("Injected Heading"),
-            "sanitized content must still render, just inert"
-        );
     }
 
     #[test]
@@ -393,20 +385,20 @@ mod tests {
         let md = render_skill_md(&context).unwrap();
 
         assert!(md.contains("## Use Cases"), "{md}");
-        // With no tools/categories, only the static H1 title, "## Use Cases", "## Usage", and
-        // "## Tools by Category" headings may start a line (4 total); the injected "###
+        // With no tools/categories, only the static H1 title, "## Use Cases", "## Workflow",
+        // "## Privileges" and "## Tools" headings may start a line (5 total); the injected "###
         // Injected Heading" must have been flattened into the hint's single bullet line
         // instead of starting its own.
         assert_eq!(
             md.lines().filter(|l| l.starts_with('#')).count(),
-            4,
+            5,
             "hostile hint must not introduce a new heading line: {md}"
         );
         assert_eq!(
             md.lines()
                 .filter(|l| l.trim_start().starts_with("```"))
                 .count(),
-            8,
+            6,
             "hostile hint must not introduce a new fenced-code-block delimiter line: {md}"
         );
         assert!(
@@ -607,8 +599,8 @@ mod tests {
         // The hostile description must be flattened to a single line before reaching
         // the template: no new heading line (only the one legitimate "### Test"
         // category heading may start a line), and no new fenced-code-block *delimiter
-        // line* beyond the 4 static ```bash ... ``` pairs already present in the
-        // "Usage" section. A literal "```" surviving mid-line (not at line start) is
+        // line* beyond the 3 static fenced pairs already present in the
+        // "Workflow" section. A literal "```" surviving mid-line (not at line start) is
         // inert Markdown-wise — a fence only opens/closes at the start of a line —
         // so the check must look at line starts, not raw substring counts.
         assert_eq!(
@@ -620,7 +612,7 @@ mod tests {
             md.lines()
                 .filter(|l| l.trim_start().starts_with("```"))
                 .count(),
-            8,
+            6,
             "tool description must not introduce a new fenced-code-block delimiter line: {md}"
         );
         assert!(
@@ -690,20 +682,20 @@ mod tests {
             .nth(1)
             .expect("md must have a body after frontmatter");
 
-        // Only the static "## Usage"/"## Tools by Category" headings, the H1 title heading,
-        // and the one legitimate "### Test" category heading may start a line (4 total); the
-        // injected "### Injected Heading" must have been flattened into the H1 line instead
-        // of starting its own.
+        // Only the static "## Workflow"/"## Privileges"/"## Tools" headings, the H1 title
+        // heading, and the one legitimate "### Test" category heading may start a line (5
+        // total); the injected "### Injected Heading" must have been flattened into the H1
+        // line instead of starting its own.
         assert_eq!(
             body.lines().filter(|l| l.starts_with('#')).count(),
-            4,
+            5,
             "hostile skill_name must not introduce a new heading line in the body: {body}"
         );
         assert_eq!(
             body.lines()
                 .filter(|l| l.trim_start().starts_with("```"))
                 .count(),
-            8,
+            6,
             "hostile skill_name must not introduce a new fenced-code-block delimiter line in \
              the body: {body}"
         );
@@ -724,29 +716,9 @@ mod tests {
         assert!(HANDLEBARS.strict_mode());
     }
 
-    /// Issue #370 regression: a context missing a variable the template references
-    /// must hard-fail rendering (`TemplateError::RenderFailed`) rather than silently
-    /// producing an incomplete SKILL.md/prompt. Exercises the actual `HANDLEBARS`
-    /// static and the real embedded templates, not a hand-rolled stand-in.
-    #[test]
-    fn test_render_generation_prompt_fails_on_missing_variable() {
-        let context = serde_json::json!({
-            "server_id": "test",
-            // "skill_name" intentionally omitted — referenced unconditionally by
-            // skill-generation.hbs.
-            "tool_count": 1,
-        });
-
-        let result = HANDLEBARS.render("skill", &context);
-
-        assert!(
-            result.is_err(),
-            "rendering with a missing referenced variable must fail under strict mode, got: {result:?}"
-        );
-    }
-
-    /// Same guarantee as above, exercised against the `skill-md.hbs` template used by
-    /// `render_skill_md`.
+    /// Issue #370 regression: a context missing a variable the template references must
+    /// hard-fail rendering (`TemplateError::RenderFailed`) rather than silently producing an
+    /// incomplete SKILL.md. Exercises the actual `HANDLEBARS` static and the real template.
     #[test]
     fn test_render_skill_md_fails_on_missing_variable() {
         let context = serde_json::json!({

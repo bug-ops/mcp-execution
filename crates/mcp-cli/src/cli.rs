@@ -12,9 +12,35 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::actions::ServerAction;
+use crate::commands::call::CallArgs;
 use crate::commands::common::{ServerSource, TransportArgs};
+use crate::commands::drift::DriftArgs;
+use crate::commands::run::RunArgs;
+use crate::commands::scripts::ScriptsAction;
+use crate::commands::stats::StatsArgs;
 use mcp_execution_core::cli::{LogFormat, OutputFormat};
-use mcp_execution_core::{Error as CoreError, RedactedItems, RedactedUrl, sanitize_path_for_error};
+use mcp_execution_core::{
+    Error as CoreError, RedactedItems, RedactedUrl, ServerId, ServerIdError,
+    sanitize_path_for_error,
+};
+
+/// Clap value parser for a [`ServerId`] argument.
+///
+/// # Errors
+///
+/// Returns the [`ServerIdError`] [`ServerId::new`] reports.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::cli::parse_server_id;
+///
+/// assert!(parse_server_id("github").is_ok());
+/// assert!(parse_server_id("../x").is_err());
+/// ```
+pub fn parse_server_id(raw: &str) -> Result<ServerId, ServerIdError> {
+    ServerId::new(raw)
+}
 
 /// MCP Code Execution - typed TypeScript SDK generation for MCP servers.
 ///
@@ -347,6 +373,12 @@ impl TryFrom<ServerFlags> for ServerSource {
 ///     Commands::Skill { .. } => println!("Skill command"),
 ///     Commands::Setup => println!("Setup command"),
 ///     Commands::Completions { .. } => println!("Completions command"),
+///     Commands::Run(_) => println!("Run command"),
+///     Commands::Call(_) => println!("Call command"),
+///     Commands::Scripts { .. } => println!("Scripts command"),
+///     Commands::Stats(_) => println!("Stats command"),
+///     Commands::Drift(_) => println!("Drift command"),
+///     Commands::Helper => println!("Helper command"),
 /// }
 /// ```
 #[derive(Subcommand)]
@@ -451,7 +483,9 @@ pub enum Commands {
 
         /// Custom skill name
         ///
-        /// Default: {server}
+        /// Default: {server}. A custom name must equal the name of the directory the skill is
+        /// written to ({server}, or the parent directory of --output) and be 1-64 lowercase
+        /// letters, digits or hyphens; anything else is rejected before writing.
         #[arg(long)]
         skill_name: Option<String>,
 
@@ -567,6 +601,95 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// Run a TypeScript script against generated servers with bounded output.
+    ///
+    /// The script imports servers as `mcp:<server-id>` and helpers from `mcp:helpers`. Only
+    /// the first `--max-output` bytes of its stdout are printed; the rest is spilled to a
+    /// private file.
+    ///
+    /// Security: the script runs with your full privileges and without a sandbox. The journal
+    /// and `--dry-run` are diagnostics, not a boundary. `--restrict` is an opt-in that narrows
+    /// file and process access (Unix only; network on Node 25+ only).
+    ///
+    /// Stdin: under `run` the script cannot read stdin; it is reserved for the helper channel
+    /// and `process.stdin` reads end-of-file immediately.
+    ///
+    /// Calls: tool calls from a child process or a worker thread of the script are refused, and
+    /// `run` cannot be started from inside a script.
+    ///
+    /// Output: the default text output wraps the script's output in runner lines and is not
+    /// meant for pipelines; use `--format json` for one machine-readable document.
+    Run(RunArgs),
+
+    /// Call one tool of one server and print its result within the output budget.
+    ///
+    /// The tool name and an optional JSON object of arguments follow the server flags after
+    /// `--`, e.g. `call --from-config github -- list_issues '{"state":"open"}'`.
+    #[command(after_help = "The tool name goes after `--`, for example:\n  \
+        call --from-config github -- create_issue '{\"title\":\"x\"}'\n  \
+        call --http URL -- echo\n  \
+        call fixture-bin -a stdio -- echo '{}'")]
+    Call(CallArgs),
+
+    /// Inspect the saved scripts of a skill.
+    Scripts {
+        /// Saved-script action
+        #[command(subcommand)]
+        action: ScriptsAction,
+    },
+
+    /// Print deterministic size figures of a generated server.
+    Stats(StatsArgs),
+
+    /// Compare a live server's tool list with the metadata recorded at generation.
+    ///
+    /// Exits 0 when nothing changed and 5 when tools differ. Writes nothing.
+    Drift(DriftArgs),
+
+    /// Serve the helper protocol on stdio (used by generated tools; not for direct use).
+    #[command(hide = true)]
+    Helper,
+}
+
+/// How chatty a command's default logging is.
+///
+/// Commands whose stderr is read by a script or an agent (`call`, `run`, the helper) default to
+/// warnings only; `--verbose` or `RUST_LOG` restores the standard behaviour.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::cli::{Commands, LogProfile};
+///
+/// assert_eq!(Commands::Setup.log_profile(), LogProfile::Standard);
+/// assert_eq!(Commands::Helper.log_profile(), LogProfile::Quiet);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogProfile {
+    /// Default `info` level.
+    Standard,
+    /// Default `warn` level, including for `rmcp`.
+    Quiet,
+}
+
+impl Commands {
+    /// Returns the default logging profile of this command.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_cli::cli::{Commands, LogProfile};
+    ///
+    /// assert_eq!(Commands::Setup.log_profile(), LogProfile::Standard);
+    /// ```
+    #[must_use]
+    pub const fn log_profile(&self) -> LogProfile {
+        match self {
+            Self::Call(_) | Self::Run(_) | Self::Helper => LogProfile::Quiet,
+            _ => LogProfile::Standard,
+        }
+    }
 }
 
 impl fmt::Debug for Commands {
@@ -612,6 +735,12 @@ impl fmt::Debug for Commands {
             Self::Completions { shell } => {
                 f.debug_struct("Completions").field("shell", shell).finish()
             }
+            Self::Run(args) => f.debug_tuple("Run").field(args).finish(),
+            Self::Call(args) => f.debug_tuple("Call").field(args).finish(),
+            Self::Scripts { action } => f.debug_struct("Scripts").field("action", action).finish(),
+            Self::Stats(args) => f.debug_tuple("Stats").field(args).finish(),
+            Self::Drift(args) => f.debug_tuple("Drift").field(args).finish(),
+            Self::Helper => write!(f, "Helper"),
         }
     }
 }
@@ -620,6 +749,20 @@ impl fmt::Debug for Commands {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn test_skill_help_states_the_skill_name_directory_rule() {
+        let help = Cli::command()
+            .find_subcommand_mut("skill")
+            .expect("skill subcommand should exist")
+            .render_long_help()
+            .to_string();
+
+        assert!(
+            help.contains("must equal the name of the directory"),
+            "{help}"
+        );
+    }
 
     #[test]
     fn test_cli_help_examples_use_published_binary_name() {
@@ -1151,6 +1294,122 @@ mod tests {
         let debug_output = format!("{:?}", cli.command);
         assert!(debug_output.contains("<redacted>"));
         assert!(!debug_output.contains(secret_body));
+    }
+
+    #[test]
+    fn test_run_parses_defaults_script_source_and_trailing_args() {
+        let cli = Cli::parse_from(["mcp-execution-cli", "run", "-", "--", "a", "--b"]);
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(args.script, crate::commands::run::ScriptSource::Stdin);
+        assert_eq!(args.timeout.get().as_secs(), 60);
+        assert_eq!(args.max_output.get(), 16 * 1024);
+        assert_eq!(args.max_stderr.get(), 4 * 1024);
+        assert_eq!(args.args, ["a", "--b"]);
+    }
+
+    #[test]
+    fn test_run_rejects_out_of_range_values_and_overwrite_without_save() {
+        for bad in [
+            ["run", "s.ts", "--timeout", "0"],
+            ["run", "s.ts", "--timeout", "601"],
+            ["run", "s.ts", "--max-output", "0"],
+            ["run", "s.ts", "--overwrite", "--typecheck"],
+        ] {
+            let argv = std::iter::once("mcp-execution-cli").chain(bad);
+            assert!(Cli::try_parse_from(argv).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn test_call_takes_tool_and_json_after_the_separator_for_every_selector() {
+        for selector in [
+            vec!["--from-config", "github"],
+            vec!["--http", "https://example.com/mcp"],
+            vec!["fixture-bin"],
+        ] {
+            let mut argv = vec!["mcp-execution-cli", "call"];
+            argv.extend(selector);
+            argv.extend(["--", "echo", r#"{"a":1}"#]);
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let Commands::Call(parsed) = cli.command else {
+                panic!("expected call");
+            };
+            assert_eq!(parsed.call, ["echo", r#"{"a":1}"#]);
+        }
+        assert!(Cli::try_parse_from(["mcp-execution-cli", "call", "--from-config", "g"]).is_err());
+    }
+
+    #[test]
+    fn test_call_forms_from_the_help_examples_parse_with_optional_json() {
+        let forms: [&[&str]; 3] = [
+            &[
+                "--from-config",
+                "github",
+                "--",
+                "create_issue",
+                r#"{"title":"x"}"#,
+            ],
+            &["--http", "https://example.com/mcp", "--", "echo"],
+            &["fixture-bin", "-a", "stdio", "--", "echo", "{}"],
+        ];
+        for form in forms {
+            let argv = ["mcp-execution-cli", "call"]
+                .into_iter()
+                .chain(form.iter().copied());
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let Commands::Call(parsed) = cli.command else {
+                panic!("expected call");
+            };
+            assert!((1..=2).contains(&parsed.call.len()), "{form:?}");
+        }
+    }
+
+    #[test]
+    fn test_call_without_the_separator_is_a_clap_error() {
+        let err = Cli::try_parse_from([
+            "mcp-execution-cli",
+            "call",
+            "--from-config",
+            "gh",
+            "create_issue",
+        ])
+        .unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn test_call_help_tells_where_the_tool_name_goes() {
+        let mut command = Cli::command();
+        let call = command.find_subcommand_mut("call").unwrap();
+        assert!(call.render_long_help().to_string().contains("after `--`"));
+    }
+
+    #[test]
+    fn test_scripts_stats_drift_and_hidden_helper_parse() {
+        let cli = Cli::parse_from(["mcp-execution-cli", "scripts", "check", "--server", "gh"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Scripts {
+                action: crate::commands::scripts::ScriptsAction::Check(_)
+            }
+        ));
+        assert!(Cli::try_parse_from(["mcp-execution-cli", "stats", "../x"]).is_err());
+        assert!(matches!(
+            Cli::parse_from(["mcp-execution-cli", "drift", "--sse", "https://e.com/s"]).command,
+            Commands::Drift(_)
+        ));
+        assert!(matches!(
+            Cli::parse_from(["mcp-execution-cli", "helper"]).command,
+            Commands::Helper
+        ));
+        let mut command = Cli::command();
+        assert!(
+            command
+                .find_subcommand_mut("helper")
+                .is_some_and(|helper| helper.is_hide_set())
+        );
     }
 
     #[test]

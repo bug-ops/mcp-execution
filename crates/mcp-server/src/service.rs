@@ -27,8 +27,8 @@ use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::{Introspector, ToolInfo};
 use mcp_execution_skill::{
     GenerateSkillParams, MAX_TOOL_FILES, OutputPathError, SaveSkillParams, SaveSkillResult,
-    ScanError, build_skill_context, extract_skill_metadata, resolve_skill_output_path,
-    scan_tools_directory, validate_skill_name,
+    ScanError, SkillName, build_skill_context, extract_skill_metadata, resolve_skill_output_path,
+    scan_tools_directory, skill_directory_name,
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::tool::ToolRouter;
@@ -990,9 +990,17 @@ impl GeneratorService {
         // rendered and written to disk only for `extract_skill_metadata` to reject it later
         // (issue #413). Validating before rather than after also means an invalid name never
         // reaches `generation_prompt` at all (issue #435).
-        if let Some(name) = params.skill_name.as_deref() {
-            validate_skill_name(name).map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-        }
+        // The skill is written to `{server_id}/`, so a custom name must equal `server_id`.
+        let skill_name = params
+            .skill_name
+            .as_deref()
+            .map(|name| {
+                SkillName::new(name)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))?
+                    .in_directory(&params.server_id)
+                    .map_err(|e| McpError::invalid_params(e.to_string(), None))
+            })
+            .transpose()?;
 
         // Build context. The validated custom name (if any) is threaded straight into
         // `build_skill_context` so it's the name actually embedded in `generation_prompt`, not
@@ -1002,7 +1010,7 @@ impl GeneratorService {
             &params.server_id,
             &scan_result.tools,
             params.use_case_hints.as_deref(),
-            params.skill_name.as_deref(),
+            skill_name.as_ref(),
         );
 
         // Surface non-fatal drift warnings (e.g. `.ts` files excluded for lacking
@@ -1145,6 +1153,17 @@ impl GeneratorService {
                 McpError::internal_error(format!("Failed to resolve output path: {e}"), None)
             }
         })?;
+
+        // The name must equal the directory the file lands in. Checked on the resolved path so
+        // path errors keep precedence; like the overwrite refusal below it can leave the
+        // confined (empty) directory behind, but it never writes `SKILL.md`.
+        SkillName::new(&metadata.name)
+            .map_err(|e| McpError::invalid_params(format!("Invalid SKILL.md format: {e}"), None))?
+            .in_directory(skill_directory_name(
+                &params.server_id,
+                Some(output_path.as_path()),
+            ))
+            .map_err(|e| McpError::invalid_params(format!("Invalid SKILL.md format: {e}"), None))?;
 
         // Check if file exists
         let overwritten = output_path.exists();
@@ -5216,7 +5235,7 @@ mod tests {
     /// what was requested). Covers FR-001/FR-005: `generation_prompt` contains the custom name,
     /// the stale default does not appear, and `result.skill_name` matches what's in the prompt.
     #[tokio::test]
-    async fn test_generate_skill_honors_custom_skill_name() {
+    async fn test_generate_skill_requires_custom_skill_name_to_equal_its_directory() {
         use mcp_execution_core::metadata::{
             METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata,
             ToolMetadata as SidecarToolMetadata,
@@ -5262,35 +5281,38 @@ mod tests {
             .await
             .unwrap();
 
-        let params = GenerateSkillParams {
+        let params = |skill_name: &str| GenerateSkillParams {
             server_id: "test-server".to_string(),
-            skill_name: Some("my-custom-skill".to_string()),
+            skill_name: Some(skill_name.to_string()),
             use_case_hints: None,
-            servers_dir: Some(base_dir),
+            servers_dir: Some(base_dir.clone()),
         };
 
+        // FR-043.6: the skill is written to `test-server/`, so any other name is refused.
+        let mismatch = service
+            .generate_skill(
+                Parameters(params("my-custom-skill")),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(mismatch.code, ErrorCode::INVALID_PARAMS);
+
         let result = service
-            .generate_skill(Parameters(params), CancellationToken::new())
+            .generate_skill(Parameters(params("test-server")), CancellationToken::new())
             .await;
 
-        assert!(result.is_ok(), "valid custom skill_name must be accepted");
+        assert!(result.is_ok(), "a name equal to the directory is accepted");
         let content = result.unwrap();
         let text_content = content.content[0].as_text().unwrap();
         let parsed: GenerateSkillResult = serde_json::from_str(&text_content.text).unwrap();
 
-        assert_eq!(parsed.skill_name, "my-custom-skill");
+        assert_eq!(parsed.skill_name, "test-server");
         assert!(
             parsed
                 .generation_prompt
-                .contains("**Skill Name**: my-custom-skill"),
-            "generation_prompt must embed the custom name: {}",
-            parsed.generation_prompt
-        );
-        assert!(
-            !parsed
-                .generation_prompt
                 .contains("**Skill Name**: test-server"),
-            "generation_prompt must not fall back to the default name: {}",
+            "generation_prompt must embed the name: {}",
             parsed.generation_prompt
         );
     }
@@ -5529,7 +5551,7 @@ mod tests {
 
         let params = SaveSkillParams {
             server_id: "test".to_string(),
-            content: "---\nname: test-skill\ndescription: A test skill\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
+            content: "---\nname: nested\ndescription: A test skill\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
             output_path: Some(PathBuf::from("nested/SKILL.md")),
             overwrite: false,
         };
@@ -5545,7 +5567,7 @@ mod tests {
 
         assert!(parsed.success);
         assert!(!parsed.overwritten);
-        assert_eq!(parsed.metadata.name, "test-skill");
+        assert_eq!(parsed.metadata.name, "nested");
         assert_eq!(parsed.metadata.description, "A test skill");
         assert!(parsed.metadata.section_count >= 1);
         assert!(parsed.metadata.word_count > 0);
@@ -5569,7 +5591,7 @@ mod tests {
 
         let params = SaveSkillParams {
             server_id: "test".to_string(),
-            content: "---\nname: test-skill\ndescription: \"GitHub: issues and CI\"\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
+            content: "---\nname: test\ndescription: \"GitHub: issues and CI\"\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
             output_path: None,
             overwrite: false,
         };
@@ -5760,7 +5782,7 @@ mod tests {
         for server_id in ["server-a", "server-b"] {
             let params = SaveSkillParams {
                 server_id: server_id.to_string(),
-                content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
+                content: format!("---\nname: {server_id}\ndescription: test\n---\n# Test"),
                 output_path: None,
                 overwrite: false,
             };
@@ -5795,7 +5817,7 @@ mod tests {
             tokio::fs::read_to_string(temp_dir.path().join("server-a").join("SKILL.md"))
                 .await
                 .unwrap();
-        assert!(server_a_content.contains("name: test"));
+        assert!(server_a_content.contains("name: server-a"));
         assert!(!server_a_content.contains("hijack"));
     }
 

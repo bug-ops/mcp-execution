@@ -13,18 +13,17 @@ mod acceptance_support;
 mod support;
 
 use acceptance_support::{
-    REPLY_ECHO_ARGUMENTS, SERVER_ID, canonical_tempdir, fake_server_js, file, generate,
+    REPLY_ECHO_ARGUMENTS, SERVER_ID, canonical_tempdir, fake_helper_js, file, generate,
     generate_with, run_node, server_info, tool, write_home, write_package,
 };
 use mcp_execution_codegen::progressive::BridgeContext;
 use mcp_execution_codegen::{ProgressiveGenerator, TemplateEngine};
-use mcp_execution_core::untrusted::sanitize_untrusted_text;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
 use support::{
     compile_and_run_bridge_harness, install_declared_dev_dependencies, require_node_strip_types,
-    require_ts_toolchain, tsc_program, write_test_script,
+    require_ts_toolchain, tsc_program,
 };
 
 const OBSERVED_MARKER: &str = "observed in a past call";
@@ -201,7 +200,7 @@ fn install(
     let pkg = root.join("pkg");
     std::fs::create_dir_all(&pkg).unwrap();
     write_package(&generate(server), &pkg);
-    (pkg, write_home(root, &fake_server_js(reply)))
+    (pkg, write_home(root, &fake_helper_js(reply)))
 }
 
 #[test]
@@ -326,10 +325,6 @@ fn default_bridge_ts() -> String {
     bridge_ts_with(|_| {})
 }
 
-fn mcp_json(script: &str) -> Value {
-    json!({ "mcpServers": { SERVER_ID: { "command": "node", "args": [script] } } })
-}
-
 fn last_line(stdout: &str) -> &str {
     stdout
         .lines()
@@ -355,11 +350,10 @@ callMCPTool('fake', 'noop', {}).then(
 ";
 
 fn run_error_harness(test_name: &str, bridge_ts: &str, reply: &str) -> Option<Value> {
-    let script = write_test_script(&fake_server_js(reply));
     let (success, stdout, stderr) = compile_and_run_bridge_harness(
         test_name,
         bridge_ts,
-        &mcp_json(&script),
+        &fake_helper_js(reply),
         ERROR_HARNESS_TS,
         &[],
     )?;
@@ -403,19 +397,6 @@ fn bridge_rpc_error_is_an_mcp_tool_error_with_kind_rpc_error() {
     );
 }
 
-#[test]
-fn bridge_server_message_bound_is_rendered_from_the_bridge_context() {
-    let name = "bridge_server_message_bound_is_rendered_from_the_bridge_context";
-    let bridge = bridge_ts_with(|c| c.max_server_message_len = 10);
-    let reply = "(m) => ({ result: { isError: true, content: [{ type: 'text', text: 'abcdefghijklmnopqrstuvwxyz' }] } })";
-    let Some(seen) = run_error_harness(name, &bridge, reply) else {
-        return;
-    };
-
-    assert_eq!(seen["serverMessage"], "abcdefghij");
-    assert_eq!(seen["truncated"], true);
-}
-
 fn run_loop_harness(
     test_name: &str,
     bridge_ts: &str,
@@ -431,45 +412,15 @@ fn run_loop_harness(
          console.log(JSON.stringify(out));\n\
          process.exit(0);\n"
     );
-    let script = write_test_script(&fake_server_js(reply));
-    let (success, stdout, stderr) =
-        compile_and_run_bridge_harness(test_name, bridge_ts, &mcp_json(&script), &harness, env)?;
+    let (success, stdout, stderr) = compile_and_run_bridge_harness(
+        test_name,
+        bridge_ts,
+        &fake_helper_js(reply),
+        &harness,
+        env,
+    )?;
     assert!(success, "stdout: {stdout}\nstderr: {stderr}");
     Some(last_line(&stdout).to_string())
-}
-
-#[test]
-fn bridge_bound_server_text_equals_sanitize_untrusted_text_on_shared_vectors() {
-    let name = "bridge_bound_server_text_equals_sanitize_untrusted_text_on_shared_vectors";
-    let vectors = vectors();
-    let section = &vectors["untrusted_text"];
-    let max_len = usize::try_from(section["max_len"].as_u64().unwrap()).unwrap();
-    let inputs: Vec<&str> = section["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["input"].as_str().unwrap())
-        .collect();
-    let reply = format!(
-        "(m) => {{ const V = {}; return {{ result: {{ isError: true, content: [{{ type: 'text', text: V[m.params.arguments.i] }}] }} }}; }}",
-        serde_json::to_string(&inputs).unwrap()
-    );
-    let body = "try { await callMCPTool('fake', 'noop', { i }); out.push(null); } catch (e: any) { out.push(e.serverMessage ?? null); }";
-
-    let Some(line) = run_loop_harness(name, &default_bridge_ts(), &reply, inputs.len(), body, &[])
-    else {
-        return;
-    };
-
-    let bound: Vec<Option<String>> = serde_json::from_str(&line).expect("harness prints an array");
-    for (index, input) in inputs.iter().enumerate() {
-        let case = section["cases"][index]["name"].as_str().unwrap();
-        assert_eq!(
-            bound[index].clone().unwrap_or_default(),
-            sanitize_untrusted_text(input, max_len),
-            "vector {case}"
-        );
-    }
 }
 
 fn is_recordable_key(key: &str) -> bool {

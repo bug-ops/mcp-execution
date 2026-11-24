@@ -11,7 +11,7 @@
 use mcp_execution_codegen::{GeneratedCode, ProgressiveGenerator};
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc;
@@ -114,45 +114,24 @@ pub const REPLY_TEXT_JSON_OK: &str =
 /// Reply that echoes the call's `arguments` back as the text content.
 pub const REPLY_ECHO_ARGUMENTS: &str = r"(m) => ({ result: { content: [{ type: 'text', text: JSON.stringify(m.params.arguments) }] } })";
 
-/// Builds a fake stdio MCP server that answers `initialize` and replies to every `tools/call`
-/// with whatever the JS function `reply` returns.
-pub fn fake_server_js(reply: &str) -> String {
-    format!(
-        r"
-const readline = require('readline');
-const rl = readline.createInterface({{ input: process.stdin, terminal: false }});
-const reply = {reply};
-rl.on('line', (line) => {{
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return;
-  const message = JSON.parse(trimmed);
-  if (message.method === 'initialize') {{
-    process.stdout.write(JSON.stringify({{
-      jsonrpc: '2.0', id: message.id,
-      result: {{ protocolVersion: '2024-11-05', capabilities: {{}}, serverInfo: {{ name: 'fake', version: '0.0.0' }} }}
-    }}) + '\n');
-    return;
-  }}
-  if (message.method === 'tools/call') {{
-    process.stdout.write(JSON.stringify({{ jsonrpc: '2.0', id: message.id, ...reply(message) }}) + '\n');
-  }}
-}});
-"
-    )
+/// File name, inside the fake home, of the helper stand-in preload.
+const FAKE_HELPER_FILE: &str = "fake-helper.cjs";
+
+/// A `CommonJS` preload that registers an in-process helper channel answering every call with
+/// whatever the JS function `reply` returns (see [`REPLY_TEXT_JSON_OK`]).
+///
+/// The generated bridge adopts the channel exactly as it adopts the one `run` registers, so the
+/// tests exercise the real bridge against a scripted helper.
+pub fn fake_helper_js(reply: &str) -> String {
+    include_str!("fake_helper.cjs").replace("__REPLY__", reply)
 }
 
-/// Writes a fake `$HOME` whose `~/.claude/mcp.json` maps [`SERVER_ID`] to `server_js`, returning
-/// the home directory path.
-pub fn write_home(root: &Path, server_js: &str) -> std::path::PathBuf {
+/// Writes a fake home holding the helper stand-in preload for `helper_js`, returning the home
+/// directory. [`run_node`] preloads it when it exists.
+pub fn write_home(root: &Path, helper_js: &str) -> std::path::PathBuf {
     let home = root.join("home");
-    std::fs::create_dir_all(home.join(".claude")).expect("create fake home");
-    let script = root.join("fake-server.js");
-    std::fs::write(&script, server_js).expect("write fake server");
-    let mcp_json = json!({
-        "mcpServers": { SERVER_ID: { "command": "node", "args": [script.to_string_lossy()] } }
-    });
-    std::fs::write(home.join(".claude").join("mcp.json"), mcp_json.to_string())
-        .expect("write mcp.json");
+    std::fs::create_dir_all(&home).expect("create fake home");
+    std::fs::write(home.join(FAKE_HELPER_FILE), helper_js).expect("write fake helper");
     home
 }
 
@@ -190,7 +169,8 @@ impl Run {
     }
 }
 
-/// Runs `node --experimental-strip-types <script> [argument]` with a 30 s watchdog.
+/// Runs `node --experimental-strip-types <script> [argument]` with a 30 s watchdog, preloading
+/// the helper stand-in that [`write_home`] wrote into `home`.
 pub fn run_node(
     script: &Path,
     cwd: &Path,
@@ -202,6 +182,8 @@ pub fn run_node(
     command
         .arg("--experimental-strip-types")
         .arg("--no-warnings")
+        .arg("--require")
+        .arg(home.join(FAKE_HELPER_FILE))
         .arg(script)
         .current_dir(cwd)
         .env("HOME", home)

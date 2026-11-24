@@ -36,8 +36,20 @@ Only text a model reads costs context. Importing a module when a script runs put
 
 Some hosts offer their own code execution mode for MCP tools. This project does not replace it: it produces the typed SDK (parameter and result types, a catalog and a bridge to the server) that a script, run by any means you have, imports. The generated files run with plain Node.js; no host feature is required.
 
-> [!NOTE]
-> This project publishes no measured context-cost figures. A measurement command is planned (#562).
+### Measured Context Cost
+
+`mcp-execution-cli stats <server-id>` prints, from a generated directory, the size in bytes and the estimated tokens (bytes divided by 4, always labelled an estimate) of each level a model can read: the server's own definitions as recorded at generation, all tool files, one tool file and `catalog.ts`. For the in-repo fixture server (9 tools):
+
+| Level | Bytes | Tokens (estimate) |
+|-------|-------|-------------------|
+| server definitions (recorded) | 1898 | 475 |
+| all tool files | 5250 | 1313 |
+| one tool file (mean) | 583 | 146 |
+| `catalog.ts` | 1899 | 475 |
+
+These are sizes of text a model reads if it reads that level in full. They do not show that a model did, they are not real token counts, and a host that already defers tool definitions starts from a lower baseline.
+
+The scenario harness (`crates/mcp-cli/tests/context_cost_harness.rs`, offline, part of `cargo nextest run --all-features -p mcp-execution-cli`) compares the bytes that reach the context when K calls are made one `call` per shell command and when one `run` script makes them, against the same fixture. With a fixed script, the single script is the smaller of the two from K = 5 (for K = 1, 2 and 3 one call per command is smaller; at K = 10 it is 680 against 348 bytes, at K = 20 it is 1380 against 438). The figures prove only these scenarios. They do not prove more than that: the script is fixed, not written by a model, so the cost of writing it is not counted; the server is the in-repo fixture only; tokens are an estimate (bytes/4), not a real count; turn overhead and prompt caching are not modelled.
 
 ## Installation
 
@@ -127,32 +139,110 @@ mcp-execution-cli generate --from-config github
 #   - ... (one file per tool)
 ```
 
-### Use the Generated SDK
+### Find Tools in the Catalog
 
 ```bash
-# List the generated tools
-ls ~/.claude/servers/github/
-
 # Read the compact signatures of every tool
 cat ~/.claude/servers/github/catalog.ts
 
 # Read one tool in full (types and JSDoc)
 cat ~/.claude/servers/github/createIssue.ts
+```
 
-# Call one tool directly: the single argument is a JSON object
+`catalog.ts` is the cheap level to read first: one type-only signature per tool. Open a tool file only for a tool you need in full.
+
+### Call One Tool
+
+```bash
+# The tool name and an optional JSON object follow `--`
+mcp-execution-cli call --from-config github -- create_issue '{"owner":"myorg","repo":"myrepo","title":"Bug"}'
+```
+
+`call` accepts the same server flags as `generate` (`--from-config`, `--http`, `--sse` or a command) and prints the result as one compact JSON line within the output budget. An empty success prints nothing. A tool error exits 3, a non-object or malformed JSON argument exits 2 without echoing it.
+
+A generated tool file also runs directly with Node.js, one JSON object as the argument:
+
+```bash
 node ~/.claude/servers/github/createIssue.ts '{"owner":"myorg","repo":"myrepo","title":"Bug"}'
 ```
 
-A script imports tools by relative path, with the `.ts` extension. Keep scripts outside `~/.claude/servers/<id>/`: `generate` replaces that directory on every run. For a script in `~/scripts/`:
-
-```typescript
-import { createIssue } from '../.claude/servers/github/createIssue.ts';
-
-const issue = await createIssue({ owner: 'myorg', repo: 'myrepo', title: 'Bug' });
-```
+Outside `run` this starts a hidden `mcp-execution-cli helper` process. The binary is `$MCP_EXECUTION_CLI` when set, otherwise `mcp-execution-cli` on `PATH`; a set but unusable `MCP_EXECUTION_CLI` is an error and never falls back to `PATH`.
 
 > [!NOTE]
-> Generated files are TypeScript that Node.js runs directly. This needs Node.js 22.18.0 or newer (on the 23 line, 23.6.0 or newer); `mcp-execution-cli setup` checks it.
+> Generated files are TypeScript that Node.js runs directly. This needs Node.js 22.18.0 or newer (on the 23 line, 23.6.0 or newer); `mcp-execution-cli setup` checks it, and reports whether the helper binary is found.
+
+### Run a Script
+
+For many calls, a join or a large result, write one script and run it. A script imports servers as `mcp:<server-id>`:
+
+```typescript
+// ~/scripts/open-issues.mts (adapt the result handling to the types in catalog.ts)
+import { listIssues } from 'mcp:github';
+
+const { items } = await listIssues({ owner: 'myorg', repo: 'myrepo', state: 'open' });
+console.log(items.map((issue) => `#${issue.number} ${issue.title}`).join('\n'));
+```
+
+```bash
+mcp-execution-cli run ~/scripts/open-issues.mts
+```
+
+Keep scripts outside `~/.claude/servers/<id>/`: `generate` replaces that directory on every run. `run -` reads the script from stdin and arguments after `--` go to the script.
+
+What `run` prints:
+
+- The first stdout line is `[mcp-execution <token>] run started`; the same token marks every line the runner adds, so text printed by the script cannot pass for it.
+- The script's stdout is cut at `--max-output` bytes (default 16384) and its stderr at `--max-stderr` bytes (default 4096). The remainder is saved to a private file under the per-user state directory and a notice names it.
+- The last line is `[mcp-execution <token>] script_status exit 0` (or `exit N`, `signal N`, `timed out`).
+- On failure a summary lists the tool calls made and their state (start and end only, never values); `completed calls may have changed state`.
+- `--timeout` is 1 to 600 seconds (default 60). `--format json` prints one envelope with the same fields.
+
+Exit codes: 0 success, 1 other error, 2 invalid input, 3 server or tool error, 4 timeout, 5 a check found problems (`drift`, `scripts check`), 6 the script itself exited non-zero or was killed by a signal.
+
+Optional checks and limits:
+
+| Flag | Effect |
+|------|--------|
+| `--typecheck` | Runs `tsc --noEmit` first and exits 2 before node starts on a type error. Skipped with a note, and the script runs, when `tsc` is missing, when Node type definitions are not installed, or when the dependencies of the generated SDK are not installed (run `npm install` in the server directory to enable the check). Real type errors in your script still exit 2. |
+| `--dry-run` | Executes only the tools listed under `reads` in the policy file and skips every other call, rejecting it with `write_skipped`; the report lists the skipped writes and says the result is incomplete. |
+| `--policy FILE` | Policy file for `--dry-run`: JSON `{"reads":["github/list_issues"]}`. Default: `mcp-execution/policy.json` in the per-user config directory. The default policy is empty, so every call counts as a write. |
+| `--restrict` | Unix only. Limits file reads to the script, the servers directory and the run directory, and grants no file writes, child processes or workers. Network access is narrowed only on Node.js 25 and later. Windows refuses the flag with exit 2. |
+| `--save NAME` | Saves the script as a named recipe after it exits 0 (see below). `--overwrite` replaces an existing recipe. |
+
+> [!WARNING]
+> `run` is not a sandbox. The script runs with your user privileges, so read a script before running it and never run one that came from tool output. The journal, `--dry-run` and `--restrict` are diagnostics and a narrowing, not a security boundary. A script cannot read its own stdin under `run`; a raw read of file descriptor 0 breaks the run. Child processes a script starts can outlive the run.
+
+### Saved Scripts
+
+A script that worked can be kept with the skill of its server. It starts with a header block (JSON in a comment) that is read without running anything:
+
+```typescript
+/*! mcp-script
+{"v":1,"name":"open-issues","description":"List open issues of a repository","parameters":[],"tools":["github/list_issues"],"writes":"read_only"}
+*/
+import { listIssues } from 'mcp:github';
+// ...
+```
+
+```bash
+# Save after a successful run: ~/.claude/skills/github/scripts/open-issues.ts
+mcp-execution-cli run ~/scripts/open-issues.mts --save open-issues
+
+# List saved scripts by signature (no bodies), then check them against the live tool list
+mcp-execution-cli scripts list --server github
+mcp-execution-cli scripts check --server github
+```
+
+`scripts check` exits 5 when a saved script references a tool the server no longer has or has an invalid header, and changes nothing. `generate` and `skill` never touch the `scripts/` directory, and no command runs a saved script on its own. A skill holds at most 50 scripts of up to 64 KiB each.
+
+### Check for Drift
+
+```bash
+# Compare the live tool list with the metadata recorded at generation (writes nothing)
+mcp-execution-cli drift --from-config github
+```
+
+Exit 0: no drift. Exit 5: the tool list or endpoint differs from the recorded one. When the server was generated under another name or into another directory, pass the same `--name` and `--progressive-output` you gave `generate`.
 
 ## Key Features
 
@@ -160,6 +250,10 @@ const issue = await createIssue({ owner: 'myorg', repo: 'myrepo', title: 'Bug' }
 |---------|-------------|
 | **Typed SDK** | TypeScript parameter and result types converted from MCP JSON schemas |
 | **Compact Catalog** | `catalog.ts` lists one type-only signature per tool |
+| **One-Shot Calls** | `call` runs one tool of any stdio, HTTP or SSE server and prints a bounded result |
+| **Script Runner** | `run` executes a script with bounded output, a journal, optional type check, dry run and `--restrict` |
+| **Saved Scripts** | `run --save`, `scripts list` and `scripts check` keep and verify working scripts per skill |
+| **Measured Cost** | `stats` prints bytes and estimated tokens per level; `drift` compares the live tool list with generation |
 | **Direct Execution** | Each generated tool file runs with Node.js and takes one JSON argument |
 | **Any MCP Server** | stdio, HTTP and SSE servers via the [rmcp SDK](https://docs.rs/rmcp) |
 
@@ -197,6 +291,15 @@ mcp-execution-cli generate --from-config github
 # Preview what would be generated without writing to disk
 mcp-execution-cli generate --from-config github --dry-run
 
+# Call one tool, run a script, inspect saved scripts
+mcp-execution-cli call --from-config github -- list_issues '{"state":"open"}'
+mcp-execution-cli run script.mts
+mcp-execution-cli scripts list --server github
+
+# Context cost of a generated server, and drift against the live server
+mcp-execution-cli stats github
+mcp-execution-cli drift --from-config github
+
 # Introspect MCP server from config
 mcp-execution-cli introspect --from-config github
 
@@ -223,6 +326,9 @@ mcp-execution-cli completions bash
 > **Unreleased breaking change:** `_meta.json` metadata schema version bumped from 2 to 3 (tool annotations, result type text and origin, and manifest size were added). Files generated before this change will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
 
 > [!WARNING]
+> **Unreleased breaking change:** the generated runtime bridge is now a thin client of the `mcp-execution-cli` helper, so every server directory must be regenerated after upgrading (`mcp-execution-cli generate --from-config <SERVER>`), and a tool file run directly with `node` needs a matching `mcp-execution-cli` (`MCP_EXECUTION_CLI` or `PATH`). `closeAllConnections`, the bridge's SIGINT/SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are removed. `call` takes the tool after `--`, and exit code 6 now means a script run by `run` failed. See the [changelog](CHANGELOG.md) for the full list.
+
+> [!WARNING]
 > **v0.10 breaking change:** server IDs and tool names must now consist only of Unicode
 > `Identifier_Status=Allowed` characters. A remote MCP server exposing a tool named with a space or
 > `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright instead of being silently accepted —
@@ -240,6 +346,7 @@ cargo bench --profile bench-fast -p mcp-execution-codegen -p mcp-execution-files
 ## Documentation
 
 - [Usage Guide](examples/progressive-loading-usage.md) - Complete guide
+- [Host Code Mode notes](examples/host-code-mode.md) - What the host documents about its own code execution mode
 - [Claude Code Integration](crates/mcp-skill) - SKILL.md generation (`mcp-execution-cli skill`)
 
 ## Development

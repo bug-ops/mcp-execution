@@ -8,9 +8,10 @@ use anyhow::Result;
 use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, LOG_FORMAT_ENV_VAR, LogFormat, OutputFormat};
 use mcp_execution_files::FilesError;
+use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::cli::Commands;
+use crate::cli::{Commands, LogProfile};
 use crate::commands;
 use crate::commands::common::ServerSource;
 use crate::formatters::escape_error_text;
@@ -70,8 +71,8 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
         && std::env::var(LOG_FORMAT_ENV_VAR).is_ok_and(|raw| LogFormat::is_invalid_env_value(&raw))
 }
 
-/// Caps `rmcp`'s own `tracing` targets at `info`, on top of whatever base filter is already in
-/// effect.
+/// Caps `rmcp`'s own `tracing` targets at `cap` (`info`, or `warn` for [`LogProfile::Quiet`]), on
+/// top of whatever base filter is already in effect.
 ///
 /// `rmcp` 3.1.2's transport layer logs raw, unsanitized peer input at `debug` level. This crate is
 /// a *client* of third-party MCP servers (see `mcp_execution_introspector::Introspector`), so
@@ -99,12 +100,28 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
 /// level, so a same-target `add_directive` call overwrites the existing entry. Both behaviors are
 /// pinned by tests below rather than assumed.
 #[expect(clippy::expect_used, reason = "static directive string is valid")]
-fn cap_rmcp_log_level(filter: EnvFilter) -> EnvFilter {
+fn cap_rmcp_log_level(filter: EnvFilter, cap: LevelFilter) -> EnvFilter {
     filter.add_directive(
-        "rmcp=info"
+        format!("rmcp={cap}")
             .parse()
-            .expect("static \"rmcp=info\" directive string is always valid"),
+            .expect("\"rmcp=<level>\" is always a valid directive"),
     )
+}
+
+/// Selects the log filter: `--verbose` is `debug`, an explicit `RUST_LOG` (`env`) is honoured,
+/// otherwise the default of `profile`. Only a [`LogProfile::Quiet`] default drops `rmcp` to
+/// `warn`; every other case keeps the `rmcp=info` cap.
+fn log_filter(verbose: bool, profile: LogProfile, env: Option<EnvFilter>) -> EnvFilter {
+    match (verbose, env, profile) {
+        (true, _, _) => cap_rmcp_log_level(EnvFilter::new("debug"), LevelFilter::INFO),
+        (false, Some(env), _) => cap_rmcp_log_level(env, LevelFilter::INFO),
+        (false, None, LogProfile::Quiet) => {
+            cap_rmcp_log_level(EnvFilter::new("warn"), LevelFilter::WARN)
+        }
+        (false, None, LogProfile::Standard) => {
+            cap_rmcp_log_level(EnvFilter::new("info"), LevelFilter::INFO)
+        }
+    }
 }
 
 /// Initializes logging infrastructure.
@@ -130,6 +147,8 @@ fn cap_rmcp_log_level(filter: EnvFilter) -> EnvFilter {
 ///   environment variable override via `RUST_LOG`
 /// * `log_format` - `--log-format` flag value, or `None` to consult
 ///   `MCP_EXECUTION_LOG_FORMAT`
+/// * `profile` - default verbosity of the running command; `Quiet` logs at `warn` unless
+///   `--verbose` or `RUST_LOG` is given
 ///
 /// # Errors
 ///
@@ -140,19 +159,20 @@ fn cap_rmcp_log_level(filter: EnvFilter) -> EnvFilter {
 /// # Examples
 ///
 /// ```no_run
+/// use mcp_execution_cli::cli::LogProfile;
 /// use mcp_execution_cli::runner;
 ///
 /// // `no_run`: this installs a process-global tracing subscriber, which
 /// // panics if called more than once in the same process.
-/// runner::init_logging(false, None)?;
+/// runner::init_logging(false, None, LogProfile::Standard)?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub fn init_logging(verbose: bool, log_format: Option<LogFormat>) -> Result<()> {
-    let filter = cap_rmcp_log_level(if verbose {
-        EnvFilter::new("debug")
-    } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
-    });
+pub fn init_logging(
+    verbose: bool,
+    log_format: Option<LogFormat>,
+    profile: LogProfile,
+) -> Result<()> {
+    let filter = log_filter(verbose, profile, EnvFilter::try_from_default_env().ok());
 
     let format = resolve_log_format(log_format);
 
@@ -272,6 +292,12 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
         Commands::Server { action } => commands::server::run(action, output_format).await,
         Commands::Setup => commands::setup::run(output_format).await,
         Commands::Completions { shell } => run_completions(shell).await,
+        Commands::Run(args) => commands::run::run(args, output_format).await,
+        Commands::Call(args) => commands::call::run(args, output_format).await,
+        Commands::Scripts { action } => commands::scripts::run(action, output_format).await,
+        Commands::Stats(args) => commands::stats::run(args, output_format).await,
+        Commands::Drift(args) => commands::drift::run(args, output_format).await,
+        Commands::Helper => commands::helper::run().await,
     }
 }
 
@@ -985,6 +1011,19 @@ mod tests {
     /// `RUST_LOG` (parallel test threads share one process) -- `base_filter` plays the same role
     /// a real `RUST_LOG` value would, but only ever reaches `EnvFilter::new` directly.
     fn rmcp_capped_filter_captures(base_filter: &str) -> (bool, bool) {
+        let written = captured_log(cap_rmcp_log_level(
+            EnvFilter::new(base_filter),
+            LevelFilter::INFO,
+        ));
+        (
+            written.contains("raw untrusted peer line"),
+            written.contains("own debug event"),
+        )
+    }
+
+    /// Logs one rmcp `debug`, one own `debug` and one rmcp `info` event through `filter` and
+    /// returns what a real `fmt::layer()` wrote.
+    fn captured_log(filter: EnvFilter) -> String {
         use std::sync::{Arc, Mutex};
 
         #[derive(Clone)]
@@ -1006,7 +1045,6 @@ mod tests {
             move || SharedBuf(buf.clone())
         };
 
-        let filter = cap_rmcp_log_level(EnvFilter::new(base_filter));
         let subscriber = tracing_subscriber::registry().with(filter).with(
             tracing_subscriber::fmt::layer()
                 .with_writer(make_writer)
@@ -1019,13 +1057,26 @@ mod tests {
                 "raw untrusted peer line"
             );
             tracing::debug!(target: "mcp_execution_cli", "own debug event");
+            tracing::info!(target: "rmcp::service", "rmcp info event");
         });
 
-        let written = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        (
-            written.contains("raw untrusted peer line"),
-            written.contains("own debug event"),
-        )
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn quiet_profile_drops_rmcp_info_by_default() {
+        let written = captured_log(log_filter(false, LogProfile::Quiet, None));
+        assert!(!written.contains("rmcp info event"), "{written}");
+        let standard = captured_log(log_filter(false, LogProfile::Standard, None));
+        assert!(standard.contains("rmcp info event"), "{standard}");
+    }
+
+    #[test]
+    fn verbose_restores_debug_and_rmcp_info_under_the_quiet_profile() {
+        let written = captured_log(log_filter(true, LogProfile::Quiet, None));
+        assert!(written.contains("own debug event"), "{written}");
+        assert!(written.contains("rmcp info event"), "{written}");
+        assert!(!written.contains("raw untrusted peer line"), "{written}");
     }
 
     /// Regression coverage for issue #421: `--verbose`'s `EnvFilter::new("debug")` branch (no

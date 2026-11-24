@@ -40,6 +40,7 @@ mod types;
 
 pub mod annotations;
 pub mod cli;
+pub mod helper_protocol;
 pub mod metadata;
 pub mod provenance;
 pub mod untrusted;

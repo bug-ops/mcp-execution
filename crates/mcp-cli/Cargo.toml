@@ -18,8 +18,31 @@ workspace = true
 name = "mcp-execution-cli"
 path = "src/main.rs"
 
+[[bin]]
+# Test fixture MCP server (stdio, or `--http 127.0.0.1:0`) with a fixed tool set, spawned by the
+# acceptance tests. Not part of the public API; only built with `--features test-fixtures`
+# (implied by `--all-features`, which is how CI runs tests).
+name = "fixture-tools-mcp-server"
+path = "tests/fixtures/tools_mcp_server.rs"
+test = false
+doc = false
+required-features = ["test-fixtures"]
+
+[features]
+# Enables the server-side rmcp features and the HTTP stack the fixture server needs, without
+# pulling them into the default build of this client-side crate.
+test-fixtures = [
+    "dep:axum",
+    "dep:rmcp",
+    "dep:tokio-util",
+    "rmcp/server",
+    "rmcp/transport-io",
+    "rmcp/transport-streamable-http-server",
+]
+
 [dependencies]
 anyhow = { workspace = true }
+axum = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive", "color"] }
 clap_complete.workspace = true
 colored = { workspace = true }
@@ -30,12 +53,27 @@ mcp-execution-core = { workspace = true }
 mcp-execution-files = { workspace = true }
 mcp-execution-introspector = { workspace = true }
 mcp-execution-skill = { workspace = true }
+rmcp = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "fs",
+    "sync",
+    "time",
+    "process",
+    "io-std",
+    "io-util",
+    "net",
+    "signal",
+] }
+tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 url = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 which = { workspace = true }
 
 [dev-dependencies]

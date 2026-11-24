@@ -27,19 +27,20 @@
 mod context;
 mod output_path;
 mod parser;
+pub mod scripts;
 mod template;
 pub mod types;
 
 pub use context::build_skill_context;
-pub use output_path::{OutputPathError, resolve_skill_output_path};
+pub use output_path::{OutputPathError, resolve_skill_output_path, skill_directory_name};
 pub use parser::{
     MAX_FILE_SIZE, MAX_FRONTMATTER_SIZE, MAX_TOOL_FILES, ParsedParameter, ParsedToolFile,
     ScanError, ScanResult, SkillMetadataError, extract_skill_metadata, scan_tools_directory,
 };
-pub use template::{TemplateError, render_generation_prompt, render_skill_md};
+pub use template::{TemplateError, render_skill_md};
 pub use types::{
-    GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH, MAX_SKILL_NAME_LENGTH,
-    MAX_USE_CASE_HINT_LENGTH, MAX_USE_CASE_HINTS, SaveSkillParams, SaveSkillResult, SkillCategory,
-    SkillMetadata, SkillNameError, SkillServerIdError, SkillTool, ToolExample, validate_server_id,
-    validate_skill_name,
+    GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH, MAX_SKILL_DESCRIPTION_LENGTH,
+    MAX_SKILL_NAME_LENGTH, MAX_USE_CASE_HINT_LENGTH, MAX_USE_CASE_HINTS, SaveSkillParams,
+    SaveSkillResult, SkillCategory, SkillDirectoryMismatch, SkillMetadata, SkillName,
+    SkillNameError, SkillServerIdError, SkillTool, ToolExample, validate_server_id,
 };

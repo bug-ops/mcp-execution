@@ -246,106 +246,53 @@ pub fn require_node_strip_types(test_name: &str) -> bool {
     false
 }
 
-/// Compiles `bridge_ts` (the rendered runtime bridge) alongside a harness that calls
-/// `callMCPTool(server_id, "noop", {})`, runs it under Node with `$HOME`/`%USERPROFILE%`
-/// pointed at a temp directory containing `mcp_json` as `~/.claude/mcp.json`, and returns
+/// One run of a harness script against the rendered runtime bridge.
+#[derive(Debug, Clone, Copy)]
+pub struct BridgeHarness<'a> {
+    /// Name used in skip and failure messages.
+    pub test_name: &'a str,
+    /// The rendered `_runtime/mcp-bridge.ts`.
+    pub bridge_ts: &'a str,
+    /// TypeScript importing `./mcp-bridge.js`; compiled next to the bridge.
+    pub harness_ts: &'a str,
+    /// `CommonJS` preloaded with `node --require`, typically registering a helper channel.
+    pub preload_js: Option<&'a str>,
+    /// Extra files written into the working directory, which is also node's cwd.
+    pub files: &'a [(&'a str, &'a str)],
+    /// Extra environment variables for the node process.
+    pub env: &'a [(&'a str, &'a str)],
+}
+
+/// Compiles the bridge and harness of `run` under `tsc` (type-erasure only, so `@types/node` is
+/// not needed) and runs the result under Node inside `work_dir`, returning
 /// `(exit_success, stdout, stderr)`.
 ///
-/// Uses `tsc --noCheck` (type-erasure only, no type-checking) so this doesn't need
-/// `@types/node` installed to resolve the bridge's Node builtin imports (`child_process`,
-/// `fs/promises`, `os`, `path`, `stream`).
-///
-/// A hostile/unvalidated config that reaches `spawn()` can hang forever here (the bridge
-/// waits on a JSON-RPC response from a subprocess that will never send one) — that's
-/// exactly the failure mode these tests exist to catch, so the harness itself races a 5s
-/// watchdog against `callMCPTool`'s promise, and this helper additionally bounds the whole
-/// Node run at 15s so a regression fails the test suite instead of hanging it.
+/// The run is bounded at 15 s so a bridge that hangs instead of settling every pending call
+/// fails the suite instead of stalling it.
 ///
 /// Returns `None` if `tsc`/`node` are not on `PATH` and the caller should skip locally; hard
 /// fails (via `require_ts_toolchain`) instead of returning `None` when running in CI.
-pub fn run_bridge_harness(
-    test_name: &str,
-    bridge_ts: &str,
-    mcp_json: &serde_json::Value,
-    server_id: &str,
+pub fn run_bridge_harness_in(
+    work_dir: &std::path::Path,
+    run: &BridgeHarness<'_>,
 ) -> Option<(bool, String, String)> {
-    run_bridge_harness_with_env(test_name, bridge_ts, mcp_json, server_id, &[])
-}
-
-/// Same as [`run_bridge_harness`], additionally setting `extra_env` on the spawned Node
-/// harness process (e.g. `MCPBRIDGE_REQUEST_TIMEOUT_MS` for timeout-specific tests).
-pub fn run_bridge_harness_with_env(
-    test_name: &str,
-    bridge_ts: &str,
-    mcp_json: &serde_json::Value,
-    server_id: &str,
-    extra_env: &[(&str, &str)],
-) -> Option<(bool, String, String)> {
-    let harness_ts = format!(
-        "import {{ callMCPTool }} from './mcp-bridge.js';\n\
-         \n\
-         const watchdog = setTimeout(() => {{\n\
-         \x20\x20console.log('TIMEOUT: did not settle before spawning');\n\
-         \x20\x20process.exit(2);\n\
-         }}, 5000);\n\
-         \n\
-         callMCPTool('{server_id}', 'noop', {{}}).then(\n\
-         \x20\x20() => {{\n\
-         \x20\x20\x20\x20clearTimeout(watchdog);\n\
-         \x20\x20\x20\x20console.log('UNEXPECTED_SUCCESS');\n\
-         \x20\x20\x20\x20process.exit(1);\n\
-         \x20\x20}},\n\
-         \x20\x20(err: unknown) => {{\n\
-         \x20\x20\x20\x20clearTimeout(watchdog);\n\
-         \x20\x20\x20\x20console.log('REJECTED:', String(err));\n\
-         \x20\x20\x20\x20process.exit(0);\n\
-         \x20\x20}}\n\
-         );\n"
-    );
-
-    compile_and_run_bridge_harness(test_name, bridge_ts, mcp_json, &harness_ts, extra_env)
-}
-
-/// Shared innards of [`run_bridge_harness_with_env`] and the concurrency regression test below:
-/// compiles `bridge_ts` plus a caller-supplied `harness_ts` under tsc, then runs the result
-/// under Node with `$HOME`/`%USERPROFILE%` pointed at a temp directory containing `mcp_json`
-/// as `~/.claude/mcp.json`. Factored out of `run_bridge_harness_with_env` so a harness body
-/// other than the single fixed `callMCPTool('...', 'noop', {})` call (e.g. two concurrent
-/// calls) does not need to duplicate the tsc/Node plumbing.
-///
-/// Returns `None` if `tsc`/`node` are not on `PATH` and the caller should skip locally; hard
-/// fails (via `require_ts_toolchain`) instead of returning `None` when running in CI.
-pub fn compile_and_run_bridge_harness(
-    test_name: &str,
-    bridge_ts: &str,
-    mcp_json: &serde_json::Value,
-    harness_ts: &str,
-    extra_env: &[(&str, &str)],
-) -> Option<(bool, String, String)> {
-    if !require_ts_toolchain(test_name, true) {
+    if !require_ts_toolchain(run.test_name, true) {
         return None;
     }
 
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let home_dir = dir.path().join("home");
-    let claude_dir = home_dir.join(".claude");
-    std::fs::create_dir_all(&claude_dir).expect("Failed to create fake $HOME/.claude");
-    std::fs::write(claude_dir.join("mcp.json"), mcp_json.to_string())
-        .expect("Failed to write mcp.json");
-
-    let src_dir = dir.path().join("src");
+    let src_dir = work_dir.join("src");
     std::fs::create_dir_all(&src_dir).expect("Failed to create src dir");
     // `--module NodeNext` picks CJS vs. ESM emit per-file based on the nearest
     // `package.json`'s "type" field, resolved from the *source* file's location — not the
-    // `--outDir`. Without this, tsc silently emits CommonJS (`require`/`exports`), which
-    // then fails at runtime once Node sees `dist/package.json`'s `"type": "module"`.
+    // `--outDir`. Without this, tsc silently emits CommonJS, which then fails at runtime once
+    // Node sees `dist/package.json`'s `"type": "module"`.
     std::fs::write(src_dir.join("package.json"), "{\"type\":\"module\"}\n")
         .expect("Failed to write src/package.json");
-    std::fs::write(src_dir.join("mcp-bridge.ts"), bridge_ts)
+    std::fs::write(src_dir.join("mcp-bridge.ts"), run.bridge_ts)
         .expect("Failed to write mcp-bridge.ts");
-    std::fs::write(src_dir.join("harness.ts"), harness_ts).expect("Failed to write harness.ts");
+    std::fs::write(src_dir.join("harness.ts"), run.harness_ts).expect("Failed to write harness.ts");
 
-    let dist_dir = dir.path().join("dist");
+    let dist_dir = work_dir.join("dist");
     let tsc_output = Command::new(tsc_program())
         .args(["--noCheck", "--module", "NodeNext", "--moduleResolution"])
         .arg("NodeNext")
@@ -366,34 +313,34 @@ pub fn compile_and_run_bridge_harness(
     std::fs::write(dist_dir.join("package.json"), "{\"type\":\"module\"}\n")
         .expect("Failed to write dist/package.json");
 
-    let harness_path = dist_dir.join("harness.js");
-    let owned_extra_env: Vec<(String, String)> = extra_env
-        .iter()
-        .map(|&(k, v)| (k.to_string(), v.to_string()))
-        .collect();
+    for (name, content) in run.files {
+        std::fs::write(work_dir.join(name), content).expect("Failed to write a harness file");
+    }
+
+    let mut command = Command::new("node");
+    if let Some(preload) = run.preload_js {
+        let path = work_dir.join("preload.cjs");
+        std::fs::write(&path, preload).expect("Failed to write the preload");
+        command.arg("--require").arg(path);
+    }
+    command
+        .arg(dist_dir.join("harness.js"))
+        .current_dir(work_dir);
+    for (key, value) in run.env {
+        command.env(key, value);
+    }
+
+    let test_name = run.test_name.to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut cmd = Command::new("node");
-        cmd.arg(&harness_path)
-            // Node's `os.homedir()` — which `loadServerConfig()` uses to find
-            // `~/.claude/mcp.json` — reads `$HOME` on POSIX but `%USERPROFILE%` on Windows;
-            // both must point at the fake home directory for the harness to isolate itself
-            // from the real runner's home on every platform.
-            .env("HOME", &home_dir)
-            .env("USERPROFILE", &home_dir);
-        for (key, value) in &owned_extra_env {
-            cmd.env(key, value);
-        }
-        let result = cmd.output();
-        let _ = tx.send(result);
+        let _ = tx.send(command.output());
     });
-
     let output = rx
         .recv_timeout(std::time::Duration::from_secs(15))
         .unwrap_or_else(|_| {
             panic!(
                 "node harness for {test_name} did not exit within 15s; the bridge may be \
-                 hanging instead of settling every pending request"
+                 hanging instead of settling every pending call"
             )
         })
         .expect("Failed to run node");
@@ -405,71 +352,33 @@ pub fn compile_and_run_bridge_harness(
     ))
 }
 
-/// Writes `content` to a standalone `.js` file inside a fresh temp directory and returns its
-/// absolute path as a string, suitable for use as a stdio-transport `args` entry.
-///
-/// Used instead of `node -e '<code>'` for the #221 item 4 tests below: `(` and `)` are
-/// themselves forbidden shell metacharacters (`FORBIDDEN_CHARS`), so virtually any real JS
-/// snippet passed inline as an argument would trip `validateCommandString` before the
-/// scenario under test — the process dying or hanging — ever gets a chance to run.
-pub fn write_test_script(content: &str) -> String {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir for test script");
-    let path = dir.path().join("script.js");
-    std::fs::write(&path, content).expect("Failed to write test script");
-    // Leak the tempdir so it outlives the spawned `node` process for the duration of the
-    // test; these are single test-process-lifetime allocations, not a long-running leak.
-    Box::leak(Box::new(dir));
-    path.to_string_lossy().into_owned()
-}
-
-/// Builds a minimal fake MCP server script that answers `initialize` normally and replies to
-/// the single `tools/call` request it receives with `result_json` verbatim as the `result`
-/// field. Shared by the #255 regression tests below, which each need a different `result`
-/// shape (empty `content`, `structuredContent`-only, etc.) but identical initialize/id
-/// plumbing.
-pub fn respond_once_fake_server_js(result_json: &str) -> String {
-    format!(
-        r"
-const readline = require('readline');
-const rl = readline.createInterface({{ input: process.stdin, terminal: false }});
-
-rl.on('line', (line) => {{
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return;
-  const message = JSON.parse(trimmed);
-
-  if (message.method === 'initialize') {{
-    const response = {{
-      jsonrpc: '2.0',
-      id: message.id,
-      result: {{
-        protocolVersion: '2024-11-05',
-        capabilities: {{}},
-        serverInfo: {{ name: 'fake', version: '0.0.0' }}
-      }}
-    }};
-    process.stdout.write(JSON.stringify(response) + '\n');
-    return;
-  }}
-
-  if (message.method === 'tools/call') {{
-    const response = {{
-      jsonrpc: '2.0',
-      id: message.id,
-      result: {result_json}
-    }};
-    process.stdout.write(JSON.stringify(response) + '\n');
-  }}
-}});
-"
+/// [`run_bridge_harness_in`] in a fresh temp directory, with `helper_js` preloaded as the
+/// helper channel and no extra files.
+pub fn compile_and_run_bridge_harness(
+    test_name: &str,
+    bridge_ts: &str,
+    helper_js: &str,
+    harness_ts: &str,
+    env: &[(&str, &str)],
+) -> Option<(bool, String, String)> {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    run_bridge_harness_in(
+        dir.path(),
+        &BridgeHarness {
+            test_name,
+            bridge_ts,
+            harness_ts,
+            preload_js: Some(helper_js),
+            files: &[],
+            env,
+        },
     )
 }
 
 /// Harness that calls `callMCPTool('fake', 'noop', {})` once, printing `RESOLVED: <json>` or
 /// `REJECTED: <message>` (followed by ` SERVER_MESSAGE: <text>` when the rejection is an
-/// `McpToolError` carrying server text) and exiting 0 in either case (the fake servers below
-/// never hang, so no watchdog is needed) — the assertions inspect stdout rather than the exit
-/// code.
+/// `McpToolError` carrying server text) and exiting 0 in either case; the assertions inspect
+/// stdout rather than the exit code.
 pub const SINGLE_CALL_HARNESS_TS: &str = r"
 import { callMCPTool, McpToolError } from './mcp-bridge.js';
 

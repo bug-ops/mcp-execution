@@ -506,7 +506,7 @@ pub enum SkillMetadataError {
     /// Enforced here rather than only on the two `generate` call sites
     /// (`crates/mcp-cli/src/commands/skill.rs`, `crates/mcp-server/src/service.rs`) so that
     /// `save_skill` — which writes caller-supplied `SKILL.md` content directly and never routes
-    /// through [`crate::types::validate_skill_name`] — cannot persist an unbounded `name` into
+    /// through [`crate::types::SkillName`] — cannot persist an unbounded `name` into
     /// the always-loaded skill index (issue #419).
     #[error("skill_name too long: {len} chars exceeds {limit} limit")]
     NameTooLong {
@@ -520,6 +520,16 @@ pub enum SkillMetadataError {
     /// hyphen (the Agent Skills `name` rule).
     #[error("skill_name must contain only lowercase letters, digits, and hyphens")]
     NameInvalidCharacters,
+
+    /// The frontmatter `description` exceeded
+    /// [`MAX_SKILL_DESCRIPTION_LENGTH`](crate::types::MAX_SKILL_DESCRIPTION_LENGTH).
+    #[error("description too long: {len} chars exceeds {limit} limit")]
+    DescriptionTooLong {
+        /// Actual length of the rejected description, in `char`s.
+        len: usize,
+        /// Maximum allowed length (`MAX_SKILL_DESCRIPTION_LENGTH`).
+        limit: usize,
+    },
 }
 
 /// Fixed vocabulary of `serde-saphyr` failure kinds, keyed by [`serde_saphyr::Error`] variant.
@@ -816,8 +826,8 @@ pub fn extract_skill_metadata(
         })?;
 
     let name = require_field(frontmatter.name, "name")?;
-    match crate::types::validate_skill_name(&name) {
-        Ok(()) => {}
+    match crate::types::SkillName::new(&name) {
+        Ok(_) => {}
         // `require_field` already rejects a blank/empty `name`, so this arm is unreachable via
         // this call site today — mapped onto the equivalent `MissingField` rather than a `panic!`
         // or a second, inconsistent "empty" error so the match stays exhaustive and safe even if
@@ -833,6 +843,13 @@ pub fn extract_skill_metadata(
         }
     }
     let description = require_field(frontmatter.description, "description")?;
+    let description_len = description.chars().count();
+    if description_len > crate::types::MAX_SKILL_DESCRIPTION_LENGTH {
+        return Err(SkillMetadataError::DescriptionTooLong {
+            len: description_len,
+            limit: crate::types::MAX_SKILL_DESCRIPTION_LENGTH,
+        });
+    }
 
     // Count sections (H2 headers)
     let section_count = content.lines().filter(|l| l.starts_with("## ")).count();
@@ -1488,7 +1505,7 @@ More content.
     #[test]
     fn test_extract_skill_metadata_name_too_long_rejected() {
         // Issue #419: `save_skill` writes caller-supplied SKILL.md content directly, never
-        // routing `name` through `validate_skill_name` the way the two `generate` call sites do.
+        // routing `name` through `SkillName::new` the way the two `generate` call sites do.
         // `extract_skill_metadata` is the one chokepoint both paths share, so the bound has to
         // live here.
         let long_name = "a".repeat(crate::types::MAX_SKILL_NAME_LENGTH + 1);
@@ -1872,9 +1889,10 @@ description: 'quoted text'
 
     #[test]
     fn test_budget_accepts_8kib_plain_scalar() {
-        // ADR-405: a legitimate, scalar-byte-heavy ~8 KiB description must not be falsely
-        // rejected by `max_total_scalar_bytes` (65_536, 8x the input cap).
-        let preamble = "name: test-skill\ndescription: ";
+        // ADR-405: a legitimate, scalar-byte-heavy ~8 KiB scalar must not be falsely
+        // rejected by `max_total_scalar_bytes` (65_536, 8x the input cap). Held in an extra
+        // key: a `description` itself is capped at `MAX_SKILL_DESCRIPTION_LENGTH`.
+        let preamble = "name: test-skill\ndescription: short\nnotes: ";
         let suffix = "\n";
         let padding_len = MAX_FRONTMATTER_SIZE - preamble.len() - suffix.len();
         let frontmatter_block = format!("{preamble}{}{suffix}", "a".repeat(padding_len));
@@ -1886,6 +1904,24 @@ description: 'quoted text'
             result.is_ok(),
             "expected Ok for a legitimate ~8 KiB plain scalar, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_description_over_the_agent_skills_limit_is_rejected() {
+        let at_limit = "d".repeat(crate::types::MAX_SKILL_DESCRIPTION_LENGTH);
+        let over_limit = "d".repeat(crate::types::MAX_SKILL_DESCRIPTION_LENGTH + 1);
+
+        assert!(
+            extract_skill_metadata(&format!("---\nname: a\ndescription: {at_limit}\n---\n"))
+                .is_ok()
+        );
+        assert!(matches!(
+            extract_skill_metadata(&format!("---\nname: a\ndescription: {over_limit}\n---\n")),
+            Err(SkillMetadataError::DescriptionTooLong {
+                len: 1025,
+                limit: 1024
+            })
+        ));
     }
 
     #[test]

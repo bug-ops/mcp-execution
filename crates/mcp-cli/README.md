@@ -76,6 +76,8 @@ cat ~/.claude/servers/github/createIssue.ts
 node ~/.claude/servers/github/createIssue.ts '{"owner":"myorg","repo":"myrepo","title":"Bug"}'
 ```
 
+A tool file run with `node` starts a hidden `mcp-execution-cli helper` process: the binary is `$MCP_EXECUTION_CLI` when set, otherwise `mcp-execution-cli` on `PATH`. A set but unusable `MCP_EXECUTION_CLI` is an error and never falls back to `PATH`.
+
 ### Shell Completions
 
 ```bash
@@ -133,6 +135,81 @@ mcp-execution-cli generate docker \
   --env=API_KEY=xxx \
   --name=myserver
 ```
+
+### `call`
+
+Call one tool of one server and print its result within the output budget:
+
+```bash
+mcp-execution-cli call <SERVER FLAGS> -- <TOOL> [JSON]
+```
+
+Server flags are those of `generate` (`--from-config`, `--http`, `--sse`, or a command). The tool name and an optional JSON object follow `--`. The result is printed as one compact JSON line; an empty success prints nothing; a tool error exits 3; a non-object or malformed JSON argument exits 2 without echoing it.
+
+```bash
+mcp-execution-cli call --from-config github -- create_issue '{"title":"x"}'
+mcp-execution-cli call --http https://api.example.com/mcp -- echo
+```
+
+### `run`
+
+Run a TypeScript script against the generated servers with bounded output:
+
+```bash
+mcp-execution-cli run [SCRIPT|-] [OPTIONS] [-- ARGS...]
+```
+
+The script imports `mcp:<server-id>` (a server's tools) and `mcp:helpers` (`paginate`, `mapBounded`).
+
+**Options**:
+
+- `--servers-dir <PATH>`: Base directory of generated servers (default: `~/.claude/servers`)
+- `--timeout <SECS>`: Run timeout, 1-600 (default 60)
+- `--max-output <BYTES>`: Stdout printed before the rest is spilled to a private file (default 16384)
+- `--max-stderr <BYTES>`: Stderr printed before the rest is spilled (default 4096)
+- `--typecheck`: Run `tsc --noEmit` first; a type error exits 2 before node starts. Skipped with a note, and the script runs, when `tsc` is missing or when Node type definitions or the generated SDK's dependencies are not installed (run `npm install` in the server directory to enable the check); real type errors in the script still exit 2
+- `--dry-run`: Execute only the tools listed under `reads` in the policy file; skip and report every other call
+- `--policy <FILE>`: Policy for `--dry-run`, JSON `{"reads":["github/list_issues"]}` (default: `mcp-execution/policy.json` in the per-user config directory)
+- `--restrict`: Unix only. Narrow file reads to the script, the servers directory and the run directory; no file writes, child processes or workers. Network is narrowed on Node.js 25 and later only; Windows refuses the flag (exit 2)
+- `--save <NAME>`: Save the script as a recipe in `~/.claude/skills/<server>/scripts/` after it exits 0; `--overwrite` replaces an existing one
+
+**Output**: the first stdout line is `[mcp-execution <token>] run started`, every runner line carries the same token, and the last is `[mcp-execution <token>] script_status exit 0` (`exit N`, `signal N`, `timed out`). A cut stream is saved to a file and a notice names it. After a failed run a call summary lists the calls made and their state, never values. `--format json` prints one envelope.
+
+**Exit codes**: 0 success, 1 other error, 2 invalid input, 3 server or tool error, 4 timeout, 5 a check found problems, 6 the script exited non-zero or was killed.
+
+> [!WARNING]
+> `run` is not a sandbox: the script runs with your user privileges. A script cannot read its own stdin under `run`.
+
+### `scripts`
+
+Inspect the saved scripts of a skill:
+
+```bash
+mcp-execution-cli scripts list --server github    # signatures only, no bodies
+mcp-execution-cli scripts check --server github   # exit 5 on problems, changes nothing
+```
+
+`--skills-dir <PATH>` selects another skills directory. A saved script starts with an `mcp-script` header (JSON in a leading block comment); `generate` and `skill` never touch the `scripts/` directory.
+
+### `stats`
+
+Print deterministic size figures of a generated server:
+
+```bash
+mcp-execution-cli stats github [--servers-dir <PATH>]
+```
+
+For the server's recorded definitions, all tool files, one tool file (mean) and `catalog.ts`, it prints bytes and estimated tokens (bytes divided by 4, always labelled an estimate) and how many tools declare an output schema. Missing data prints `not available`, never zero; the output is identical on every run; a `_meta.json` older than schema version 3 exits 2 with no figures.
+
+### `drift`
+
+Compare a live server's tool list with the metadata recorded at generation:
+
+```bash
+mcp-execution-cli drift --from-config github
+```
+
+Takes the server flags of `generate` plus `--name` and `--progressive-output` (pass the same values you gave `generate`). Exit 0: no drift. Exit 5: the lists differ. Writes nothing.
 
 ### `introspect`
 
@@ -256,12 +333,14 @@ Validate the runtime environment for generated MCP tool execution:
 mcp-execution-cli setup
 
 # Output:
-# ✓ Node.js v20.10.0 detected
-# ✓ MCP configuration found
+# ✓ Node.js v26.13.1 detected
+# ✓ MCP configuration found: ~/.claude/mcp.json
+# ✓ Made 13 TypeScript files executable
+# ✓ Helper binary found: /usr/local/bin/mcp-execution-cli
 # ✓ Runtime setup complete
 ```
 
-Checks that Node.js 22.18.0 or newer is installed (23.6.0 or newer on the 23 line; generated tools run as `.ts` files), `~/.claude/mcp.json` exists, and makes generated TypeScript files executable (Unix only).
+Checks that Node.js 22.18.0 or newer is installed (23.6.0 or newer on the 23 line; generated tools run as `.ts` files), `~/.claude/mcp.json` exists, that the helper binary (`$MCP_EXECUTION_CLI`, else `mcp-execution-cli` on `PATH`) is found, and makes generated TypeScript files executable (Unix only).
 
 ### `completions`
 
@@ -277,6 +356,8 @@ mcp-execution-cli completions <SHELL>
 ## Features
 
 - **Typed SDK**: One TypeScript file per MCP tool, plus a type-only catalog
+- **Script Runner**: `run` with bounded output, call journal, type check, dry run and `--restrict`
+- **Saved Scripts and Measurement**: `scripts`, `stats` and `drift`
 - **Type-Safe**: Full TypeScript interfaces from MCP schemas
 - **Multiple Transports**: stdio, HTTP, SSE, Docker
 - **Shell Completions**: bash, zsh, fish, PowerShell
@@ -284,6 +365,7 @@ mcp-execution-cli completions <SHELL>
 ## Security
 
 - **No Code Execution by the Generator**: `generate` writes files and never runs them; running a generated tool is your decision
+- **No Sandbox for `run`**: a script runs with your privileges; the journal, `--dry-run` and `--restrict` narrow and report but are not a security boundary
 - **Command Injection Prevention**: All user input validated
 - **Path Validation**: Rejects malicious paths
 - **Template Security**: Handlebars escapes all user input
