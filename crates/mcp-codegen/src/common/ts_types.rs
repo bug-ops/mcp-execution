@@ -6,7 +6,7 @@
 //! stored texts.
 //!
 //! The converter never panics, never errors and never fetches a remote reference: every bound it
-//! hits degrades the smallest enclosing node to `unknown` and records a [`SchemaDiagnostic`].
+//! hits degrades the smallest enclosing node to `unknown` and records a `SchemaDiagnostic`.
 //! Property keys that are not bare identifiers render as exact quoted literals, never renamed.
 
 use crate::common::typescript::{

@@ -168,7 +168,7 @@ const _: () = assert!(
 /// Maximum total bytes across every file in a single `generate`/`generate_with_categories`
 /// call's output (denial-of-service protection, CWE-400).
 ///
-/// Derived from the per-tool bound [`PER_TOOL_BYTES_MAX`] — up to `MAX_TOOL_COUNT` tools, each
+/// Derived from the per-tool bound `PER_TOOL_BYTES_MAX` — up to `MAX_TOOL_COUNT` tools, each
 /// within it — plus the files that do not scale with the tool count, rather than chosen
 /// independently, so a `ServerInfo` that already cleared introspection's own bounds can never
 /// be deterministically rejected here for simply being "as large as introspection already

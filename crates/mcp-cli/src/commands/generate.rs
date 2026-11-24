@@ -101,7 +101,7 @@ fn format_size(bytes: usize) -> String {
 /// * `name` - Custom server name for directory (default: `server_id`)
 /// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
 /// * `observed_shapes` - Optional JSON-lines file of result shapes recorded by a past run of
-///   the generated tools; only its last 4 MiB are read (see [`read_observed_tail`])
+///   the generated tools; only its last 4 MiB are read (see `read_observed_tail`)
 /// * `dry_run` - When true, preview files without writing to disk
 /// * `output_format` - Output format (json, text, pretty)
 ///
