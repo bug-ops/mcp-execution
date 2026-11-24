@@ -6,7 +6,8 @@
 //! | OS | Root |
 //! |----|------|
 //! | Linux | `dirs::state_dir()/mcp-execution` |
-//! | macOS, Windows | `dirs::data_local_dir()/mcp-execution` |
+//! | macOS | `dirs::data_local_dir()/mcp-execution` |
+//! | Windows | `%LOCALAPPDATA%/mcp-execution` (absolute), else `dirs::data_local_dir()/mcp-execution` |
 //!
 //! A missing base directory is an error, never a silent temp-dir fallback. On Unix the
 //! directories are `0700`; on Windows the profile ACL applies and no mode bits are set.
@@ -288,7 +289,15 @@ fn platform_state_base() -> Option<PathBuf> {
     dirs::state_dir()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn platform_state_base() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(dirs::data_local_dir)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn platform_state_base() -> Option<PathBuf> {
     dirs::data_local_dir()
 }
@@ -522,16 +531,30 @@ mod tests {
         assert!(temp.path().join("young").exists());
     }
 
+    /// Sets a directory's modification time; Windows needs backup semantics to open a directory.
+    fn set_dir_modified(path: &Path, when: SystemTime) {
+        #[cfg(windows)]
+        let dir = {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .unwrap()
+        };
+        #[cfg(not(windows))]
+        let dir = std::fs::File::open(path).unwrap();
+        dir.set_modified(when).unwrap();
+    }
+
     #[tokio::test]
     async fn prune_removes_directories_and_ignores_a_missing_dir() {
         let temp = tempfile::tempdir().unwrap();
         let run = temp.path().join("run");
         std::fs::create_dir(&run).unwrap();
         std::fs::write(run.join("script.ts"), "x").unwrap();
-        std::fs::File::open(&run)
-            .unwrap()
-            .set_modified(SystemTime::now() - Duration::from_secs(5000))
-            .unwrap();
+        set_dir_modified(&run, SystemTime::now() - Duration::from_secs(5000));
 
         assert_eq!(
             prune_dir(temp.path(), POLICY, SystemTime::now())

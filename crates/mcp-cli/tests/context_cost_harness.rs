@@ -120,6 +120,10 @@ fn render(rows: &[(usize, ContextBytes, ContextBytes)], crossing: Option<usize>)
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
+)]
 fn script_arm_overtakes_one_call_per_command_within_the_compared_counts() {
     if !require_node("script_arm_overtakes_one_call_per_command_within_the_compared_counts") {
         return;
@@ -164,6 +168,10 @@ fn script_arm_overtakes_one_call_per_command_within_the_compared_counts() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
+)]
 fn script_arm_size_is_deterministic() {
     if !require_node("script_arm_size_is_deterministic") {
         return;

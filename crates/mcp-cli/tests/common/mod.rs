@@ -235,6 +235,7 @@ impl Sandbox {
             .env("XDG_STATE_HOME", self.home.join("state"))
             .env("XDG_CONFIG_HOME", self.home.join("config"))
             .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("LOCALAPPDATA", self.home.join("AppData").join("Local"))
             .env(mcp_execution_core::helper_protocol::CLI_PATH_ENV, CLI_BIN)
             .env_remove(mcp_execution_core::helper_protocol::HELPER_ENV)
             .env_remove(mcp_execution_core::helper_protocol::HELPER_TOKEN_ENV)
