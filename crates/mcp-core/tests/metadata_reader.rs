@@ -57,11 +57,12 @@ fn valid_json() -> String {
 #[test]
 fn read_server_metadata_returns_a_valid_sidecar() {
     let dir = tempfile::tempdir().unwrap();
-    write_sidecar(dir.path(), &valid_json());
+    let expected = sidecar();
+    write_sidecar(dir.path(), &serde_json::to_string(&expected).unwrap());
 
     let meta = read_server_metadata(dir.path()).unwrap();
 
-    assert_eq!(meta, sidecar());
+    assert_eq!(meta, expected);
 }
 
 #[cfg(unix)]
@@ -212,11 +213,12 @@ fn metadata_read_error_messages_do_not_contain_the_path() {
 #[tokio::test]
 async fn read_server_metadata_async_matches_the_sync_reader() {
     let dir = tempfile::tempdir().unwrap();
-    write_sidecar(dir.path(), &valid_json());
+    let expected = sidecar();
+    write_sidecar(dir.path(), &serde_json::to_string(&expected).unwrap());
 
     let ok = read_server_metadata_async(dir.path().to_path_buf()).await;
     let missing = read_server_metadata_async(dir.path().join("absent")).await;
 
-    assert_eq!(ok.unwrap(), sidecar());
+    assert_eq!(ok.unwrap(), expected);
     assert!(matches!(missing, Err(MetadataReadError::NotFound)));
 }
