@@ -31,6 +31,12 @@ related:
 > already-tested code path cited in one of those documents, not to a new
 > design decision.
 
+> [!warning] Planned content
+> Section [[#3.2.8 Planned: Script-First Capabilities]] (FR-030 to FR-046) is
+> the one exception: it records adopted but unimplemented requirements and is
+> marked planned throughout. Every other `SHALL` statement is as described
+> above.
+
 ## 1. Introduction
 
 ### 1.1 Purpose
@@ -53,7 +59,9 @@ execute the generated TypeScript itself (that runs externally via Node.js/
 `tsx`/`deno`), does not provide its own LLM API integration, and does not
 sandbox the commands it is configured to spawn (see
 [[BRD-mcp-execution-2026-07-27#Out of Scope]]). Full business rationale is in
-[[BRD-mcp-execution-2026-07-27]].
+[[BRD-mcp-execution-2026-07-27]]. This describes the released system; a
+script runner that executes generated TypeScript is planned
+([[#3.2.8 Planned: Script-First Capabilities]], FR-036) and not implemented.
 
 ### 1.3 Definitions, Acronyms, and Abbreviations
 
@@ -75,6 +83,8 @@ sandbox the commands it is configured to spawn (see
 - [[README]] — cross-block architecture, data flow, and discrepancies vs. `CLAUDE.md`
 - [[constitution]] — reverse-engineered project principles
 - `specs/core/spec.md`, `specs/introspector/spec.md`, `specs/codegen/spec.md`, `specs/files/spec.md`, `specs/skill/spec.md`, `specs/server/spec.md`, `specs/cli/spec.md` — the per-crate informal specs this SRS formalizes
+- [[runtime/spec]] — planned script-runtime block (not implemented; see 3.2.8)
+- `specs/decisions/ADR-569-runtime-strategy-single-mcp-client.md`, `specs/decisions/ADR-581-code-mode-interoperability.md` — proposed decision records (not decided)
 
 ### 1.5 Document Overview
 
@@ -931,6 +941,174 @@ previously-resolved path.
      30-minute MCP session).
 - *Dependencies*: FR-017
 
+#### 3.2.8 Planned: Script-First Capabilities
+
+> [!warning] Planned, not implemented
+> Nothing in this subsection exists in the code. These statements record the
+> requirements of the direction adopted on 2026-11-24
+> ([[BRD-mcp-execution-2026-07-27#Direction (adopted 2026-11-24)]]) and are
+> not restatements of tested behaviour. Detail, constraints and open decisions
+> are in the "Planned Changes" section of each named block spec; the script
+> runtime is the new block [[runtime/spec]]. Two decision records are
+> proposed: `specs/decisions/ADR-569-runtime-strategy-single-mcp-client.md`
+> (#569) and `specs/decisions/ADR-581-code-mode-interoperability.md` (#581).
+> The first gates FR-037 to FR-041.
+>
+> Verification method for every requirement here: **Planned, not yet
+> implemented.**
+
+> [!info] Traceability
+> Traces to: [[BRD-mcp-execution-2026-07-27#Planned script-first capabilities]]
+
+**FR-030** (#482): The system shall, for a tool that declares an output
+schema, generate a result type that follows that schema and shall prefer a
+tool call's structured content over its text content. The system shall keep a
+generic result declaration for a tool without an output schema.
+
+- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-030
+
+**FR-031** (#565): The system shall represent in generated types the schema
+constructs that constrain a tool's arguments (allowed values, alternatives,
+nullability, local references) or shall fall back to an explicit unknown type.
+The system shall perform the conversion within named resource bounds.
+
+- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-031
+
+**FR-032** (#566): The system shall generate, for each server, a typed catalog
+that lists every tool with its signature, a one-line description and
+annotation markers, and shall offer three detail levels (names, catalog, full
+tool file). The system shall generate the catalog and the tool files from the
+same converted types so that they cannot disagree.
+
+- *Detail*: [[codegen/spec]], "Planned Changes"; [[files/spec]] where a
+  fixed file is added.
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-032
+
+**FR-033** (#567): The system shall generate tool files that do not repeat a
+fixed command-line block and shall provide that behaviour through a shared
+module, with the behaviour of a single call unchanged.
+
+- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-033
+
+**FR-034** (#568): The system shall capture the annotations a server reports
+for each tool at introspection, shall treat them as untrusted hints, and shall
+persist them in `_meta.json` version 3. The system shall define the version 3
+fields in one registry and shall reject a version 2 directory with a message
+that says to regenerate.
+
+- *Detail*: [[core/spec]] (registry), [[introspector/spec]] (capture),
+  [[codegen/spec]] (writing), "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-034
+
+**FR-035** (#570): The system shall make the single-call output of a generated
+tool compact on success and a one-line structured error on failure, without a
+stack trace unless debugging is requested. The system shall accept a single
+JSON object as the argument and shall report a malformed argument without
+repeating its text.
+
+- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-035
+
+**FR-036** (#571): The system shall provide a runner that executes a script
+file or standard input with a timeout and defined exit codes, shall limit what
+the script prints to a budget, and shall replace output beyond the budget with
+a head, a path and a byte count. The system shall let a script import
+generated servers through a stable specifier.
+
+- *Detail*: [[runtime/spec]], [[cli/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-036
+
+**FR-037** (#572, gated by #569): The system shall record, for each run, the
+server, tool, status, duration and result size of every call without recording
+argument or result values. When a run fails, the system shall report the calls
+that completed through a channel script output cannot forge, and shall report
+each as possibly state-changing unless the user's policy classes it as a read.
+
+- *Detail*: [[runtime/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-037
+
+**FR-038** (#573, gated by #569, blocked by #568): The system shall offer a
+dry run in which calls classified as reads execute and calls classified as
+writes are reported and not sent. The system shall classify from the
+annotations recorded at generation, shall treat an unannotated tool as a
+write, shall not let a wrong or hostile read-only hint cause a write to
+execute, and shall never return a fabricated result for a skipped write.
+
+- *Detail*: [[runtime/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-038
+
+**FR-039** (#574, gated by #569): The system shall provide a one-shot tool
+call that reaches a server over stdio, HTTP or SSE through the project's
+authoritative MCP client and prints budgeted output. The system shall not add
+a second validation or handshake path for it.
+
+- *Detail*: [[runtime/spec]], [[cli/spec]], [[introspector/spec]],
+  "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-039
+
+**FR-040** (#575, gated by #569): The system shall provide a per-script helper
+that reuses connections to servers within one run, and generated wrappers
+shall call tools through it. The system shall remove the generated bridge's
+own connection code, its mirrored validation and its fixed handshake version.
+
+- *Detail*: [[runtime/spec]], [[codegen/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-040
+
+**FR-041** (#576, gated by #569): The system shall offer to run a script under
+reduced privileges, in which file writes and process spawning are denied
+unless allowed, and shall document what the mode does not restrict.
+
+- *Detail*: [[runtime/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-041
+
+**FR-042** (#577): Where a TypeScript compiler is available, the system shall
+typecheck a script against the generated SDK before running it and report the
+diagnostics; whether a failed check blocks the run or only warns is an open
+decision of the runtime block. Where none is available, the system shall
+run the script and report that the check was skipped.
+
+- *Detail*: [[runtime/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-042
+
+**FR-043** (#578, #582): The system shall generate a skill that teaches one
+workflow on both generation paths: catalog first, one script, print only the
+answer, direct call for a single lookup. The system shall give the skill a name
+equal to its directory that follows the Agent Skills naming rule. The system
+shall ensure that text originating from an MCP server stays inert data in a
+rendered skill, on both generation paths.
+
+- *Detail*: [[skill/spec]], [[server/spec]], [[cli/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-043
+
+**FR-044** (#579): The system shall let a working script be saved as a recipe
+with a validated header inside the skill's directory, and shall list recipes
+by signature. The system shall never execute a recipe automatically, shall
+bound recipe count and size, and shall keep recipes across regeneration of the
+skill and of the server directory.
+
+- *Detail*: [[skill/spec]], [[cli/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-044
+
+**FR-045** (#580): The system shall compare the live server's tool list with
+the provenance recorded at generation and shall report added and removed tools
+by name and report that the list differs. The system shall word the result as
+a change of the server, not as out-of-date files.
+
+- *Detail*: [[cli/spec]], [[core/spec]], [[introspector/spec]],
+  "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-045
+
+**FR-046** (#562): The system shall provide a command that reports the bytes
+and estimated tokens of generated output with a stated method, and a
+deterministic scenario harness that compares call patterns on in-repository
+mock servers. The system shall not label any output as savings.
+
+- *Detail*: [[cli/spec]], [[core/spec]], "Planned Changes".
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-046
+
 ### 3.3 Performance Requirements
 
 > [!note]
@@ -1021,6 +1199,7 @@ written) and the in-memory-only session table in `mcp-execution-server`
 | FR-027 | Test (regression, secret-substring assertion) | Secret never appears in `Debug` output | Passing |
 | FR-028 | Test (regression, forged-boundary attempt) | Sanitization + boundary both hold under attack input | Passing |
 | FR-029 | Test (unit, symlink-at-boundary scenarios) | Fresh-resolution-per-write and boundary-symlink rejection both confirmed | Passing |
+| FR-030 to FR-046 | Planned, not yet implemented | Criteria are stated per requirement in [[#3.2.8 Planned: Script-First Capabilities]] and in each block spec's "Planned Changes" | Planned |
 
 > [!note]
 > "Passing" reflects the existing, already-implemented test suite this SRS
@@ -1078,6 +1257,29 @@ written) and the in-memory-only session table in `mcp-execution-server`
 | BRD-FR-028 | FR-028 | NFR-SEC-031 |
 | BRD-FR-029 | FR-029 | NFR-SEC-040 |
 
+Planned rows (not implemented). NFR IDs marked planned are defined in
+[[NFR-mcp-execution-2026-07-27#11. Planned Non-Functional Requirements]].
+
+| BRD Requirement | SRS Requirement | Block spec ("Planned Changes") | Issue |
+|----------------|-----------------|--------------------------------|-------|
+| BRD-FR-030 | FR-030 | [[codegen/spec]] | #482 |
+| BRD-FR-031 | FR-031 | [[codegen/spec]] | #565 |
+| BRD-FR-032 | FR-032 | [[codegen/spec]], [[files/spec]] | #566 |
+| BRD-FR-033 | FR-033 | [[codegen/spec]] | #567 |
+| BRD-FR-034 | FR-034 | [[introspector/spec]], [[core/spec]], [[codegen/spec]] | #568 |
+| BRD-FR-035 | FR-035 | [[codegen/spec]] | #570 |
+| BRD-FR-036 | FR-036 | [[runtime/spec]], [[cli/spec]] | #571 |
+| BRD-FR-037 | FR-037 | [[runtime/spec]] | #572 |
+| BRD-FR-038 | FR-038 | [[runtime/spec]] | #573 |
+| BRD-FR-039 | FR-039 | [[runtime/spec]], [[cli/spec]], [[introspector/spec]] | #574 |
+| BRD-FR-040 | FR-040 | [[runtime/spec]], [[codegen/spec]] | #575 |
+| BRD-FR-041 | FR-041 | [[runtime/spec]] | #576 |
+| BRD-FR-042 | FR-042 | [[runtime/spec]] | #577 |
+| BRD-FR-043 | FR-043 | [[skill/spec]], [[server/spec]], [[cli/spec]] | #578, #582 |
+| BRD-FR-044 | FR-044 | [[skill/spec]], [[cli/spec]] | #579 |
+| BRD-FR-045 | FR-045 | [[cli/spec]], [[core/spec]], [[introspector/spec]] | #580 |
+| BRD-FR-046 | FR-046 | [[cli/spec]], [[core/spec]] | #562 |
+
 ### 5.2 Use Case Diagrams / Flows
 
 See [[README#End-to-End Data Flow]] for the full, verified end-to-end
@@ -1087,4 +1289,5 @@ sequence diagram covering both the CLI and MCP-server entry points.
 
 - [[BRD-mcp-execution-2026-07-27]] — business requirements (source)
 - [[NFR-mcp-execution-2026-07-27]] — non-functional requirements
+- [[runtime/spec]] — planned script-runtime block (not implemented)
 - [[README]] — project knowledge base / cross-block index

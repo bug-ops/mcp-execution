@@ -28,6 +28,10 @@ related:
 > enforced/not measured** where the repository asserts an intention (a doc
 > comment target) without a corresponding CI gate. No numeric target in this
 > document was invented for the occasion.
+>
+> The one exception is [[#11. Planned Non-Functional Requirements]], which
+> records requirements of the direction adopted on 2026-11-24. They are
+> planned, unenforced and unmeasured, and some values are open.
 
 ## 1. Introduction
 
@@ -91,7 +95,7 @@ service-level Availability target (no hosted component exists).
 |----|------------|--------|-------------|-----------|
 | NFR-PERF-001 | Progressive-loading code generation latency | <100ms for 10 tools; <20ms for 50 tools | `criterion` benchmark (`crates/mcp-codegen/benches/code_generation.rs`); reported achieved: 0.19ms (10 tools, 526x under target), 0.97ms (50 tools, 20.6x under target) | Local benchmark run, single process, per `README.md`'s Performance table |
 | NFR-PERF-002 | Virtual filesystem export latency | <10ms (README); <50ms for a 30-file export (crate doc comment, `crates/mcp-files/src/filesystem.rs`) | `criterion` benchmark (`crates/mcp-files/benches/filesystem_export.rs`); reported achieved: 1.2ms (8.3x under the README target) | Local benchmark run |
-| NFR-PERF-003 | Per-tool token footprint of a loaded generated file | ~500–1,500 tokens/tool | Not an automated measurement — a documented estimate in `README.md`/`specs/README.md`, not re-derived by any test or benchmark in this repository | N/A |
+| NFR-PERF-003 | Per-tool token footprint of a loaded generated file | ~500–1,500 tokens/tool | Not an automated measurement — a documented estimate in `README.md`/`specs/README.md`, not re-derived by any test or benchmark in this repository. **Revised 2026-11-24:** this estimate is not a requirement; measurement is planned under #562 (see NFR-PERF-030 to NFR-PERF-032) | N/A |
 
 > [!warning] Assumptions
 > The headline "98% token savings" figure (`README.md`) and the "83%
@@ -100,7 +104,8 @@ service-level Availability target (no hosted component exists).
 > automated, reproducible benchmark measuring actual end-to-end token
 > consumption in a real Claude Code session. Both NFR-PERF-003 and the
 > savings percentage itself should be treated as documented estimates, not
-> verified NFRs, until such a benchmark exists — see
+> verified NFRs. **Decision (2026-11-24):** the 98% and 83% figures are
+> retired; a reproducible measurement is planned under #562 — see
 > [[BRD-mcp-execution-2026-07-27#Open Questions]].
 
 ### 2.2 Resource Utilization
@@ -331,6 +336,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | NFR-MNT-010–014 | `cargo nextest run`, `cargo test --doc` | CI | Every push/PR |
 | NFR-MNT-011 (coverage) | `cargo llvm-cov nextest` → Codecov upload | CI (`coverage` job, Linux only) | Every push/PR; **not gating** (`fail_ci_if_error: false`, no threshold check) |
 | NFR-POR-012 (MSRV) | `cargo check`/`build` pinned to Rust 1.91 | CI (`msrv` job) | Every push/PR |
+| NFR-PERF-030 to NFR-PERF-032, NFR-SEC-050 to NFR-SEC-055, NFR-MNT-030, NFR-COM-020, NFR-POR-020 | Planned, not yet implemented | Not applicable until the owning capability lands | Not applicable |
 
 ## 10. Open Questions
 
@@ -341,9 +347,11 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 >   response-size gap (see [[SRS-mcp-execution-2026-07-27#FR-002]]), and
 >   should a quantitative NFR (e.g. a maximum buffered-response size) be set
 >   for it once `rmcp` exposes the necessary knob?
-> - [ ] Should the 98% token-savings claim be backed by an automated,
+> - [x] Should the 98% token-savings claim be backed by an automated,
 >   reproducible benchmark (making it a verifiable NFR rather than a
->   documented estimate)?
+>   documented estimate)? **Answered 2026-11-24:** the 98% and 83% figures are
+>   retired; measurement is planned under #562 and no published figure may be
+>   unreproducible (#560).
 > - [ ] Is any future hosted/multi-tenant deployment mode planned (which
 >   would reintroduce Availability/Scalability as real, specifiable NFR
 >   categories rather than "not applicable")?
@@ -352,6 +360,54 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 >   comparison/staleness-detection mechanism consumes it yet. Should a
 >   drift-detection NFR (and CLI/server surface) be specified once that
 >   comparison ships?
+> - [ ] What value should the output budget of a script run take
+>   (NFR-PERF-031), and what runner start-up overhead is acceptable
+>   (NFR-PERF-032)?
+> - [ ] What is the minimum supported Node.js version (NFR-POR-020, #564)?
+> - [ ] Do successful tool results printed to the caller fall under the
+>   untrusted-text boundary rule, or are they an accepted exception
+>   (NFR-SEC-054)?
+
+## 11. Planned Non-Functional Requirements
+
+> [!warning] Planned, not implemented
+> Nothing in this section is enforced or measured today. These requirements
+> belong to the direction adopted on 2026-11-24
+> ([[BRD-mcp-execution-2026-07-27#Direction (adopted 2026-11-24)]]) and use
+> the same ID scheme as above. Values marked provisional or open are
+> undecided; no figure here is a measurement.
+
+### 11.1 Performance Efficiency (planned)
+
+| ID | Requirement | Target | Measurement |
+|----|------------|--------|-------------|
+| NFR-PERF-030 | Context cost of discovery: size of one entry of the typed catalog (FR-032) | Provisional: median entry at most about 250 bytes without parameter documentation, and the whole catalog of the 16-tool baseline server at most about 10% of the bytes of its tool files. The target is a plan figure, not an achieved one | The measurement command planned under #562, on reference fixtures |
+| NFR-PERF-031 | Output budget of a script run (FR-036): the amount a run may print before output is spilled to a file | Open: value to be decided | Test at the exact boundary once the value exists |
+| NFR-PERF-032 | Runner overhead: start-up cost of running a script through the runner compared with running it directly | Measured and stated; the acceptable value is open | The measurement harness planned under #562 |
+
+### 11.2 Security and resource bounds (planned)
+
+| ID | Requirement | Details |
+|----|------------|---------|
+| NFR-SEC-050 | Spill files, call journals and saved scripts are bounded by named constants, each derived from an existing bound where one sits below it | Count, size, retention and listing size are bounded (CWE-400). The bound on a saved script does not depend on a constant private to a higher crate; where a shared bound lives is open (FR-036, FR-037, FR-044) |
+| NFR-SEC-051 | Generated-file and generated-byte bounds stay consistent when output grows | A change that adds or removes a fixed generated file follows the fixed-file rule in [[codegen/spec]] (planned changes). The generated-bytes bound is re-derived so that a server that passed introspection is never rejected at generation, counting one input schema and one output schema per tool. A named byte bound for the catalog derives from the generated-bytes budget (value open) (FR-032, FR-030) |
+| NFR-SEC-052 | The call journal never trusts a server's read-only hint | Every completed call is reported as possibly state-changing unless the user's policy classes it as a read; the failure summary is delivered through the runner's notice channel, which script output cannot forge; deleting expired journal and spill files is confined exactly like creating them (FR-037) |
+| NFR-SEC-053 | A dry run cannot be defeated by a wrong or hostile hint | Classification uses the annotations recorded at generation; a wrong or hostile read-only hint must not cause a write to execute (mechanism open); a skipped write never returns a fabricated result (FR-038) |
+| NFR-SEC-054 | Tool results printed to the caller and the untrusted-text rule | Open maintainer decision: whether results printed by single-call mode, the runner and the one-shot call fall under the boundary rule in [[constitution#V. Security]] or are an accepted exception. No sanitisation and no exception is claimed until it is decided. Error text from a server is sanitised, bounded and marked as coming from the server. An argument is a single JSON object and a malformed one is reported without repeating its text (FR-035, FR-036, FR-039) |
+| NFR-SEC-055 | Text from an MCP server stays inert data in a rendered skill: the host that loads the skill treats none of it as anything but text | A requirement on every generation path of the skill (FR-043), under the injection-defence rule of the constitution's security section |
+
+### 11.3 Maintainability and documentation (planned)
+
+| ID | Requirement | Details |
+|----|------------|---------|
+| NFR-MNT-030 | Documentation claims policy | Every number in user-facing documentation comes from a command a reader can rerun or is labelled as an illustration with its source; documentation says when a script is not worth it; examples run as written (#560, #562, #563) |
+
+### 11.4 Compatibility and portability (planned)
+
+| ID | Requirement | Details |
+|----|------------|---------|
+| NFR-COM-020 | The `_meta.json` version 3 bump is a breaking change | Existing version 2 directories are rejected with a message that says to regenerate; the bump happens once, with one registry of fields; the change is recorded in `CHANGELOG.md` and no compatibility shim is added before 1.0 (FR-034, #568) |
+| NFR-POR-020 | Minimum Node.js version for running generated files and scripts | Open: the value is to be decided (#564). `setup` accepts Node.js 18 today (NFR-COM-011), and whether the generated files run there is unverified |
 
 ## See Also
 

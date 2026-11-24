@@ -15,6 +15,7 @@ related:
   - "[[../codegen/spec]]"
   - "[[../files/spec]]"
   - "[[../skill/spec]]"
+  - "[[../runtime/spec]]"
 ---
 
 # Block: MCP Server Exposure (`mcp-execution-server`)
@@ -741,9 +742,71 @@ environment's fault — I/O failure, task join error, serialization failure).
   confinement check in this crate rather than being the one path that
   skips it.
 
-## 13. See Also
+## 13. Planned Changes (script-first direction, adopted 2026-11-24)
+
+> [!warning] Not implemented
+> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
+> When a change lands, its content moves into the as-built sections above and the subsection is
+> removed in the same pull request.
+
+### Planned: script-first skill through `generate_skill` and `save_skill` (#578)
+
+The workflow, naming rule, staging rule and body-size rule are specified once, in
+[[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]]. This subsection holds only
+what belongs to the tool handlers.
+
+**Why.** `generate_skill` returns `context.generation_prompt`, the string `build_generation_prompt` produces,
+and Claude composes the file from it (workflow documented at `crates/mcp-server/src/service.rs:902-907`, handler at `:917`). `save_skill` then checks only the
+content size (`service.rs:1097`), a leading `---` (`:1109`) and that the frontmatter parses
+(`extract_skill_metadata`, `:1117`), whose `name` bound is 200 characters; it resolves the confined path
+(`:1122`) and writes with `write_confined_file` (`:1181`). Nothing compares the frontmatter `name` with the
+directory the file lands in or bounds `description`, and the same `validate_skill_name` bound is the only check
+on the `skill_name` argument of `generate_skill` (`:998`). On this path the content is model-composed, so the
+rules of the skill block have to hold for what `save_skill` writes.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-043.10 | THE SYSTEM SHALL return from `generate_skill` a prompt that teaches the same workflow, and names the same commands, as the deterministic render of the skill block, with a default name equal to the server id | must |
+| FR-043.11 | WHEN `generate_skill` receives `skill_name` THE SYSTEM SHALL apply the name rule of the skill block before building the prompt, and the declared schema bound SHALL agree with the runtime rule | must |
+| FR-043.12 | WHEN `save_skill` receives content THE SYSTEM SHALL validate the frontmatter `name` against the same rule and against the directory the file is written to, and the `description` against the Agent Skills description limit, before anything is written, and report a violation as `invalid_params` without echoing the content | must |
+| FR-043.13 | WHEN `save_skill` receives content THE SYSTEM SHALL hold it to the security requirement FR-043.9 of the skill block (text that originates from an MCP server, including text Claude copied into the file, stays inert data in the saved skill), and reject content that does not meet it without echoing it | must |
+| FR-043.14 | WHEN `save_skill` writes or overwrites `SKILL.md` THE SYSTEM SHALL leave any saved scripts under the skill directory byte-identical (FR-044.2), and a regression test SHALL pin this | must |
+
+**Constraints.**
+
+- [[../constitution#V. Security]]: errors derived from submitted content follow the no-source-echo rule; the
+  write stays on `write_confined_file`, and the S1/S2 cancellation checkpoints stay as they are, the write is
+  never raced (§3, `save_skill`).
+- The 100 KiB content bound and the 8 KiB frontmatter bound stay; the new checks run after the cheap checks and
+  before the write.
+- The schema drift guards in `types.rs` are updated together with the runtime rule
+  ([[../skill/spec#10. Cross-Crate Contracts]]).
+- Wire-format changes for the changelog: the default `skill_name` in the `generate_skill` response, the shape of
+  `generation_prompt`, and the extra rejections of `save_skill`.
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: how `save_skill` verifies FR-043.13, and whether the optional catalog inclusion of FR-043.8 may appear in saved content.]
+- [NEEDS CLARIFICATION: how the "directory the file is written to" is determined when `output_path` places the file in a subdirectory of `{server_id}/`.]
+- [NEEDS CLARIFICATION: what the check of FR-043.13 inspects: the rendered text only, or the frontmatter and body separately.]
+
+Ask first: any exception to FR-043.13; any change to the declared tool schemas beyond bounds
+that mirror the runtime rule.
+
+**Depends on / blocks.** Same dependencies as the skill block (#566, #571). The handlers change together with the
+skill block in one pull request, as the project's specification rule requires. Tracked under epic #558.
+
+**Deferred.** Search and execute tools for clients that have no shell (a gateway over the generated servers) are
+not part of this package: they are deferred to #589 under epic #559, depend on the runtime block
+([[../runtime/spec]]), and nothing in this section reserves a tool name or a schema for them.
+
+## 14. See Also
 
 - [[../introspector/spec]] — wrapped by `introspect_server`
 - [[../codegen/spec]] / [[../files/spec]] — wrapped by `save_categorized_tools`
 - [[../skill/spec]] — wrapped by `generate_skill`/`save_skill`
 - [[../cli/spec]] — the CLI-driven alternative path to the same underlying crates
+- [[#13. Planned Changes (script-first direction, adopted 2026-11-24)]] — script-first skill through the tool handlers (#578), not implemented
+- [[../runtime/spec]] — the script runtime, which a future gateway (#589) would depend on (planned)

@@ -14,7 +14,10 @@ related:
   - "[[../core/spec]]"
   - "[[../server/spec]]"
   - "[[../cli/spec]]"
+  - "[[../codegen/spec]]"
+  - "[[../runtime/spec]]"
   - "[[../decisions/ADR-405-adopt-serde-saphyr]]"
+  - "[[../decisions/ADR-581-code-mode-interoperability]]"
 ---
 
 # Block: Skill Generation (`mcp-execution-skill`)
@@ -607,8 +610,146 @@ crate's error messages drift from `mcp-core`'s/`mcp-server`'s for identical inpu
   description text, verified by a dedicated regression test distinct from
   the tool-description case.
 
-## 12. See Also
+## 12. Planned Changes (script-first direction, adopted 2026-11-24)
+
+> [!warning] Not implemented
+> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
+> When a change lands, its content moves into the as-built sections above and the subsection is
+> removed in the same pull request.
+
+Two packages touch this block. Both are tracked under epic #558. The command-line side of saved scripts
+is in [[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]]; the tool-handler side of
+both packages is in [[../server/spec#13. Planned Changes (script-first direction, adopted 2026-11-24)]].
+
+### Planned: script-first skill (#578, closes #582)
+
+**Why.** Both generation paths teach the workflow the project is moving away from, one tool file run per shell
+command with every result landing in the context. The deterministic render teaches listing the directory,
+reading a tool file, running it with a JSON argument and searching by keyword, then lists every tool by
+category (`crates/mcp-skill/src/templates/skill-md.hbs:16-49`), so its size grows with the tool count up to
+`MAX_TOOL_FILES` (`crates/mcp-skill/src/parser.rs:29`). The prompt-then-save path asks the model for six
+sections including three to five "Common Tasks" and three to five "Troubleshooting" items
+(`GENERATION_INSTRUCTIONS`, `crates/mcp-skill/src/context.rs:506-562`) and shows each example as a single
+`node` command (`context.rs:330`). The production prompt is `build_generation_prompt` (`context.rs:392`);
+`render_generation_prompt` and `skill-generation.hbs` are exported (`lib.rs:39`) but no production caller uses
+them, so editing that template alone changes nothing a user sees. The default `name` is
+`{server_id}-progressive` (`context.rs:76`) while the directory is `{server_id}` (`crates/mcp-cli/src/commands/skill.rs:376-389`),
+and `validate_skill_name` accepts any non-blank text up to 200 characters (`types.rs:533-545`), so the name
+neither equals its directory nor follows the Agent Skills naming rule (defect #582). The default description is a
+tool count or a category list (`context.rs:362-380`), which gives a host nothing to match a task against.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-043.1 | THE SYSTEM SHALL teach one workflow (find tools in the catalog first, write one script that runs through the runner, print only the answer, make a direct call when one lookup is enough) in the deterministic render and in the generation prompt, and a test SHALL assert that both name the same commands | must |
+| FR-043.2 | WHEN a rendered skill names a command, file or flag THE SYSTEM SHALL have verified at render time that the installed feature set provides it; otherwise THE SYSTEM SHALL render the per-file text the skill teaches today | must |
+| FR-043.3 | THE SYSTEM SHALL keep the size of the rendered body independent of the number of tools, by listing categories and a bounded number of example tools and pointing at the catalog for the rest | must |
+| FR-043.4 | THE SYSTEM SHALL state when not to script (a single lookup, one or two sequential calls, a small catalog), tell the agent to print only what answers the question, and, once the runner exists, state that scripts run with the user's privileges and without a sandbox | must |
+| FR-043.5 | THE SYSTEM SHALL default the skill name to the server id, without the `-progressive` suffix | must |
+| FR-043.6 | WHEN a custom name is supplied (`--skill-name`, `skill_name`) THE SYSTEM SHALL reject, before anything is written, a name that does not satisfy the Agent Skills naming rule or that differs from the name of the directory the file is written to; the name SHALL be carried by a validated type, not a free-form string | must |
+| FR-043.7 | THE SYSTEM SHALL generate a description that says what the skill covers and when to use it, within the Agent Skills description limit, from sanitised fields only | should |
+| FR-043.8 | WHERE the host supports it THE SYSTEM MAY include the catalog when the skill loads, bounded by the named catalog byte bound owned by [[../codegen/spec]], wrapped in the untrusted-data boundary with escaping, with a static fallback; the body SHALL be complete and correct when nothing is included | may |
+| FR-043.9 | THE SYSTEM SHALL ensure that text originating from an MCP server (names, descriptions, categories, keywords, hints, catalog content) stays inert data in a rendered skill, so that the host loading the skill treats none of it as anything but text, in the deterministic render and in the prompt-then-save path, and SHALL pin each path with regression tests that use hostile fixtures | must |
+
+**Constraints.**
+
+- [[../constitution#V. Security]]: server-originated text follows the existing sanitisation plus
+  `<untrusted-data>` boundary rule on both paths; no new text source bypasses it (§4, §5, §6).
+- Sizes and bounds derive from the layer below and are named constants; the body budget and the
+  example-tool count are derived from the catalog bound and measured through the context-cost command
+  ([[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]]), not chosen independently.
+- Strong types: a validated skill-name type replaces the free-form `String` name across `mcp-skill`,
+  `mcp-cli` and `mcp-server`; a discovery mode and an execution mode are closed enums detected at render time.
+- The deterministic path stays byte-identical for identical inputs.
+- Before v1.0.0 there is no compatibility shim: the default name, the name validation and the body shape are
+  breaking changes and go into the changelog.
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: custom name that differs from the server id: reject it, or move the directory to match. Moving the directory would orphan saved scripts (see the saved-scripts subsection).]
+- [NEEDS CLARIFICATION: a server id that is a valid slug (`[a-z0-9-]`, at most 64 bytes, §2) but would break the Agent Skills rule if that rule also forbids leading, trailing or consecutive hyphens; confirm the exact rule from the specification text before implementing.]
+- [NEEDS CLARIFICATION: a custom `--output` that places the file outside `{skills}/{server_id}/`: require the parent directory name to equal the skill name?]
+- [NEEDS CLARIFICATION: wire `render_generation_prompt` and `skill-generation.hbs`, or remove them. Both are exported public API.]
+- [NEEDS CLARIFICATION: one shared workflow text fragment for the template and the prompt, or two texts with an equality test (FR-043.1).]
+- [NEEDS CLARIFICATION: body budget in bytes and the number of example tools; whether the optional catalog inclusion reads a file or invokes the binary.]
+- [NEEDS CLARIFICATION: whether the skill mentions the host's own code mode in one line or leaves that to the documentation (#560); see [[../decisions/ADR-581-code-mode-interoperability]].]
+
+Ask first: removing the exported prompt renderer; raising any body or catalog bound above its derived value;
+anything that changes where existing skills are written; whether the optional load-time inclusion ships at all.
+
+**Depends on / blocks.** Depends on the typed catalog (#566) and the script runner (#571): until they exist the
+rendered text may teach only per-file discovery and a direct run of one tool file with a JSON object argument,
+and must name no catalog file, runner command or import form that is absent (FR-043.2). Closes #582. Blocks the
+saved-scripts mention in the skill text (#579). Context-cost numbers come from #562.
+
+### Planned: saved scripts (#579)
+
+**Why.** A script that took design effort is lost when the session ends. Where a saved script may live follows
+from how the two trees it could sit in are written today.
+
+| Tree | How it is written today | Evidence | Consequence |
+|------|-------------------------|----------|-------------|
+| Generated server `~/.claude/servers/{id}/` | Whole-directory replacement: output is staged in a sibling directory, the existing directory is moved aside, the staged one is renamed into place and the old one removed | `crates/mcp-files/src/filesystem.rs:816-840` (`swap_into_place`); caller `crates/mcp-cli/src/commands/generate.rs:441` | Anything saved inside it is destroyed by the next `generate`; a file not in `_meta.json` is also reported as drift by the scan (§3 item 3) |
+| Skill `~/.claude/skills/{id}/` | Single-file write: the CLI writes `SKILL.md` through a temporary file and `rename` (`crates/mcp-cli/src/commands/skill.rs:336-352`); `save_skill` writes one file through `write_confined_file` (`crates/mcp-server/src/service.rs:1181`); the segment directory is created, never replaced (`skill.rs:376-389`) | Neither path removes or replaces the directory | Sibling files survive today by omission, not by contract |
+
+The skill directory is therefore the home for saved scripts, and survival must become a stated, tested guarantee.
+A saved script is model-written code that runs again later with the user's privileges and may embed text that
+came from an MCP server.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-044.1 | WHEN a script is saved THE SYSTEM SHALL write it only under a scripts directory inside the skill directory, never under the generated server directory | must |
+| FR-044.2 | WHEN the server directory is regenerated, or the skill is regenerated by the CLI or by `save_skill`, THE SYSTEM SHALL leave every saved script byte-identical, and one regression test per path SHALL pin this | must |
+| FR-044.3 | IF a later change publishes the skill directory as a whole THEN THE SYSTEM SHALL preserve the scripts directory across that publish | must |
+| FR-044.4 | WHEN a script is saved THE SYSTEM SHALL require a header that validates against the recipe format and reject the save, writing nothing, otherwise | must |
+| FR-044.5 | THE SYSTEM SHALL store the script text exactly as it was run, without rewriting it | must |
+| FR-044.6 | THE SYSTEM SHALL NOT execute a saved script as part of saving, listing, checking, skill generation or skill loading | must |
+| FR-044.7 | WHEN scripts are listed THE SYSTEM SHALL print each one's signature (name, one-line description, declared inputs, referenced tools) and no script body | must |
+| FR-044.8 | WHEN a header is parsed THE SYSTEM SHALL cap the exact slice handed to the parser before parsing, the project-wide rule for YAML input (§7) | must |
+| FR-044.9 | THE SYSTEM SHALL derive each file name from a validated recipe-name type and confine every read and write to the scripts directory with the symlink-aware walk the project already uses (§8) | must |
+| FR-044.10 | WHEN a script of the same name exists THE SYSTEM SHALL refuse the save unless overwrite is requested explicitly | must |
+| FR-044.11 | THE SYSTEM SHALL bound the number of saved scripts per skill, the size of one file, the header size and the size of one listing, each a named constant derived from the layer below | must |
+| FR-044.12 | WHEN a script is written THE SYSTEM SHALL write atomically (temporary file in the same directory, then rename) through the confined no-follow write primitive | must |
+| FR-044.13 | WHEN header text appears in a listing or report THE SYSTEM SHALL sanitise it as untrusted text and bound its length | must |
+
+**Constraints.**
+
+- [[../constitution#V. Security]]: path confinement through `resolve_confined_path` and `write_confined_file`
+  (§8; [[../core/spec#`confinement` module (`src/confinement.rs`)]]); a symlinked scripts directory, script
+  file or skill directory is rejected, not followed; headers are untrusted; no script body or parser source
+  excerpt is echoed in an error or through `Debug`, since a script may contain pasted credentials.
+- Strong types: a validated recipe name, a validated header and a tool reference holding a server id and a tool
+  name; no raw strings for these concepts. `thiserror` in this crate.
+- The size bound must not depend on `MAX_SKILL_CONTENT_SIZE`, which is `pub(crate)` in a higher crate
+  (`crates/mcp-server/src/service.rs:51`); where the shared bound lives is open.
+- Saved scripts that reference a tool a regenerated server no longer has are reported, never modified or deleted.
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: header format, where it lives (leading comment block, sidecar file, other) and the full field list; an ADR on recipe format and location precedes implementation.]
+- [NEEDS CLARIFICATION: numeric bounds (count, file size, header size, listing size) and the derivation of each; whether the shared bound lives in `mcp-core`.]
+- [NEEDS CLARIFICATION: first save for a skill whose directory does not exist: refuse, or create a directory with no `SKILL.md`.]
+- [NEEDS CLARIFICATION: files in the scripts directory that are not saved scripts: ignored by listing, or reported by the check.]
+- [NEEDS CLARIFICATION: a script that references tools of two servers: which skill directory owns it; cross-server runs do not exist before the Rust tool-call path (#574, #575).]
+- [NEEDS CLARIFICATION: credential-looking literals in a script: warn, refuse, or document only.]
+
+Ask first: the header format and location (decision record); a parser dependency for the header (check current
+versions, follow the YAML tooling rules); the numeric bounds; scripts that reference more than one server.
+
+**Depends on / blocks.** Depends on the script runner (#571) for the stable import form and the save hook. Interacts
+with the name rule of #578: moving a skill directory to match a differing name would orphan saved scripts.
+Command-line side: [[../cli/spec#16. Planned Changes (script-first direction, adopted 2026-11-24)]]; tool-handler
+side: [[../server/spec#13. Planned Changes (script-first direction, adopted 2026-11-24)]]. The drift check (#580)
+reports saved scripts that reference removed tools. Tracked under epic #558.
+
+## 13. See Also
 
 - [[../core/spec]] — shared path-confinement and untrusted-text primitives
 - [[../server/spec]] — MCP-tool-level `generate_skill`/`save_skill` wrappers
 - [[../cli/spec#skill]] — CLI-level direct SKILL.md rendering
+- [[#12. Planned Changes (script-first direction, adopted 2026-11-24)]] — script-first skill (#578) and saved scripts (#579), not implemented
+- [[../runtime/spec]] — the script runner the skill teaches (planned)
+- [[../decisions/ADR-581-code-mode-interoperability]] — relationship to the host's code mode (proposed)
