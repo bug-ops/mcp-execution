@@ -65,6 +65,12 @@ impl Client {
         stdin.flush().unwrap();
     }
 
+    fn send_raw(&mut self, text: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        stdin.write_all(text.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+    }
+
     fn next(&self, within: Duration) -> Value {
         self.lines.recv_timeout(within).expect("a protocol line")
     }
@@ -256,6 +262,33 @@ fn an_unknown_server_is_a_call_failure_not_a_crash() {
     }
     assert_eq!(kinds[&9]["error"]["kind"], "call_failed");
     assert_eq!(kinds[&10]["value"], json!({"still": "alive"}));
+}
+
+#[test]
+fn a_call_finishing_while_a_request_arrives_in_pieces_does_not_corrupt_it() {
+    let sb = Sandbox::new();
+    let mut client = Client::start(&sb);
+    client.hello();
+
+    client.call(9, "no-such-server", "echo", &json!({}));
+    let second = json!({
+        "id": 10, "server": "fixture", "tool": "echo", "arguments": {"still": "alive"},
+        "result": "content"
+    })
+    .to_string();
+    let (head, tail) = second.split_at(second.len() / 2);
+    client.send_raw(head);
+    std::thread::sleep(Duration::from_millis(500));
+    client.send_raw(tail);
+    client.send_raw("\n");
+
+    let mut replies = std::collections::BTreeMap::new();
+    for _ in 0..2 {
+        let line = client.next(Duration::from_secs(20));
+        replies.insert(line["id"].as_u64().unwrap(), line);
+    }
+    assert_eq!(replies[&9]["error"]["kind"], "call_failed");
+    assert_eq!(replies[&10]["value"], json!({"still": "alive"}));
 }
 
 #[cfg(unix)]

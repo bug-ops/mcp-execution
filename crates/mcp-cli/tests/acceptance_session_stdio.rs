@@ -22,7 +22,7 @@ use mcp_execution_core::{Error, ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{
     CallTimeout, Introspector, ResultSource, ServerText, Session, ToolCall, ToolCallOutcome,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 async fn connect(marker: &str) -> Session {
     let config = ServerConfig::builder()
@@ -128,7 +128,7 @@ async fn close_kills_the_server_process() {
         call(
             &session,
             "echo",
-            Value::Object(Map::new()),
+            Value::Object(serde_json::Map::new()),
             Duration::from_secs(10)
         )
         .await

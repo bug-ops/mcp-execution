@@ -640,10 +640,12 @@ where
     let mut calls = JoinSet::new();
 
     loop {
+        // Reaped here, not as a select branch: `read_line` keeps a partly read line in a local
+        // buffer, so cancelling it would drop that prefix.
+        while calls.try_join_next().is_some() {}
         let line = tokio::select! {
             biased;
             () = &mut stop => break,
-            Some(_) = calls.join_next(), if !calls.is_empty() => continue,
             line = read_line(&mut reader, MAX_HELPER_LINE_BYTES) => line,
         };
         let bytes = match line {
