@@ -16,6 +16,8 @@ related:
   - "[[../codegen/spec]]"
   - "[[../files/spec]]"
   - "[[../skill/spec]]"
+  - "[[../runtime/spec]]"
+  - "[[../decisions/ADR-569-runtime-strategy-single-mcp-client]]"
 ---
 
 # Block: Command-Line Interface (`mcp-execution-cli`)
@@ -713,7 +715,227 @@ itself.
   unrecognized keys, so this project's CLI can coexist with a config file
   shared by other MCP-aware tools.
 
-## 16. See Also
+## 16. Planned Changes (script-first direction, adopted 2026-11-24)
+
+> [!warning] Not implemented
+> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
+> When a change lands, its content moves into the as-built sections above and the subsection is
+> removed in the same pull request.
+
+Command, flag and subcommand names below (`stats`, `run`, `call`, `recipe`, `--save`, the drift command) are
+working names; choosing them is an open decision of each subsection. The `skill` command also changes through
+the script-first skill package (default name, name validation, body shape); that content lives in
+[[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]] and is not repeated here.
+
+### Planned: context-cost measurement command (#562)
+
+**Why.** The project's headline number has no measurement behind it. `README.md:10`, `:23` and `:133` claim 98%
+token savings; the business requirements document records the disagreement with the later "~83% maximum"
+note as an open question, and the performance requirement on tokens per tool is stated as not an automated
+measurement. `ToolMetadata` (`crates/mcp-core/src/metadata.rs:179`) records name, TypeScript name, category,
+keywords, description and parameters, but not how large the server's own definition of the tool was, and once
+generation is over that size cannot be recovered; `METADATA_SCHEMA_VERSION` is 2 (`metadata.rs:65`). A single
+"savings" percentage also misleads, because it depends on which files a model reads and on what the host already
+defers.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-046.10 | WHEN the user runs the measurement command on a generated directory THE SYSTEM SHALL print, for each discovery level (the server's own definitions as recorded, all tool files, one tool file, and the catalog once it exists), the size in bytes and the estimated tokens, the name of the estimator, and the number and share of tools that declare an output schema | must |
+| FR-046.11 | WHEN a quantity is not available (catalog not generated, size absent from an older directory) THE SYSTEM SHALL print "not available" and SHALL NOT print zero or an estimate | must |
+| FR-046.12 | WHEN the directory carries an older metadata schema version THE SYSTEM SHALL exit non-zero, state that the directory must be regenerated and print no figures, as the skill scan does for an unsupported schema (`ScanError::UnsupportedSchema`, `crates/mcp-skill/src/parser.rs:95`) | must |
+| FR-046.13 | THE SYSTEM SHALL provide a deterministic scenario harness that compares, for K calls in a bounded list that always includes 1 and 2, the bytes reaching the context when the K calls are made one per shell command and when one script makes them, against an in-repo mock server, and reports the K at which the two arms cross | must |
+| FR-046.14 | THE SYSTEM SHALL run the harness with no network and no model, in CI | must |
+| FR-046.15 | THE SYSTEM SHALL NOT label any output "savings"; a ratio MAY be shown only between two named quantities that are both shown | should |
+| FR-046.16 | THE SYSTEM SHALL state in the command help and in the report header what each measurement proves and does not prove | should |
+
+**What each measurement proves.**
+
+| Measurement | Proves | Does not prove |
+|-------------|--------|----------------|
+| Static report | The size of the text a model would read if it read that level in full; how that size splits between fixed boilerplate and tool-specific content; how many tools declare an output schema | That a model did read it; savings against a host that already defers definitions; the success of any task; true token counts |
+| Scenario harness | For the defined scenarios, the bytes that reach the context under each arm, deterministically, and where scripting stops paying off | The cost of writing the script (model-authored in reality); turn overhead and prompt caching; correctness; behaviour with real servers or tokenizers |
+
+**Constraints.**
+
+- [[../constitution#V. Security]]: the command reads a bounded set of files, with count and bytes derived from
+  the generation and export bounds (`MAX_GENERATED_FILES`, `MAX_GENERATED_BYTES`, `MAX_EXPORT_FILES`,
+  `MAX_EXPORT_BYTES`), not an independent number; a directory beyond the bound is rejected, not truncated.
+  Tool names and text read from generated files are untrusted: the report prints names, sizes and counts only,
+  never file contents, sanitised through `mcp_execution_core::untrusted` and the output rules of §12.
+- Writes nothing; any later output file is confined with symlink-aware validation.
+- Strong types: sizes and token estimates are distinct newtypes, the estimator is an enum; the same input and
+  version give byte-identical output (no timestamps, stable order).
+- The per-tool size field and the output-schema flag are fields of the single `_meta.json` v3 registry owned by
+  [[../core/spec]]; this subsection defines no metadata field and never bumps the version on its own.
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: command name and placement (working name `stats`), and whether the harness is a subcommand, a test target or a benchmark.]
+- [NEEDS CLARIFICATION: how a tool definition is serialised for sizing (canonical JSON of the tool object, with or without annotations and output schema; before or after the introspector's bounds).]
+- [NEEDS CLARIFICATION: the token estimator and its documented error band; recorded in a decision record.]
+- [NEEDS CLARIFICATION: whether `index.ts` and the runtime files count in "all tool files"; where the mock servers live so this crate can use them; whether CI asserts exact figures or relations and bounds.]
+
+Ask first: choosing the estimator; a tokenizer dependency (check current versions); any machine-readable output
+format or output file.
+
+**Depends on / blocks.** The static report is blocked by #568 (per-tool size and the output-schema flag in the
+`_meta.json` v3 registry); the scenario harness is not. Consumed by the documentation rewrite (#560), which may
+quote only figures this command prints. Tracked under epic #555.
+
+### Planned: command-line front doors for the script runner (#571) and the one-shot tool call (#574)
+
+The behaviour of both commands (execution, output budget and spill, notices, the connection path, result
+semantics) is specified in [[../runtime/spec#4. Planned: Script Runner With Bounded Output (#571)]] and
+[[../runtime/spec#7. Planned: One-Shot Tool Call Through the Authoritative Client (#574)]]. This subsection holds
+only what belongs to the command-line layer.
+
+**Why.** The subcommands today are `introspect`, `generate`, `skill`, `server`, `setup` and `completions` (§2);
+none runs a script or calls a tool, and the exit-code classification (§5) has no class for a script's own exit
+status. `introspect` resolves a server through `resolve_server_config` and `Introspector::discover_server`
+(`crates/mcp-cli/src/commands/introspect.rs:185-203`); a one-shot call reuses that resolution instead of adding
+a second one.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-036.20 | WHEN the run command is invoked THE SYSTEM SHALL take the script from a file or from standard input, take the time limit and output budget as options bounded by a hard maximum, and pass script arguments to the script as data, never interpolated into a command line | must |
+| FR-036.21 | WHEN the runner itself fails (unreadable script, invalid option, missing runtime, unusable spill location, timeout) THE SYSTEM SHALL exit with the classification of §5 (invalid input 2, timeout 4, other 1) and a one-line message that does not echo script text; WHEN the script exits non-zero by itself THE SYSTEM SHALL propagate its status without remapping it onto the classified codes | must |
+| FR-036.22 | THE SYSTEM SHALL give every new type that carries script text, script arguments or environment values a hand-written redacting `Debug`, and the `Commands` value SHALL never print them (§4) | must |
+| FR-039.20 | WHEN the call command is invoked THE SYSTEM SHALL select the server with the same selectors as `introspect` (`ServerFlags`, `ServerSource`, §2, §3), take the arguments as a single JSON object, and validate the server as a `ServerId` and the tool as a `ToolName` before connecting | must |
+| FR-039.21 | WHEN the JSON argument is malformed or is not a single object THE SYSTEM SHALL exit with invalid input and report the failure without repeating any part of the argument | must |
+| FR-039.22 | THE SYSTEM SHALL map call failures onto §5 (connection failure and resource limit 3, timeout 4, invalid input 2) and state the class of a tool-reported error | must |
+| FR-039.23 | WHEN the call prints a result or an error THE SYSTEM SHALL apply the global `--format`, sanitise and bound server text in error output and mark it as coming from the server, and build any freeform line from untrusted text through `escape_display` (§12) | must |
+
+**Constraints.**
+
+- The call command is a client of the shared connect step that the introspector owns; this crate owns no
+  connection code ([[../runtime/spec#7. Planned: One-Shot Tool Call Through the Authoritative Client (#574)]]).
+- `execute_command` keeps resolving to a classified exit code and never propagates a handler failure as `Err`
+  (§5); `main.rs` still calls `std::process::exit` only after classification.
+- Help text of the run command states that scripts run with the user's privileges and without a sandbox.
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: command names, flags, and how a file or standard input is chosen (working names `run`, `call`).]
+- [NEEDS CLARIFICATION: exit code of a tool-reported error (3 or 1), and whether the runner's classified tool failures map onto 3 and 4.]
+- [NEEDS CLARIFICATION: whether results printed to the caller fall under the constitution's untrusted-text rule or are an accepted exception; a maintainer decision stated here and in the runtime block, with neither sanitisation nor an exception claimed until it is made.]
+- [NEEDS CLARIFICATION: how the global `--format` interacts with runner notices.]
+
+Ask first: the command names and flags; any change to `ExitCode` or to the classification table; starting the
+one-shot call before the runtime decision record is accepted.
+
+**Depends on / blocks.** The run command (#571) is not gated and builds on #570. The one-shot call (#574) is gated
+by the runtime decision record #569 ([[../decisions/ADR-569-runtime-strategy-single-mcp-client]]): if the
+generated bridge stays the only client, a Rust call path would be a second way to call tools. #574 also depends
+on the shared connect step in [[../introspector/spec]]. Tracked under epic #557.
+
+### Planned: saved-script commands (#579)
+
+The storage layout, survival across regeneration, header validation and bounds are specified in
+[[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]]; this subsection holds the
+command-line side.
+
+**Why.** Nothing in the CLI saves, lists or checks a script. The `skill` command writes `SKILL.md` through a
+temporary file and `rename` (`commands/skill.rs:336-352`) into a segment directory it creates and never replaces
+(`:376-389`), whereas `generate` replaces the whole server directory (`commands/generate.rs:441`, §7 step 7);
+saved scripts therefore belong beside `SKILL.md`, and the commands that touch them must respect that.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-044.14 | WHEN the user lists saved scripts THE SYSTEM SHALL print each signature (name, one-line description, declared inputs, referenced tools) and no script body, with header text sanitised as untrusted and the listing bounded | must |
+| FR-044.15 | WHEN the user checks saved scripts THE SYSTEM SHALL report per script an invalid header, an over-bound file and each referenced tool absent from the generated server's `_meta.json`, SHALL NOT connect to any server, and SHALL NOT modify or delete anything | must |
+| FR-044.16 | WHEN the check finds a problem THE SYSTEM SHALL exit non-zero with a code distinct from usage and I/O errors | must |
+| FR-044.17 | WHEN the run command is given a save option THE SYSTEM SHALL save exactly the executed text under an explicit script name and header, refuse an existing name unless overwrite is requested, and write nothing when the header or name is invalid | should |
+| FR-044.18 | THE SYSTEM SHALL NOT execute a saved script as a side effect of saving, listing or checking | must |
+
+**Constraints.**
+
+- [[../constitution#V. Security]]: writes go through the confined no-follow primitives of §8; script bodies and
+  parser source excerpts never appear in output, errors or `Debug`; output text follows §12.
+- `thiserror` in `mcp-skill`, `anyhow` only here (§13).
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: subcommand and flag names (working names `recipe list`, `recipe check`, `--save`).]
+- [NEEDS CLARIFICATION: the exit code for "problems found": a new `ExitCode` constant or a documented use of an existing one.]
+- [NEEDS CLARIFICATION: whether saving happens only after a successful run, and how it behaves after a partial failure ([[../runtime/spec#5. Planned: Call Journal and Partial-Failure Report (#572)]]).]
+- [NEEDS CLARIFICATION: a check of a skill whose server directory is missing or stale: reported as unreadable, distinct from a missing tool.]
+
+Ask first: adding an `ExitCode` constant; the recipe header format (decision record, see the skill block).
+
+**Depends on / blocks.** Depends on the script runner (#571) for the save hook and on the skill-block storage
+rules. Tracked under epic #558.
+
+### Planned: drift check against recorded provenance (#580)
+
+**Why.** Every `generate` run records provenance in `_meta.json` and nothing reads it back: `tool_digest` and
+`config_fingerprint` are written by `crates/mcp-codegen/src/progressive/generator.rs:866-876` and referenced
+otherwise only by tests. The question provenance exists to answer, whether the server's exposed surface or the
+endpoint changed since generation, is unmet, so a server that adds, removes or rewords a tool is invisible
+until a script misbehaves. The record is one aggregate digest, not one per tool (`GenerationProvenance`,
+`crates/mcp-core/src/provenance.rs:650-657`), so exact attribution of a changed tool needs a per-tool digest
+recorded at generation. The locked `rmcp` 3.10.0 carries `ttl_ms` and `cache_scope` on the tools listing result
+(`rmcp-3.10.0/src/model.rs:1920-1936`), but the introspector keeps only `page.tools` and `page.next_cursor`
+(`crates/mcp-introspector/src/lib.rs:738-744`) and no code in `crates/` reads either field.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-045.10 | WHEN the check runs THE SYSTEM SHALL resolve the server as `generate` does (`ServerSource`, §3) and obtain the live tool list through `Introspector::discover_server`, adding no second connection path, and SHALL derive the generated directory as `generate` derives it (§7 step 3) | must |
+| FR-045.11 | WHEN the check compares THE SYSTEM SHALL compute the live digest with the one mapping and function `generate` uses, and WHEN the config fingerprint differs from the recorded one SHALL report that the endpoint differs rather than present a tool difference as the server changing | must |
+| FR-045.12 | WHEN the digests differ THE SYSTEM SHALL name the tools present only in the live list and only in `_meta.json`; WHEN the names are identical but the digests differ and no per-tool digests are recorded THE SYSTEM SHALL report that the tool list differs and that which tool changed cannot be determined from the recorded data | must |
+| FR-045.13 | WHERE per-tool digests are recorded THE SYSTEM SHALL also name tools present on both sides whose digest differs, and a change confined to tool annotations SHALL be reported as drift once the digest decision of the `_meta.json` v3 registry allows it | should |
+| FR-045.14 | THE SYSTEM SHALL exit with distinct codes usable in CI for no drift, drift detected, and check could not complete (connection, timeout, unreadable or unsupported sidecar, invalid input) | must |
+| FR-045.15 | THE SYSTEM SHALL phrase every message as "the server changed" or "the tool list differs from the one recorded at generation", never "your files are out of date byte for byte" ([[../core/spec]], provenance: what provenance does and does not answer) | must |
+| FR-045.16 | THE SYSTEM SHALL always issue the live request, SHALL report `ttl_ms` and `cache_scope` when the listing carries them, SHALL state that the list may depend on credentials when the scope is not public, and SHALL NOT use `ttl_ms` to skip the request | must |
+| FR-045.17 | WHEN printing tool or script names THE SYSTEM SHALL sanitise them as untrusted text, bound the number printed with an "and N more" count, and SHALL NOT print descriptions or schema text of changed tools; THE SYSTEM SHALL write no file, `_meta.json` included | must |
+| FR-045.18 | WHERE saved scripts exist THE SYSTEM SHOULD list, by name only, those that reference a removed or changed tool | should |
+
+**Constraints.**
+
+- [[../constitution#V. Security]]: names come from an untrusted server and from model-written files; the
+  fingerprint and digests are printed as hex only and config values never; redacting `Debug` on config types
+  is unchanged.
+- The outcome is a closed enum (no drift, endpoint differs, drift with added, removed, changed and undetermined),
+  not strings or booleans; same inputs give identical output and ordering.
+- The tool-to-digest mapping exists once and is shared with `generate`; it is private to codegen today, so
+  where it lives is open and decided with the registry in [[../core/spec]].
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: record per-tool digests in the `_meta.json` v3 registry (makes "changed" exact) or accept name-level reporting only.]
+- [NEEDS CLARIFICATION: exit code values and names (existing: success 0, error 1, invalid input 2, server error 3, timeout 4).]
+- [NEEDS CLARIFICATION: command name and placement, a new subcommand or a flag on an existing one.]
+- [NEEDS CLARIFICATION: whether honouring `ttlMs` means more than reporting it.]
+
+Ask first: changing `ServerInfo` public fields to carry `ttl_ms` and `cache_scope`; recording per-tool digests;
+the exit code values.
+
+**Depends on / blocks.** Needs the exposure of the cache hints in [[../introspector/spec]] and, for exact
+attribution, the per-tool digest decision in the `_meta.json` v3 registry owned by #568. Independent of the
+runtime decision record. Tracked under epic #558.
+
+### Planned: minimum Node.js version accepted by `setup` (#564)
+
+**Why.** `setup` documents and enforces a floor of Node.js 18: `check_node_version` rejects only a major version
+below 18 (`crates/mcp-cli/src/commands/setup.rs:229`), and its module documentation and error text say 18.0.0
+(`setup.rs:4`, `:69`, `:233`). Whether the generated files run on that version, and what the script runner
+needs, is not established; the runner's floor is an open decision in
+[[../runtime/spec#4. Planned: Script Runner With Bounded Output (#571)]]. This is a defect with its own
+issue and acceptance: no requirement is added here, and §10 changes in the pull request that fixes #564.
+
+**Depends on / blocks.** Ask first for any change to the accepted versions. Informs the Node floor of #571.
+
+## 17. See Also
 
 - [[../core/spec]] — shared config/redaction/exit-code primitives
 - [[../introspector/spec]], [[../codegen/spec]], [[../files/spec]], [[../skill/spec]] — crates this CLI drives directly, without going through [[../server/spec]]
+- [[#16. Planned Changes (script-first direction, adopted 2026-11-24)]] — measurement, runner and call front doors, saved scripts, drift check; not implemented
+- [[../runtime/spec]] — behaviour behind the runner and call commands (planned)
+- [[../decisions/ADR-569-runtime-strategy-single-mcp-client]] — gates the one-shot call

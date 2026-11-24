@@ -224,6 +224,27 @@ and issue-number references dedicated to it.
   convention).
 - CHANGELOG.md maintained under `[Unreleased]` until a version is cut.
 
+---
+
+## Adopted Direction (2026-11-24), not yet observed in code
+
+> [!warning] Not observed
+> Sections I to VIII above describe principles the code already enforces. The
+> principles below are adopted by the maintainer but are **not yet observed in
+> the code**; they are recorded here so that new specs follow them. Each moves
+> into the sections above once the code shows it.
+
+- **The context budget is a first-class resource.** What a model must read
+  (tool definitions, results, skill text) is designed, bounded and measured
+  like memory or disk, not left to whatever a tool prints.
+- **Documentation figures are reproducible or labelled as illustrations.**
+  A number in user-facing documentation comes from a command a reader can
+  rerun, or says it is an illustration and names its source.
+
+A principle on where the MCP client lives is added here once the decision
+record for #569 (`specs/decisions/ADR-569-runtime-strategy-single-mcp-client.md`)
+is accepted.
+
 ## See Also
 
 - [[README]] — cross-block index and end-to-end data flow

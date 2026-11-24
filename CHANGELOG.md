@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Specifications**: `specs/` records the script-first direction: planned requirements FR-030 to FR-046, a planned `runtime` block and two proposed decision records (ADR-569, ADR-581).
+
 ### Security
 
 - Updated `url` to 2.5.9 to resolve RUSTSEC-2026-0592 (stack overflow in `Url::origin()` on nested `blob:` URLs) (#596).

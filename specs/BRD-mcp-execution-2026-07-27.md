@@ -33,6 +33,12 @@ related:
 > (market sizing, named stakeholders, budget, timeline), this is stated
 > explicitly rather than invented — see [[#Open Questions]].
 
+> [!warning] Planned content is not implemented
+> Sections marked **Planned** or **Direction (adopted 2026-11-24)** record a
+> maintainer-accepted direction and its tracking issues. Nothing in them
+> exists in the code yet. Requirements FR-001 to FR-029 and every statement
+> not marked planned describe the released system.
+
 ## Executive Summary
 
 **mcp-execution** is a Rust workspace (CLI binary, MCP server binary, and five
@@ -50,6 +56,16 @@ standalone CLI (`mcp-execution-cli`) and as an MCP server in its own right
 (`mcp-execution-server`), the latter letting Claude Code drive the same
 generation pipeline using its own natural-language tool-categorization
 ability instead of a second, separately-billed LLM call.
+
+**Adopted direction (2026-11-24, planned).** The maintainer has adopted a
+script-first direction: an agent programs against a typed TypeScript SDK
+generated from an MCP server, so that loops, joins and large results stay in
+code and only the answer reaches the context window. Agent hosts now defer
+tool definitions natively, so loading fewer definitions no longer
+distinguishes the project; the direction moves the weight to intermediate
+results, round trips and reuse. It is tracked as the
+five epics (#555 to #559; #559 holds the deferred items). See
+[[#Direction (adopted 2026-11-24)]]. None of it is implemented yet.
 
 ## Problem Statement
 
@@ -75,6 +91,26 @@ ability instead of a second, separately-billed LLM call.
   project replaces is the standard MCP client behavior of loading a server's
   full tool manifest up front; the project's own solution *is* the
   documented alternative (Anthropic's code-execution-with-MCP pattern).
+
+**Extended problem statement (adopted 2026-11-24).** Loading tool definitions
+is one of four costs an agent pays when it works through MCP tools one call at
+a time:
+
+1. **Tool definitions** held in the context for every tool the agent might use.
+2. **Intermediate results** that pass through the context even when the agent
+   only needs a filtered or joined answer.
+3. **One model round trip per call**, including calls whose arguments depend
+   on nothing the model needs to see.
+4. **Redesigning a solution that already worked**, because nothing the agent
+   built in one session is kept for the next.
+
+Agent hosts now defer tool definitions natively, which reduces cost 1 for
+users of those hosts without this project. Costs 2 to 4 are not addressed by
+host-side deferral. The generated tool files today print each result in full
+and end in one pretty-printed JSON document per shell command
+(`crates/mcp-codegen/templates/progressive/tool.ts.hbs:81-105`), so the
+released system does not yet address them either; the planned capabilities
+are listed under [[#Planned script-first capabilities]].
 
 > [!warning] Assumptions
 > - No user research, customer interviews, or support-ticket history is
@@ -127,6 +163,59 @@ enterprise-support document). `CHANGELOG.md`'s earliest entries (`[0.2.0]`,
 2025-11-23) credit "Rust Project Architect, Performance Engineer, and
 Security Engineer agents" for development — i.e. the project's own history
 records AI-agent-assisted development, not a human team roster.
+
+## Direction (adopted 2026-11-24)
+
+> [!warning] Planned, not implemented
+> This section states a direction the maintainer accepted, with tracking
+> issues. It does not describe the released system.
+
+### Positioning statement
+
+Script-first MCP for coding agents: turn any MCP server into a typed
+TypeScript SDK that the agent programs against, so loops, joins and large
+results stay in code and only the answer reaches the context window.
+
+### Pillars
+
+1. **Find**: a typed catalog that costs tens of tokens per tool, with full
+   documentation on demand.
+2. **Compose**: one script instead of N tool calls; loops, pagination,
+   fan-out and cross-server joins.
+3. **Contain**: data stays in the process; output is budgeted, large results
+   spill to a file, and typed results let a script be right the first time.
+4. **Keep**: a working script becomes a recipe that runs again without design
+   tokens, including outside any agent session.
+5. **Control**: pinned tool definitions, drift detection, a dry run for
+   writes, and a journal of calls.
+6. **Measure**: reproducible context-cost numbers in place of slogans.
+
+### Relationship to the host's code mode
+
+Claude Code ships an experimental code mode in which the model writes
+JavaScript that calls its tools. It validates the pattern this project is
+built on. The project's position is to make the pattern portable and durable:
+it works wherever there is a shell, leaves artifacts that outlive a session,
+and adds typed results, saved recipes and pinned definitions that an
+in-session REPL does not provide. Interoperation uses documented pieces only;
+the host's script API for calling MCP tools is not documented and nothing
+shipped may depend on it. The decision is proposed in
+`specs/decisions/ADR-581-code-mode-interoperability.md` (#581).
+
+### Claims policy
+
+- Every number in user-facing documentation either comes from a command the
+  reader can rerun or is labelled as an illustration with its source (#560,
+  #562).
+- Documentation says when scripting is not worth it.
+
+### When a script is not worth it
+
+A single lookup, one or two sequential calls, and small catalogs are cheaper
+with direct tool calls: a script adds design and setup tokens that short work
+never recovers. The benefit grows with catalog size, number of calls and size
+of intermediate results. Documentation must state this, and must not present
+figures from third-party sources as this project's own.
 
 ## Functional Requirements
 
@@ -378,6 +467,160 @@ shared between this BRD and the SRS for traceability.
     (never cached).
   - *Priority*: Must
 
+### Planned script-first capabilities
+
+> [!warning] Planned, not implemented
+> FR-030 to FR-046 are accepted but not built. Each entry has status
+> **Planned** and a tracking issue. Detail lives in the block specs'
+> "Planned Changes" sections and in the new [[runtime/spec]] block;
+> formal statements are in [[SRS-mcp-execution-2026-07-27#3.2.8 Planned: Script-First Capabilities]].
+> The runtime strategy (#569) gates FR-037, FR-038, FR-039, FR-040 and FR-041.
+
+- **FR-030**: As a developer, I need the result type of a generated tool to
+  reflect the tool's declared output schema and to prefer structured content,
+  so that a script can use a result without guessing its shape.
+  - *Acceptance criteria*: for a tool that declares an output schema, the
+    generated result type follows it and structured content is preferred over
+    text; a tool without one keeps a generic result declaration.
+  - *Priority*: Must
+  - *Status*: Planned (#482)
+- **FR-031**: As a developer, I need schema-to-TypeScript conversion to keep
+  what the input schema says (allowed values, alternatives, nullability,
+  local references), so that an agent does not pass invalid arguments and
+  spend turns recovering.
+  - *Acceptance criteria*: constructs the converter drops today are
+    represented or fall back to an explicit unknown type with a recorded
+    reason; conversion stays within named resource bounds.
+  - *Priority*: Must
+  - *Status*: Planned (#565)
+- **FR-032**: As an agent, I need a typed catalog of a server's tools at
+  three detail levels (names, catalog, full tool file), so that I can find the
+  right tool for a few tens of tokens per tool.
+  - *Acceptance criteria*: the catalog lists every tool with its signature, a
+    one-line description and annotation markers; it is generated in the same
+    pass as the tool files and cannot disagree with them; its size is
+    measured, not assumed.
+  - *Priority*: Must
+  - *Status*: Planned (#566)
+- **FR-033**: As a developer, I need generated tool files without fixed
+  boilerplate, and a shared command-line module, so that reading one tool costs
+  only what is specific to it.
+  - *Acceptance criteria*: tool files no longer repeat the command-line block;
+    behaviour of a single call is unchanged; the size reduction is measured on
+    reference fixtures.
+  - *Priority*: Should
+  - *Status*: Planned (#567)
+- **FR-034**: As a developer, I need the tool annotations a server reports
+  (read-only, destructive, idempotent, open-world) captured at introspection and
+  persisted in `_meta.json` version 3, so that later features can classify
+  calls without asking the server again.
+  - *Acceptance criteria*: annotations are stored as untrusted hints; the
+    metadata schema moves to version 3 once, with one registry of fields; a
+    version 2 directory is rejected with a message that says to regenerate.
+  - *Priority*: Must
+  - *Status*: Planned (#568)
+- **FR-035**: As an agent, I need a single tool call to print only a compact
+  result or a one-line structured error, so that one call per shell command
+  does not flood the context.
+  - *Acceptance criteria*: success output is compact; errors are one line and
+    carry no stack trace unless debugging is requested; result text is
+    handled under the untrusted-text rule decision (see Open Questions).
+  - *Priority*: Must
+  - *Status*: Planned (#570)
+- **FR-036**: As an agent, I need a runner that executes a multi-call script
+  with bounded output, so that intermediate data stays in the process and large
+  output is spilled to a file instead of the context.
+  - *Acceptance criteria*: a script run has a timeout and defined exit codes;
+    output beyond a budget is replaced by a head, a path and a byte count;
+    generated servers can be imported through a stable specifier.
+  - *Priority*: Must
+  - *Status*: Planned (#571)
+- **FR-037**: As a developer, I need a journal of the calls a script made and a
+  report of which completed when it fails, so that I do not repeat side effects
+  on a rerun.
+  - *Acceptance criteria*: each run records server, tool, status, duration and
+    result size, never argument or result values; a failure report lists the
+    calls that completed and treats every one as possibly state-changing unless
+    the user's policy classes it as a read.
+  - *Priority*: Should
+  - *Status*: Planned (#572); gated by #569
+- **FR-038**: As a developer, I need a dry run in which reads execute and
+  intended writes are reported but not sent, so that one review replaces many
+  approvals.
+  - *Acceptance criteria*: classification uses recorded annotations; an
+    unannotated tool counts as a write; a wrong read-only hint cannot cause a
+    write to execute; a skipped write never returns a fabricated result.
+  - *Priority*: Should
+  - *Status*: Planned (#573); gated by #569, blocked by #568
+- **FR-039**: As a developer, I need a one-shot tool call through the
+  project's authoritative MCP client, so that a call does not depend on a
+  second client implementation.
+  - *Acceptance criteria*: the call reaches stdio, HTTP and SSE servers and
+    prints budgeted output; no second validation or handshake path is added.
+  - *Priority*: Should
+  - *Status*: Planned (#574); gated by #569
+- **FR-040**: As a developer, I need a per-script helper that reuses
+  connections and replaces the generated bridge, so that one client implements
+  the protocol.
+  - *Acceptance criteria*: generated wrappers call tools through the helper;
+    the bridge's own connection code, mirrored validation and fixed handshake
+    version are removed.
+  - *Priority*: Could
+  - *Status*: Planned (#575); gated by #569
+- **FR-041**: As a developer, I need an option to run scripts with reduced
+  privileges, so that a model-written script cannot write files or spawn
+  processes by default.
+  - *Acceptance criteria*: under the reduced-privilege mode, file writes and
+    process spawning are denied unless allowed; what the mode does not restrict
+    is documented.
+  - *Priority*: Could
+  - *Status*: Planned (#576); gated by #569
+- **FR-042**: As a developer, I need an optional typecheck of a script against
+  the generated SDK before it runs, so that shape errors surface before any
+  tool is called.
+  - *Acceptance criteria*: when a TypeScript compiler is available, a script
+    is typechecked before it runs and the diagnostics are reported; whether a
+    failed check blocks the run or only warns is open; without a compiler the
+    run proceeds and says the check was skipped.
+  - *Priority*: Could
+  - *Status*: Planned (#577)
+- **FR-043**: As an agent, I need a generated skill that teaches the
+  script-first workflow, with a name equal to its directory, so that the skill
+  is short, valid and consistent with the runner.
+  - *Acceptance criteria*: both generation paths teach one workflow (catalog,
+    one script, print only the answer, direct call for a single lookup); the
+    skill name equals its directory and follows the Agent Skills naming rule;
+    optional catalog injection at load time is bounded and has a static
+    fallback; text from a server stays inert data in a rendered skill.
+  - *Priority*: Must
+  - *Status*: Planned (#578, #582)
+- **FR-044**: As a developer, I need to save a working script as a recipe that
+  can be listed and run again, so that I do not pay design tokens twice.
+  - *Acceptance criteria*: a recipe has a validated header, is confined to the
+    skill's directory, is bounded in count and size, is never executed
+    automatically, and survives regeneration of the skill and of the server
+    directory.
+  - *Priority*: Should
+  - *Status*: Planned (#579)
+- **FR-045**: As a developer, I need to compare the live server's tool list
+  with the provenance recorded at generation, so that I learn when a server
+  changed.
+  - *Acceptance criteria*: the check reports added and removed tools by name
+    and reports when the list differs; wording says the server changed, not
+    that files are out of date; naming a changed tool depends on per-tool
+    digests (open decision).
+  - *Priority*: Should
+  - *Status*: Planned (#580)
+- **FR-046**: As a maintainer and as a reader of the documentation, I need
+  context-cost figures produced by a command anyone can rerun, so that no
+  published number is a slogan.
+  - *Acceptance criteria*: a command reports bytes and estimated tokens of
+    generated output with a stated method; a deterministic scenario harness
+    compares call patterns on in-repository mock servers; no output is
+    labelled "savings".
+  - *Priority*: Must
+  - *Status*: Planned (#562); the static report is blocked by #568
+
 ## Non-Functional Requirements
 
 Detailed, measurable non-functional requirements are specified separately in
@@ -388,7 +631,8 @@ threshold for a standalone NFR document). Summary below.
 ### Performance
 
 Token-budget reduction is the project's core value proposition (claimed 98%
-savings, `README.md`), backed by measured code-generation/export timings far
+savings, `README.md`; the figure is retired as a headline, see
+[[#Open Questions]]), backed by measured code-generation/export timings far
 inside documented targets. See [[NFR-mcp-execution-2026-07-27#2. Performance Efficiency]].
 
 ### Scalability
@@ -432,6 +676,13 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 - Security hardening: command-injection defense, resource-exhaustion (CWE-400)
   bounds, prompt-injection defense, debug-redaction, path confinement.
 - Independent publishing of five library crates to crates.io.
+- **Planned (not implemented):** the script-first capabilities FR-030 to
+  FR-046: typed results and lossless types, a typed catalog, slimmer tool
+  files, tool annotations in `_meta.json` version 3, quiet single-call output,
+  a script runner with bounded output, a call journal, a dry run, a Rust
+  tool-call path, reduced-privilege execution, pre-run typecheck, a
+  script-first skill, saved scripts, a drift check, and reproducible
+  context-cost measurement. See [[#Planned script-first capabilities]].
 
 ### Out of Scope
 
@@ -442,7 +693,17 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 - **A standalone runtime package.** `mcp-execution-runtime` (an npm package
   duplicating the generated bridge) was removed entirely (`CHANGELOG.md`
   `[Unreleased]`, #261) for being an unhardened, structurally-unsynchronizable
-  fork of the generated bridge template.
+  fork of the generated bridge template. This exclusion stands alongside the
+  planned script runtime (FR-036): the removed npm package is not coming back.
+  Where a single MCP client lives for the planned runtime (the Rust binary, or
+  the generated TypeScript bridge) is the pending decision #569, proposed in
+  `specs/decisions/ADR-569-runtime-strategy-single-mcp-client.md`.
+- **Deferred under epic #559 (not planned for the first waves):**
+  observed result shapes for tools without an output schema (#587); support
+  for agent hosts other than the current one, including output roots and
+  instruction formats (#588); gateway tools for MCP clients without a shell
+  (#589); connections that persist across runs (#590); ranked search across
+  catalogs (#591).
 - **A WASM-based execution runtime and a disk-based plugin/persistence
   store.** Early `CHANGELOG.md` history (`[0.2.0]`–`[0.5.0]`) documents a
   `mcp-wasm-runtime` crate, a `mcp-plugin-store` crate (Blake3-verified
@@ -507,6 +768,9 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 > Engineer, Security Engineer") rather than a human team roster, which is
 > unusual for a BRD's "Business Constraints" section and is reported here
 > exactly as found, not reinterpreted.
+>
+> Update (2026-11-24): a roadmap now exists as epics #555 to #559 (see
+> Open Questions); timeline, budget, funding and team size remain unrecorded.
 
 ### Assumptions
 
@@ -520,7 +784,11 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 > - The claimed "98% token savings" (README) is the project's own estimate,
 >   not an independently reproduced benchmark; `CHANGELOG.md`'s own revised
 >   "~83% asymptotic maximum" note (`[0.2.0]`) is never reconciled with the
->   current README figure anywhere in the repo.
+>   current README figure anywhere in the repo. **Decision (2026-11-24):** the
+>   98% and 83% figures are both retired; measured figures replace them (#562).
+> - **Host scope (decision, 2026-11-24):** the current host (Claude Code)
+>   stays first. No new hard-coded host assumption is added, and support for
+>   other hosts is deferred to #588.
 
 ## Success Criteria
 
@@ -533,7 +801,13 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
   edit, not a live-verified figure as of this document's date).
 - [ ] Token-savings claim is reconciled and independently reproducible — not
   currently demonstrated by an executable benchmark in this repository (the
-  93–98% figures live only in prose).
+  93–98% figures live only in prose). Superseded by the first criterion below.
+- [ ] Context-cost figures in documentation come from a command a reader can
+  rerun, with a stated method (#562).
+- [ ] User-facing documentation contains no figure that cannot be reproduced
+  and labels every other number as an illustration with its source (#560).
+- [ ] Every command and import in the documentation examples runs as written;
+  an example that invokes a generated tool passes a single JSON object (#563).
 - [ ] A defined process exists for resolving the introspector's documented
   HTTP/SSE response-size gap — currently tracked only as a "known
   limitation" note, with no committed target release.
@@ -548,13 +822,38 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
   channel/SLA beyond "file a GitHub issue"?
 - [ ] Is there a business model (this is dual MIT/Apache-2.0 licensed with no
   evidence of commercial licensing, hosting, or paid support)?
-- [ ] Which figure is authoritative for the headline savings claim — 98%
+- [x] Which figure is authoritative for the headline savings claim — 98%
   (current README) or the ~83% asymptotic maximum documented in
-  `CHANGELOG.md` `[0.2.0]`?
-- [ ] Is broader (non-Claude-Code) MCP-host support an intended future
-  direction, given the hardcoded `~/.claude/*` output paths?
-- [ ] Is there a roadmap beyond the `[Unreleased]` section of
-  `CHANGELOG.md`?
+  `CHANGELOG.md` `[0.2.0]`? **Answered 2026-11-24:** neither; both are
+  retired in favour of measured figures (#562) and documentation without
+  unreproducible numbers (#560).
+- [x] Is broader (non-Claude-Code) MCP-host support an intended future
+  direction, given the hardcoded `~/.claude/*` output paths? **Answered
+  2026-11-24:** deferred; the current host stays first, other hosts are #588.
+- [x] Is there a roadmap beyond the `[Unreleased]` section of
+  `CHANGELOG.md`? **Answered 2026-11-24:** the five epics #555 to #559
+  (positioning and evidence, typed SDK, script runtime, skills/recipes/drift,
+  and the deferred items).
+
+Questions only the maintainer can answer, raised by the planned direction:
+
+- [ ] What does `_meta.json` version 3 contain, and in which release does it
+  land? A second bump is ruled out, so the field set (per-tool digests,
+  annotations inside the digest entries, a catalog reference, converter
+  diagnostics) must be fixed first (#568).
+- [ ] Is structured content preferred for every tool, or only for tools that
+  declare an output schema? (#482)
+- [ ] Do successful tool results printed by single-call mode, the runner and
+  the one-shot call fall under the untrusted-text boundary rule, or are they an
+  accepted exception? (#570, #571, #574)
+- [ ] Which mechanism keeps a wrong or hostile read-only hint from executing a
+  write during a dry run, and may a user policy relax a classification? (#573)
+- [ ] Is the typed catalog a new generated file or an extension of `index.ts`?
+  (#566)
+- [ ] What is the minimum supported Node.js version? `setup` accepts 18 today
+  (#564).
+- [ ] Does the documentation check also cover unknown subcommands and flags in
+  fenced blocks, or only commands that exist? (#563)
 
 ## Glossary
 
@@ -573,3 +872,4 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 - [[constitution]] — reverse-engineered project principles
 - [[SRS-mcp-execution-2026-07-27]] — formal functional requirements derived from this BRD and the per-crate specs
 - [[NFR-mcp-execution-2026-07-27]] — formal non-functional/quality requirements
+- [[runtime/spec]] — planned script-runtime block (not implemented)

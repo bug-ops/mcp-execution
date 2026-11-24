@@ -45,6 +45,18 @@ Code drive tool categorization with its own natural-language understanding
 instead of a second LLM call, and it can render Claude Code `SKILL.md`
 integration files from a server's already-generated tools.
 
+> [!warning] Adopted direction, not implemented
+> On 2026-11-24 the maintainer adopted a **script-first** direction: turn any
+> MCP server into a typed TypeScript SDK that an agent programs against, so
+> loops, joins and large results stay in code and only the answer reaches the
+> context window. Hosts now defer tool definitions themselves, so the figures
+> above are not the project's headline any more and are not a measured result;
+> measurement is planned (#562). The direction is tracked as epics #555 to #559
+> and recorded as planned requirements (FR-030 to FR-046) in the
+> [[BRD-mcp-execution-2026-07-27|BRD]], [[SRS-mcp-execution-2026-07-27|SRS]] and
+> [[NFR-mcp-execution-2026-07-27|NFR]], and as "Planned Changes" sections in the
+> block specs. Everything else in this package describes the released code.
+
 ## Business & Requirements Documents
 
 | Document | Standard | Scope |
@@ -96,6 +108,18 @@ graph TD
 | Skill generation | `mcp-execution-skill` (`crates/mcp-skill`) | [[skill/spec]] |
 | MCP server exposure | `mcp-execution-server` (`crates/mcp-server`) | [[server/spec]] |
 | CLI | `mcp-execution-cli` (`crates/mcp-cli`) | [[cli/spec]] |
+| Script runtime (**planned, no code yet**) | not yet assigned; placement is the pending decision #569 | [[runtime/spec]] |
+
+The planned `runtime` block (script runner, call journal, dry run, helper) is
+not part of the dependency graph above because it does not exist in code.
+
+**Proposed decision records** (status `proposed`, not decided):
+
+- `specs/decisions/ADR-569-runtime-strategy-single-mcp-client.md` (#569), which
+  gates the journal, the dry run, the Rust call path and reduced-privilege
+  execution.
+- `specs/decisions/ADR-581-code-mode-interoperability.md` (#581), on how the
+  project relates to the host's code mode.
 
 `mcp-server` and `mcp-cli` are **parallel front doors** onto the same lower
 four crates (`introspector`/`codegen`/`files`/`skill`) — they do not depend
@@ -232,6 +256,28 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
    structural line breaks and, for LLM-facing text specifically, wrap it in
    an explicit, unforgeable `<untrusted-data>` boundary.
 
+### Planned contract changes
+
+> [!warning] Not implemented
+> The data flow and the seven contracts above describe today's code. The
+> changes below are adopted but not built; each lands with an update to the
+> contract it changes.
+
+- **Contract 3, metadata v3 (#568).** `_meta.json` version 3 adds tool
+  annotations and further per-tool fields in one registry owned by
+  [[core/spec]]; a version 2 directory is rejected with a message to
+  regenerate. No other block defines its own metadata field.
+- **Contract 2, fixed-file bound chain (#566, #567, #571, #575).** A change
+  that adds or removes a fixed generated file follows the fixed-file rule in
+  [[codegen/spec]] (planned changes); the catalog (#566), the shared command-line
+  module (#567) and the runner's helpers (#571) may add one, and retiring the
+  bridge (#575) removes one. The generated-bytes bound is re-derived to count an output schema
+  per tool (#482).
+- **Contract 6, retirement of the generated bridge (#575).** If the runtime
+  decision (#569) lands on a single Rust MCP client, wrappers call tools through
+  a per-script helper and the bridge's own connection code, mirrored validation
+  and fixed handshake version are removed; contract 6 then ends.
+
 ## Discrepancies vs `CLAUDE.md`
 
 `CLAUDE.md`'s crate table and data-flow diagram are directionally correct
@@ -297,6 +343,7 @@ resource/prompt-injection hardening.
 
 - [[constitution]] — principles observed across every block
 - [[core/spec]] — read this first; every other block depends on it
+- [[runtime/spec]] — planned script-runtime block (not implemented)
 - [[BRD-mcp-execution-2026-07-27]] — business requirements (reverse-engineered)
 - [[SRS-mcp-execution-2026-07-27]] — formal functional requirements
 - [[NFR-mcp-execution-2026-07-27]] — formal non-functional/quality requirements

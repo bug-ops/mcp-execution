@@ -13,6 +13,7 @@ related:
   - "[[../constitution]]"
   - "[[../core/spec]]"
   - "[[../codegen/spec]]"
+  - "[[../runtime/spec]]"
 ---
 
 # Block: MCP Server Introspection (`mcp-execution-introspector`)
@@ -250,10 +251,132 @@ open until `rmcp` exposes a JSON-body size knob.
   are referenced **by value** (not independently re-chosen) in
   `mcp-codegen`'s and `mcp-files`'s own derived resource bounds.
 
-## 9. See Also
+## 9. Planned Changes (script-first direction, adopted 2026-11-24)
+
+> [!warning] Not implemented
+> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
+> When a change lands, its content moves into the as-built sections above and the subsection is
+> removed in the same pull request.
+
+### Planned: capture tool annotations (#568)
+
+**Why.** An MCP server can attach annotations to each tool: a title and four behavioural hints
+(read-only, destructive, idempotent, open-world). The pinned SDK exposes them on every tool as
+`Tool.annotations: Option<ToolAnnotations>` plus a separate `Tool.title`
+(`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-3.10.0/src/model/tool.rs:17-39`;
+version from `Cargo.lock`). `ToolAnnotations` (`tool.rs:54`) holds an optional title and four
+`Option<bool>` hints, and its documentation says clients should never make tool-use decisions from
+annotations received from untrusted servers (`tool.rs:48`). This crate drops all of it:
+`build_tool_info` copies only name, description, input schema and output schema
+(`crates/mcp-introspector/src/lib.rs:1295-1300`), and `ToolInfo` has exactly those four fields
+(`lib.rs:237-246`). Later steps (dry run, catalog markers, honest generated text) cannot tell
+"read-only: true" from "not stated".
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|---|---|---|
+| FR-034.8 | WHEN a tool advertises annotations THE SYSTEM SHALL capture its title and its read-only, destructive, idempotent and open-world hints into `ToolInfo` | must |
+| FR-034.9 | THE SYSTEM SHALL represent each hint as a typed three-valued value (stated true, stated false, not stated) and SHALL NOT apply the SDK's documented defaults at capture | must |
+| FR-034.10 | WHEN a tool advertises no annotations THE SYSTEM SHALL record annotations as absent, not as an all-default value | must |
+| FR-034.11 | WHEN destructive or idempotent is stated while read-only is true THE SYSTEM SHALL record the values as advertised and not reinterpret them | should |
+| FR-034.12 | THE SYSTEM SHALL bound the captured annotation payload: the title is length-capped and the payload counts toward the per-tool size limits applied at introspection | must |
+| FR-034.13 | THE SYSTEM SHALL NOT branch on an annotation to relax validation, skip an approval or choose an execution path; a missing annotation SHALL NOT be read as safe | must |
+
+**Constraints.** Annotations are untrusted hints from a possibly hostile server. Nothing in this
+crate relaxes a check because a hint is present or has a given value. The title is server-supplied
+text and is sanitised under the constitution's untrusted-text rule before it reaches any rendered
+output. Hints carry no text. The annotations value is one struct on `ToolInfo`, constructible
+through capture or an explicit builder, and implements `Send + Sync + Debug`. The sidecar field
+that persists these values is registered in
+[[../core/spec#Planned: `_meta.json` schema version 3 (#568)]].
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: Whether the SDK tool-level title or the annotation title wins when both are present, and whether both are stored.]
+- [NEEDS CLARIFICATION: Whether the title is sanitised at capture or only when rendered; a bound at capture is required either way.]
+- [NEEDS CLARIFICATION: Which size-limit variant an oversized annotation payload reports; the closed `ResourceKind` set lives in the core block.]
+- Ask first: adding a field to the public `ToolInfo` (a struct literal elsewhere stops compiling); adding a variant to `ResourceKind`; making any consumer read a hint for a decision (that belongs to the dry-run policy, #573); adding a dependency.
+
+**Depends on / blocks.** Owned by the v3 bump (#568). Blocks #566 (annotation markers), #573 (dry
+run) and the annotation rows of the drift check (#580).
+
+### Planned: keep the freshness hints of a tools listing (#580)
+
+**Why.** The drift check (FR-045) compares a live listing with the recorded provenance and should
+report how long the server says the listing stays fresh and who may cache it. The pinned SDK's
+tools-listing result carries `ttl_ms: Option<u64>` and `cache_scope: Option<CacheScope>`
+(`rmcp-3.10.0/src/model.rs:1894-1960`, the `paginated_result!` macro, instantiated for tools at
+`model.rs:4398-4402`); both are optional because they are required only from protocol version
+`2026-07-28`. This crate reads neither: `list_tools_bounded` extends a vector with each page's
+tools and keeps only the next cursor (`crates/mcp-introspector/src/lib.rs:738-744`), and
+`ServerInfo` has no field for them (`lib.rs:196-209`).
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|---|---|---|
+| FR-045.5 | WHEN a tools listing carries `ttl_ms` or `cache_scope` THE SYSTEM SHALL expose them as typed values on the discovery result, and WHEN absent THE SYSTEM SHALL expose them as absent | must |
+| FR-045.6 | THE SYSTEM SHALL type `ttl_ms` as a duration and `cache_scope` as an enum, not as a number and a string | must |
+| FR-045.7 | WHEN a listing spans several pages THE SYSTEM SHALL define which page's hints are exposed and SHALL document the rule | must |
+| FR-045.8 | THE SYSTEM SHALL NOT use either hint to skip, shorten or cache a request; it only reports them | must |
+
+**Constraints.** The hints are server-supplied and untrusted; they describe the server's claim, not
+a guarantee. Exposing them changes public fields of `ServerInfo`, which derives `Deserialize` and
+is constructed by struct literal in downstream crates, so the change is ask-first. Paging stays
+bounded exactly as in [[#3. Discovery Flow (`discover_server`)]].
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: Which page's hints are kept when pages differ: first page, last page, or the most conservative combination (smallest freshness, most restrictive scope).]
+- [NEEDS CLARIFICATION: Whether the hints are fields of `ServerInfo` or of a separate listing-metadata value returned alongside it.]
+- Ask first: changing any public field of `ServerInfo` or `ToolInfo`; adding a dependency.
+
+**Depends on / blocks.** Blocks the freshness part of #580. Independent of the v3 bump.
+
+### Planned: a shared connect step for tool calls (#574)
+
+**Why.** Today the client connects, lists tools and is dropped: `connect_and_list_tools` builds the
+`RunningService`, pages the listing under the discover timeout and returns only the tool list and
+peer metadata (`crates/mcp-introspector/src/lib.rs:1009-1050`); on the HTTP path the client is
+dropped when it returns (`lib.rs:1137-1141`). No call-tool request is issued anywhere in the
+Rust crates; calling a tool is done only by the generated TypeScript bridge. A one-shot call
+command (FR-039) needs a live client. The quick way, a small separate client beside this crate,
+would be a second connection path with its own validation, timeouts and bounds, which the
+project avoids.
+
+**Requirements.**
+
+| ID | Requirement | Priority |
+|---|---|---|
+| FR-039.30 | THE SYSTEM SHALL provide one connect step, shared by tool listing and tool calling, covering config validation, transport selection (stdio, HTTP, SSE), the connect timeout, the bounded stdio response decoder, HTTP header handling and protocol negotiation | must |
+| FR-039.31 | THE SYSTEM SHALL NOT introduce a second connection path, a lighter client or a second copy of the config validation for calling tools | must |
+| FR-039.32 | WHEN the one-shot call connects THE SYSTEM SHALL run `validate_server_config` through the same code as discovery, so an unsafe config is rejected with the same classified error before any connection is made | must |
+| FR-039.33 | THE SYSTEM SHALL leave `Introspector::discover_server`'s public behaviour, errors and tests unchanged; the shared step is extracted, not duplicated | must |
+| FR-039.34 | WHEN the call ends, fails or times out THE SYSTEM SHALL terminate any server process it started | must |
+
+**Constraints.** The call path itself, its output bounds and its exit codes are specified in the
+new block [[../runtime/spec]] and in [[../cli/spec]]; this block owns only the shared connect
+step. The known unbounded HTTP JSON response gap ([[#5. Known Gap: HTTP JSON Response Size]]) is
+inherited by the call path and stated there, not hidden. The `2024-11-05` handshake pin of the
+generated bridge is not copied; negotiation follows the existing connect step and the
+protocol-version decision record.
+
+**Open decisions.**
+
+- [NEEDS CLARIFICATION: Shape of the shared step: a public type or function in this crate, or crate-private with the call path inside this crate.]
+- [NEEDS CLARIFICATION: Whether the connection is returned to the caller for reuse across several calls (needed by the per-script helper, #575) or consumed by one call.]
+- Ask first: new public API on this crate; moving the step into another crate; any change to timeouts, bounds or handshake behaviour; adding a dependency.
+
+**Depends on / blocks.** Gated by the runtime decision record #569 (if the generated bridge stays
+the only client, a Rust call path would be a second way to call tools). Blocks #574 and #575.
+
+## 10. See Also
 
 - [[../core/spec]] — `ServerConfig`/security validation this crate re-checks
 - [[../codegen/spec]] — consumer of `ServerInfo`/`ToolInfo`
 - [[../decisions/ADR-529-rmcp-3-5-latest-promotion-revisit]] — handshake
   protocol-version decision and revisit gate
 - [[../server/spec#introspect_server]] — MCP-tool-level wrapper around this crate
+- [[#9. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — annotation capture, freshness hints, shared connect step
+- [[../runtime/spec]] — the planned tool-call path that reuses the shared connect step
