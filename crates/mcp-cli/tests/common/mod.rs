@@ -314,8 +314,9 @@ impl Sandbox {
     /// The runner's per-OS state root as seen by a CLI started with [`Sandbox::command`].
     pub fn state_root(&self) -> PathBuf {
         if cfg!(windows) {
-            dirs::data_local_dir()
-                .expect("data dir")
+            self.home
+                .join("AppData")
+                .join("Local")
                 .join("mcp-execution")
         } else if cfg!(target_os = "macos") {
             self.home
