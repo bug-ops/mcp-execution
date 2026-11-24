@@ -47,6 +47,7 @@
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
 use http::{HeaderName, HeaderValue};
+use mcp_execution_core::annotations::{AnnotationTitle, Hint, ToolAnnotations};
 use mcp_execution_core::{
     Error, ResourceKind, Result, ServerConfig, ServerId, ToolName, Transport,
     validate_server_config,
@@ -229,6 +230,7 @@ pub struct ServerInfo {
 ///         "required": ["chat_id", "text"]
 ///     }),
 ///     output_schema: None,
+///     annotations: None,
 /// };
 ///
 /// assert_eq!(tool.name.as_str(), "send_message");
@@ -243,6 +245,9 @@ pub struct ToolInfo {
     pub input_schema: serde_json::Value,
     /// Optional JSON Schema for tool output (if provided by server)
     pub output_schema: Option<serde_json::Value>,
+    /// Annotations the server advertised for the tool, if any
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
 }
 
 /// Server capabilities.
@@ -1250,6 +1255,8 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
         "Found tool"
     );
 
+    let annotations = capture_annotations(tool.title.as_deref(), tool.annotations);
+
     let description = tool.description.unwrap_or_default().to_string();
     if description.len() > MAX_TOOL_DESCRIPTION_LEN {
         return Err(Error::ResourceLimitExceeded {
@@ -1297,7 +1304,41 @@ fn build_tool_info(tool: rmcp::model::Tool) -> Result<ToolInfo> {
         description,
         input_schema,
         output_schema,
+        annotations,
     })
+}
+
+/// Captures the annotations and display title a server advertised for one tool.
+///
+/// The title is `Tool.title`, falling back to `annotations.title`; it is sanitized, and one that
+/// sanitizes to nothing counts as absent. Returns `None` when the server stated no hint and sent
+/// no usable title, so omitting `annotations` and sending an empty object capture identically.
+/// Hints are kept exactly as advertised, including contradictory combinations: they are
+/// untrusted and advisory, never normalized here.
+fn capture_annotations(
+    title: Option<&str>,
+    wire: Option<rmcp::model::ToolAnnotations>,
+) -> Option<ToolAnnotations> {
+    let wire = wire.unwrap_or_default();
+    let captured = ToolAnnotations {
+        title: title
+            .and_then(AnnotationTitle::new)
+            .or_else(|| wire.title.as_deref().and_then(AnnotationTitle::new)),
+        read_only: Hint::from(wire.read_only_hint),
+        destructive: Hint::from(wire.destructive_hint),
+        idempotent: Hint::from(wire.idempotent_hint),
+        open_world: Hint::from(wire.open_world_hint),
+    };
+    let states_nothing = captured.title.is_none()
+        && [
+            captured.read_only,
+            captured.destructive,
+            captured.idempotent,
+            captured.open_world,
+        ]
+        .iter()
+        .all(|hint| *hint == Hint::NotStated);
+    (!states_nothing).then_some(captured)
 }
 
 /// Extracts server name, version, resource support, and prompt support from
@@ -1348,6 +1389,25 @@ fn fallback_server_name(config: &ServerConfig) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn capture_annotations_treats_an_empty_object_like_absent_annotations() {
+        assert_eq!(capture_annotations(None, None), None);
+        assert_eq!(
+            capture_annotations(None, Some(rmcp::model::ToolAnnotations::new())),
+            None
+        );
+    }
+
+    #[test]
+    fn capture_annotations_keeps_a_title_only_tool() {
+        let captured = capture_annotations(Some("Only title"), None).expect("title is captured");
+        assert_eq!(
+            captured.title.as_ref().map(AnnotationTitle::as_str),
+            Some("Only title")
+        );
+        assert_eq!(captured.read_only, Hint::NotStated);
+    }
+
     use super::*;
 
     // ── bounded_response_stream (issue #225) ─────────────────────────────────
@@ -1997,6 +2057,7 @@ mod tests {
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             output_schema: None,
+            annotations: None,
         };
 
         assert_eq!(tool.name.as_str(), "test_tool");
@@ -2129,6 +2190,7 @@ mod tests {
             description: "Test".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             output_schema: Some(serde_json::json!({"type": "string"})),
+            annotations: None,
         };
 
         // Serialize to JSON

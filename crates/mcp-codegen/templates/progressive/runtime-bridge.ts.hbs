@@ -12,6 +12,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { closeSync, constants, fstatSync, openSync, writeSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -56,9 +57,8 @@ interface MCPToolCallRequest {
  * `content` and `structuredContent` mirror `rmcp::model::CallToolResult`: `content` defaults
  * to `[]` server-side, so it is legitimately absent or empty — never assume a first element.
  * `callMCPTool` treats an empty `content` paired with `structuredContent` as a valid
- * "no textual output" result; an empty `content` with no `structuredContent` either is
- * surfaced as a thrown error, since the bridge cannot distinguish a genuinely void tool from a
- * misbehaving server at this layer.
+ * "no textual output" result, and an empty `content` with no `structuredContent` as a valid
+ * empty success that resolves to `undefined` (FR-030.6).
  */
 interface MCPToolCallResponse {
   jsonrpc: '2.0';
@@ -206,6 +206,235 @@ const MAX_ENV_VALUE_LEN = {{max_env_value_len}};
 const MAX_URL_LEN = {{max_url_len}};
 const MAX_HEADER_COUNT = {{max_header_count}};
 const MAX_HEADER_VALUE_LEN = {{max_header_value_len}};
+
+/**
+ * Bounds for server-supplied text kept in a {@link McpToolError}, rendered directly from
+ * `mcp-execution-core`'s `untrusted` constants so {@link boundServerText} cannot drift from
+ * `sanitize_untrusted_text`.
+ */
+const MAX_SERVER_MESSAGE_LEN = {{max_server_message_len}};
+const MAX_VARIATION_SELECTOR_RUN = {{max_variation_selector_run}};
+const MAX_TOTAL_VARIATION_SELECTORS = {{max_total_variation_selectors}};
+
+/**
+ * Bounds and key rule of the opt-in observed-shape recorder, rendered from
+ * `mcp-execution-codegen`'s `observed` constants so the Rust reader and this recorder apply
+ * identical limits.
+ */
+const OBSERVED_SHAPE_MAX_DEPTH = {{observed_shape_max_depth}};
+const OBSERVED_SHAPE_MAX_KEYS = {{observed_shape_max_keys}};
+const OBSERVED_SHAPE_MAX_KEY_LEN = {{observed_shape_max_key_len}};
+const OBSERVED_SHAPE_MAX_LINE_BYTES = {{observed_shape_max_line_bytes}};
+const OBSERVED_KEY_REGEX = new RegExp('{{{identifier_pattern}}}');
+
+function isVariationSelector(codePoint: number): boolean {
+  return (
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+    (codePoint >= 0xe0100 && codePoint <= 0xe01ef)
+  );
+}
+
+/** Drops variation selectors the way `strip_variation_selector_smuggling` does. */
+function stripVariationSelectorSmuggling(codePoints: number[]): number[] {
+  const total = codePoints.filter(isVariationSelector).length;
+  if (total === 0) return codePoints;
+  if (total > MAX_TOTAL_VARIATION_SELECTORS) {
+    return codePoints.filter((codePoint) => !isVariationSelector(codePoint));
+  }
+
+  const result: number[] = [];
+  let index = 0;
+  while (index < codePoints.length) {
+    const codePoint = codePoints[index]!;
+    if (!isVariationSelector(codePoint)) {
+      result.push(codePoint);
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (end < codePoints.length && isVariationSelector(codePoints[end]!)) end += 1;
+    if (end - index <= MAX_VARIATION_SELECTOR_RUN) {
+      result.push(...codePoints.slice(index, end));
+    }
+    index = end;
+  }
+  return result;
+}
+
+/** Server text after neutralization, and whether it was cut at the length bound. */
+interface BoundText {
+  text: string;
+  truncated: boolean;
+}
+
+/**
+ * Neutralizes untrusted server text exactly like `mcp_execution_core::untrusted::
+ * sanitize_untrusted_text` (control, bidi, zero-width, Tags-block and variation-selector
+ * handling) and truncates it to {@link MAX_SERVER_MESSAGE_LEN} code points, not UTF-16 units.
+ * The shared vectors in `tests/fixtures/shared_vectors.json` pin both implementations together.
+ */
+function boundServerText(raw: string): BoundText {
+  const kept: number[] = [];
+  for (const char of raw) {
+    const codePoint = char.codePointAt(0)!;
+    if (
+      codePoint === 0x61c || codePoint === 0x200e || codePoint === 0x200f ||
+      (codePoint >= 0xe0000 && codePoint <= 0xe007f) ||
+      codePoint === 0xfeff ||
+      (codePoint >= 0x2060 && codePoint <= 0x2064)
+    ) {
+      continue;
+    }
+    const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    const isSpaced =
+      codePoint === 0x2028 || codePoint === 0x2029 || codePoint === 0x200b ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069);
+    kept.push(isControl || isSpaced ? 0x20 : codePoint);
+  }
+
+  const sanitized = stripVariationSelectorSmuggling(kept);
+  return {
+    text: sanitized
+      .slice(0, MAX_SERVER_MESSAGE_LEN)
+      .map((codePoint) => String.fromCodePoint(codePoint))
+      .join(''),
+    truncated: sanitized.length > MAX_SERVER_MESSAGE_LEN
+  };
+}
+
+/** Why a tool call failed. */
+export type McpToolErrorKind = 'tool_error' | 'rpc_error' | 'call_failed';
+
+/**
+ * The only error {@link callMCPTool} throws.
+ *
+ * `message` is fixed bridge text. Anything the MCP server said (an `isError` result, a JSON-RPC
+ * `error.message`) is neutralized by {@link boundServerText} and kept only in `serverMessage`,
+ * so a hostile server cannot inject text into a log line or a prompt through `message`.
+ */
+export class McpToolError extends Error {
+  readonly kind: McpToolErrorKind;
+  readonly serverMessage?: string;
+  readonly serverMessageTruncated: boolean;
+
+  constructor(kind: McpToolErrorKind, message: string, server?: BoundText) {
+    super(message);
+    this.name = 'McpToolError';
+    this.kind = kind;
+    this.serverMessageTruncated = false;
+    if (server !== undefined) {
+      this.serverMessage = server.text;
+      this.serverMessageTruncated = server.truncated;
+    }
+  }
+}
+
+/**
+ * Bounds `raw` when the server really sent text. A server may put any JSON value where a
+ * message string is expected; anything that is not a string is dropped rather than coerced.
+ */
+function serverTextOf(raw: unknown): BoundText | undefined {
+  return typeof raw === 'string' ? boundServerText(raw) : undefined;
+}
+
+/** JSON-Schema fragment of the JSON types seen in a result, never of its values. */
+type ObservedShape =
+  | { type: 'null' | 'boolean' | 'number' | 'integer' | 'string' }
+  | { type: 'array'; items?: ObservedShape }
+  | {
+      type: 'object';
+      properties?: Record<string, ObservedShape>;
+      additionalProperties?: ObservedShape;
+    };
+
+function isRecordableKey(key: string): boolean {
+  return key.length <= OBSERVED_SHAPE_MAX_KEY_LEN && OBSERVED_KEY_REGEX.test(key);
+}
+
+/**
+ * Shape of `value`. An object keeps its keys only when it has few keys and every key is a short
+ * identifier; otherwise (IDs, emails, paths used as map keys) only the shape of its first value
+ * is kept, so key text that may be data never reaches the record.
+ */
+function observedShapeOf(value: unknown, depth: number): ObservedShape {
+  if (value === null) return { type: 'null' };
+  if (typeof value === 'boolean') return { type: 'boolean' };
+  if (typeof value === 'number') return { type: Number.isInteger(value) ? 'integer' : 'number' };
+  if (typeof value === 'string') return { type: 'string' };
+
+  if (Array.isArray(value)) {
+    if (depth >= OBSERVED_SHAPE_MAX_DEPTH || value.length === 0) return { type: 'array' };
+    return { type: 'array', items: observedShapeOf(value[0], depth + 1) };
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (depth >= OBSERVED_SHAPE_MAX_DEPTH || keys.length === 0) return { type: 'object' };
+    if (keys.length <= OBSERVED_SHAPE_MAX_KEYS && keys.every(isRecordableKey)) {
+      return {
+        type: 'object',
+        properties: Object.fromEntries(
+          keys.map((key) => [key, observedShapeOf(record[key], depth + 1)])
+        )
+      };
+    }
+    return { type: 'object', additionalProperties: observedShapeOf(record[keys[0]!], depth + 1) };
+  }
+
+  return { type: 'null' };
+}
+
+/**
+ * Appends `line` to `path` only when that is safe: the path is opened without following a
+ * symlink, and an existing file must be a regular file owned by this user and closed to group
+ * and others (`mode` in `openSync` applies on creation only). Returns whether it was written.
+ */
+function appendPrivately(path: string, line: string): boolean {
+  // O_NONBLOCK keeps an open of a FIFO from waiting for a reader; the fstat below rejects it.
+  const flags =
+    constants.O_WRONLY |
+    constants.O_APPEND |
+    constants.O_CREAT |
+    (constants.O_NOFOLLOW ?? 0) |
+    (constants.O_NONBLOCK ?? 0);
+  const fd = openSync(path, flags, 0o600);
+  try {
+    const stat = fstatSync(fd);
+    const uid = process.getuid?.();
+    if (!stat.isFile() || (uid !== undefined && (stat.uid !== uid || (stat.mode & 0o077) !== 0))) {
+      return false;
+    }
+    writeSync(fd, line);
+    return true;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Appends the shape of a successful result to the file named by `MCPBRIDGE_OBSERVE_SHAPES`, if
+ * set. Opt-in and best effort: a failure or an unsafe target is only debug-logged and never
+ * affects the call.
+ */
+function recordObservedShape(serverId: string, toolName: string, value: unknown): void {
+  const path = process.env.MCPBRIDGE_OBSERVE_SHAPES;
+  if (!path) return;
+  try {
+    const line =
+      JSON.stringify({ server: serverId, tool: toolName, shape: observedShapeOf(value, 1) }) + '\n';
+    if (byteLength(line) > OBSERVED_SHAPE_MAX_LINE_BYTES) {
+      debug('Observed shape exceeds the line bound, not recorded');
+      return;
+    }
+    if (!appendPrivately(path, line)) {
+      debug('Observed-shape file is not a private regular file owned by this user, not recorded');
+    }
+  } catch (error) {
+    debug('Could not record observed shape:', error);
+  }
+}
 
 /**
  * Returns the UTF-8 byte length of `value`, matching the semantics of Rust's `str::len()`
@@ -980,10 +1209,23 @@ async function createConnection(
     debug('Received initialize response:', JSON.stringify(initResponse));
 
     if (initResponse.error) {
-      throw new Error(`Server initialization failed: ${initResponse.error.message}`);
+      throw new McpToolError(
+        'rpc_error',
+        'Server initialization failed',
+        serverTextOf(initResponse.error.message)
+      );
     }
   } catch (error) {
     childProcess.kill();
+    if (error instanceof McpToolError) {
+      throw new McpToolError(
+        error.kind,
+        `Failed to initialize server ${serverId}: ${error.message}`,
+        error.serverMessage === undefined
+          ? undefined
+          : { text: error.serverMessage, truncated: error.serverMessageTruncated }
+      );
+    }
     throw new Error(`Failed to initialize server ${serverId}: ${error}`);
   }
 
@@ -1057,6 +1299,92 @@ async function getConnection(serverId: string): Promise<ServerConnection> {
   }
 }
 
+/** Which part of a tool response carries the result a caller wants. */
+export type ResultSource = 'structured' | 'content';
+
+/**
+ * Extracts the caller-visible result from a tool-call response.
+ *
+ * With `resultSource === 'structured'` a non-null `structuredContent` wins even when `content`
+ * is populated. Otherwise `content[0]` is used, falling back to `structuredContent` when
+ * `content` is empty or malformed. An empty success (no `content`, no `structuredContent`)
+ * resolves to `undefined`, which every generated Result type includes.
+ */
+function extractResult(
+  response: MCPToolCallResponse,
+  resultSource: ResultSource,
+  serverId: string,
+  toolName: string
+): unknown {
+  if (response.error) {
+    const code =
+      typeof response.error.code === 'number'
+        ? ` (JSON-RPC error code ${response.error.code})`
+        : '';
+    throw new McpToolError(
+      'rpc_error',
+      `Tool execution failed: ${serverId}.${toolName}${code}`,
+      serverTextOf(response.error.message)
+    );
+  }
+
+  if (!response.result) {
+    throw new McpToolError('call_failed', `No result in response from ${serverId}.${toolName}`);
+  }
+  const result = response.result;
+
+  // `content` legitimately defaults to `[]` server-side, so a first element is never assumed.
+  // `structuredContent` is the fallback detail for an error whose `content` has no text.
+  if (result.isError) {
+    const contentText = result.content?.[0]?.text;
+    const errorText =
+      typeof contentText === 'string' && contentText !== ''
+        ? contentText
+        : result.structuredContent != null
+          ? JSON.stringify(result.structuredContent)
+          : undefined;
+    throw new McpToolError(
+      'tool_error',
+      `Tool returned error: ${serverId}.${toolName}`,
+      serverTextOf(errorText)
+    );
+  }
+
+  // `!= null` is deliberate: a literal `null` is treated like an absent field.
+  if (resultSource === 'structured' && result.structuredContent != null) {
+    return result.structuredContent;
+  }
+
+  const content = result.content;
+  if (!content || content.length === 0) {
+    return result.structuredContent != null ? result.structuredContent : undefined;
+  }
+
+  const firstContent = content[0];
+  if (!firstContent) {
+    if (result.structuredContent != null) {
+      return result.structuredContent;
+    }
+    throw new McpToolError(
+      'call_failed',
+      `Tool ${serverId}.${toolName} returned an invalid content[0] (null) and no structuredContent`
+    );
+  }
+
+  if (firstContent.type === 'text' && firstContent.text) {
+    if (firstContent.text.trim().startsWith('{') || firstContent.text.trim().startsWith('[')) {
+      try {
+        return JSON.parse(firstContent.text);
+      } catch {
+        return firstContent.text;
+      }
+    }
+    return firstContent.text;
+  }
+
+  return firstContent;
+}
+
 /**
  * Call an MCP tool on a server
  *
@@ -1069,8 +1397,11 @@ async function getConnection(serverId: string): Promise<ServerConnection> {
  * @param serverId - Server identifier (e.g., "github")
  * @param toolName - Tool name as defined by MCP server (e.g., "create_issue")
  * @param params - Tool parameters as object
- * @returns Tool execution result
- * @throws {Error} If tool execution fails or returns error
+ * @param resultSource - Which part of the response carries the result: `'structured'` prefers
+ *   `structuredContent` (tools with a declared output schema), `'content'` the content text
+ * @returns Tool execution result, or `undefined` for an empty success
+ * @throws {McpToolError} For every failure: `tool_error` (the tool reported `isError`),
+ *   `rpc_error` (a JSON-RPC error) or `call_failed` (transport, timeout or malformed response)
  *
  * @example
  * ```typescript
@@ -1085,105 +1416,37 @@ async function getConnection(serverId: string): Promise<ServerConnection> {
 export async function callMCPTool(
   serverId: string,
   toolName: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  resultSource: ResultSource = 'content'
 ): Promise<unknown> {
   debug(`Calling tool: ${serverId}.${toolName}`, params);
 
-  const connection = await getConnection(serverId);
+  try {
+    const connection = await getConnection(serverId);
 
-  const request: MCPToolCallRequest = {
-    jsonrpc: '2.0',
-    id: requestIdCounter++,
-    method: 'tools/call',
-    params: {
-      name: toolName,
-      arguments: params
-    }
-  };
-
-  debug('Sending tool call request:', JSON.stringify(request));
-  const response = await sendRequest(connection, request);
-  debug('Received tool call response:', JSON.stringify(response));
-
-  // Handle errors
-  if (response.error) {
-    throw new Error(
-      `Tool execution failed: ${response.error.message}\n` +
-      `Tool: ${serverId}.${toolName}\n` +
-      `Error code: ${response.error.code}`
-    );
-  }
-
-  // Extract result
-  if (!response.result) {
-    throw new Error(`No result in response from ${serverId}.${toolName}`);
-  }
-
-  // Handle error flag in result. `content` legitimately defaults to `[]` server-side (see
-  // MCPToolCallResponse), so this must not assume a first element exists. When `content` has no
-  // usable text, fall back to `structuredContent` before giving up: a structured error response
-  // can carry real detail that plain `content` omits.
-  if (response.result.isError) {
-    const errorContent = response.result.content?.[0];
-    const errorMessage =
-      errorContent?.text ||
-      (response.result.structuredContent != null
-        ? JSON.stringify(response.result.structuredContent)
-        : 'Unknown error');
-    throw new Error(`Tool returned error: ${errorMessage}`);
-  }
-
-  const content = response.result.content;
-
-  // `structuredContent`-only responses (spec 2025-06-18+): surfaced as a distinct case rather
-  // than falling through to the content[0] handling below, which it was never meant to reach.
-  // `!= null` is deliberate (not `!== undefined`): a literal `null` must be treated the same as
-  // an absent field rather than returned as if it were real structured data.
-  if ((!content || content.length === 0) && response.result.structuredContent != null) {
-    return response.result.structuredContent;
-  }
-
-  // A tool that legitimately has no output (e.g. a side-effect-only action) is indistinguishable
-  // here from a misbehaving server that forgot to populate `content`: per the MCP spec,
-  // `CallToolResult::success(vec![])` is a valid empty-but-successful result. We treat it as an
-  // error until the per-tool Result type generated in tool.ts.hbs (currently
-  // `Record<string, unknown> | unknown[] | string`) gains a void/undefined member to represent
-  // this case explicitly.
-  if (!content || content.length === 0) {
-    throw new Error(`Tool ${serverId}.${toolName} returned no content and no structuredContent`);
-  }
-
-  // Extract content from response
-  const firstContent = content[0];
-
-  if (!firstContent) {
-    // `content[0]` is present but null/falsy — a malformed entry, distinct from the
-    // empty/absent `content` case handled above. Prefer a populated `structuredContent` over
-    // failing, since the server may still have supplied usable structured data alongside a
-    // malformed content array.
-    if (response.result.structuredContent != null) {
-      return response.result.structuredContent;
-    }
-    throw new Error(
-      `Tool ${serverId}.${toolName} returned an invalid content[0] (null) and no structuredContent`
-    );
-  }
-
-  if (firstContent.type === 'text' && firstContent.text) {
-    // Try to parse as JSON if it looks like JSON
-    if (firstContent.text.trim().startsWith('{') || firstContent.text.trim().startsWith('[')) {
-      try {
-        return JSON.parse(firstContent.text);
-      } catch {
-        // Not valid JSON, return as string
-        return firstContent.text;
+    const request: MCPToolCallRequest = {
+      jsonrpc: '2.0',
+      id: requestIdCounter++,
+      method: 'tools/call',
+      params: {
+        name: toolName,
+        arguments: params
       }
-    }
-    return firstContent.text;
-  }
+    };
 
-  // Return the entire content object for non-text types
-  return firstContent;
+    debug('Sending tool call request:', JSON.stringify(request));
+    const response = await sendRequest(connection, request);
+    debug('Received tool call response:', JSON.stringify(response));
+
+    const value = extractResult(response, resultSource, serverId, toolName);
+    if (value !== undefined) {
+      recordObservedShape(serverId, toolName, value);
+    }
+    return value;
+  } catch (error) {
+    if (error instanceof McpToolError) throw error;
+    throw new McpToolError('call_failed', error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**

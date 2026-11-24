@@ -24,6 +24,7 @@ fn create_server_info(tool_count: usize) -> ServerInfo {
                 "required": ["arg1"]
             }),
             output_schema: Some(json!({"type": "boolean"})),
+            annotations: None,
         })
         .collect();
 
@@ -104,6 +105,7 @@ fn bench_tool_info_serialization(c: &mut Criterion) {
             }
         }),
         output_schema: Some(json!({"type": "object"})),
+        annotations: None,
     };
 
     c.bench_function("tool_info_serialization", |b| {
@@ -120,6 +122,7 @@ fn bench_tool_info_deserialization(c: &mut Criterion) {
         description: "A test tool for benchmarking".to_string(),
         input_schema: json!({"type": "object"}),
         output_schema: None,
+        annotations: None,
     };
 
     let json = serde_json::to_string(&tool).unwrap();

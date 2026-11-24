@@ -194,6 +194,9 @@ mcp-execution-cli completions bash
 > **v0.10 breaking change:** `_meta.json` metadata schema version bumped from 1 to 2. Files generated before this release will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
 
 > [!WARNING]
+> **Unreleased breaking change:** `_meta.json` metadata schema version bumped from 2 to 3 (tool annotations, result type text and origin, and manifest size were added). Files generated before this change will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
+
+> [!WARNING]
 > **v0.10 breaking change:** server IDs and tool names must now consist only of Unicode
 > `Identifier_Status=Allowed` characters. A remote MCP server exposing a tool named with a space or
 > `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright instead of being silently accepted —

@@ -3,7 +3,30 @@
 //! Defines data structures used during progressive code generation,
 //! where each tool is generated as a separate file.
 
+use crate::common::typescript::TS_IDENTIFIER_PATTERN;
+use crate::progressive::observed::{
+    OBSERVED_SHAPE_MAX_DEPTH, OBSERVED_SHAPE_MAX_KEY_LEN, OBSERVED_SHAPE_MAX_KEYS,
+    OBSERVED_SHAPE_MAX_LINE_BYTES,
+};
 use serde::{Deserialize, Serialize};
+
+/// How the generated tool function asks the runtime bridge for a tool's result.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_codegen::progressive::ResultSource;
+///
+/// assert_eq!(serde_json::to_string(&ResultSource::Structured).unwrap(), "\"structured\"");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultSource {
+    /// The text content of the result; used when the server declares no output schema.
+    Content,
+    /// The result's `structuredContent`; used when the server declares an output schema.
+    Structured,
+}
 
 /// Context for rendering a single tool template.
 ///
@@ -13,8 +36,7 @@ use serde::{Deserialize, Serialize};
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ToolContext;
-/// use serde_json::json;
+/// use mcp_execution_codegen::progressive::{ResultSource, ToolContext};
 ///
 /// let context = ToolContext {
 ///     server_id: "github".to_string(),
@@ -23,11 +45,15 @@ use serde::{Deserialize, Serialize};
 ///     server_id_literal: "github".to_string(),
 ///     typescript_name: "createIssue".to_string(),
 ///     description: "Creates a new issue".to_string(),
-///     input_schema: json!({"type": "object"}),
-///     properties: vec![],
+///     params_description: None,
+///     params_type: "{ title: string }".to_string(),
+///     result_type: "unknown | undefined".to_string(),
+///     result_source: ResultSource::Content,
+///     observed_hint: None,
 ///     category: Some("issues".to_string()),
 ///     keywords: Some("create,issue,new,bug".to_string()),
 ///     short_description: "Create a new issue".to_string(),
+///     annotation_tags: vec![],
 /// };
 ///
 /// assert_eq!(context.server_id, "github");
@@ -46,11 +72,17 @@ pub struct ToolContext {
     pub typescript_name: String,
     /// Human-readable description
     pub description: String,
-    /// JSON Schema for input parameters, with `description` fields sanitized
-    /// for safe interpolation into `JSDoc` block comments (see issue #102).
-    pub input_schema: serde_json::Value,
-    /// Extracted properties for template rendering
-    pub properties: Vec<PropertyInfo>,
+    /// Description of the whole input schema, sanitized for a `JSDoc` comment
+    pub params_description: Option<String>,
+    /// TypeScript type of the parameters, in the multi-line declaration form
+    pub params_type: String,
+    /// TypeScript type of the result, ending in `| undefined` for an empty success
+    pub result_type: String,
+    /// Which part of the tool result the generated function asks the bridge for
+    pub result_source: ResultSource,
+    /// `JSDoc` text describing a result shape observed in a past call, for tools that declare
+    /// no output schema
+    pub observed_hint: Option<String>,
     /// Optional category for tool grouping
     pub category: Option<String>,
     /// Optional keywords for discovery via grep/search
@@ -59,37 +91,8 @@ pub struct ToolContext {
     /// constructor falls back to `description` when no categorization short description is
     /// available, so `None` is not a state this type can represent.
     pub short_description: String,
-}
-
-/// Information about a single parameter property.
-///
-/// Used in Handlebars templates to render parameter type definitions.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::progressive::PropertyInfo;
-///
-/// let prop = PropertyInfo {
-///     name: "title".to_string(),
-///     typescript_type: "string".to_string(),
-///     description: Some("Issue title".to_string()),
-///     required: true,
-/// };
-///
-/// assert_eq!(prop.name, "title");
-/// assert!(prop.required);
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PropertyInfo {
-    /// Property name
-    pub name: String,
-    /// TypeScript type (e.g., "string", "number", "boolean")
-    pub typescript_type: String,
-    /// Optional description from schema
-    pub description: Option<String>,
-    /// Whether the property is required
-    pub required: bool,
+    /// `JSDoc` tag lines for the annotations the server stated, empty when none were
+    pub annotation_tags: Vec<String>,
 }
 
 /// Context for rendering the index.ts template.
@@ -301,6 +304,28 @@ pub struct BridgeContext {
     /// Maximum byte length for a single HTTP header value
     /// (`mcp_execution_core::MAX_HEADER_VALUE_LEN`).
     pub max_header_value_len: usize,
+    /// Maximum length in code points of server-supplied message text kept in a tool error
+    /// (`mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN`).
+    pub max_server_message_len: usize,
+    /// Longest run of variation selectors kept in server text
+    /// (`mcp_execution_core::untrusted::MAX_VARIATION_SELECTOR_RUN`).
+    pub max_variation_selector_run: usize,
+    /// Most variation selectors kept across a whole server text
+    /// (`mcp_execution_core::untrusted::MAX_TOTAL_VARIATION_SELECTORS`).
+    pub max_total_variation_selectors: usize,
+    /// Maximum nesting depth of a recorded observed shape.
+    pub observed_shape_max_depth: usize,
+    /// Maximum number of keys an object may have to be recorded key by key.
+    pub observed_shape_max_keys: usize,
+    /// Maximum length in characters of a recorded object key.
+    pub observed_shape_max_key_len: usize,
+    /// Maximum size in bytes of one recorded observed-shape line.
+    pub observed_shape_max_line_bytes: usize,
+    /// Anchored `RegExp` pattern source for the identifier keys a recorded shape may keep,
+    /// pre-escaped for embedding inside a single-quoted TypeScript string literal. Private
+    /// with an accessor for the same fail-open reason as `env_name_charset_pattern`: an empty
+    /// pattern would match every key.
+    identifier_pattern: String,
 }
 
 impl BridgeContext {
@@ -362,6 +387,21 @@ impl BridgeContext {
     pub fn env_name_charset_pattern(&self) -> &str {
         &self.env_name_charset_pattern
     }
+
+    /// Anchored `RegExp` pattern source for the identifier keys a recorded observed shape may
+    /// keep. Never empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::progressive::BridgeContext;
+    ///
+    /// assert!(!BridgeContext::default().identifier_pattern().is_empty());
+    /// ```
+    #[must_use]
+    pub fn identifier_pattern(&self) -> &str {
+        &self.identifier_pattern
+    }
 }
 
 impl Default for BridgeContext {
@@ -398,6 +438,17 @@ impl Default for BridgeContext {
             max_url_len: mcp_execution_core::MAX_URL_LEN,
             max_header_count: mcp_execution_core::MAX_HEADER_COUNT,
             max_header_value_len: mcp_execution_core::MAX_HEADER_VALUE_LEN,
+            max_server_message_len: mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN,
+            max_variation_selector_run: mcp_execution_core::untrusted::MAX_VARIATION_SELECTOR_RUN,
+            max_total_variation_selectors:
+                mcp_execution_core::untrusted::MAX_TOTAL_VARIATION_SELECTORS,
+            observed_shape_max_depth: OBSERVED_SHAPE_MAX_DEPTH,
+            observed_shape_max_keys: OBSERVED_SHAPE_MAX_KEYS,
+            observed_shape_max_key_len: OBSERVED_SHAPE_MAX_KEY_LEN,
+            observed_shape_max_line_bytes: OBSERVED_SHAPE_MAX_LINE_BYTES,
+            identifier_pattern: crate::progressive::generator::sanitize_ts_string_literal(
+                TS_IDENTIFIER_PATTERN,
+            ),
         }
     }
 }
@@ -416,11 +467,15 @@ mod tests {
             server_id_literal: "github".to_string(),
             typescript_name: "createIssue".to_string(),
             description: "Creates an issue".to_string(),
-            input_schema: json!({"type": "object"}),
-            properties: vec![],
+            params_description: None,
+            params_type: "{}".to_string(),
+            result_type: "unknown | undefined".to_string(),
+            result_source: ResultSource::Content,
+            observed_hint: None,
             category: Some("issues".to_string()),
             keywords: Some("create,issue,new".to_string()),
             short_description: "Create a new issue".to_string(),
+            annotation_tags: vec![],
         };
 
         assert_eq!(context.server_id, "github");
@@ -431,17 +486,15 @@ mod tests {
     }
 
     #[test]
-    fn test_property_info() {
-        let prop = PropertyInfo {
-            name: "title".to_string(),
-            typescript_type: "string".to_string(),
-            description: Some("Issue title".to_string()),
-            required: true,
-        };
-
-        assert_eq!(prop.name, "title");
-        assert_eq!(prop.typescript_type, "string");
-        assert!(prop.required);
+    fn test_result_source_serializes_as_template_literal() {
+        assert_eq!(
+            serde_json::to_value(ResultSource::Content).unwrap(),
+            json!("content")
+        );
+        assert_eq!(
+            serde_json::to_value(ResultSource::Structured).unwrap(),
+            json!("structured")
+        );
     }
 
     #[test]
@@ -487,6 +540,7 @@ mod tests {
         assert_ne!(context.forbidden_env_names(), [] as [String; 0]);
         assert_ne!(context.forbidden_env_prefix(), "");
         assert_ne!(context.env_name_charset_pattern(), "");
+        assert_ne!(context.identifier_pattern(), "");
 
         // #471: the DoS size/count ceilings must be populated from mcp_execution_core, not
         // left at zero (which would reject every config, silently breaking every generated

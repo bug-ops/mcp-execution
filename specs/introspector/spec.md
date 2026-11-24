@@ -47,7 +47,7 @@ impl Introspector {
 // Default: same as new()
 
 pub struct ServerInfo { pub id: ServerId, pub name: String, pub version: String, pub tools: Vec<ToolInfo>, pub capabilities: ServerCapabilities }
-pub struct ToolInfo { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub output_schema: Option<serde_json::Value> }
+pub struct ToolInfo { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub output_schema: Option<serde_json::Value>, pub annotations: Option<ToolAnnotations> /* #[serde(default, skip_serializing_if = "Option::is_none")] */ }
 pub struct ServerCapabilities { pub supports_tools: bool, pub supports_resources: bool, pub supports_prompts: bool }
 ```
 
@@ -251,55 +251,47 @@ open until `rmcp` exposes a JSON-body size knob.
   are referenced **by value** (not independently re-chosen) in
   `mcp-codegen`'s and `mcp-files`'s own derived resource bounds.
 
-## 9. Planned Changes (script-first direction, adopted 2026-11-24)
+## 9. Annotation Capture (#568)
+
+`ToolInfo.annotations: Option<mcp_execution_core::annotations::ToolAnnotations>` (serde
+`default`, omitted when `None`) carries what the server advertised for a tool; the types are in
+[[../core/spec#`annotations` module (`src/annotations.rs`, #568)]]. `build_tool_info` captures them
+through a private `capture_annotations(title, wire_annotations)`:
+
+- The title is `Tool.title`, falling back to `annotations.title`, and passes through
+  `AnnotationTitle::new` (sanitized, capped at `MAX_UNTRUSTED_FIELD_LEN`); a title that sanitizes to
+  nothing counts as absent.
+- Each of `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` becomes a three-valued
+  `Hint` (`From<Option<bool>>`); the SDK's documented defaults are never applied.
+- The result is `None` when the server stated no hint and sent no usable title, so omitting
+  `annotations` and sending an empty object capture identically; a title-only tool keeps its title
+  with four `NotStated` hints.
+- Contradictory hints (read-only with destructive) are stored as advertised.
+
+| ID | Requirement | Status |
+|---|---|---|
+| FR-034.8 | A tool's title and its four hints are captured into `ToolInfo` | implemented |
+| FR-034.9 | Each hint is a typed three-valued value; SDK defaults are not applied | implemented |
+| FR-034.10 | A tool with no annotations and no title is recorded as absent | implemented |
+| FR-034.11 | Values are recorded as advertised, not reinterpreted | implemented |
+| FR-034.12 | The captured payload is bounded: the title is capped by the sanitizer and hints carry no text | implemented in part: the payload is not added to the per-tool size checks at introspection (`MAX_SCHEMA_SIZE_BYTES` and the description cap apply to the schemas and description only); the bound is the title cap |
+| FR-034.13 | No code in this crate branches on an annotation; a missing annotation is never read as safe | implemented |
+
+**Constraints.** Annotations are untrusted hints from a possibly hostile server; the rmcp SDK's own
+documentation says clients should never make tool-use decisions from annotations received from
+untrusted servers. Nothing in this crate relaxes a check because a hint is present or has a given
+value. The sidecar field that persists the values is in
+[[../core/spec#`metadata` module (`src/metadata.rs`)]].
+
+Ask first: making any consumer read a hint for a decision (that belongs to the dry-run policy, #573).
+
+## 10. Planned Changes (script-first direction, adopted 2026-11-24)
 
 > [!warning] Not implemented
-> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
-> When a change lands, its content moves into the as-built sections above and the subsection is
-> removed in the same pull request.
-
-### Planned: capture tool annotations (#568)
-
-**Why.** An MCP server can attach annotations to each tool: a title and four behavioural hints
-(read-only, destructive, idempotent, open-world). The pinned SDK exposes them on every tool as
-`Tool.annotations: Option<ToolAnnotations>` plus a separate `Tool.title`
-(`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-3.10.0/src/model/tool.rs:17-39`;
-version from `Cargo.lock`). `ToolAnnotations` (`tool.rs:54`) holds an optional title and four
-`Option<bool>` hints, and its documentation says clients should never make tool-use decisions from
-annotations received from untrusted servers (`tool.rs:48`). This crate drops all of it:
-`build_tool_info` copies only name, description, input schema and output schema
-(`crates/mcp-introspector/src/lib.rs:1295-1300`), and `ToolInfo` has exactly those four fields
-(`lib.rs:237-246`). Later steps (dry run, catalog markers, honest generated text) cannot tell
-"read-only: true" from "not stated".
-
-**Requirements.**
-
-| ID | Requirement | Priority |
-|---|---|---|
-| FR-034.8 | WHEN a tool advertises annotations THE SYSTEM SHALL capture its title and its read-only, destructive, idempotent and open-world hints into `ToolInfo` | must |
-| FR-034.9 | THE SYSTEM SHALL represent each hint as a typed three-valued value (stated true, stated false, not stated) and SHALL NOT apply the SDK's documented defaults at capture | must |
-| FR-034.10 | WHEN a tool advertises no annotations THE SYSTEM SHALL record annotations as absent, not as an all-default value | must |
-| FR-034.11 | WHEN destructive or idempotent is stated while read-only is true THE SYSTEM SHALL record the values as advertised and not reinterpret them | should |
-| FR-034.12 | THE SYSTEM SHALL bound the captured annotation payload: the title is length-capped and the payload counts toward the per-tool size limits applied at introspection | must |
-| FR-034.13 | THE SYSTEM SHALL NOT branch on an annotation to relax validation, skip an approval or choose an execution path; a missing annotation SHALL NOT be read as safe | must |
-
-**Constraints.** Annotations are untrusted hints from a possibly hostile server. Nothing in this
-crate relaxes a check because a hint is present or has a given value. The title is server-supplied
-text and is sanitised under the constitution's untrusted-text rule before it reaches any rendered
-output. Hints carry no text. The annotations value is one struct on `ToolInfo`, constructible
-through capture or an explicit builder, and implements `Send + Sync + Debug`. The sidecar field
-that persists these values is registered in
-[[../core/spec#Planned: `_meta.json` schema version 3 (#568)]].
-
-**Open decisions.**
-
-- [NEEDS CLARIFICATION: Whether the SDK tool-level title or the annotation title wins when both are present, and whether both are stored.]
-- [NEEDS CLARIFICATION: Whether the title is sanitised at capture or only when rendered; a bound at capture is required either way.]
-- [NEEDS CLARIFICATION: Which size-limit variant an oversized annotation payload reports; the closed `ResourceKind` set lives in the core block.]
-- Ask first: adding a field to the public `ToolInfo` (a struct literal elsewhere stops compiling); adding a variant to `ResourceKind`; making any consumer read a hint for a decision (that belongs to the dry-run policy, #573); adding a dependency.
-
-**Depends on / blocks.** Owned by the v3 bump (#568). Blocks #566 (annotation markers), #573 (dry
-run) and the annotation rows of the drift check (#580).
+> The annotation capture of #568 is implemented and described in
+> [[#9. Annotation Capture (#568)]]. Nothing in this section exists in the code yet. Each subsection
+> names its tracking issue. When a change lands, its content moves into the as-built sections above
+> and the subsection is removed in the same pull request.
 
 ### Planned: keep the freshness hints of a tools listing (#580)
 
@@ -378,5 +370,5 @@ the only client, a Rust call path would be a second way to call tools). Blocks #
 - [[../decisions/ADR-529-rmcp-3-5-latest-promotion-revisit]] — handshake
   protocol-version decision and revisit gate
 - [[../server/spec#introspect_server]] — MCP-tool-level wrapper around this crate
-- [[#9. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — annotation capture, freshness hints, shared connect step
+- [[#10. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — freshness hints, shared connect step; [[#9. Annotation Capture (#568)]] — implemented
 - [[../runtime/spec]] — the planned tool-call path that reuses the shared connect step

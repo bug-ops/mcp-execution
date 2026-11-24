@@ -518,6 +518,7 @@ fn create_test_server_info(server_id: ServerId) -> ServerInfo {
                 "required": ["message"]
             }),
             output_schema: None,
+            annotations: None,
         }],
     }
 }

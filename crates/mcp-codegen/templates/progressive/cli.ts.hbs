@@ -1,0 +1,128 @@
+/**
+ * Single-call entry point shared by every generated tool file.
+ *
+ * A tool file ends with `runIfMain(import.meta.url, tool);`. When the file is the process entry
+ * point (`node tool.ts '{"param":"value"}'`) the tool is called with the JSON argument and the
+ * result is printed as one compact JSON line; when it is merely imported, nothing happens.
+ *
+ * @module cli
+ */
+
+import { realpathSync } from 'fs';
+import { resolve } from 'path';
+import { fileURLToPath } from 'url';
+import { McpToolError } from './mcp-bridge.ts';
+
+/** Failure kinds reported on stderr. */
+type ErrorKind = 'invalid_arguments' | 'tool_error' | 'rpc_error' | 'call_failed';
+
+/** The single JSON line printed to stderr when a call fails. */
+interface ErrorLine {
+  error: string;
+  kind: ErrorKind;
+  server_message?: string;
+  server_message_truncated?: boolean;
+  stack?: string;
+}
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * Whether `moduleUrl` is the file Node was started with. Both sides go through `realpath`,
+ * so a symlinked directory, a path with spaces or non-ASCII characters (percent-encoded in the
+ * URL) and a relative `argv[1]` all compare equal.
+ */
+function isEntryPoint(moduleUrl: string): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return canonicalPath(fileURLToPath(moduleUrl)) === canonicalPath(entry);
+  } catch {
+    return false;
+  }
+}
+
+function parseArguments(raw: string | undefined): Record<string, unknown> {
+  if (raw === undefined || raw === '') return {};
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new TypeError('arguments must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function errorLine(error: unknown): ErrorLine {
+  const debug = process.env.MCPBRIDGE_DEBUG === '1';
+  const stack = debug && error instanceof Error ? { stack: error.stack } : {};
+  if (error instanceof McpToolError) {
+    const server =
+      error.serverMessage === undefined
+        ? {}
+        : {
+            server_message: error.serverMessage,
+            server_message_truncated: error.serverMessageTruncated
+          };
+    return { error: error.message, kind: error.kind, ...server, ...stack };
+  }
+  return {
+    error: error instanceof Error ? error.message : 'Tool call failed',
+    kind: 'call_failed',
+    ...stack
+  };
+}
+
+/**
+ * Writes `line` and exits inside the write callback: `process.exit` straight after a write to a
+ * pipe can cut off output that is still buffered, and live bridge child handles keep the
+ * process alive, so setting `exitCode` alone would hang.
+ */
+function emitAndExit(stream: NodeJS.WriteStream, line: string, code: number): void {
+  stream.write(line + '\n', () => process.exit(code));
+}
+
+async function run<P extends Record<string, unknown>>(
+  tool: (params: P) => Promise<unknown>
+): Promise<void> {
+  let params: P;
+  try {
+    params = parseArguments(process.argv[2]) as P;
+  } catch {
+    const line: ErrorLine = { error: 'Arguments must be a JSON object', kind: 'invalid_arguments' };
+    emitAndExit(process.stderr, JSON.stringify(line), 1);
+    return;
+  }
+
+  try {
+    const result = await tool(params);
+    if (result === undefined) process.exit(0);
+    emitAndExit(process.stdout, JSON.stringify(result), 0);
+  } catch (error) {
+    emitAndExit(process.stderr, JSON.stringify(errorLine(error)), 1);
+  }
+}
+
+/**
+ * Runs `tool` with the JSON object in `argv[2]` (a missing or empty argument means `{}`) when
+ * `moduleUrl` is the process entry point.
+ *
+ * Success prints one compact JSON line to stdout and exits 0 (an empty success prints nothing).
+ * Failure prints one JSON line to stderr and exits 1: `{"error", "kind"}`, plus
+ * `server_message` and `server_message_truncated` when the server supplied text, plus `stack`
+ * when `MCPBRIDGE_DEBUG=1`. Argument text is never echoed.
+ *
+ * @param moduleUrl - `import.meta.url` of the tool file
+ * @param tool - The tool function to call
+ */
+export function runIfMain<P extends Record<string, unknown>>(
+  moduleUrl: string,
+  tool: (params: P) => Promise<unknown>
+): void {
+  if (!isEntryPoint(moduleUrl)) return;
+  void run(tool);
+}

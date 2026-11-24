@@ -45,17 +45,21 @@ Code drive tool categorization with its own natural-language understanding
 instead of a second LLM call, and it can render Claude Code `SKILL.md`
 integration files from a server's already-generated tools.
 
-> [!warning] Adopted direction, not implemented
+> [!warning] Adopted direction, partly implemented
 > On 2026-11-24 the maintainer adopted a **script-first** direction: turn any
 > MCP server into a typed TypeScript SDK that an agent programs against, so
 > loops, joins and large results stay in code and only the answer reaches the
 > context window. Hosts now defer tool definitions themselves, so the figures
 > above are not the project's headline any more and are not a measured result;
 > measurement is planned (#562). The direction is tracked as epics #555 to #559
-> and recorded as planned requirements (FR-030 to FR-046) in the
+> and recorded as requirements (FR-030 to FR-046) in the
 > [[BRD-mcp-execution-2026-07-27|BRD]], [[SRS-mcp-execution-2026-07-27|SRS]] and
-> [[NFR-mcp-execution-2026-07-27|NFR]], and as "Planned Changes" sections in the
-> block specs. Everything else in this package describes the released code.
+> [[NFR-mcp-execution-2026-07-27|NFR]]. The generated-SDK part (#556: typed results #482, lossless
+> types #565 and #584, catalog #566, slim tool files #567, annotations #568, quiet single-call
+> output #570 and #583, observed result shapes #587) is **implemented** and described as built in
+> the block specs, chiefly [[codegen/spec#13. Script-First Capabilities (implemented, #556)]]. The
+> runner, journal, dry run, one-shot call, saved scripts and drift check remain planned and live in
+> the "Planned Changes" sections of the block specs.
 
 ## Business & Requirements Documents
 
@@ -161,9 +165,9 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
               └───────────────┬───────────────┘
                               ▼
                     GeneratedCode { files: Vec<GeneratedFile> }
-              (index.ts, {tool}.ts × N, _runtime/mcp-bridge.ts,
-               package.json, tsconfig.json, _meta.json — 7 files for
-               a 2-tool server; sanitized JSDoc/TS-literal injection
+              (index.ts, catalog.ts, {tool}.ts × N, _runtime/mcp-bridge.ts,
+               _runtime/cli.ts, package.json, tsconfig.json, _meta.json —
+               9 files for a 2-tool server; sanitized JSDoc/TS-literal injection
                defenses applied before Handlebars renders; bounded by
                MAX_GENERATED_FILES/MAX_GENERATED_BYTES, derived from
                mcp-introspector's own bounds)
@@ -215,11 +219,13 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
 
 3. **`_meta.json` is the wire contract between codegen and everything that
    reads tool metadata back.** Schema owned by `mcp-core::metadata`
-   (`METADATA_SCHEMA_VERSION`), written by `mcp-codegen`, read by
+   (`METADATA_SCHEMA_VERSION` = 3), written by `mcp-codegen` (compact JSON), read by
    `mcp-skill::scan_tools_directory` — which **cross-checks it against the
    `.ts` files actually on disk** rather than trusting it blindly (a
    sidecar entry with no matching file is a hard error; a `.ts` file with
-   no sidecar entry is a non-fatal, surfaced warning). This replaced a
+   no sidecar entry is a non-fatal, surfaced warning; `index.ts` and
+   `catalog.ts` are exempt). The producer warns when the sidecar exceeds
+   the shared `MAX_METADATA_FILE_BYTES` cap the consumer enforces. This replaced a
    historical regex-based re-parse of generated TypeScript that could never
    recover parameter descriptions.
 
@@ -256,23 +262,23 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
    structural line breaks and, for LLM-facing text specifically, wrap it in
    an explicit, unforgeable `<untrusted-data>` boundary.
 
-### Planned contract changes
+### Contract changes of the script-first work
 
-> [!warning] Not implemented
-> The data flow and the seven contracts above describe today's code. The
-> changes below are adopted but not built; each lands with an update to the
-> contract it changes.
+> [!info] Implemented (#556)
+> Contracts 2 and 3 changed as described below and the text above reflects them.
 
-- **Contract 3, metadata v3 (#568).** `_meta.json` version 3 adds tool
-  annotations and further per-tool fields in one registry owned by
-  [[core/spec]]; a version 2 directory is rejected with a message to
-  regenerate. No other block defines its own metadata field.
-- **Contract 2, fixed-file bound chain (#566, #567, #571, #575).** A change
-  that adds or removes a fixed generated file follows the fixed-file rule in
-  [[codegen/spec]] (planned changes); the catalog (#566), the shared command-line
-  module (#567) and the runner's helpers (#571) may add one, and retiring the
-  bridge (#575) removes one. The generated-bytes bound is re-derived to count an output schema
-  per tool (#482).
+- **Contract 3, metadata v3 (#568), implemented.** `_meta.json` version 3 adds tool
+  annotations, `result_type`, `result_type_origin` and `manifest_size_bytes` in one registry
+  owned by [[core/spec]]; a version 2 directory is rejected with a message to regenerate. No other
+  block defines its own metadata field. The file is compact JSON, and `MAX_METADATA_FILE_BYTES` is
+  shared by producer and consumer.
+- **Contract 2, fixed-file bound chain (#566, #567), implemented.** The catalog and the
+  shared command-line module raised the fixed files to 7 (`MAX_GENERATED_FILES` = `MAX_TOOL_COUNT` + 7),
+  and the generated-bytes bound is `MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX`
+  with a two-stage per-tool degrade ([[codegen/spec#9. Resource-Exhaustion Bounds (CWE-400)]]); `mcp-files`
+  follows by equality. Still pending: the runner's helpers (#571) may add a fixed file, and retiring
+  the bridge (#575) removes one, each following the fixed-file rule in
+  [[codegen/spec#14. Planned Changes (generated bridge retirement, #575)]].
 - **Contract 6, retirement of the generated bridge (#575).** If the runtime
   decision (#569) lands on a single Rust MCP client, wrappers call tools through
   a per-script helper and the bridge's own connection code, mirrored validation
@@ -310,7 +316,7 @@ the real source, not assumed):
 - **Generated file set is incomplete.** `CLAUDE.md`'s example tree shows
   only `index.ts`, per-tool `.ts` files, and `_runtime/mcp-bridge.ts`. The
   real generator (`ProgressiveGenerator::generate_with_categories`) also
-  always emits `package.json`, `tsconfig.json`, and a `_meta.json`
+  always emits `catalog.ts`, `_runtime/cli.ts`, `package.json`, `tsconfig.json`, and a `_meta.json`
   structured-metadata sidecar — the latter is load-bearing (it's the
   contract `mcp-skill` reads instead of re-parsing TypeScript).
   `CLAUDE.md` says nothing about the required `npm install` post-generation

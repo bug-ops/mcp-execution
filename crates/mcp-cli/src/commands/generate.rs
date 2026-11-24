@@ -17,6 +17,7 @@ use mcp_execution_files::{ExportOptions, FilesBuilder};
 use mcp_execution_introspector::{Introspector, ServerInfo};
 use mcp_execution_skill::validate_server_id;
 use serde::Serialize;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -99,6 +100,8 @@ fn format_size(bytes: usize) -> String {
 ///   there is no "ignored override" state to document.
 /// * `name` - Custom server name for directory (default: `server_id`)
 /// * `output_dir` - Custom output directory (default: ~/.claude/servers/)
+/// * `observed_shapes` - Optional JSON-lines file of result shapes recorded by a past run of
+///   the generated tools; only its last 4 MiB are read (see `read_observed_tail`)
 /// * `dry_run` - When true, preview files without writing to disk
 /// * `output_format` - Output format (json, text, pretty)
 ///
@@ -135,6 +138,7 @@ fn format_size(bytes: usize) -> String {
 ///     },
 ///     None,
 ///     None,
+///     None,
 ///     false,
 ///     OutputFormat::Pretty
 /// ).await?;
@@ -151,6 +155,7 @@ fn format_size(bytes: usize) -> String {
 ///     },
 ///     Some("my-custom-name".to_string()),
 ///     Some(PathBuf::from("/tmp/generated")),
+///     Some(PathBuf::from("/tmp/observed-shapes.jsonl")),
 ///     false,
 ///     OutputFormat::Json
 /// ).await?;
@@ -161,9 +166,14 @@ pub async fn run(
     source: ServerSource,
     name: Option<String>,
     output_dir: Option<PathBuf>,
+    observed_shapes: Option<PathBuf>,
     dry_run: bool,
     output_format: OutputFormat,
 ) -> Result<ExitCode> {
+    let observed_jsonl = observed_shapes
+        .as_deref()
+        .map(read_observed_tail)
+        .transpose()?;
     // Captured before `source` is consumed below: an id resolved from
     // `--from-config` without a `--name` override is the one case
     // `resolve_server_dir_name` isn't a redundant backstop for (see its doc
@@ -181,7 +191,7 @@ pub async fn run(
     }
 
     let server_dir_name = resolve_server_dir_name(&server_info, id_from_unvalidated_config_key)?;
-    let generated_code = generate_code(&server_info, &server_config)?;
+    let generated_code = generate_code(&server_info, &server_config, observed_jsonl.as_deref())?;
 
     let base_dir = resolve_base_dir(output_dir)?;
     let output_path = base_dir.join(&server_dir_name);
@@ -246,13 +256,56 @@ async fn discover_server_info(
     Ok(server_info)
 }
 
-/// Generates progressive-loading TypeScript code for `server_info`.
+/// Maximum number of bytes read from the end of an `--observed-shapes` file.
+const OBSERVED_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Reads the last [`OBSERVED_TAIL_BYTES`] of the observed-shapes file at `path`.
+///
+/// The recorder only ever appends, so the newest shapes are at the end and a file of any size
+/// is handled without error. When the read starts past offset 0 the first, possibly partial,
+/// line is dropped. Bytes that are not valid UTF-8 are replaced, which the line parser then
+/// rejects like any other malformed line.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened, measured, or read.
+fn read_observed_tail(path: &Path) -> Result<String> {
+    let read_failed = || format!("failed to read observed shapes from {}", path.display());
+    let mut file = std::fs::File::open(path).with_context(read_failed)?;
+    let length = file.metadata().with_context(read_failed)?.len();
+    let start = length.saturating_sub(OBSERVED_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start))
+        .with_context(read_failed)?;
+    let mut bytes = Vec::new();
+    file.take(OBSERVED_TAIL_BYTES)
+        .read_to_end(&mut bytes)
+        .with_context(read_failed)?;
+    let complete_lines = if start > 0 {
+        bytes
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(&[][..], |newline| &bytes[newline + 1..])
+    } else {
+        &bytes[..]
+    };
+    Ok(String::from_utf8_lossy(complete_lines).into_owned())
+}
+
+/// Generates progressive-loading TypeScript code for `server_info`, with the result shapes in
+/// `observed_jsonl` when given.
 ///
 /// # Errors
 ///
 /// Returns an error if the code generator fails to initialize or generate code.
-fn generate_code(server_info: &ServerInfo, server_config: &ServerConfig) -> Result<GeneratedCode> {
-    let generator = ProgressiveGenerator::new().context("failed to create code generator")?;
+fn generate_code(
+    server_info: &ServerInfo,
+    server_config: &ServerConfig,
+    observed_jsonl: Option<&str>,
+) -> Result<GeneratedCode> {
+    let mut generator = ProgressiveGenerator::new().context("failed to create code generator")?;
+    if let Some(jsonl) = observed_jsonl {
+        generator = generator.with_observed_shapes(jsonl);
+    }
     let generated_code = generator
         .generate(server_info, server_config)
         .context("failed to generate TypeScript code")?;
@@ -511,6 +564,7 @@ mod tests {
                     }
                 }),
                 output_schema: None,
+                annotations: None,
             }],
             capabilities: ServerCapabilities {
                 supports_tools: true,
@@ -678,6 +732,42 @@ mod tests {
     }
 
     #[test]
+    fn test_read_observed_tail_returns_a_small_file_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("observed.jsonl");
+        std::fs::write(&path, "first\nsecond\n").unwrap();
+
+        assert_eq!(read_observed_tail(&path).unwrap(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn test_read_observed_tail_keeps_only_whole_lines_from_the_last_4_mib() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("observed.jsonl");
+        let line = format!("{}\n", "x".repeat(99));
+        let mut content = String::from("oldest\n");
+        while content.len() < 6 * 1024 * 1024 {
+            content.push_str(&line);
+        }
+        content.push_str("newest\n");
+        std::fs::write(&path, &content).unwrap();
+
+        let tail = read_observed_tail(&path).unwrap();
+
+        assert!(tail.len() < 4 * 1024 * 1024);
+        assert!(tail.ends_with("newest\n"));
+        assert!(!tail.contains("oldest"));
+        assert!(tail.lines().all(|l| l == "newest" || l == "x".repeat(99)));
+    }
+
+    #[test]
+    fn test_read_observed_tail_reports_a_missing_file() {
+        let error = read_observed_tail(Path::new("/nonexistent/observed.jsonl")).unwrap_err();
+
+        assert!(format!("{error:#}").contains("failed to read observed shapes"));
+    }
+
+    #[test]
     fn test_format_size_bytes() {
         assert_eq!(format_size(0), "0 B");
         assert_eq!(format_size(512), "512 B");
@@ -808,7 +898,7 @@ mod tests {
             connect_timeout_secs: Some(0),
             discover_timeout_secs: None,
         };
-        let result = run(source, None, None, false, OutputFormat::Json).await;
+        let result = run(source, None, None, None, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -836,7 +926,7 @@ mod tests {
             connect_timeout_secs: Some(5),
             discover_timeout_secs: Some(90),
         };
-        let result = run(source, None, None, false, OutputFormat::Json).await;
+        let result = run(source, None, None, None, false, OutputFormat::Json).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

@@ -42,6 +42,7 @@ fn create_simple_tool(index: usize) -> ToolInfo {
             "required": ["id"]
         }),
         output_schema: None,
+        annotations: None,
     }
 }
 
@@ -71,6 +72,7 @@ fn create_moderate_tool(index: usize) -> ToolInfo {
                 "code": {"type": "number"}
             }
         })),
+        annotations: None,
     }
 }
 
@@ -143,6 +145,7 @@ fn create_complex_tool(index: usize) -> ToolInfo {
                 }
             }
         })),
+        annotations: None,
     }
 }
 
@@ -229,6 +232,7 @@ fn bench_generator_initialization(c: &mut Criterion) {
 
 /// Benchmarks type conversion performance.
 fn bench_type_conversion(c: &mut Criterion) {
+    use mcp_execution_codegen::common::ts_types::{RenderStyle, convert_schema};
     use mcp_execution_codegen::common::typescript;
 
     let mut group = c.benchmark_group("type_conversion");
@@ -237,7 +241,7 @@ fn bench_type_conversion(c: &mut Criterion) {
     let simple_schema = json!({"type": "string"});
     group.bench_function("simple_schema", |b| {
         b.iter(|| {
-            let result = typescript::json_schema_to_typescript(black_box(&simple_schema));
+            let result = convert_schema(black_box(&simple_schema)).render(RenderStyle::Declaration);
             black_box(result)
         });
     });
@@ -263,15 +267,16 @@ fn bench_type_conversion(c: &mut Criterion) {
 
     group.bench_function("complex_schema", |b| {
         b.iter(|| {
-            let result = typescript::json_schema_to_typescript(black_box(&complex_schema));
+            let result =
+                convert_schema(black_box(&complex_schema)).render(RenderStyle::Declaration);
             black_box(result)
         });
     });
 
-    // Property extraction
-    group.bench_function("property_extraction", |b| {
+    // Compact rendering, as used for the catalog and stored texts
+    group.bench_function("compact_rendering", |b| {
         b.iter(|| {
-            let result = typescript::extract_properties(black_box(&complex_schema));
+            let result = convert_schema(black_box(&complex_schema)).render(RenderStyle::Compact);
             black_box(result)
         });
     });

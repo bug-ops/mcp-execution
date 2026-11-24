@@ -1,69 +1,36 @@
 //! TypeScript code generation utilities.
 //!
-//! Provides functions to convert JSON Schema to TypeScript types
-//! and generate type-safe TypeScript code.
+//! Provides name-casing and identifier helpers and the exact string-literal encoder used when
+//! generating TypeScript. Schema conversion lives in [`ts_types`](crate::common::ts_types).
 //!
 //! # Examples
 //!
 //! ```
 //! use mcp_execution_codegen::common::typescript;
-//! use serde_json::json;
 //!
-//! let schema = json!({
-//!     "type": "object",
-//!     "properties": {
-//!         "name": {"type": "string"},
-//!         "age": {"type": "number"}
-//!     }
-//! });
-//!
-//! let ts_type = typescript::json_schema_to_typescript(&schema);
+//! assert_eq!(typescript::to_camel_case("send_message"), "sendMessage");
 //! ```
 
-use serde_json::Value;
-use std::collections::HashSet;
+use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
 
-/// Maximum nesting depth [`json_schema_to_typescript`] will descend into before treating the
-/// remainder of a branch as opaque, rather than recursing further.
+/// Maximum nesting depth [`convert_schema`](crate::common::ts_types::convert_schema) descends
+/// into before it renders the remainder of a branch as `unknown` and records a depth
+/// diagnostic.
 ///
-/// The `JSDoc` description sanitizer in `progressive::generator` uses the same cap. Both
-/// functions recurse into every nested `object`/`array` schema with no depth limit of
-/// their own, and `mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES` bounds a schema's
-/// *serialized byte size*, not its nesting depth — so nothing in this crate stops a caller from
-/// handing either function an arbitrarily deep, directly-constructed `serde_json::Value` (e.g.
-/// built by hand via `Value::Object`/`Map`, as in this module's own tests). That is the actual
-/// threat this constant defends against: **not** a schema arriving over the wire from a target
-/// MCP server. `input_schema` there is deserialized by `serde_json` from a `tools/list`
-/// response, and this workspace never raises or disables that deserializer's own default
-/// recursion limit (128 — no `disable_recursion_limit`/`unbounded_depth` anywhere in the
-/// dependency tree). Measured through a real `tools/list` envelope, that limit caps *reachable*
-/// nesting at 122 levels for an array-shaped schema and ~61 levels for `properties`-nested
-/// objects (each object level costs two parser recursion levels: the wrapper and its
-/// `properties` map) — a server that sends anything deeper gets its response line dropped as a
-/// parse error before `mcp-execution-introspector` ever builds a `ToolInfo` from it, let alone
-/// hands it to this crate. So on the wire path, this cap can never fire, let alone protect
-/// against a stack overflow.
+/// Every descent counts: nested objects, array items, union and intersection members, and each
+/// `$ref` hop. `mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES` bounds a schema's serialized
+/// size, not its nesting depth, so this bound is what keeps the converter's recursion, and the
+/// rendering of its result, from overflowing the stack on a deeply nested `Value`.
 ///
-/// This cap is therefore defense-in-depth for direct callers of these two functions — bounding
-/// a `Value` handed straight to `json_schema_to_typescript` or the `JSDoc` sanitizer, regardless
-/// of provenance — not a fix for a reachable wire-path denial of service, and **not** a
-/// guarantee that covers the rest of the `ProgressiveGenerator::generate`/
-/// `generate_with_categories` pipeline built on top of them. That pipeline has other
-/// unconditionally-recursive touches on the same schema this cap does not reach: e.g.
-/// `progressive::generator`'s `create_tool_context` clones `tool.input_schema` (an
-/// unguarded, recursive `Value::Clone`) before ever calling the capped sanitizer, and the
-/// schema is later re-serialized (`serde_json::to_vec`) and rendered through Handlebars, and
-/// eventually dropped (`Value`'s `Drop` impl is itself recursive) — none of which this constant
-/// bounds. 128 is set at the wire path's own ceiling (comfortably above the 122 levels a real
-/// `tools/list` response can ever produce, so no schema that actually arrives via introspection
-/// is ever clipped) while still bounding the unconditionally-recursive descent for a `Value`
-/// passed directly to either of these two functions.
+/// A schema arriving over the wire from an MCP server is already limited by `serde_json`'s own
+/// default recursion limit (128, never raised in this workspace): a response nested deeper than
+/// about 122 array levels, or about 61 `properties` levels, is dropped as a parse error before a
+/// `ToolInfo` is built. The value 128 sits at that ceiling, so a schema that arrives through
+/// introspection is never clipped. The ceiling is coupled to `serde_json`'s default; if that
+/// changes, re-check that this bound never clips a real wire schema.
 ///
-/// That ceiling is coupled to `serde_json`'s own default recursion limit staying at 128: this
-/// value isn't an arbitrary round number, it's chosen to sit at the wire path's current ceiling
-/// specifically because that upstream default is 128. If a future `serde_json` release changes
-/// its own default, or this workspace ever configures a different limit, this constant's "never
-/// clips a real wire schema" property needs re-verifying against the new ceiling.
+/// The bound does not cover the rest of the generation pipeline: cloning, serializing and
+/// dropping a `serde_json::Value` stay recursive without a limit.
 ///
 /// # Examples
 ///
@@ -172,231 +139,83 @@ pub fn sanitize_ts_identifier(s: &str) -> String {
     result
 }
 
-/// Disambiguates `base` against the `used` set by appending a numeric suffix
-/// (`_2`, `_3`, ...) until the candidate is not already present, then reserves the
-/// winning candidate by inserting it into `used`.
+/// Anchored pattern source (JavaScript `RegExp` syntax) matching the ASCII identifiers that
+/// render as bare property keys.
 ///
-/// Shared by every call site that maps untrusted, sanitized names into a namespace where
-/// distinct source names can collide after sanitization (e.g. sibling schema keys or tool
-/// names) — collisions must be disambiguated deterministically rather than silently
-/// overwriting one another.
-pub(crate) fn disambiguate_identifier(base: &str, used: &mut HashSet<String>) -> String {
-    let mut candidate = base.to_string();
-    let mut suffix = 2;
-    while !used.insert(candidate.clone()) {
-        candidate = format!("{base}_{suffix}");
-        suffix += 1;
-    }
-    candidate
+/// Rendered into the generated runtime bridge so its observed-shape recorder applies the same
+/// predicate as the converter's bare-key rule instead of a hand-copied pattern;
+/// [`is_bare_identifier`] is the same predicate in Rust.
+pub(crate) const TS_IDENTIFIER_PATTERN: &str = "^[A-Za-z_$][A-Za-z0-9_$]*$";
+
+/// Whether `s` matches [`TS_IDENTIFIER_PATTERN`]: an ASCII identifier usable as a bare key.
+pub(crate) fn is_bare_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
-/// Converts JSON Schema type to TypeScript type.
+/// Sanitizes a server-controlled string for safe interpolation into `JSDoc` block comments.
 ///
-/// Maps JSON Schema primitive types to their TypeScript equivalents.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::common::typescript::json_type_to_typescript;
-///
-/// assert_eq!(json_type_to_typescript("string"), "string");
-/// assert_eq!(json_type_to_typescript("number"), "number");
-/// assert_eq!(json_type_to_typescript("integer"), "number");
-/// assert_eq!(json_type_to_typescript("boolean"), "boolean");
-/// assert_eq!(json_type_to_typescript("unknown_type"), "unknown");
-/// ```
-#[must_use]
-pub fn json_type_to_typescript(json_type: &str) -> &'static str {
-    match json_type {
-        "string" => "string",
-        "number" | "integer" => "number",
-        "boolean" => "boolean",
-        "array" => "unknown[]",
-        "object" => "Record<string, unknown>",
-        "null" => "null",
-        _ => "unknown",
+/// Neutralizes control characters (C0, DEL, C1 — everything `char::is_control` reports —
+/// plus U+2028 LINE SEPARATOR/U+2029 PARAGRAPH SEPARATOR, which ECMAScript treats as line
+/// terminators even though they aren't in the control-character category) by delegating to
+/// the shared [`mcp_execution_core::untrusted::sanitize_untrusted_text`], which *replaces*
+/// each with a space rather than deleting it — deleting would glue adjacent words together
+/// (`"tab\tseparated"` -> `"tabseparated"`) and, more importantly, would let a control
+/// character sitting between `*` and `/` collapse into a live `JSDoc` comment terminator once
+/// removed. This neutralization runs *before* the `*/` escape step for exactly that reason:
+/// escaping first would see no `*/` match (the control character still separates them), then
+/// deleting/collapsing that character afterward would reopen the comment. Truncation to
+/// `max_len` runs last, after escaping, so a `*/` straddling the truncation boundary is
+/// already widened to `*\/` and cannot be split back into a bare `*/` by the cut.
+pub(crate) fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
+    let neutralized = mcp_execution_core::untrusted::sanitize_untrusted_text(s, usize::MAX);
+    let sanitized = neutralized.replace("*/", "*\\/");
+    if sanitized.chars().count() > max_len {
+        sanitized.chars().take(max_len).collect()
+    } else {
+        sanitized
     }
 }
 
-/// Converts a JSON Schema to TypeScript type definition.
-///
-/// Handles complex schemas including objects, arrays, and nested types.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::common::typescript::json_schema_to_typescript;
-/// use serde_json::json;
-///
-/// let schema = json!({
-///     "type": "object",
-///     "properties": {
-///         "name": {"type": "string"},
-///         "age": {"type": "number"}
-///     },
-///     "required": ["name"]
-/// });
-///
-/// let ts = json_schema_to_typescript(&schema);
-/// assert!(ts.contains("name: string"));
-/// ```
-#[must_use]
-pub fn json_schema_to_typescript(schema: &Value) -> String {
-    let mut cap_hit = false;
-    let ts_type = json_schema_to_typescript_at_depth(schema, 0, &mut cap_hit);
-    if cap_hit {
-        // Known limitation: `extract_properties` calls this function once per top-level
-        // property, so a schema whose properties each nest deeply logs once per affected
-        // property rather than once per tool, and this warning carries no tool/server
-        // identifier to correlate it back to the originating `generate_with_categories` call.
-        tracing::warn!(
-            max_depth = MAX_SCHEMA_RECURSION_DEPTH,
-            "schema nesting exceeded MAX_SCHEMA_RECURSION_DEPTH; branches beyond that depth were \
-             rendered as an opaque `unknown` type"
-        );
-    }
-    ts_type
+/// The `\uXXXX` escape of a character in the Basic Multilingual Plane.
+fn unicode_escape(c: char) -> String {
+    format!("\\u{:04x}", u32::from(c))
 }
 
-/// Depth-tracked implementation backing [`json_schema_to_typescript`].
+/// Returns `s` as the body of a single-quoted TypeScript string literal that evaluates back to
+/// exactly `s`, or `None` when that cannot be guaranteed.
 ///
-/// Once `depth` reaches [`MAX_SCHEMA_RECURSION_DEPTH`], the current branch is treated as
-/// opaque (`unknown`/`unknown[]`) instead of recursing further — see that constant's docs for
-/// what this cap actually defends against. `cap_hit` is set (never cleared) the first time any
-/// branch trips the cap, so the public wrapper can log once per call rather than once per
-/// clipped branch.
-fn json_schema_to_typescript_at_depth(schema: &Value, depth: usize, cap_hit: &mut bool) -> String {
-    if depth >= MAX_SCHEMA_RECURSION_DEPTH {
-        *cap_hit = true;
-        return "unknown".to_string();
+/// Control characters, quotes, backslashes and the line separators U+2028/U+2029 are escaped.
+/// `None` above [`MAX_UNTRUSTED_FIELD_LEN`] characters, or when the text contains a character
+/// the shared sanitizer would neutralize (bidi controls, the Unicode Tags block, zero-width
+/// operators, variation-selector runs): such text cannot be kept both exact and safe.
+pub(crate) fn ts_string_literal_exact(s: &str) -> Option<String> {
+    if s.chars().count() > MAX_UNTRUSTED_FIELD_LEN {
+        return None;
     }
-
-    match schema {
-        Value::Object(obj) => {
-            // Get type field
-            let schema_type = obj
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-
-            match schema_type {
-                "object" => {
-                    // Extract properties
-                    let properties = obj.get("properties").and_then(|v| v.as_object());
-                    let required = obj
-                        .get("required")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-                        .unwrap_or_default();
-
-                    properties.map_or_else(
-                        || "Record<string, unknown>".to_string(),
-                        |props| {
-                            let mut fields = Vec::new();
-                            let mut used_keys = HashSet::new();
-                            for (key, value) in props {
-                                let is_required = required.contains(&key.as_str());
-                                let optional_marker = if is_required { "" } else { "?" };
-                                let ts_type =
-                                    json_schema_to_typescript_at_depth(value, depth + 1, cap_hit);
-                                let base_key = sanitize_ts_identifier(key);
-                                let safe_key = disambiguate_identifier(&base_key, &mut used_keys);
-                                fields.push(format!("  {safe_key}{optional_marker}: {ts_type};"));
-                            }
-
-                            if fields.is_empty() {
-                                "Record<string, unknown>".to_string()
-                            } else {
-                                format!("{{\n{}\n}}", fields.join("\n"))
-                            }
-                        },
-                    )
-                }
-                "array" => obj.get("items").map_or_else(
-                    || "unknown[]".to_string(),
-                    |item_schema| {
-                        format!(
-                            "{}[]",
-                            json_schema_to_typescript_at_depth(item_schema, depth + 1, cap_hit)
-                        )
-                    },
-                ),
-                other => json_type_to_typescript(other).to_string(),
+    let mut body = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => body.push_str("\\\\"),
+            '\'' => body.push_str("\\'"),
+            '\n' => body.push_str("\\n"),
+            '\r' => body.push_str("\\r"),
+            '\t' => body.push_str("\\t"),
+            c if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') => {
+                body.push_str(&unicode_escape(c));
             }
-        }
-        Value::String(s) => json_type_to_typescript(s).to_string(),
-        _ => "unknown".to_string(),
-    }
-}
-
-/// Extracts property definitions from JSON Schema for template rendering.
-///
-/// Returns a vector of property information suitable for Handlebars templates.
-///
-/// Calls [`json_schema_to_typescript`] once per top-level property, starting each call fresh
-/// at depth 0 — the `schema`'s own `type: "object"` wrapper and `properties` map are peeled off
-/// by this function rather than counted by [`MAX_SCHEMA_RECURSION_DEPTH`]. So the real
-/// per-tool call path (`ProgressiveGenerator::extract_property_infos` /
-/// `extract_property_data`, both built on this function) tolerates one level more of true JSON
-/// nesting in a tool's raw `input_schema` than the constant's value alone would suggest: a
-/// property value schema can nest `MAX_SCHEMA_RECURSION_DEPTH` levels *below* the property
-/// itself before clipping, for `MAX_SCHEMA_RECURSION_DEPTH + 1` raw levels overall.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::common::typescript::extract_properties;
-/// use serde_json::json;
-///
-/// let schema = json!({
-///     "type": "object",
-///     "properties": {
-///         "name": {"type": "string"},
-///         "age": {"type": "number"}
-///     },
-///     "required": ["name"]
-/// });
-///
-/// let props = extract_properties(&schema);
-/// assert_eq!(props.len(), 2);
-/// ```
-#[must_use]
-pub fn extract_properties(schema: &Value) -> Vec<serde_json::Value> {
-    let mut properties = Vec::new();
-
-    if let Some(obj) = schema.as_object()
-        && let Some(props) = obj.get("properties").and_then(|v| v.as_object())
-    {
-        let required = obj
-            .get("required")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(String::from)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        for (name, prop_schema) in props {
-            let ts_type = json_schema_to_typescript(prop_schema);
-            let is_required = required.contains(name);
-
-            properties.push(serde_json::json!({
-                "name": name,
-                "type": ts_type,
-                "required": is_required,
-            }));
+            c => body.push(c),
         }
     }
-
-    properties
+    (sanitize_untrusted_text(&body, usize::MAX) == body).then_some(body)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_to_camel_case() {
@@ -411,150 +230,6 @@ mod tests {
         assert_eq!(to_pascal_case("send_message"), "SendMessage");
         assert_eq!(to_pascal_case("get_user_data"), "GetUserData");
         assert_eq!(to_pascal_case("hello"), "Hello");
-    }
-
-    #[test]
-    fn test_json_type_to_typescript() {
-        assert_eq!(json_type_to_typescript("string"), "string");
-        assert_eq!(json_type_to_typescript("number"), "number");
-        assert_eq!(json_type_to_typescript("integer"), "number");
-        assert_eq!(json_type_to_typescript("boolean"), "boolean");
-        assert_eq!(json_type_to_typescript("array"), "unknown[]");
-        assert_eq!(json_type_to_typescript("object"), "Record<string, unknown>");
-        assert_eq!(json_type_to_typescript("null"), "null");
-        assert_eq!(json_type_to_typescript("unknown_type"), "unknown");
-    }
-
-    #[test]
-    fn test_json_schema_to_typescript_primitive() {
-        assert_eq!(
-            json_schema_to_typescript(&json!({"type": "string"})),
-            "string"
-        );
-        assert_eq!(
-            json_schema_to_typescript(&json!({"type": "number"})),
-            "number"
-        );
-    }
-
-    #[test]
-    fn test_json_schema_to_typescript_object() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "number"}
-            },
-            "required": ["name"]
-        });
-
-        let result = json_schema_to_typescript(&schema);
-        assert!(result.contains("name: string"));
-        assert!(result.contains("age?: number"));
-    }
-
-    #[test]
-    fn test_json_schema_to_typescript_object_sanitizes_nested_keys() {
-        let malicious_key = "x }; export const pwned = evil(); interface J {";
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                malicious_key: {"type": "string"}
-            },
-            "required": []
-        });
-
-        let result = json_schema_to_typescript(&schema);
-        assert!(!result.contains("export const pwned"));
-        assert!(!result.contains(malicious_key));
-        assert!(result.contains(&sanitize_ts_identifier(malicious_key)));
-    }
-
-    #[test]
-    fn test_json_schema_to_typescript_dedups_colliding_sibling_keys() {
-        // "a-b" and "a.b" both sanitize to "a_b"; the second must be disambiguated
-        // rather than producing a duplicate field name in the generated interface.
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "a-b": {"type": "string"},
-                "a.b": {"type": "number"}
-            },
-            "required": []
-        });
-
-        let result = json_schema_to_typescript(&schema);
-        // Exact field-line matches: a substring count on "a_b" would also match "a_b_2",
-        // so assert on the full `key?: type` field lines instead.
-        assert_eq!(result.matches("a_b?: string").count(), 1, "{result}");
-        assert_eq!(result.matches("a_b_2?: number").count(), 1, "{result}");
-    }
-
-    #[test]
-    fn test_json_schema_to_typescript_dedups_three_way_colliding_sibling_keys() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "a-b": {"type": "string"},
-                "a.b": {"type": "number"},
-                "a b": {"type": "boolean"}
-            },
-            "required": []
-        });
-
-        let result = json_schema_to_typescript(&schema);
-        // The workspace enables `serde_json/preserve_order`, so `serde_json::Map` iterates
-        // in insertion order: "a-b" claims the base "a_b" first.
-        assert_eq!(result.matches("a_b?: string").count(), 1, "{result}");
-        assert_eq!(result.matches("a_b_2?: number").count(), 1, "{result}");
-        assert_eq!(result.matches("a_b_3?: boolean").count(), 1, "{result}");
-    }
-
-    #[test]
-    fn test_json_schema_to_typescript_dedups_colliding_keys_in_nested_object() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "outer": {
-                    "type": "object",
-                    "properties": {
-                        "a-b": {"type": "string"},
-                        "a.b": {"type": "number"}
-                    },
-                    "required": []
-                }
-            },
-            "required": []
-        });
-
-        let result = json_schema_to_typescript(&schema);
-        assert!(result.contains("a_b?: string"), "{result}");
-        assert!(result.contains("a_b_2?: number"), "{result}");
-    }
-
-    #[test]
-    fn test_disambiguate_identifier_reuses_base_across_independent_scopes() {
-        // Disambiguation state must not leak between unrelated objects: two sibling nested
-        // objects each independently reusing "a_b" as a field name is not a collision.
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "first": {
-                    "type": "object",
-                    "properties": {"a_b": {"type": "string"}},
-                    "required": []
-                },
-                "second": {
-                    "type": "object",
-                    "properties": {"a_b": {"type": "number"}},
-                    "required": []
-                }
-            },
-            "required": []
-        });
-
-        let result = json_schema_to_typescript(&schema);
-        assert!(!result.contains("a_b_2"), "{result}");
     }
 
     #[test]
@@ -616,131 +291,26 @@ mod tests {
     }
 
     #[test]
-    fn test_json_schema_to_typescript_array() {
-        let schema = json!({
-            "type": "array",
-            "items": {"type": "string"}
-        });
-
-        assert_eq!(json_schema_to_typescript(&schema), "string[]");
-    }
-
-    /// Builds a schema with `depth` nested `type: "array"` levels wrapping a `string` leaf.
-    ///
-    /// Assembles each level directly via `serde_json::Map`/`Value` (rather than the `json!`
-    /// macro, which round-trips embedded values through `to_value`'s own recursive
-    /// serializer) so building this pathological fixture can't itself overflow the stack.
-    fn nested_array_schema(depth: usize) -> Value {
-        let mut schema = json!({"type": "string"});
-        for _ in 0..depth {
-            let mut map = serde_json::Map::new();
-            map.insert("type".to_string(), Value::String("array".to_string()));
-            map.insert("items".to_string(), schema);
-            schema = Value::Object(map);
+    fn is_bare_identifier_matches_the_ascii_identifier_pattern() {
+        for key in ["id", "_private", "$ref", "a1", "A_b$"] {
+            assert!(is_bare_identifier(key), "{key}");
         }
-        schema
-    }
-
-    /// Builds a schema with `depth` nested `type: "object"` levels (each with a single
-    /// property `"a"`) wrapping a `string` leaf, for the same construction reason as
-    /// [`nested_array_schema`].
-    fn nested_object_schema(depth: usize) -> Value {
-        let mut schema = json!({"type": "string"});
-        for _ in 0..depth {
-            let mut properties = serde_json::Map::new();
-            properties.insert("a".to_string(), schema);
-            let mut map = serde_json::Map::new();
-            map.insert("type".to_string(), Value::String("object".to_string()));
-            map.insert("properties".to_string(), Value::Object(properties));
-            map.insert("required".to_string(), Value::Array(Vec::new()));
-            schema = Value::Object(map);
+        for key in ["", "1st", "per-page", "a.b", "two words", "naïve", "x*/y"] {
+            assert!(!is_bare_identifier(key), "{key}");
         }
-        schema
-    }
-
-    /// Runs `f` on a dedicated thread with a generous stack, and returns its result.
-    ///
-    /// `serde_json::Value`'s own `Drop` impl is recursive and unrelated to this module's fix:
-    /// a `Value` nested 5,000+ levels deep overflows the *default* thread stack merely by
-    /// going out of scope, regardless of how it was traversed beforehand. That's not
-    /// reachable in production — `serde_json`'s deserializer already rejects JSON nested
-    /// beyond its own default recursion limit (well under 5,000) before a `Value` this deep
-    /// can ever be constructed from the wire — but a test fixture built directly via
-    /// `Value`/`Map` (bypassing deserialization, see [`nested_array_schema`]) still has to
-    /// survive being dropped at the end of the test. A larger stack lets construction, the
-    /// (now depth-capped) function under test, and teardown all complete without that
-    /// unrelated limitation masking a pass.
-    fn run_on_large_stack<F: FnOnce() + Send + 'static>(f: F) {
-        std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(f)
-            .expect("spawn test thread")
-            .join()
-            .expect("test thread panicked");
     }
 
     #[test]
-    fn test_json_schema_to_typescript_bounds_deeply_nested_array() {
-        // Issue #303: verifies the recursion-depth cap actually bounds this function's
-        // descent for a `Value` nested far beyond MAX_SCHEMA_RECURSION_DEPTH (see that
-        // constant's docs — this is defense-in-depth for the `pub` API, not a reachable
-        // wire-path scenario). Past the cap, the type must degrade to a well-formed
-        // `unknown[]...[]` string rather than continuing to recurse.
-        run_on_large_stack(|| {
-            let schema = nested_array_schema(5_000);
-            let result = json_schema_to_typescript(&schema);
-            assert!(result.starts_with("unknown"), "{result}");
-            assert!(result.ends_with("[]"), "{result}");
-        });
-    }
-
-    #[test]
-    fn test_json_schema_to_typescript_bounds_deeply_nested_object() {
-        // Same cap-behavior check as the array case above, for object nesting.
-        run_on_large_stack(|| {
-            let schema = nested_object_schema(5_000);
-            let result = json_schema_to_typescript(&schema);
-            assert!(result.contains("unknown"), "{result}");
-        });
-    }
-
-    #[test]
-    fn test_extract_properties() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "number"}
-            },
-            "required": ["name"]
-        });
-
-        let props = extract_properties(&schema);
-        assert_eq!(props.len(), 2);
-
-        // Find the "name" property (HashMap order is not guaranteed)
-        let name_prop = props
-            .iter()
-            .find(|p| p["name"] == "name")
-            .expect("name property not found");
-
-        assert_eq!(name_prop["type"], "string");
-        assert_eq!(name_prop["required"], true);
-
-        // Check age property
-        let age_prop = props
-            .iter()
-            .find(|p| p["name"] == "age")
-            .expect("age property not found");
-
-        assert_eq!(age_prop["type"], "number");
-        assert_eq!(age_prop["required"], false);
-    }
-
-    #[test]
-    fn test_extract_properties_empty() {
-        let schema = json!({"type": "string"});
-        let props = extract_properties(&schema);
-        assert_eq!(props.len(), 0);
+    fn ts_string_literal_exact_escapes_control_characters_and_rejects_invisible_ones() {
+        assert_eq!(
+            ts_string_literal_exact("a\u{1}b").as_deref(),
+            Some("a\\u0001b")
+        );
+        assert_eq!(
+            ts_string_literal_exact("a\u{2028}b").as_deref(),
+            Some("a\\u2028b")
+        );
+        assert_eq!(ts_string_literal_exact("a\u{e0041}b"), None);
+        assert_eq!(ts_string_literal_exact("a\u{feff}b"), None);
     }
 }

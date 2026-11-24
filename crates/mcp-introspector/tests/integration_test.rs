@@ -63,6 +63,7 @@ fn test_tool_info_creation() {
                 "message_id": {"type": "string"}
             }
         })),
+        annotations: None,
     };
 
     assert_eq!(tool.name.as_str(), "send_message");
@@ -166,6 +167,7 @@ fn test_tool_info_serialization() {
         description: "Test tool description".to_string(),
         input_schema: json!({"type": "object"}),
         output_schema: None,
+        annotations: None,
     };
 
     // Serialize to JSON
@@ -268,6 +270,7 @@ fn test_tool_info_debug() {
         description: "Description".to_string(),
         input_schema: json!({}),
         output_schema: None,
+        annotations: None,
     };
 
     let debug_str = format!("{tool:?}");
@@ -338,6 +341,7 @@ fn test_complex_tool_schema() {
         description: "A tool with complex schema".to_string(),
         input_schema: complex_schema,
         output_schema: Some(json!({"type": "boolean"})),
+        annotations: None,
     };
 
     assert_eq!(tool.name.as_str(), "complex_tool");
@@ -422,6 +426,7 @@ fn test_tool_info_empty_description() {
         description: String::new(),
         input_schema: json!({"type": "null"}),
         output_schema: None,
+        annotations: None,
     };
 
     assert_eq!(tool.description, "");
@@ -485,6 +490,7 @@ fn test_tool_info_clone() {
         description: "Test".to_string(),
         input_schema: json!({}),
         output_schema: None,
+        annotations: None,
     };
 
     let cloned = tool.clone();
@@ -547,6 +553,7 @@ fn test_server_info_with_many_tools() {
             description: format!("Tool number {i}"),
             input_schema: json!({"type": "object"}),
             output_schema: None,
+            annotations: None,
         })
         .collect();
 
@@ -574,6 +581,7 @@ fn test_tool_info_null_schema() {
         description: "Test".to_string(),
         input_schema: json!(null),
         output_schema: Some(json!(null)),
+        annotations: None,
     };
 
     assert!(tool.input_schema.is_null());
@@ -609,6 +617,7 @@ fn test_tool_info_long_description() {
         description: long_desc.clone(),
         input_schema: json!({}),
         output_schema: None,
+        annotations: None,
     };
 
     assert_eq!(tool.description.len(), 10000);
@@ -676,6 +685,7 @@ fn test_tool_info_nested_schema() {
         description: "Nested schema test".to_string(),
         input_schema: nested_schema.clone(),
         output_schema: Some(nested_schema),
+        annotations: None,
     };
 
     assert!(tool.input_schema["properties"]["level1"].is_object());
@@ -690,6 +700,7 @@ fn test_server_info_serialization_with_tools() {
         description: "Test".to_string(),
         input_schema: json!({"type": "object"}),
         output_schema: None,
+        annotations: None,
     };
 
     let info = ServerInfo {

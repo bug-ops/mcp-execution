@@ -13,7 +13,9 @@
 //! # Examples
 //!
 //! ```
-//! use mcp_execution_core::metadata::{ServerMetadata, ToolMetadata, METADATA_SCHEMA_VERSION};
+//! use mcp_execution_core::metadata::{
+//!     ResultTypeOrigin, ServerMetadata, ToolMetadata, METADATA_SCHEMA_VERSION,
+//! };
 //! use mcp_execution_core::provenance::GenerationProvenance;
 //! use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 //!
@@ -31,15 +33,20 @@
 //!         keywords: vec!["create".to_string(), "issue".to_string()],
 //!         description: Some("Creates a new issue".to_string()),
 //!         parameters: vec![],
+//!         annotations: None,
+//!         result_type: None,
+//!         result_type_origin: ResultTypeOrigin::Undeclared,
+//!         manifest_size_bytes: 0,
 //!     }],
 //!     provenance: GenerationProvenance::capture(&config, &[]),
 //! };
 //!
-//! let json = serde_json::to_string_pretty(&meta).unwrap();
+//! let json = serde_json::to_string(&meta).unwrap();
 //! let round_tripped: ServerMetadata = serde_json::from_str(&json).unwrap();
 //! assert_eq!(round_tripped, meta);
 //! ```
 
+use crate::annotations::ToolAnnotations;
 use crate::provenance::GenerationProvenance;
 use crate::{ServerId, ToolName};
 use serde::{Deserialize, Serialize};
@@ -55,14 +62,17 @@ use serde::{Deserialize, Serialize};
 /// sidecar has no `provenance` key at all, so a consumer must check this value *before*
 /// attempting a typed deserialization (see `mcp-execution-skill`'s parser).
 ///
+/// Bumped from `2` to `3` when [`ToolMetadata`] gained `annotations`, `result_type`,
+/// `result_type_origin` and `manifest_size_bytes`.
+///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_core::metadata::METADATA_SCHEMA_VERSION;
 ///
-/// assert_eq!(METADATA_SCHEMA_VERSION, 2);
+/// assert_eq!(METADATA_SCHEMA_VERSION, 3);
 /// ```
-pub const METADATA_SCHEMA_VERSION: u32 = 2;
+pub const METADATA_SCHEMA_VERSION: u32 = 3;
 
 /// Filename of the sidecar metadata file emitted alongside generated tool files.
 ///
@@ -94,6 +104,36 @@ pub const METADATA_FILE_NAME: &str = "_meta.json";
 /// assert_eq!(INDEX_FILE_NAME, "index.ts");
 /// ```
 pub const INDEX_FILE_NAME: &str = "index.ts";
+
+/// Filename of the generated top-level catalog of tool signatures.
+///
+/// Shared between the producer (`mcp-execution-codegen`, which renders it) and its consumers
+/// (`mcp-execution-skill` and `mcp-execution-server`, which must not mistake it for a per-tool
+/// file) to avoid a stringly-typed filename duplicated across crates.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::CATALOG_FILE_NAME;
+///
+/// assert_eq!(CATALOG_FILE_NAME, "catalog.ts");
+/// ```
+pub const CATALOG_FILE_NAME: &str = "catalog.ts";
+
+/// Maximum size, in bytes, of a `_meta.json` sidecar that consumers will read.
+///
+/// Shared between the producer (`mcp-execution-codegen`, which warns when a sidecar exceeds
+/// it) and the consumer (`mcp-execution-skill`, which rejects a larger file), so the two
+/// cannot drift.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::MAX_METADATA_FILE_BYTES;
+///
+/// assert_eq!(MAX_METADATA_FILE_BYTES, 1024 * 1024);
+/// ```
+pub const MAX_METADATA_FILE_BYTES: u64 = 1024 * 1024;
 
 /// Structured sidecar describing one server's generated tools.
 ///
@@ -161,7 +201,7 @@ pub struct ServerMetadata {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_core::metadata::ToolMetadata;
+/// use mcp_execution_core::metadata::{ResultTypeOrigin, ToolMetadata};
 /// use mcp_execution_core::ToolName;
 ///
 /// let tool = ToolMetadata {
@@ -171,6 +211,10 @@ pub struct ServerMetadata {
 ///     keywords: vec!["create".to_string(), "issue".to_string()],
 ///     description: Some("Creates a new issue".to_string()),
 ///     parameters: vec![],
+///     annotations: None,
+///     result_type: None,
+///     result_type_origin: ResultTypeOrigin::Undeclared,
+///     manifest_size_bytes: 0,
 /// };
 ///
 /// assert_eq!(tool.name.as_str(), "create_issue");
@@ -199,6 +243,42 @@ pub struct ToolMetadata {
 
     /// Metadata for each of the tool's input parameters.
     pub parameters: Vec<ParameterMetadata>,
+
+    /// Annotations the server advertised for the tool, if any (advisory and untrusted).
+    pub annotations: Option<ToolAnnotations>,
+
+    /// Compact TypeScript text of the tool's result type.
+    ///
+    /// `None` when the text would exceed the stored-text cap or the result type degraded to the
+    /// generic form.
+    pub result_type: Option<String>,
+
+    /// Where the result type came from.
+    pub result_type_origin: ResultTypeOrigin,
+
+    /// Length in bytes of the compact JSON serialization of the tool's introspected manifest.
+    pub manifest_size_bytes: u64,
+}
+
+/// Where a tool's generated result type came from.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::ResultTypeOrigin;
+///
+/// let json = serde_json::to_string(&ResultTypeOrigin::Degraded).unwrap();
+/// assert_eq!(json, "\"degraded\"");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultTypeOrigin {
+    /// Converted from an output schema the server declared.
+    Declared,
+    /// The server declared an output schema but the generator fell back to the generic type.
+    Degraded,
+    /// The server declared no output schema.
+    Undeclared,
 }
 
 /// Structured metadata for a single tool parameter.
@@ -234,7 +314,9 @@ pub struct ParameterMetadata {
 
 #[cfg(test)]
 mod tests {
-    use super::{METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata};
+    use super::{
+        METADATA_SCHEMA_VERSION, ParameterMetadata, ResultTypeOrigin, ServerMetadata, ToolMetadata,
+    };
     use crate::provenance::GenerationProvenance;
     use crate::{ServerConfig, ServerId, ToolName};
 
@@ -265,11 +347,15 @@ mod tests {
                     required: true,
                     description: Some("Issue title".to_string()),
                 }],
+                annotations: None,
+                result_type: Some("string".to_string()),
+                result_type_origin: ResultTypeOrigin::Declared,
+                manifest_size_bytes: 123,
             }],
             provenance: test_provenance(),
         };
 
-        let json = serde_json::to_string_pretty(&meta).unwrap();
+        let json = serde_json::to_string(&meta).unwrap();
         let round_tripped: ServerMetadata = serde_json::from_str(&json).unwrap();
 
         assert_eq!(round_tripped, meta);
@@ -278,7 +364,7 @@ mod tests {
     #[test]
     fn deserializes_minimal_tool() {
         let json = r#"{
-            "schema_version": 2,
+            "schema_version": 3,
             "server_id": "github",
             "server_name": "GitHub",
             "server_version": "1.0.0",
@@ -288,7 +374,11 @@ mod tests {
                 "category": null,
                 "keywords": [],
                 "description": null,
-                "parameters": []
+                "parameters": [],
+                "annotations": null,
+                "result_type": null,
+                "result_type_origin": "undeclared",
+                "manifest_size_bytes": 0
             }],
             "provenance": {
                 "generated_at": "2026-01-01T00:00:00Z",

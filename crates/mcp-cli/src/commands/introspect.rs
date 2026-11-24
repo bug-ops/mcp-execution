@@ -384,12 +384,14 @@ mod tests {
                     description: "First tool".to_string(),
                     input_schema: json!({"type": "object"}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("tool2").unwrap(),
                     description: "Second tool".to_string(),
                     input_schema: json!({"type": "string"}),
                     output_schema: Some(json!({"type": "boolean"})),
+                    annotations: None,
                 },
             ],
             capabilities: ServerCapabilities {
@@ -425,12 +427,14 @@ mod tests {
                     description: "First tool".to_string(),
                     input_schema: json!({"type": "object", "properties": {"name": {"type": "string"}}}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("tool2").unwrap(),
                     description: "Second tool".to_string(),
                     input_schema: json!({"type": "string"}),
                     output_schema: Some(json!({"type": "boolean"})),
+                    annotations: None,
                 },
             ],
             capabilities: ServerCapabilities {
@@ -474,6 +478,7 @@ mod tests {
             description: "Sends a message".to_string(),
             input_schema: json!({"type": "object"}),
             output_schema: Some(json!({"type": "string"})),
+            annotations: None,
         };
 
         let metadata = build_tool_metadata(&tool_info, false);
@@ -497,6 +502,7 @@ mod tests {
                 }
             }),
             output_schema: Some(json!({"type": "string"})),
+            annotations: None,
         };
 
         let metadata = build_tool_metadata(&tool_info, true);
@@ -631,18 +637,21 @@ mod tests {
                     description: "A".to_string(),
                     input_schema: json!({}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("beta").unwrap(),
                     description: "B".to_string(),
                     input_schema: json!({}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("gamma").unwrap(),
                     description: "C".to_string(),
                     input_schema: json!({}),
                     output_schema: None,
+                    annotations: None,
                 },
             ],
             capabilities: ServerCapabilities {
@@ -798,6 +807,7 @@ mod tests {
                 description: format!("Tool number {i}"),
                 input_schema: json!({"type": "object"}),
                 output_schema: Some(json!({"type": "string"})),
+                annotations: None,
             })
             .collect();
 
@@ -847,6 +857,7 @@ mod tests {
                     "message": {"type": "string"}
                 }
             })),
+            annotations: None,
         };
 
         let metadata = build_tool_metadata(&tool_info, true);
@@ -947,6 +958,7 @@ mod tests {
                 description: "First".to_string(),
                 input_schema: json!({}),
                 output_schema: None,
+                annotations: None,
             }],
             capabilities: ServerCapabilities {
                 supports_tools: true,

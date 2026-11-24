@@ -53,7 +53,7 @@ in-process (issue #188).
 | Subcommand | Purpose | Key flags |
 |---|---|---|
 | `introspect` | Connect + display server capabilities/tools | `--from-config`, `server` (positional), `--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header`, `--detailed`/`-d`, `--connect-timeout-secs`, `--discover-timeout-secs` |
-| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | identical transport flags as `introspect` (`--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header` — both commands flatten the same `ServerFlags`, so the `-a`/`-e` short aliases apply here too), plus `--name`, `--progressive-output`, `--dry-run` |
+| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | identical transport flags as `introspect` (`--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header` — both commands flatten the same `ServerFlags`, so the `-a`/`-e` short aliases apply here too), plus `--name`, `--progressive-output`, `--observed-shapes <FILE>`, `--dry-run` |
 | `skill` | Render SKILL.md directly from a generated server's tools (no LLM) | `-s/--server`, `--servers-dir`, `-o/--output`, `--skill-name`, `--hint` (repeatable), `--overwrite` |
 | `server` | Manage `~/.claude/mcp.json` entries | subcommand: `list`, `info <server>`, `validate <command>` |
 | `setup` | Validate the local runtime (Node.js version, executable bits, config presence) | none |
@@ -369,7 +369,7 @@ command.
 
 ## 7. `generate` Command (`commands/generate.rs`)
 
-`run(source: ServerSource, name: Option<String>, output_dir: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
+`run(source: ServerSource, name: Option<String>, output_dir: Option<PathBuf>, observed_shapes: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
 
 1. `resolve_server_config` → `discover_server_info`: if `--name` is given,
    it is validated via `mcp_execution_skill::validate_server_id` **before**
@@ -394,7 +394,15 @@ command.
    for the other arms, since reaching it there would mean one of their own
    checks has a bug) (issue #311).
 4. `ProgressiveGenerator::generate` (uncategorized — no LLM step in this
-   path, unlike `mcp-server`'s `save_categorized_tools`).
+   path, unlike `mcp-server`'s `save_categorized_tools`). When `--observed-shapes <FILE>` is given
+   (#587), the file is read **before** the connection attempt by `read_observed_tail` and its text
+   is passed to `ProgressiveGenerator::with_observed_shapes`
+   ([[../codegen/spec#13.8 Observed result shapes (#587)]]). `read_observed_tail` reads **only the last
+   4 MiB** (`OBSERVED_TAIL_BYTES`) of the file: when the read starts past offset 0 it drops the first,
+   possibly partial, line; bytes that are not valid UTF-8 are replaced (the line parser then rejects
+   such a line like any malformed one). A file of any size therefore never fails the command; only an
+   unreadable or missing file does (`anyhow` error "failed to read observed shapes from <path>"). The
+   flag changes nothing but the result-type hint of tools without an output schema.
 5. `resolve_base_dir(output_dir)` — defaults to `~/.claude/servers`.
 6. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
    size, human-readable `format_size`) **without writing anything to
@@ -732,9 +740,10 @@ the script-first skill package (default name, name validation, body shape); that
 **Why.** The project's headline number has no measurement behind it. `README.md:10`, `:23` and `:133` claim 98%
 token savings; the business requirements document records the disagreement with the later "~83% maximum"
 note as an open question, and the performance requirement on tokens per tool is stated as not an automated
-measurement. `ToolMetadata` (`crates/mcp-core/src/metadata.rs:179`) records name, TypeScript name, category,
-keywords, description and parameters, but not how large the server's own definition of the tool was, and once
-generation is over that size cannot be recovered; `METADATA_SCHEMA_VERSION` is 2 (`metadata.rs:65`). A single
+measurement. Before #568 `ToolMetadata` recorded no size for the server's own definition of a tool, so once
+generation was over that size could not be recovered. Since #568 (`METADATA_SCHEMA_VERSION` 3) it
+records `manifest_size_bytes` (the compact serialized `ToolInfo`) and `result_type_origin` (the
+output-schema flag), which the static report reads. A single
 "savings" percentage also misleads, because it depends on which files a model reads and on what the host already
 defers.
 

@@ -89,7 +89,7 @@ pub const MAX_USE_CASE_HINTS: usize = 20; // entry-count bound (schemars maxItem
 // the excess rather than erroring (critic finding M1 on #429).
 
 pub const MAX_TOOL_FILES: usize = 500;
-pub const MAX_FILE_SIZE: u64 = 1024 * 1024;       // 1 MiB, _meta.json size cap
+pub const MAX_FILE_SIZE: u64 = MAX_METADATA_FILE_BYTES; // 1 MiB, _meta.json size cap, shared with mcp-codegen (core::metadata)
 pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024; // 8 KiB, extracted YAML block cap
 pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError>;
 pub struct ScanResult { pub tools: Vec<ParsedToolFile>, pub warnings: Vec<String> }
@@ -126,7 +126,9 @@ never recover parameter descriptions). Now:
    `ScanError::Io` — and requires the resolved sidecar path to
    `starts_with(canonical_base)` — defends against a symlinked
    `_meta.json` escaping the directory (path-traversal via symlink).
-2. Size-checks the sidecar (`MAX_FILE_SIZE`), then reads `schema_version` from a minimal
+2. Size-checks the sidecar (`MAX_FILE_SIZE`, which is `mcp_core::metadata::MAX_METADATA_FILE_BYTES`,
+   the same constant `mcp-codegen` warns against when it writes a larger sidecar; above it the scan
+   returns `ScanError::FileTooLarge` while generation itself succeeded), then reads `schema_version` from a minimal
    `SchemaVersionProbe { schema_version: u32 }` (a bare `#[derive(Deserialize)]`, which ignores
    unknown fields by default) and compares it against `METADATA_SCHEMA_VERSION` **before**
    attempting a typed `mcp_core::metadata::ServerMetadata` parse (issue #468). This ordering is
@@ -146,8 +148,8 @@ never recover parameter descriptions). Now:
    `tracing::warn!`, excluded from the result, and surfaced as a
    human-readable string in `ScanResult::warnings` (issue #161's fix — the
    drift must be visible to a structured caller, not just server-side
-   tracing). `index.ts` (the aggregator) is never treated as an "extra"
-   file.
+   tracing). `index.ts` (the aggregator) and `catalog.ts` (`CATALOG_FILE_NAME`, the type-only
+   signature catalog of #566) are never treated as an "extra" file.
 4. Each surviving sidecar entry is converted to a `ParsedToolFile` via the
    private `parsed_tool_file_from_metadata(meta, server_id)` function, which
    takes the scanned `server_id` directly. This replaced a public
@@ -175,6 +177,24 @@ without a category are grouped under `"uncategorized"`, sorted last.
 `select_example_tools` prioritizes tools whose name starts with `create`,
 `list`, `get`, `search`, `update` (in that order), one per not-yet-seen
 category, then fills remaining slots.
+
+**Raw parameter keys (#584).** `_meta.json` `parameters[].name` holds the raw schema key, so the
+skill never shows a renamed parameter. `display_param_name` renders a key that is an ASCII
+identifier (`^[A-Za-z_$][A-Za-z0-9_$]*$`, at most `MAX_UNTRUSTED_FIELD_LEN` chars) verbatim; any
+other key is shown as a double-quoted JSON string literal of its `sanitize_untrusted_text`-ed text,
+with every backtick written as the six-character escape ```, so the result contains no
+backtick and cannot close a Markdown code span early. `build_tool_example` **omits** every
+non-identifier key from the example command (the example is a shell command with the arguments in
+single quotes).
+
+**Example values.** The example command carries compact JSON built with `serde_json`, one value per
+required identifier-named parameter, derived from the parameter's stored type text
+(`example_value`): a union uses its first member other than `null`/`undefined`; a string-literal
+type is its own value when it is unchanged by sanitization and contains no quote, backslash or
+empty string; `T[]`/`Array<T>` is a one-element array; an object type is `{}`; `string`, `number`,
+`boolean` map to `"example"`, `42`, `true`; anything not understood falls back to the placeholder
+`"..."`. The derivation is bounded: a type text over 1024 bytes (`MAX_EXAMPLE_TYPE_BYTES`, the cap
+the sidecar stores) or nested deeper than 8 (`MAX_EXAMPLE_DEPTH`) yields the placeholder.
 
 `skill_name` itself — unlike `ParsedToolFile`'s fields, which all flow
 through `group_by_category` — is resolved as the very first step inside
@@ -678,9 +698,10 @@ tool count or a category list (`context.rs:362-380`), which gives a host nothing
 Ask first: removing the exported prompt renderer; raising any body or catalog bound above its derived value;
 anything that changes where existing skills are written; whether the optional load-time inclusion ships at all.
 
-**Depends on / blocks.** Depends on the typed catalog (#566) and the script runner (#571): until they exist the
-rendered text may teach only per-file discovery and a direct run of one tool file with a JSON object argument,
-and must name no catalog file, runner command or import form that is absent (FR-043.2). Closes #582. Blocks the
+**Depends on / blocks.** Depends on the typed catalog (#566, implemented: `catalog.ts`, see
+[[../codegen/spec#13.4 Typed tool catalog (#566)]]) and the script runner (#571, not implemented): until
+the runner exists the rendered text may teach per-file discovery, the catalog and a direct run of one tool
+file with a JSON object argument, and must name no runner command or import form that is absent (FR-043.2). Closes #582. Blocks the
 saved-scripts mention in the skill text (#579). Context-cost numbers come from #562.
 
 ### Planned: saved scripts (#579)

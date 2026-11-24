@@ -14,7 +14,7 @@ use crate::types::{
     PendingGeneration, SaveCategorizedToolsParams, SaveCategorizedToolsResult,
 };
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
-use mcp_execution_core::metadata::INDEX_FILE_NAME;
+use mcp_execution_core::metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME};
 use mcp_execution_core::untrusted::{
     MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_inline, sanitize_untrusted_text,
     wrap_untrusted_block,
@@ -831,7 +831,9 @@ impl GeneratorService {
                         if entry.path().is_dir() {
                             let id = entry.file_name().to_string_lossy().to_string();
 
-                            // Count per-tool .ts files. Excludes `INDEX_FILE_NAME`, the
+                            // Count per-tool .ts files. Excludes `CATALOG_FILE_NAME` (the
+                            // package's type-only signature catalog, likewise not a tool) and
+                            // `INDEX_FILE_NAME`, the
                             // package's always-present re-export entry point, which is not
                             // itself a tool (issue #477); compared case-insensitively to
                             // match `disambiguate_output_filename`'s own case-insensitive
@@ -850,6 +852,7 @@ impl GeneratorService {
                                         name.ends_with(".ts")
                                             && !name.starts_with('_')
                                             && !name.eq_ignore_ascii_case(INDEX_FILE_NAME)
+                                            && !name.eq_ignore_ascii_case(CATALOG_FILE_NAME)
                                     })
                                     .count()
                             });
@@ -1829,6 +1832,7 @@ mod tests {
                 "properties": { "param\nname": { "type": "string" } }
             }),
             output_schema: None,
+            annotations: None,
         }];
 
         let summaries = build_introspected_summaries(&tools);
@@ -1854,6 +1858,7 @@ mod tests {
                 .to_string(),
             input_schema: serde_json::json!({}),
             output_schema: None,
+            annotations: None,
         }];
         let summaries = build_introspected_summaries(&tools);
         let json = serde_json::to_string_pretty(&summaries).unwrap();
@@ -1994,6 +1999,7 @@ mod tests {
                     }
                 }),
                 output_schema: None,
+                annotations: None,
             }],
         };
 
@@ -2038,12 +2044,14 @@ mod tests {
                     description: "First tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("tool2").unwrap(),
                     description: "Second tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
+                    annotations: None,
                 },
             ],
         };
@@ -3057,6 +3065,7 @@ mod tests {
                 description: "Tool 1".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
+                annotations: None,
             }],
         };
 
@@ -3124,6 +3133,7 @@ mod tests {
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
+                annotations: None,
             })
             .collect();
 
@@ -3475,6 +3485,7 @@ mod tests {
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
+                annotations: None,
             }],
         };
         let pending = PendingGeneration::new(
@@ -3652,6 +3663,7 @@ mod tests {
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
+                annotations: None,
             }],
         };
         let pending = PendingGeneration::new(
@@ -3751,12 +3763,14 @@ mod tests {
                     description: "First tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new(raw_b).unwrap(),
                     description: "Second tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
+                    annotations: None,
                 },
             ],
         };
@@ -3836,12 +3850,14 @@ mod tests {
                     description: "Underscore tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
+                    annotations: None,
                 },
                 ToolInfo {
                     name: ToolName::new("plain").unwrap(),
                     description: "Plain tool".to_string(),
                     input_schema: serde_json::json!({"type": "object"}),
                     output_schema: None,
+                    annotations: None,
                 },
             ],
         };
@@ -3906,6 +3922,7 @@ mod tests {
                 description: "Test tool".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 output_schema: None,
+                annotations: None,
             }],
         };
         let pending = PendingGeneration::new(
@@ -5003,6 +5020,10 @@ mod tests {
                     required: true,
                     description: None,
                 }],
+                annotations: None,
+                result_type: None,
+                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
             }],
             provenance: test_provenance(),
         };
@@ -5070,6 +5091,10 @@ mod tests {
                     required: true,
                     description: None,
                 }],
+                annotations: None,
+                result_type: None,
+                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
             }],
             provenance: test_provenance(),
         };
@@ -5151,6 +5176,10 @@ mod tests {
                     required: true,
                     description: None,
                 }],
+                annotations: None,
+                result_type: None,
+                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
             }],
             provenance: test_provenance(),
         };
@@ -5226,6 +5255,10 @@ mod tests {
                     required: true,
                     description: None,
                 }],
+                annotations: None,
+                result_type: None,
+                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
             }],
             provenance: test_provenance(),
         };

@@ -39,6 +39,7 @@ mod redact;
 mod server_config;
 mod types;
 
+pub mod annotations;
 pub mod cli;
 pub mod metadata;
 pub mod provenance;

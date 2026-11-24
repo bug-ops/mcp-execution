@@ -350,34 +350,27 @@ is outside the base" (#311).
   closure — propagate this via `?` (#318), so a bug that would have reached
   this check is now a normal `Err`, not a crash.
 
-## 10. Planned Changes (script-first direction, adopted 2026-11-24)
+## 10. Export Bounds Follow the Code-Generation Bounds (#566, #567, #482)
 
-> [!warning] Not implemented
-> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
-> When a change lands, its content moves into the as-built sections above and the subsection is
-> removed in the same pull request.
+`MAX_EXPORT_FILES` is defined as `mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES`
+and `MAX_EXPORT_BYTES` as `MAX_GENERATED_BYTES` (`crates/mcp-files/src/filesystem.rs`);
+`check_export_bounds` rejects above either. This block holds no number of its own: the equality that
+keeps a normal `GeneratedCode` from being rejected at export survives every change to the fixed
+files or the byte derivation by construction.
 
-### Planned: export bounds follow the code-generation bounds (#566, #567, #571)
+As built after #556: `MAX_GENERATED_FILES` is `MAX_TOOL_COUNT` (1,000) plus `FIXED_FILE_COUNT` = 7
+(`index.ts`, `catalog.ts`, `_runtime/mcp-bridge.ts`, `_runtime/cli.ts`, `package.json`,
+`tsconfig.json`, `_meta.json`) = 1,007, and `MAX_GENERATED_BYTES` is `MAX_TOOL_COUNT *
+PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX` = 148,230,144, where `PER_TOOL_BYTES_MAX` covers one
+tool's file, `_meta.json` entry, `catalog.ts` entry and `index.ts` line (a tool that would exceed it is
+rendered degraded). Derivation and proof: [[../codegen/spec#9. Resource-Exhaustion Bounds (CWE-400)]].
 
-**Why.** `MAX_EXPORT_FILES` is defined as `mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES`
-(`crates/mcp-files/src/filesystem.rs:123-124`) and `MAX_EXPORT_BYTES` as `MAX_GENERATED_BYTES`
-(`filesystem.rs:138-139`); `check_export_bounds` rejects above either (`filesystem.rs:715-728`).
-Today `MAX_GENERATED_FILES` is 1,005 (`MAX_TOOL_COUNT` of 1,000 plus `FIXED_FILE_COUNT` of 5,
-`crates/mcp-codegen/src/progressive/generator.rs:56`, `:77-78`) and `MAX_GENERATED_BYTES` is
-`2 * 1000 * (256 + 8,192 + 65,536)` = 147,968,000 (`generator.rs:98-102`). Three planned packages
-may each add a fixed generated file (the typed catalog, the shared command-line module, the
-runner's helpers), and a fourth (#575) may remove one, so the equality that keeps a normal
-`GeneratedCode` from being rejected at export has to survive each change.
-
-**Requirements.** The change that adds or removes a fixed generated file follows the fixed-file
-rule of [[../codegen/spec]] (planned section); this section states only the `mcp-files` side.
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-032.F1 | WHEN a fixed generated file is added or removed (#566, #567, #571, #575) THE SYSTEM SHALL keep `MAX_EXPORT_FILES` equal to `MAX_GENERATED_FILES`, through the existing derivation and not an independent number | must |
-| FR-032.F2 | WHEN the generated-bytes bound is re-derived (for example to count an output schema per tool, or the catalog) THE SYSTEM SHALL keep `MAX_EXPORT_BYTES` equal to `MAX_GENERATED_BYTES` | must |
-| FR-032.F3 | WHEN a package changes either generated bound THE SYSTEM SHALL cover it with a test that generates at `MAX_TOOL_COUNT` tools and exports the result without a bound error | must |
-| FR-032.F4 | THE SYSTEM SHALL update, in the same pull request, the as-built text of this block that cites the bounds ([[#2. Public API Surface]] and [[#8. Cross-Crate Contracts]]) when a bound's derivation changes | should |
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-032.F1 | WHEN a fixed generated file is added or removed (#566, #567, #571, #575) THE SYSTEM SHALL keep `MAX_EXPORT_FILES` equal to `MAX_GENERATED_FILES`, through the existing derivation and not an independent number | implemented for #566 and #567 (7 fixed files); still applies to #571 and #575 |
+| FR-032.F2 | WHEN the generated-bytes bound is re-derived (for example to count an output schema per tool, or the catalog) THE SYSTEM SHALL keep `MAX_EXPORT_BYTES` equal to `MAX_GENERATED_BYTES` | implemented for #482/#566 |
+| FR-032.F3 | WHEN a package changes either generated bound THE SYSTEM SHALL cover it with a test that generates at `MAX_TOOL_COUNT` tools and exports the result without a bound error | partly covered: a codegen test generates at `MAX_TOOL_COUNT` (file count `MAX_TOOL_COUNT + FIXED_FILE_COUNT`, compact sidecar under the scan cap); no test exports that output, and the export half rests on the constants' equality by derivation |
+| FR-032.F4 | THE SYSTEM SHALL update, in the same pull request, the as-built text of this block that cites the bounds ([[#2. Public API Surface]] and [[#8. Cross-Crate Contracts]]) when a bound's derivation changes | done: the doc comments on `MAX_EXPORT_FILES`/`MAX_EXPORT_BYTES` describe the 7 fixed files and the per-tool bound |
 
 The IDs above carry the FR-032 prefix but serve every capability that adds or removes a fixed file
 (FR-032, FR-033, FR-036, FR-040); they are written once here because the `mcp-files` side is
@@ -391,18 +384,15 @@ identical for each.
   (section 4) or to the staging steps of [[#5. Atomic Export (`export_to_filesystem_with_options`)]].
 - Per-group publication in `build_and_export` ([[#6. `FilesBuilder::build_and_export`]]) is unchanged.
 
-**Open decisions**
-- [NEEDS CLARIFICATION: Whether the catalog is a new fixed file or an extension of `index.ts`; if it extends `index.ts`, no file bound changes here (decided in the catalog subsection of [[../codegen/spec]]).]
-- [NEEDS CLARIFICATION: The re-derived value of the generated-bytes bound (decided in the typed-results subsection of [[../codegen/spec]]).]
-
 Ask first: giving `mcp-files` a bound that is not equal to the code-generation bound.
 
-**Depends on / blocks.** Follows #566, #567, #571 and #575 in whichever order they merge; blocks
-none. Related: #482 (bytes re-derivation).
+**Still pending.** The runner's helpers (#571) and the bridge retirement (#575) may add or remove a
+fixed file; each follows the rule above in the same pull request
+([[../codegen/spec#14. Planned Changes (generated bridge retirement, #575)]]).
 
 ## 11. See Also
 
 - [[../codegen/spec]] — source of `GeneratedCode` and derived resource bounds
-- [[../codegen/spec]], planned changes — the fixed-file rule the planned section above follows
+- [[../codegen/spec#14. Planned Changes (generated bridge retirement, #575)]] — the fixed-file rule
 - [[../server/spec#Per-resource locking]] — higher-layer serialization for concurrent exports to the same target
 - [[../cli/spec#generate]] — CLI-side consumer, via `export_to_filesystem_with_options` with `ExportOptions::with_confine_to`

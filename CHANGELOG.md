@@ -7,9 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mcp-execution-codegen`**: one schema-to-TypeScript converter (`convert_schema`) with literals, unions, intersections, local `$ref`, bounds and diagnostics (#603)
+- **`mcp-execution-codegen`**: `catalog.ts`, a sorted one-signature-per-tool file between `index.ts` and the tool files (#603)
+- **`mcp-execution-codegen`**: `with_observed_shapes` and `generate --observed-shapes` render observed result shapes as a hint on undeclared results; the bridge records them with `MCPBRIDGE_OBSERVE_SHAPES` (#603)
+- **`mcp-execution-codegen`**: `callMCPTool` accepts `resultSource: 'structured'` and resolves an empty success to `undefined` (#603)
+- **`mcp-execution-introspector`**: tool annotations and title are captured into `ToolInfo.annotations` and rendered as JSDoc tags and catalog hints (#603)
+- **`mcp-execution-codegen`**: `_meta.json` stores `result_type`, its origin and `manifest_size_bytes` per tool (#603)
+
+### Breaking
+
+- `_meta.json` schema version is 3 and the file is written as compact JSON; regenerate existing output (#603)
+- The `json_schema_to_typescript`, `json_type_to_typescript` and `extract_properties` converter API is replaced by `convert_schema` (#603)
+- Generated result types end in `| undefined`; stored result type text is capped at 1 KiB (#603)
+- Single-call tools print one compact JSON line on stdout and one structured JSON line on stderr (#603)
+- The bridge throws only `McpToolError`; server text is in `serverMessage`, no longer in `.message` (#603)
+- Generated output has two more fixed files: `catalog.ts` and `_runtime/cli.ts` (#603)
+- `ToolInfo` has a new `annotations` field, and the tool digest domain is `tool-entry:v2`, so existing digests change (#603)
+- Property keys are rendered raw, quoted when not identifiers, and no longer renamed or suffixed (#603)
+
 ### Changed
 
+- **`mcp-execution-codegen`**: tool files are slim and delegate to `_runtime/cli.ts` through `runIfMain` (#603)
+- **`mcp-execution-codegen`**: each tool has a two-stage size degrade, and an oversized `_meta.json` logs a warning (#603)
+- **`mcp-execution-skill`**: non-identifier parameter keys show as JSON literals and are omitted from the example command (#603)
 - **Specifications**: `specs/` records the script-first direction: planned requirements FR-030 to FR-046, a planned `runtime` block and two proposed decision records (ADR-569, ADR-581) (#594).
+
+### Fixed
+
+- **`mcp-execution-codegen`**: generated single-call tools run from paths with spaces, non-ASCII names, symlinks and relative paths, and exit 0 on success (#603)
 
 ### Security
 

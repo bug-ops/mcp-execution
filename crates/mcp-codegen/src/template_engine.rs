@@ -116,6 +116,17 @@ impl<'a> TemplateEngine<'a> {
                 source: None,
             })?;
 
+        // CLI template: generates the single-call entry point shared by every tool file
+        handlebars
+            .register_template_string(
+                "progressive/cli",
+                include_str!("../templates/progressive/cli.ts.hbs"),
+            )
+            .map_err(|e| Error::SerializationError {
+                message: format!("Failed to register progressive cli template: {e}"),
+                source: None,
+            })?;
+
         Ok(())
     }
 
@@ -208,9 +219,11 @@ mod tests {
             "name": "test_tool",
             "name_literal": "test_tool",
             "server_id_literal": "test",
-            "properties": [],
-            "has_required_properties": false,
-            "input_schema": {}
+            "short_description": "Test tool",
+            "params_type": "Record<string, unknown>",
+            "result_type": "unknown | undefined",
+            "result_source": "content",
+            "annotation_tags": []
         });
 
         let result = engine.render("progressive/tool", &tool_context);
