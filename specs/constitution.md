@@ -135,10 +135,11 @@ and issue-number references dedicated to it.
 - **Command-injection defense in depth**: `mcp-core::command` validates
   shell metacharacters, forbidden environment variables (dynamic-linker and
   interpreter hijack vectors), URL schemes, and HTTP header safety —
-  enforced both in Rust (`validate_server_config`) and mirrored line-for-line
-  in the generated TypeScript runtime bridge
-  (`crates/mcp-codegen/templates/progressive/runtime-bridge.ts.hbs`), rendered
-  directly from the same Rust constants so the two copies cannot drift.
+  enforced once, in Rust (`validate_server_config`), on the one connection
+  path (`mcp-introspector::Introspector::connect`). The generated TypeScript
+  runtime bridge no longer holds a mirrored copy: it is a thin client of the
+  Rust helper and renders only the helper-protocol constants of
+  `mcp-core::helper_protocol` (ADR-569, option B).
 - **Resource-exhaustion (CWE-400) bounds at every layer**: tool count, tool
   name/description length, schema size, generated file count/bytes, VFS
   export file count/bytes, pending-session count/aggregate bytes, request
@@ -230,24 +231,31 @@ and issue-number references dedicated to it.
 
 ---
 
-## Adopted Direction (2026-11-24), not yet observed in code
+## Adopted Direction (2026-11-24), observed in code
 
-> [!warning] Not observed
-> Sections I to VIII above describe principles the code already enforces. The
-> principles below are adopted by the maintainer but are **not yet observed in
-> the code**; they are recorded here so that new specs follow them. Each moves
-> into the sections above once the code shows it.
+> [!success] Observed
+> The principles below were adopted by the maintainer on 2026-11-24 and are now
+> observed in the code of the script-first work (#569). They are kept in this
+> section so their origin stays visible.
 
 - **The context budget is a first-class resource.** What a model must read
   (tool definitions, results, skill text) is designed, bounded and measured
-  like memory or disk, not left to whatever a tool prints.
+  like memory or disk, not left to whatever a tool prints. Observed: the
+  runner's output budget and spill, the bounded skill listing, and the `stats`
+  command with its harness (NFR-PERF-003).
 - **Documentation figures are reproducible or labelled as illustrations.**
   A number in user-facing documentation comes from a command a reader can
   rerun, or says it is an illustration and names its source.
-
-A principle on where the MCP client lives is added here once the decision
-record for #569 (`specs/decisions/ADR-569-runtime-strategy-single-mcp-client.md`)
-is accepted.
+- **One MCP client.** Every process that calls a tool does so through
+  `mcp-introspector::Introspector::connect` and `Session::call_tool`, which
+  re-validate the configuration and bound responses; no second client or copy
+  of the validation is added (ADR-569, accepted 2026-11-24).
+- **Diagnostics are not boundaries.** The call journal and the dry run help an
+  honest script and a model that reads the output; they do not resist a script
+  written to evade them, and no document may call them tamper-evident or the
+  runner sandboxed. Runner state (spill, journals, the journal key, run
+  directories) lives in a per-user, system-derived location with owner-only
+  modes and is pruned under the same confinement as it is created.
 
 ## See Also
 

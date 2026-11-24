@@ -492,7 +492,7 @@ the one bump of the script-first package (FR-034.1, FR-034.2).
 | `result_type_origin` | `declared`, `degraded` (the server declared an output schema but the generic type is used) or `undeclared`. This is the stored output-schema flag, and it distinguishes "declared but not translated" | FR-046, FR-030 | in |
 | `manifest_size_bytes` | Length of the compact `serde_json::to_vec` of the introspected, sanitized `ToolInfo` (after the introspector's bounds, including annotations and output schema) | FR-046 | in |
 | `parameters[].name` | The **raw** schema key (never renamed or suffixed, #584); `parameters[].typescript_type` is `"unknown"` above 1024 bytes | FR-031 | in |
-| Per-tool digests | Name the changed tool in a drift report | FR-045 | out for this package; still planned with #580 ([[#6. Planned Changes (script-first direction, adopted 2026-11-24)]]) |
+| Per-tool digests | Name the changed tool in a drift report | FR-045 | out for this package; still planned with #580 ([[#7. Planned Changes (script-first direction, adopted 2026-11-24)]]) |
 | Annotations inside the digest entries | An annotation-only change reads as drift | FR-045, FR-034 | in (see [[#`provenance` module (`src/provenance.rs`)]]) |
 | Catalog reference, converter diagnostics | | FR-032, FR-031 | out (diagnostics are `tracing::warn!` only) |
 
@@ -1145,7 +1145,19 @@ and byte-preserving of each variant's existing `Display` message.
 | `ServerId::new`/`ToolName::new` rejects an input containing `&`, `<`, `>`, a control character, or a bidi override (issue #446) | The rejected value is sanitized (`untrusted::sanitize_untrusted_inline`) and `&`/`<`/`>` entity-escaped before being stored in `ServerIdError`/`ToolNameError`, so the raw disallowed characters never reach the `Display`/`Debug`-formatted error text an LLM or terminal renders |
 | `ServerId::new`/`ToolName::new` rejects an input containing emoji | **Not** sanitized or stripped — a deliberate accepted-risk exception, not an oversight: emoji is printable, cannot forge Markdown/HTML-like structure the way `&`/`<`/`>` can, and stripping arbitrary non-identifier printables would need a new allowlist pass that risks corrupting legitimate non-ASCII text elsewhere in the sanitizer |
 
-## 6. Planned Changes (script-first direction, adopted 2026-11-24)
+## 6. Helper Protocol and Exit Codes (as built)
+
+- **`helper_protocol` module** (`src/helper_protocol.rs`): `HELPER_PROTOCOL_VERSION` 1; `MAX_RESPONSE_LINE_BYTES`
+  4 MiB (moved from the introspector); `HELPER_ENVELOPE_SLACK` 64 KiB; `MAX_HELPER_LINE_BYTES` = response line plus
+  slack; `HELPER_HELLO_TIMEOUT` 5 s; the environment-name constants (`HELPER_ENV`, `HELPER_TOKEN_ENV`,
+  `CLI_PATH_ENV`); and `HELPER_CHANNEL_KEY`, the `Symbol.for` key under which the preload registers the channel, so
+  the preload and the generated bridge render the same key (added in wave 2, additive, approved by the architect);
+  and `RUN_MARKER_ENV` (`MCP_EXECUTION_RUN`), the marker set to `1` on the whole process tree under `run`.
+  The generated bridge renders the version, the line bound and the names from here ([[../codegen/spec]]).
+- **`ExitCode`** gains `CHECK_FAILED` (5: drift found or `scripts check` problems) and `SCRIPT_FAILED` (6: a script
+  exited non-zero or was killed by a signal); success 0, error 1, invalid input 2, server error 3, timeout 4.
+
+## 7. Planned Changes (script-first direction, adopted 2026-11-24)
 
 > [!warning] Not implemented
 > The `_meta.json` v3 bump, the annotation types and the measurement fields (#568, #562's metadata
@@ -1197,10 +1209,10 @@ to it changes every recorded digest, so it is ask-first and lands only with a sc
 
 **Depends on / blocks.** Blocks the "name the changed tool" part of #580.
 
-## 7. See Also
+## 8. See Also
 
 - [[../introspector/spec]] — primary consumer of `ServerConfig`/`validate_server_config`
-- [[#6. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — per-tool digest granularity (#580), not implemented; the v3 field registry is in §2 `metadata`
+- [[#7. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — per-tool digest granularity (#580), not implemented; the v3 field registry is in §2 `metadata`
 - [[../cli/spec]] — consumer of `cli::{OutputFormat,ExitCode}` and the error-classification contract
 - [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]] / [[../skill/spec#8. `resolve_skill_output_path` — Path Confinement]] — the two `confinement::resolve_confined_path` consumers
 - [[../constitution]] — security principles this crate embodies workspace-wide

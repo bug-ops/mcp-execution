@@ -15,7 +15,6 @@ related:
   - "[[../codegen/spec]]"
   - "[[../files/spec]]"
   - "[[../skill/spec]]"
-  - "[[../runtime/spec]]"
 ---
 
 # Block: MCP Server Exposure (`mcp-execution-server`)
@@ -749,17 +748,27 @@ environment's fault — I/O failure, task join error, serialization failure).
   confinement check in this crate rather than being the one path that
   skips it.
 
-## 13. Planned Changes (script-first direction, adopted 2026-11-24)
+## 13. Skill Name Rules (as built)
 
-> [!warning] Not implemented
-> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
-> When a change lands, its content moves into the as-built sections above and the subsection is
-> removed in the same pull request.
+- `generate_skill` requires the custom skill name to equal the server id.
+- `save_skill` checks the name against the directory name of the resolved output path. The check runs after path
+  resolution, so path errors keep precedence; like the overwrite refusal, it may leave an empty confined directory.
+  The description is bounded at `MAX_SKILL_DESCRIPTION_LENGTH` (1024) through `extract_skill_metadata`. Neither error
+  echoes the offending text.
+- The `--skill-name` help text (`cli.rs`, pinned by `test_skill_help_states_the_skill_name_directory_rule`) and the
+  `GenerateSkillParams::skill_name` documentation (`mcp-skill/src/types.rs`) state the equality rule.
 
-### Planned: script-first skill through `generate_skill` and `save_skill` (#578)
+## 14. Script-First Requirements
+
+> [!success] Implemented
+> The requirements below were implemented in the script-first pull request (#569 accepted, option B). Each **Why**
+> paragraph describes the state before the change; the as-built sections above govern where they differ. Decisions
+> that are still open are marked.
+
+### script-first skill through `generate_skill` and `save_skill` (#578)
 
 The workflow, naming rule, staging rule and body-size rule are specified once, in
-[[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]]. This subsection holds only
+[[../skill/spec#14. Script-First Requirements]]. This subsection holds only
 what belongs to the tool handlers.
 
 **Why.** `generate_skill` returns `context.generation_prompt`, the string `build_generation_prompt` produces,
@@ -793,27 +802,24 @@ rules of the skill block have to hold for what `save_skill` writes.
 - Wire-format changes for the changelog: the default `skill_name` in the `generate_skill` response, the shape of
   `generation_prompt`, and the extra rejections of `save_skill`.
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: how `save_skill` verifies FR-043.13, and whether the optional catalog inclusion of FR-043.8 may appear in saved content.]
-- [NEEDS CLARIFICATION: how the "directory the file is written to" is determined when `output_path` places the file in a subdirectory of `{server_id}/`.]
-- [NEEDS CLARIFICATION: what the check of FR-043.13 inspects: the rendered text only, or the frontmatter and body separately.]
+- Resolved: `save_skill` checks the name against the directory name of the resolved output path, after path resolution, and bounds the description through `extract_skill_metadata` (section 13). Load-time catalog insertion (FR-043.8) is deferred by the user.
 
 Ask first: any exception to FR-043.13; any change to the declared tool schemas beyond bounds
 that mirror the runtime rule.
 
-**Depends on / blocks.** Same dependencies as the skill block (#566, implemented; #571, not implemented). The handlers change together with the
-skill block in one pull request, as the project's specification rule requires. Tracked under epic #558.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
 **Deferred.** Search and execute tools for clients that have no shell (a gateway over the generated servers) are
 not part of this package: they are deferred to #589 under epic #559, depend on the runtime block
-([[../runtime/spec]]), and nothing in this section reserves a tool name or a schema for them.
+([[../cli/spec]]), and nothing in this section reserves a tool name or a schema for them.
 
-## 14. See Also
+## 15. See Also
 
 - [[../introspector/spec]] — wrapped by `introspect_server`
 - [[../codegen/spec]] / [[../files/spec]] — wrapped by `save_categorized_tools`
 - [[../skill/spec]] — wrapped by `generate_skill`/`save_skill`
 - [[../cli/spec]] — the CLI-driven alternative path to the same underlying crates
-- [[#13. Planned Changes (script-first direction, adopted 2026-11-24)]] — script-first skill through the tool handlers (#578), not implemented
-- [[../runtime/spec]] — the script runtime, which a future gateway (#589) would depend on (planned)
+- [[#14. Script-First Requirements]] — script-first skill through the tool handlers (#578); as built in section 13
+- [[../cli/spec]] — the script runtime, which a future gateway (#589) would depend on

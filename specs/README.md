@@ -38,29 +38,30 @@ related:
 **mcp-execution** turns an MCP (Model Context Protocol) server into a typed
 TypeScript SDK that a model programs against — one file per tool, a
 type-only catalog and a runtime bridge — so loops, joins and large results
-stay in code and only the answer reaches the context window. The project
-publishes no measured context-cost figures; measurement is planned (#562).
+stay in code and only the answer reaches the context window. The `stats`
+command and a deterministic harness measure context cost on in-repo fixtures
+(NFR-PERF-003); the project publishes no other figures.
 It also exposes
 that same generation capability *as an MCP server itself*, letting Claude
 Code drive tool categorization with its own natural-language understanding
 instead of a second LLM call, and it can render Claude Code `SKILL.md`
 integration files from a server's already-generated tools.
 
-> [!warning] Adopted direction, partly implemented
+> [!success] Script-first direction, implemented
 > On 2026-11-24 the maintainer adopted a **script-first** direction: turn any
 > MCP server into a typed TypeScript SDK that an agent programs against, so
 > loops, joins and large results stay in code and only the answer reaches the
-> context window. Hosts now defer tool definitions themselves, so the figures
-> above are not the project's headline any more and are not a measured result;
-> measurement is planned (#562). The direction is tracked as epics #555 to #559
-> and recorded as requirements (FR-030 to FR-046) in the
-> [[BRD-mcp-execution-2026-07-27|BRD]], [[SRS-mcp-execution-2026-07-27|SRS]] and
-> [[NFR-mcp-execution-2026-07-27|NFR]]. The generated-SDK part (#556: typed results #482, lossless
-> types #565 and #584, catalog #566, slim tool files #567, annotations #568, quiet single-call
-> output #570 and #583, observed result shapes #587) is **implemented** and described as built in
-> the block specs, chiefly [[codegen/spec#13. Script-First Capabilities (implemented, #556)]]. The
-> runner, journal, dry run, one-shot call, saved scripts and drift check remain planned and live in
-> the "Planned Changes" sections of the block specs.
+> context window. The direction is tracked as epics #555 to #559 and recorded as
+> requirements (FR-030 to FR-046) in the [[BRD-mcp-execution-2026-07-27|BRD]],
+> [[SRS-mcp-execution-2026-07-27|SRS]] and [[NFR-mcp-execution-2026-07-27|NFR]]. The generated-SDK
+> part (#556: typed results #482, lossless types #565 and #584, catalog #566, slim tool files #567,
+> annotations #568, quiet single-call output #570 and #583, observed result shapes #587) is described
+> in [[codegen/spec#13. Script-First Capabilities (implemented, #556)]]. The script runtime of the
+> #569 work (runner, journal, dry run, one-shot call, per-script helper, `--restrict`, `--typecheck`,
+> saved scripts, drift check, context-cost command) lives in [[cli/spec]] sections 16 to 19, with its
+> supporting parts in [[introspector/spec]] section 10, [[codegen/spec]] section 14, [[skill/spec]]
+> sections 12 and 13, [[server/spec]] section 13 and [[core/spec]] section 6. What the project
+> measures, and what it does not, is stated in NFR-PERF-003.
 
 ## Business & Requirements Documents
 
@@ -113,18 +114,22 @@ graph TD
 | Skill generation | `mcp-execution-skill` (`crates/mcp-skill`) | [[skill/spec]] |
 | MCP server exposure | `mcp-execution-server` (`crates/mcp-server`) | [[server/spec]] |
 | CLI | `mcp-execution-cli` (`crates/mcp-cli`) | [[cli/spec]] |
-| Script runtime (**planned, no code yet**) | not yet assigned; placement is the pending decision #569 | [[runtime/spec]] |
 
-The planned `runtime` block (script runner, call journal, dry run, helper) is
-not part of the dependency graph above because it does not exist in code.
+The script runtime (runner, call journal, dry run, per-script helper, saved
+scripts, drift check) has no crate of its own: it lives in `mcp-cli`
+(`crates/mcp-cli/src/runtime/`), on top of `mcp-introspector`'s `Session`, with
+the wire constants in `mcp-core::helper_protocol`. Its spec is in [[cli/spec]]
+sections 16 to 19.
 
-**Proposed decision records** (status `proposed`, not decided):
+**Decision records** (`specs/decisions/`):
 
-- `specs/decisions/ADR-569-runtime-strategy-single-mcp-client.md` (#569), which
-  gates the journal, the dry run, the Rust call path and reduced-privilege
-  execution.
-- `specs/decisions/ADR-581-code-mode-interoperability.md` (#581), on how the
-  project relates to the host's code mode.
+- Accepted (2026-11-24, by the user): ADR-569 (the Rust binary is the single MCP
+  client), ADR-579 (saved-script format), ADR-562 (context-cost estimator),
+  ADR-588 (Claude Code stays the only target), ADR-589 (no search or execute
+  tools on the server), ADR-590 (no persistent connections across runs), ADR-591
+  (text search over compact catalogs).
+- Proposed: `specs/decisions/ADR-581-code-mode-interoperability.md` (#581), on how the
+  project relates to the host's code mode; its investigation is deferred.
 
 `mcp-server` and `mcp-cli` are **parallel front doors** onto the same lower
 four crates (`introspector`/`codegen`/`files`/`skill`) — they do not depend
@@ -248,13 +253,14 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
    `Serialize` is deliberately exempt (config persistence needs real
    values) — this asymmetry is documented at every layer that repeats it.
 
-6. **The generated TypeScript runtime bridge re-derives its own security
-   rules from the same Rust source of truth**, rendered via Handlebars at
-   generation time (`BridgeContext::default()`), not hand-copied — so
-   `FORBIDDEN_CHARS`/`FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX`/
-   `ENV_NAME_CHARSET_REGEX` and the DoS size/count ceilings
-   (`MAX_ARG_COUNT` and siblings) in `_runtime/mcp-bridge.ts` cannot
-   silently drift from `mcp-core::command`'s Rust constants (#471, #467).
+6. **The generated TypeScript runtime bridge is a thin client of the Rust
+   helper, and shares its wire constants with it.** `_runtime/mcp-bridge.ts`
+   holds no connection code and no copy of the configuration validation: it
+   speaks protocol v1 of `mcp-core::helper_protocol` (version, line bound,
+   environment names, the channel key), rendered via Handlebars at generation
+   time (`BridgeContext`), so the bridge and the helper cannot drift apart.
+   Server connection, validation and negotiation exist once, in
+   `mcp-introspector::Introspector::connect` (#569, #575).
 
 7. **Prompt-injection defense is one primitive (`mcp-core::untrusted`), two
    independent call sites.** Both `mcp-skill` (SKILL.md body + LLM
@@ -277,13 +283,20 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
   shared command-line module raised the fixed files to 7 (`MAX_GENERATED_FILES` = `MAX_TOOL_COUNT` + 7),
   and the generated-bytes bound is `MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX`
   with a two-stage per-tool degrade ([[codegen/spec#9. Resource-Exhaustion Bounds (CWE-400)]]); `mcp-files`
-  follows by equality. Still pending: the runner's helpers (#571) may add a fixed file, and retiring
-  the bridge (#575) removes one, each following the fixed-file rule in
-  [[codegen/spec#14. Planned Changes (generated bridge retirement, #575)]].
-- **Contract 6, retirement of the generated bridge (#575).** If the runtime
-  decision (#569) lands on a single Rust MCP client, wrappers call tools through
-  a per-script helper and the bridge's own connection code, mirrored validation
-  and fixed handshake version are removed; contract 6 then ends.
+  follows by equality. The fixed-file count stayed 7 when the bridge was retired (#575); a future
+  change to it follows the fixed-file rule in
+  [[codegen/spec#15. Bridge Retirement Requirements (#575)]].
+- **Contract 6, retirement of the generated bridge (#575), implemented.** ADR-569 accepted option B:
+  wrappers call tools through the per-script helper hosted by the runner, and the bridge's own
+  connection code, mirrored validation and fixed handshake version are gone ([[codegen/spec#14. Helper-Protocol Bridge (as built)]]).
+- **New contract, the helper protocol.** The version, line bounds, hello timeout, environment names and
+  channel key live in `mcp-core::helper_protocol`; `mcp-cli` serves the protocol and the generated
+  bridge renders the same values. Unix carries it on an inherited socketpair as fd 0, Windows on a
+  single-instance named pipe with a token ([[cli/spec#17. Helper, Saved Scripts, Typecheck and Restrict (as built)]]).
+- **New contract, one MCP client.** `mcp-introspector::Introspector::connect` and `Session::call_tool`
+  are the only way any process calls a tool ([[introspector/spec#10. `Session` and `discover` (as built)]]).
+- **New contract, saved scripts.** `mcp-skill::scripts` owns the header format, bounds and confined
+  writes; `generate` and `skill` never touch `scripts/` ([[skill/spec#13. Saved Scripts (as built)]]).
 
 ## Discrepancies vs `CLAUDE.md`
 
@@ -350,7 +363,7 @@ resource/prompt-injection hardening.
 
 - [[constitution]] — principles observed across every block
 - [[core/spec]] — read this first; every other block depends on it
-- [[runtime/spec]] — planned script-runtime block (not implemented)
+- [[cli/spec]] — CLI and the script runtime (sections 16 to 19)
 - [[BRD-mcp-execution-2026-07-27]] — business requirements (reverse-engineered)
 - [[SRS-mcp-execution-2026-07-27]] — formal functional requirements
 - [[NFR-mcp-execution-2026-07-27]] — formal non-functional/quality requirements

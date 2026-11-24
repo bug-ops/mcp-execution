@@ -14,7 +14,6 @@ related:
   - "[[../introspector/spec]]"
   - "[[../files/spec]]"
   - "[[../core/spec]]"
-  - "[[../runtime/spec]]"
 ---
 
 # Block: Code Generation & Templating (`mcp-execution-codegen`)
@@ -31,7 +30,7 @@ related:
 > #587 (parent #556) are implemented and described as built in
 > [[#13. Script-First Capabilities (implemented, #556)]]. Only the retirement
 > of the generated bridge (#575) is still planned
-> ([[#14. Planned Changes (generated bridge retirement, #575)]]).
+> ([[#15. Bridge Retirement Requirements (#575)]]).
 
 ## 1. Responsibility
 
@@ -343,6 +342,12 @@ actual injection-safety mechanism given `no_escape` is set:
 > old regex-based parser could not recover parameter descriptions at all).
 
 ## 8. Runtime Bridge (`_runtime/mcp-bridge.ts`)
+
+> [!warning] Superseded by section 14
+> Wave 2 (#575, 2026-11-24) retired the connection code described below: the mcp.json read, the mirrored validation,
+> the `2024-11-05` handshake pin and the stdio spawn no longer exist in the generated bridge, which is now a thin
+> helper-protocol client ([[#14. Helper-Protocol Bridge (as built)]]). The text below is
+> kept for the parts that still hold (result semantics, error kinds) and is rewritten at SDD-4.
 
 Generated once per server (identical content regardless of tool count,
 except for the forbidden-char/env-name/DoS-bound/charset-pattern fields
@@ -786,7 +791,7 @@ dependency and uses no `eval` or dynamic import.
 Successful results are printed as the server returned them (compact JSON). This specification
 claims neither sanitisation nor an exception for them; whether the untrusted-text boundary rule
 applies to successful results printed by single-call mode, the runner and the one-shot call is a
-maintainer decision that remains open ([[../runtime/spec]]).
+maintainer decision that remains open ([[../cli/spec#Security posture of the runner]]).
 
 ### 13.7 Reserved names
 
@@ -858,11 +863,50 @@ every server directory generated before the upgrade must be regenerated.
   assumption in §9).
 - #600, #601: cosmetic refactors.
 
-## 14. Planned Changes (generated bridge retirement, #575)
+## 14. Helper-Protocol Bridge (as built)
 
-> [!warning] Not implemented
-> Nothing in this section exists in the code yet. When the change lands, its content moves into
-> the as-built sections above and this section is removed in the same pull request.
+- **Shape.** `_runtime/mcp-bridge.ts` keeps `callMCPTool`, `McpToolError` (kinds plus `write_skipped`),
+  `ResultSource` and the observed-shape recorder (#587). Removed: all connection code, the mirrored validation, the
+  mcp.json read, the `2024-11-05` pin, `boundServerText`, `closeAllConnections`, the SIGINT and SIGTERM handlers and
+  the `MCPBRIDGE_REQUEST_TIMEOUT_MS` variable (breaking; call timeouts are now the helper's `DEFAULT_CALL_TIMEOUT`
+  capped by the run time). The template went from about 1503 to about 600 lines. `FIXED_FILE_COUNT` stays 7. `cli.ts`
+  derives `ErrorKind` from `McpToolError['kind']`.
+- **`BridgeContext`** carries `helper_protocol_version`, `max_helper_line_bytes`, `helper_env`, `helper_token_env`,
+  `cli_path_env` (rendered from core, [[../core/spec]]) plus the observed-shape fields and a private
+  `identifier_pattern`; the validation fields and accessors are gone.
+- **Channel selection.** The channel registered at `globalThis[Symbol.for('mcp-execution.helper-channel')]` wins. Else,
+  if `MCP_EXECUTION_HELPER` is set, the call fails with `call_failed` (never a second helper). Else, if the run marker
+  `MCP_EXECUTION_RUN` is set, the call fails with `call_failed` "refused: tool calls from a child process or worker
+  thread are not supported under `run`; call tools from the main script". Else the bridge spawns the helper binary:
+  `$MCP_EXECUTION_CLI` when set (absolute, no PATH fallback), otherwise `mcp-execution-cli` found through absolute
+  `PATH` entries only, else "mcp-execution-cli not found on PATH; set MCP_EXECUTION_CLI"
+  ([[../cli/spec#Run marker, pipe descriptor and Windows binary resolution (D25)]]), with `helper` as its argument, stdio `['pipe','pipe','inherit']`, no shell,
+  `windowsHide`, `MCP_EXECUTION_HELPER*` removed from its environment, the child killed on node `exit`. The bridge never
+  opens fd 0; the preload owns claiming, the hello and the token. In spawn mode the bridge sends the hello; in both
+  modes the first helper line is the hello reply, version-checked, and a mismatch says to regenerate the servers.
+  Requests wait for the reply.
+- **ref/unref.** The channel is `unref()`d on adoption, `ref()`d while at least one call is pending and `unref()`d at
+  zero; in spawn mode the child, its stdout and its stdin follow the same rule.
+- **Bounds and failure.** The read buffer is capped at `MAX_HELPER_LINE_BYTES`; overflow, EOF, a stream error, a
+  non-JSON line or child exit fails the connection: pending calls reject with `helper channel closed: <reason>`, later
+  calls too, never reconnected. A request over the bound is rejected locally (`call_failed`, not sent). An unknown
+  `kind` or a response with no body becomes `call_failed`; `server_message` and `server_message_truncated` pass
+  through unchanged (the helper sanitizes).
+- **Tests.** `tests/runtime_bridge.rs` was rewritten (14 tests of the bridge side of the wire under node, on a fake
+  helper channel in `tests/acceptance_support/fake_helper.cjs`); `mcp-cli/tests/single_call_e2e.rs` runs against the
+  real helper (only the typed-error test runs on Windows, the rest are ignored there, #604).
+- **Breaking changes** (changelog): the list above, `BridgeContext` fields, regeneration of every existing server.
+- The user docs (`crates/mcp-codegen/README.md`, `crates/mcp-cli/README.md`) describe the helper-protocol bridge and
+  the regeneration requirement.
+- **Open (follow-up):** `fixtures/shared_vectors.json` section `untrusted_text` has no TypeScript consumer left; the Rust
+  sanitizer is not yet pinned to those vectors.
+
+## 15. Bridge Retirement Requirements (#575)
+
+> [!success] Implemented
+> The requirements below were implemented in the script-first pull request (#569 accepted, option B). Each **Why**
+> paragraph describes the state before the change; the as-built sections above govern where they differ. Decisions
+> that are still open are marked.
 
 > [!info] Fixed-file rule
 > Every generation emits `FIXED_FILE_COUNT` = 7 fixed files: `index.ts`, `catalog.ts`, the runtime
@@ -874,9 +918,9 @@ every server directory generated before the upgrade must be regenerated.
 > `N + 7` wording in [[#2. Public API Surface]], [[#4. Output: Generated File Set]] and
 > [[#9. Resource-Exhaustion Bounds (CWE-400)]].
 
-### Planned: retirement of the generated bridge (#575)
+### retirement of the generated bridge (#575)
 
-Code-generation side only. The per-script helper itself is specified in [[../runtime/spec]]. Gated
+Code-generation side only. The per-script helper itself is specified in [[../cli/spec#Per-script helper and retirement of the generated bridge (#575, FR-040)]]. Gated
 by the decision record #569: nothing here lands unless it chooses the Rust binary as the single
 client; otherwise the bridge stays the only client and this subsection is removed.
 
@@ -899,27 +943,26 @@ would make two ways to call a tool.
 
 **Constraints**
 - Wrappers must type-check as a package without the bridge file. How they reach the helper is
-  specified in [[../runtime/spec]] and adds no server-supplied text to generated source.
+  specified in [[../cli/spec]] and adds no server-supplied text to generated source.
 - Generation bounds and the sanitizers of [[#7. Injection Defense (Sanitization Pipeline)]] still
   apply to every remaining generated file.
 
-**Open decisions**
-- [NEEDS CLARIFICATION: What `callMCPTool`, re-exported from `index.ts` today (last line of `templates/progressive/index.ts.hbs`), becomes: a thin export over the helper, or removed (a breaking change for scripts that import it).]
-- [NEEDS CLARIFICATION: Whether `BridgeContext` and its accessors ([[#2. Public API Surface]]) are removed or reduced to the values the shared module of #567 still needs.]
+**Resolved and open decisions.**
+
+- Resolved: `callMCPTool` and `McpToolError` keep their names and signatures and are a thin client of the helper channel; `BridgeContext` is reduced to the helper-protocol values (section 14).
 
 Ask first: removing `callMCPTool` from the package surface; changing the import specifier of any
 generated file.
 
-**Depends on / blocks.** Gated by #569; depends on #574 (one-shot call path) and the helper in
-[[../runtime/spec]]. Relates to #567 (shared module) and #571.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-## 15. See Also
+## 16. See Also
 
 - [[../introspector/spec]] — source of `ServerInfo`/`ToolInfo`
 - [[../files/spec]] — consumer of `GeneratedCode`
 - [[../server/spec#save_categorized_tools]] — MCP-tool caller of `generate_with_categories`
 - [[../cli/spec#generate]] — CLI caller of `generate`
 - [[../core/spec]] — registry of `_meta.json` v3 fields, annotation types, provenance digest
-- [[../runtime/spec]] — script runner, one-shot call and per-script helper (planned block)
+- [[../cli/spec]] — script runner, one-shot call and per-script helper
 - [[#13. Script-First Capabilities (implemented, #556)]] — as-built text of #482, #565, #566, #567, #568, #570, #583, #584, #587
-- [[#14. Planned Changes (generated bridge retirement, #575)]] — the one change still planned in this block
+- [[#15. Bridge Retirement Requirements (#575)]] — the one change still planned in this block

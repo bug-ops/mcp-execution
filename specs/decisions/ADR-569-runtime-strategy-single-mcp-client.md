@@ -8,11 +8,13 @@ tags:
   - runtime
   - architecture
 created: 2026-11-24
-status: proposed
+status: accepted
+decided: 2026-11-24
+decided-option: B
 review-date: 2027-02-24
 related:
   - "[[../constitution]]"
-  - "[[../runtime/spec]]"
+  - "[[../cli/spec]]"
   - "[[../codegen/spec]]"
   - "[[../introspector/spec]]"
   - "[[ADR-369-rmcp-stateless-lifecycle-adoption]]"
@@ -22,10 +24,15 @@ related:
 # ADR-569: Who Is the MCP Client at Script Run Time, the Generated Bridge or the Rust Binary
 
 > [!important]
-> This is a decision record, not a feature spec. It lays out options and
-> criteria and records the adopted direction's recommendation as a recommendation. It
-> decides nothing and authorizes no code change. Status is `proposed`; only a
-> maintainer can move it to `accepted`.
+> **Status: accepted (2026-11-24), option B.** The maintainer decided in-session
+> during the #569 work: the Rust binary is the single MCP client at script run
+> time. The decision is recorded in section 5a. Sections 1 to 5 are the
+> evaluation as written before the decision and are kept unchanged.
+>
+> The latency requirement of section 6 was accepted on a proxy: option B's per-call
+> figure cannot be measured before B exists, so the cold `introspect` time stands
+> in for it at acceptance, and the real per-call figures are measured during
+> implementation (section 5a, "Measurements owed").
 
 ## 1. Context
 
@@ -42,7 +49,7 @@ Today two clients exist.
 | Configuration | resolved by the CLI | reads `~/.claude/mcp.json` itself at call time (`:680-681`) and spawns the server in the process that runs the script (`:906`) |
 | Bounds | response line cap, SSE event cap, connect and discover timeouts ([[../introspector/spec]] sections 4-5) | none on output; no call record; no write policy |
 
-The planned script runtime ([[../runtime/spec]]) adds a runner, a call journal,
+The script runtime ([[../cli/spec]]) adds a runner, a call journal,
 a dry run with a write policy and a Rust call path. Each can be built in the
 bridge or around one Rust client; choosing late means building twice. The
 two clients also have to be kept in agreement by hand: the bridge mirrors the
@@ -114,7 +121,7 @@ other tools are labelled as secondary.
 
 ## 4. What Each Option Implies for the Gated Components
 
-Gating is defined in [[../runtime/spec]] section 3. Not gated and unaffected
+Gating was defined in the runtime block, since folded into [[../cli/spec]]; this decision satisfies the gate. Not gated and unaffected
 under any option: quiet single-call output (#570), the script runner (#571) and
 the pre-run typecheck (#577).
 
@@ -140,7 +147,50 @@ the pieces whose owner changes.
 > an input to this evaluation and must survive it; option A and the library
 > variant are to be assessed with equal rigor.
 
+## 5a. Decision
+
+- **Adopted: option B.** One Rust MCP client; the runner process hosts the
+  per-script helper; generated TypeScript becomes a protocol client of it.
+  Staging, carriers and the protocol are in [[../cli/spec]] sections 16 to 18 and [[../core/spec]] section 6.
+- **Not adopted:** option A, the TypeScript-library variant and the hybrid.
+- **Latency evidence accepted at decision time:** the cold `introspect` time of
+  the in-repo fixture, as a proxy for the helper's cold connect (the helper
+  uses the same connection code).
+- **Measurements (recorded at SDD-1 from the #574 handoff):** release builds,
+  macOS, Node v26.13.1, fixture `echo`, 10 sequential runs each, milliseconds.
+  Every run is a separate process, so there is no warm state. Script:
+  `bench.py` in the developer's scratchpad (not tracked); commands as in the
+  table.
+
+  | Measurement | first | 2nd | 10th | median |
+  |---|---|---|---|---|
+  | A: `node echo.ts '{}'` (generated wrapper, existing TypeScript bridge) | 206 | 198 | 136 | 160 |
+  | B: `mcp-execution-cli call --from-config fixture -- echo '{}'` | 9 | 8 | 8 | 8 |
+  | B: `mcp-execution-cli introspect --from-config fixture` (cold) | 9 | 10 | 8 | 8 |
+  | reference: `node --version` | 96 | | | |
+
+  Reading: A includes about 96 ms of bare node start-up, so the bridge's own
+  cost is roughly 40 to 110 ms per process. B's per-call figure equals its cold
+  introspect figure, which supports the cold-introspect proxy accepted above.
+  The figures compare one process per call; the helper, which pays the connect
+  once per run, is measured by the wave-3 harness (K calls in one script
+  versus K `call` processes).
+- **Review trigger:** the review date in the frontmatter, or a measured per-call
+  regression of option B against the pre-change bridge figure.
+- **Breaking changes implied** (changelog form, pre-1.0, no shim): generated
+  bridge loses its connection code, mirrored validation and the `2024-11-05`
+  pin; `BridgeContext` fields change; regeneration of every existing server is
+  required; `FIXED_FILE_COUNT` stays 7.
+
 ## 6. Required Before Acceptance
+
+> [!note] Status of this checklist
+> Acceptance was given by the maintainer; the items below are not all
+> satisfied. The latency item is satisfied by the proxy of section 5a and
+> completed by the owed measurements. The criteria assessment (section 3) is
+> carried by [[../cli/spec]] and the architect's evaluation. The item on
+> referencing the blocked specs is done in the runtime plan and tasks.
+
 
 - [ ] A latency measurement on an in-repo mock server: per-call and per-script
       overhead for each option, with the method stated so it can be rerun (or an
@@ -168,7 +218,7 @@ the pieces whose owner changes.
 ## 8. See Also
 
 - [[../constitution]] — mirrored validation, resource bounds
-- [[../runtime/spec]] — the planned components this record gates
+- [[../cli/spec]] — the components this record gated, now implemented
 - [[../codegen/spec]] — generated bridge responsibilities
 - [[../introspector/spec]] — the authoritative connection path
 - [[ADR-369-rmcp-stateless-lifecycle-adoption]], [[ADR-529-rmcp-3-5-latest-promotion-revisit]] — protocol lifecycle decisions this record must not contradict

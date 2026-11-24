@@ -16,7 +16,6 @@ related:
   - "[[../codegen/spec]]"
   - "[[../files/spec]]"
   - "[[../skill/spec]]"
-  - "[[../runtime/spec]]"
   - "[[../decisions/ADR-569-runtime-strategy-single-mcp-client]]"
 ---
 
@@ -731,19 +730,484 @@ itself.
   unrecognized keys, so this project's CLI can coexist with a config file
   shared by other MCP-aware tools.
 
-## 16. Planned Changes (script-first direction, adopted 2026-11-24)
+## 16. Script-First Commands (as built)
 
-> [!warning] Not implemented
-> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
-> When a change lands, its content moves into the as-built sections above and the subsection is
-> removed in the same pull request.
+### `call` (#574, `commands/call.rs`)
 
-Command, flag and subcommand names below (`stats`, `run`, `call`, `recipe`, `--save`, the drift command) are
-working names; choosing them is an open decision of each subsection. The `skill` command also changes through
+- Syntax: `call <ServerFlags> -- TOOL [JSON]` (clap `last = true`), for example
+  `call --from-config github -- create_issue '{"title":"x"}'` and `call --http URL -- echo`. `ServerFlags` is
+  unchanged, so `introspect`, `generate` and `drift` keep their positional server.
+- Flow: the tool name is validated as `ToolName` and the argument as a single JSON object before the server config is
+  resolved (exit 2; the error carries only the JSON error class and line and column, never argument text); then
+  `Introspector::connect`, one `Session::call_tool` with `CALL_TIMEOUT` 60 s, then `close`.
+- Output: result within the 16 KiB budget, over-budget output spilled with a notice naming path and byte count. A
+  tool-reported or JSON-RPC error is one stderr line and exit 3; an empty success prints nothing and exits 0. Exit
+  codes otherwise come from the classifier (invalid input 2, connection failure 3, timeout 4).
+- `call` uses `ResultSource::Structured` (structured content if present, else content); it does not use the helper
+  protocol. `CallArgs` has a redacting `Debug`.
+- Print form (fixed in wave 2, architect ruling): every value, strings included, is printed as compact JSON through
+  `serde_json::to_string` (a string is quoted); `--format` is ignored. This matches the generated wrapper's
+  `JSON.stringify`. The earlier raw-string form is withdrawn. `DEFAULT_CALL_TIMEOUT` (60 s) now lives in
+  `runtime/helper.rs` and is shared by `call`, `helper` and `run`. The wave-1 raw-string form was rejected by the architect.
+
+### `run` (#571, `commands/run.rs`, `runtime/{exec,notice,import_hook}.rs`)
+
+- Flow: validate flags and script, resolve node (version check), prune old run dirs, print the token anchor on stdout,
+  start node with `--import <data:...> --disable-warning=ExperimentalWarning <abs script> <args...>`, capture stdout
+  and stderr with async readers (capped at `MAX_SPILL_FILE_BYTES`, 8 MiB per stream), apply budgets, spill the rest,
+  then print head, notices and trailer, or one JSON envelope. Text output is buffered, not streamed.
+- Preload (`runtime/preload.js`, `runtime/helpers.js`): `module.registerHooks` resolves `mcp:<id>` to
+  `<servers>/<id>/index.ts` and provides a virtual `mcp:helpers` with `paginate` and `mapBounded`, each returning
+  `{items|results, truncated}`. `MCP_EXECUTION_HELPER*` is removed from the child environment. Script stdin is the
+  null device in wave 1.
+- Script source: a file runs in place by absolute path; missing, non-file or over `MAX_SCRIPT_BYTES` (1 MiB) files
+  are invalid input (exit 2, one stderr line, node not started). A stdin script is written to `runs/<id>/script.ts`
+  (0600 in a 0700 dir) and removed after the run.
+- Constants: `DRAIN_GRACE` 2 s; timeout 1..=600 s, default 60 s; `kill_on_drop` plus kill on timeout.
+- Exit mapping: script exit 0 gives 0; non-zero exit or signal gives 6 (`SCRIPT_FAILED`); runner timeout 4; runner
+  input errors 2; other runner failures 1.
+- Trailer: `[mcp-execution <token>] script_status exit N | signal N | timed out`. Stdout notices (cut, drain
+  abandoned, timeout) go to stdout and the stderr cut notice to stderr, all carrying the token. JSON mode prints no
+  anchor and no stderr; the envelope holds `token`, `script_status`, `exit_code`, `stdout`/`stderr` (`text`, `bytes`,
+  `truncated`, `spill`) and `notices`. A spill failure degrades to a notice, never a runner failure.
+- Deviations (see the runtime plan): `ScriptStatus::TimedOut` for a runner kill; the wave-1 refusal of unwired flags
+  (`reject_unwired_flags`) is gone: `--restrict`, `--typecheck` and `--save` landed in wave 2, `--dry-run` and
+  `--policy` in wave 3 (section 18).
+- The wave-1 limitation (a script that made a call never exited) is gone: the bridge is now a helper-protocol client
+  that `unref`s the channel when idle (section 17).
+
+### `stats` (#562, `commands/stats.rs`)
+
+- Reads `_meta.json` (schema v3) and file sizes only, never file contents. Types: `Bytes`, `TokenEstimate`,
+  `Measure{Available,NotAvailable}`, `StatsReport`. Estimate is `bytes.div_ceil(4)` (`BYTES_PER_TOKEN_ESTIMATE`);
+  bytes are always printed ([[../decisions/ADR-562-context-cost-estimator]]).
+- An older schema is invalid input (exit 2, "regenerate", nothing on stdout). A missing tool file or catalog is "not
+  available", and the total over tool files is then also unavailable. Symlinked or non-regular files count as not
+  available. Bounds: `MAX_METADATA_FILE_BYTES`, `MAX_TOOL_COUNT`. One text form for every `--format`.
+- "All tool files" excludes `index.ts` and runtime files; "one tool file" is the mean, rounded down; the output-schema
+  share counts `Declared` and `Degraded`.
+
+### `drift` (#580, `commands/drift.rs`)
+
+- Flow: `ServerFlags`, `resolve_server_config`, `~/.claude/servers/<server id>/_meta.json` (bounded, in-directory,
+  schema v3), `Introspector::discover()`, fingerprint first, then `ToolDigest::compute` over
+  `ToolInfo::digest_entry`, then a name diff. Types: `DriftOutcome{NoDrift,EndpointDiffers,ToolsDiffer{added,removed}}`.
+- Exit: 0 no drift; 5 (`CHECK_FAILED`) drift or endpoint differs; could-not-complete errors use the runner
+  classification (a missing directory gives 1). Writes nothing; prints no descriptions.
+- Output: names through `sanitize_untrusted_inline`, at most `MAX_PRINTED_NAMES` 20 per list plus "and N more"
+  (`MAX_NAME_CHARS` 128); ttl and cache scope printed when present, with a credentials notice for `Private`; the same
+  names with a different digest print "which tool changed cannot be determined". Summaries say "server changed" or
+  "tool list differs", never "out of date".
+- Location (fixed in wave 2, architect ruling; the user is to be informed): `DriftArgs` gained `--name` and
+  `--progressive-output` with the names and meaning of `generate`. The location derivation is shared with `generate`
+  (`name_override()` and `generated_location()` in `commands/generate.rs`; `resolve_server_dir_name` takes
+  `&ServerId`), so a package generated with `--name` or `--progressive-output` is found. The skills directory for
+  FR-045.18 is `~/.claude/skills/<id>`, id being the `--name` override or the server id.
+- FR-045.18 (wave 2): after a `ToolsDiffer` with removed tools, `scripts_using()` lists the saved scripts
+  (`scripts::list`) that name a removed tool of this server, through the same bounded and sanitised `NameList` (report
+  field `scripts_using_removed_tools`, text heading "saved scripts using a removed tool"). Best effort: a missing
+  skill directory or a `list` error gives no names. Only removed tools count: changed tools are not detectable, since
+  no per-tool digests are recorded. `read_recorded` is `pub(crate)` and reused by `scripts check`.
+
+### Logging profile for `call`, `run` and `helper`
+
+`Commands::log_profile()` returns `LogProfile::{Standard, Quiet}`. `call`, `run` and the hidden `helper` use `Quiet`:
+the default level is `warn` and rmcp is capped at `warn`. `--verbose` or `RUST_LOG` restores the standard behaviour
+(rmcp capped at `info`). `runner.rs`: `init_logging(verbose, log_format, profile)`,
+`log_filter(verbose, profile, env)`, `cap_rmcp_log_level(filter, LevelFilter)`; `main.rs` passes
+`cli.command.log_profile()`. Reason: a script or a model reads the process output, so tracing lines must not mix into
+it.
+
+## 17. Helper, Saved Scripts, Typecheck and Restrict (as built)
+
+### Helper (#575, `runtime/{protocol,pool,helper}.rs`, `commands/helper.rs`)
+
+- `HelperServer::bind` (Unix): `UnixStream::pair()`, the child end becomes node's fd 0 through `OwnedFd` and `Stdio`;
+  env `MCP_EXECUTION_HELPER=fd:0`, no token env. Windows: a pipe with `first_pipe_instance`, `reject_remote_clients`,
+  `max_instances(1)`, name `\\.\pipe\mcp-execution-<uuid>`, one accept raced against stop, never re-created; env
+  `MCP_EXECUTION_HELPER=pipe:\\.\pipe\mcp-execution-<uuid>` and the token in `MCP_EXECUTION_HELPER_TOKEN`.
+- `serve`: hello read with a 5 s timeout counted from the accepted connect, `MAX_HELLO_BYTES` 4096, version and token
+  checked, a mismatch closes the channel without a reply. The reader loop acquires the `MAX_INFLIGHT_CALLS` (16)
+  semaphore before spawning each call and holds the permit until the response is written; a `JoinSet` cancels
+  in-flight calls at the end; one writer task over a queue of `RESPONSE_QUEUE` 64. `HelperHandle::finish` signals stop, waits for the loop (bounded by `FINISH_GRACE` 2 s) and
+  closes the pool.
+- Protocol (`protocol.rs`): `read_line` is bounded (never buffers past the limit plus one read); `encode_response`
+  turns a line over `MAX_HELPER_LINE_BYTES` into `call_failed` "result exceeds N bytes". A request that cannot be
+  parsed or exceeds the bound gets `call_failed` with its `id` echoed when parseable, else id `0`, and the channel
+  closes; clients start ids at 1 and treat a close as rejecting every pending call.
+- Pool (`pool.rs`): `ServerId` to `Arc<OnceCell<Session>>`; the lock is released before the connect await; a failed
+  init evicts only when `Arc::ptr_eq` matches; `MAX_POOLED_SERVERS` 16. Servers resolve through
+  `resolve_server_config(ServerSource::Config)`, so the helper reads `mcp.json` (`HelperConfig::servers_dir` also
+  feeds the dry-run suggestions, see section 18). Every outcome maps to a `ResponseBody`; runner text goes in `message` and server text only in
+  `server_message`; failure texts are sanitized and capped at 500 characters.
+- `helper` command (hidden): serves over stdin and stdout until EOF, then closes the pool. Under `run`, the journal and
+  the dry-run report come from the typed `journal` and `dry_run` fields of `HelperConfig` (section 18, D24).
+- `setup`: `SetupResult.helper_binary` is a `CliBinary` (`Found(path)`, `OverrideInvalid`, `NotFound`; a new JSON
+  output field tagged `state` and `path`) and a warning line for the last two. `discover_cli_binary`:
+  `MCP_EXECUTION_CLI` wins when set and must be an absolute path to an executable file, otherwise the state is
+  `OverrideInvalid`, and there is never a fallback to PATH for a set variable (architect, D17). When the variable is
+  unset, the first `mcp-execution-cli` on PATH is used (`which`), else `NotFound`.
+- Protocol rule on id 0 (architect, D17): client ids start at 1. A request that cannot be parsed or has id 0 ("request
+  id 0 is reserved") gets an error response and the helper closes the channel; the bridge treats a response with id 0
+  as fatal and fails the connection ("the helper rejected a request it could not process").
+
+### `run` wiring (`runtime/{exec,preload.js,import_hook}.rs`, `commands/run.rs`)
+
+- `run` binds `HelperServer` (`Carrier::native()`, call timeout `min(run timeout, DEFAULT_CALL_TIMEOUT)`), passes the
+  endpoint env and the channel as stdin to node, always calls `finish()`, and prints `journal_summary` and
+  `dry_run_report` notices when present. `run_script_process(spec, helper: Option<&mut HelperEndpoint>)`;
+  `ScriptProcess::node_args`.
+- Preload: always registers the `mcp:<id>` and `mcp:helpers` hooks. Only when `MCP_EXECUTION_HELPER` is set it opens
+  `fd:0` or `pipe:<name>`, writes `{"v":1[,"token"]}\n`, `unref()`s the socket, stores it at
+  `globalThis[Symbol.for("mcp-execution.helper-channel")]` (core constant `HELPER_CHANNEL_KEY`), replaces
+  `process.stdin` with a lazily created empty Readable (`isTTY` false), and deletes `MCP_EXECUTION_HELPER` and
+  `MCP_EXECUTION_HELPER_TOKEN` from `process.env`. The bridge only `ref()`s the channel while calls are pending.
+- Tokio feature `io-std` added to mcp-cli.
+
+### `--typecheck` (#577, `runtime/typecheck.rs`)
+
+- tsconfig from the codegen `TSCONFIG_JSON` options plus `typeRoots` (existing `<servers>/*/node_modules/@types`, at
+  most `MAX_TYPECHECK_SERVER_DIRS` 256 listed), `paths` (`mcp:helpers` to a written `helpers.d.ts`, `mcp:*` to
+  `<servers>/*/index.ts`) and `include` (script and helpers); no `extends`; the script is never read. `tsc -p ...
+  --noEmit --pretty false`, `TYPECHECK_TIMEOUT` 60 s (skipped on timeout), found with `which`.
+- Skipped with a `typecheck skipped: <reason>` notice after the anchor when `tsc` is not on PATH ("tsc was not found on
+  PATH"), when it does not finish within 60 s, or when the environment is unresolved (below). A real problem in the
+  script fails: at most `MAX_DIAGNOSTIC_LINES` 20 and `MAX_DIAGNOSTIC_BYTES` 4096, escaped, to stderr before node
+  starts, exit 2.
+- Classification (as built, `classify_diagnostics`): each tsc diagnostic group is one of node types missing (TS2580,
+  TS2591, TS2503, TS2688 for `'node'`, TS2307 for `node:*` or a builtin), located in a generated SDK file or global
+  (no file at all), an implicit any (TS7006, TS7031), or genuine. Any genuine diagnostic, or an empty diagnostic list
+  from a failed tsc, fails the check; implicit-any diagnostics count as genuine only when the environment is resolved.
+- Deviation (approved by the architect on condition, D13: only an all-missing-types diagnostic set is skipped): `types: []` is set when no `@types/node` is found under the servers, because a global
+  tsc error for the missing `node` library would suppress every other diagnostic. The plan's "no node types: skip"
+  pre-check was replaced by the diagnostic-based skip, matching the acceptance tests.
+- Top-level `await` in a `.ts` script passes: the check-time overlay tsconfig sets `module` to ESNext,
+  `moduleResolution` to Bundler and `moduleDetection` to force. The generated tsconfig is untouched; the overlay changes
+  `module` and `moduleResolution` for the check only.
+- When there is no genuine diagnostic and node types are missing, the notice is "typecheck skipped: environment
+  unresolved (Node type definitions not installed)"; when diagnostics sit in generated SDK files or are global, it is
+  "typecheck skipped: environment unresolved (the generated SDK or the compiler reported problems of its own; run npm
+  install in the server directory)". TS7006 and TS7031 in the script are ignored only while the environment is
+  unresolved. Any other error in the script exits 2.
+- Deviation D23 (the check-time overlay and the TS7006/TS7031 handling): approved by the architect, relayed by the
+  lead, 2026-11-24, with four conditions:
+  1. A diagnostic is attributed to the generated SDK by canonicalized path prefix against the canonical servers
+     directory; a diagnostic with no file (a global type) counts as environment.
+  2. A script error other than TS7006 or TS7031 always exits 2, including when environment diagnostics are present.
+  3. When the environment is unresolved and the script has no other errors, the result is reported as a skip with
+     the "environment unresolved (...)" notice above, never as "passed".
+  4. The overlay applies only to the check; runtime execution does not change.
+  Verified against the code (`runtime/typecheck.rs`, `kind_of` and `classify_diagnostics`; `commands/run.rs`
+  notice): conditions 1 to 3 hold as built, with the final wording of the notices given above.
+
+### `--restrict` (#576, `runtime/restrict.rs`)
+
+- `permission_args` (final, architect ruling): `--permission` plus exactly one `--allow-fs-read=<path>` per path
+  (script, servers dir, run dir). Windows is refused with exit 2 before node starts; a path containing a comma is also
+  refused (exit 2), kept as a precaution for older Node lines that split on commas. Node 26 does not split a comma
+  list, which is why one flag per path is used. `--preserve-symlinks` was tried in wave 2 and rejected: it is not needed
+  once the per-path flags are used (`restrict_still_lets_the_script_call_tools_through_the_helper` passes without it
+  under the canonical `/private/var` sandbox), and no path canonicalisation was added. The comma-joined argument and
+  its `TODO(review)` are gone.
+- The fd-0 channel needs no `--allow-net`. Node 25+ narrows network through the permission model; Node 22 to 24 narrow
+  files and processes only.
+
+### `--save` (#579, `commands/run.rs`)
+
+- Validated before node starts, each failure exiting 2: `RecipeName`, `parse_header`, header name equals NAME, one
+  server from the header tools, and an existing name without `--overwrite`.
+- After a successful run (script exit 0), `scripts::save(~/.claude/skills/<server>, ...)` runs. If saving fails then,
+  the run exits 1 with the notice "script succeeded; save failed: ...". If the run did not succeed, nothing is saved and
+  the output carries "not saved: script did not succeed". Success adds `saved script <path>`. There is no
+  `--skills-dir` flag on `run`. (Architect ruling; replaces the wave-2 behaviour of exit 2 for every save failure.)
+
+### `scripts list` and `scripts check` (#579, `commands/scripts.rs`)
+
+- `list` prints `name [writes]: description (tools)`; `check` prints `script: missing tool server/tool` and
+  `file.ts: invalid header` and exits 5 on any problem, 0 when clean; `--format json` is structured. `check` reads
+  `~/.claude/servers/<server>/_meta.json` (no `--servers-dir` in the frozen args).
+
+### Run marker, pipe descriptor and Windows binary resolution (D25)
+
+Architect-approved rulings, relayed by the lead, 2026-11-24; all are built and were checked against the code.
+
+- **Run marker.** `MCP_EXECUTION_RUN=1` (core constant `RUN_MARKER_ENV`) is set on the whole process tree under `run`
+  (`runtime/exec.rs`). The preload keeps it; the channel variables stay cleared.
+- **Bridge refusal.** When the marker is set and no channel is registered, the bridge refuses to spawn its own helper
+  and fails with `call_failed` "refused: tool calls from a child process or worker thread are not supported under
+  `run`; call tools from the main script" (`runtime-bridge.ts.hbs`). The residual is stated in the `run` help text.
+- **Command refusal.** Under the marker, `call`, the hidden `helper` and `run` exit 2 with "not supported inside
+  `mcp-execution-cli run`; call tools from the main script" (`commands/common.rs`, `refuse_inside_run()`); otherwise a
+  script could run `call` or a nested `run` to escape `--dry-run` and the journal.
+- **Binary resolution in the bridge.** A set `MCP_EXECUTION_CLI` always wins, must be an absolute path and has no PATH
+  fallback (D17). When it is unset, the bridge resolves `mcp-execution-cli` (`.exe` on Windows) through absolute `PATH`
+  entries only, skipping empty and relative entries and so the current directory (libuv searches the current
+  directory first on Windows), and spawns the absolute path; if none is found it fails with "mcp-execution-cli not
+  found on PATH; set MCP_EXECUTION_CLI". Windows needs no variable.
+- **Pipe descriptor.** On Windows the runner exports `MCP_EXECUTION_HELPER=pipe:\\.\pipe\mcp-execution-<uuid>` and the
+  token in `MCP_EXECUTION_HELPER_TOKEN` (Unix: `fd:0`); the preload accepts `fd:0` and `pipe:<name>` only. The accept is
+  raced against stop, the 5 s hello timeout is measured from the accept, and `HelperHandle::finish()` is bounded by
+  `FINISH_GRACE` 2 s.
+- **Residual (documented, follow-up).** The Windows pipe uses the default DACL.
+
+## 18. Journal, Dry Run, Policy and Harness (as built)
+
+### Journal (#572, `runtime/journal.rs`)
+
+- `Journal::create` prunes journals (7 days, 50 files; a live journal is spared for `LIVE_JOURNAL_GRACE` 600 s),
+  loads or creates the per-user key `<state root>/journal.key` (32 random bytes from two v4 UUIDs, written through a
+  temporary file and an atomic rename, 0600; a corrupt key is regenerated),
+  and opens `journals/journal-<run-id>.jsonl` (0600, no symlink following) through the shared `create_private_file` of
+  `runtime/dirs.rs`, which spill also uses. A journal creation error fails the run with exit 1 instead of silently
+  disabling the journal (architect, D19).
+- Digest: SHA-256 over the domain tag `mcp-execution/journal/args/v1\0`, the key and the canonical arguments;
+  `canonical_args` sorts keys recursively, since `serde_json` keeps insertion order workspace-wide.
+- Lines: `start {event,seq,server,tool,digest (64 hex),args_bytes}` recorded before the call is sent, `end
+  {event,seq,status,duration_ms,result_bytes}`, `truncated {event,dropped}`. The file holds server id, tool name, keyed
+  digest, argument size, status, duration and result size only, never a value or server text. One writer task flushes
+  each line. Caps: 2000 lines and 1 MiB per file, with a reserved `MARKER_RESERVE` 256 bytes for the truncation marker.
+- Summary (`finish`): printed only when the script status is not `exit 0` (timeout, signal, non-zero exit): `call
+  summary: N call(s); completed calls may have changed state`, then `  #<seq> <server>/<tool> args=<12 hex> <status>
+  <ms>ms`, failed and unknown calls first, at most 20 entries plus "and N more"; an in-flight call reads `unknown (in
+  flight when the run ended)`. Applies to `run` only.
+
+### Dry run and policy (#573, `runtime/policy.rs`, `runtime/helper.rs`)
+
+- Policy file: `{"version": 1, "reads": ["<server>/<tool>"]}` (as built, architect ruling D19): `version` 1 is
+  required and unknown fields are denied; each entry is split at the first `/` and validated as `ServerId` plus
+  `ToolName`. `ToolName` cannot contain `/`, so an entry with more than one `/` is invalid, and a wildcard entry is
+  invalid (rejected at load, not silently ignored). Matching
+  is exact string match. Unknown fields and invalid JSON are rejected with a fixed message and the file path only,
+  64 KiB cap. An absent default file is an empty policy (every call is a write); a missing explicit `--policy` path
+  is invalid input (exit 2). `--policy` requires `--dry-run`. Annotations are never read: `_meta.json` annotations do
+  not classify, so a hostile `readOnly` hint cannot make a write execute.
+- `DryRun`: the skip decision plus a bounded report that keeps the first `MAX_REPORTED_WRITES` 50 skipped writes
+  (order, `server/tool`, digest prefix, argument size) with a counter for the rest, and an "incomplete" line. The report is a stdout notice, always printed
+  when writes were skipped. A skipped write returns `write_skipped` to the script and never reaches the server.
+- Helper hooks (architect, D24): there is one `pub fn bind(Carrier, HelperConfig)` (public because integration tests
+  use it) and no second constructor. `HelperConfig { servers_dir, call_timeout, journal: Option<Arc<Journal>>,
+  dry_run: DryRunMode }`, with `DryRunMode { Off, On(Policy) }` (default `Off`). `CallHooks::execute` runs journal
+  start, the dry-run decision, the pool call and journal end; `pool.call` returns `CallReply {body, status}`;
+  `HelperHandle::finish` returns the real `RunCallReport`.
+- `--dry-run` and `--policy` are not refused; `reject_unwired_flags` is gone.
+- `HelperConfig::servers_dir` (architect, D20) serves two readers: the preload resolves `mcp:<id>` imports with it, and
+  the dry-run report reads each skipped server's recorded `_meta.json` there to add a suggestion line ("the server marks
+  it read-only (a hint, not trusted): list \"server/tool\" under reads to run it") for a tool whose recorded annotations
+  say read-only; the suggestion never changes what executes.
+- A journal creation error fails the run with exit 1 before node starts (architect, D19).
+
+### Context-cost harness (`tests/context_cost_harness.rs`)
+
+- For K in {1, 2, 3, 5, 10, 20}: arm A is K `call` processes, arm B is one `run -` whose script makes K `echo` calls.
+  Bytes reaching the context are the command text plus stdout and stderr; `ContextBytes` newtype, tokens
+  `div_ceil(4)` labelled "estimate (bytes/4)", never "savings". The crossing is computed from the data, not hard-coded;
+  it skips without node locally and hard-fails under `CI`. Results are in [[../NFR-mcp-execution-2026-07-27]]
+  (NFR-PERF-003): B is smaller from K = 5. The script text is fixed, so a model's cost of writing the script is not
+  counted.
+
+## 19. Script-First Requirements and Contracts
+
+> [!success] Implemented
+> The requirements below were implemented in the script-first pull request (#569 accepted, option B). Each **Why**
+> paragraph describes the state before the change; the as-built sections above govern where they differ. Decisions
+> that are still open are marked.
+
+Command and flag names are final: `stats`, `run`, `call`, `scripts list` and `scripts check`, `--save`, `drift` (sections 16 and 17). The `skill` command also changes through
 the script-first skill package (default name, name validation, body shape); that content lives in
-[[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]] and is not repeated here.
+[[../skill/spec#14. Script-First Requirements]] and is not repeated here.
 
-### Planned: context-cost measurement command (#562)
+### Script runner and bounded output (#571, FR-036)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-036.1 | WHEN the user invokes the run command with a script file or standard input THE SYSTEM SHALL execute the script on the local runtime and return its exit status | must |
+| FR-036.2 | WHEN a script imports a generated server through the documented stable specifier THE SYSTEM SHALL resolve it to that server's generated files regardless of the script's own location | must |
+| FR-036.3 | THE SYSTEM SHALL count the bytes the script writes to stdout and, WHEN the count exceeds the output budget, show only the head within the budget and write the full output to a spill file | must |
+| FR-036.4 | WHEN output is spilled THE SYSTEM SHALL report the head, the spill file path and the total byte count in a notice written by the runner | must |
+| FR-036.5 | THE SYSTEM SHALL deliver runner notices in a form that script output cannot forge, so neither script nor server text can pass for a notice that names a path | must |
+| FR-036.6 | THE SYSTEM SHALL apply the budget to stderr as well | should |
+| FR-036.7 | WHEN the run exceeds the time limit THE SYSTEM SHALL terminate the script and exit with the timeout code | must |
+| FR-036.8 | THE SYSTEM SHALL apply a default time limit and a default budget, each overridable per run within a hard maximum | must |
+| FR-036.9 | WHEN the runner fails before or around the script THE SYSTEM SHALL exit with the CLI classification and a one-line message that does not echo script text | must |
+| FR-036.10 | WHEN the script exits non-zero by itself THE SYSTEM SHALL exit non-zero and SHALL NOT remap the script's codes onto the CLI's classified codes | must |
+| FR-036.11 | THE SYSTEM SHALL provide a pagination helper and a bounded-parallelism helper, each reporting when its limit stops it | should |
+| FR-036.12 | WHEN a spill file is created THE SYSTEM SHALL create it under a runner-owned location with a runner-generated name, confined by symlink-aware validation and readable only by the user | must |
+| FR-036.13 | THE SYSTEM SHALL bound the number and total size of spill files and remove expired ones, confined exactly as creation is | must |
+| FR-036.14 | THE SYSTEM SHALL start the script without a shell and SHALL pass script arguments as data | must |
+| FR-036.15 | THE SYSTEM SHALL state in help text and generated guidance that scripts run with the user's privileges and without a sandbox | must |
+
+**Constraints.**
+
+- Constitution [[../constitution]] section V applies: path confinement and
+  symlink-aware validation, resource bounds as named constants (a bound above an
+  existing one derives from it), redacting `Debug` on any type that carries
+  script text, arguments or environment values, and the untrusted-text rule for
+  error text and for tool and server names that originate from a server (printed
+  results are the open decision of "Security posture of the runner" below).
+- Reuse the CLI's `ExitCode` and classification; reuse existing confinement
+  helpers instead of writing new ones.
+- Works against servers generated by the current bridge. If generation must
+  change (for example to add a fixed helper file), that is a breaking change
+  and follows the fixed-file rule in [[../codegen/spec]].
+- Scripts are never interpreted, linted or restricted by the runner.
+
+### Call journal and partial-failure report (#572, FR-037)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-037.1 | WHEN a tool call is made during a run THE SYSTEM SHALL append one journal entry with server id, tool name, argument digest, argument size, status, duration and result size | must |
+| FR-037.2 | THE SYSTEM SHALL NOT write any argument value, result value, error text or server-supplied text to the journal | must |
+| FR-037.3 | WHEN a call is sent THE SYSTEM SHALL record its start before the response arrives, so a call in flight at failure is present with outcome unknown | must |
+| FR-037.4 | WHEN a run ends with a failure, timeout or kill THE SYSTEM SHALL print a bounded summary of completed calls, the failed call and unknown-outcome calls | must |
+| FR-037.5 | THE SYSTEM SHALL deliver the summary through the runner's notice channel (FR-036.5) and account for it in the output budget | must |
+| FR-037.6 | THE SYSTEM SHALL report every completed call as possibly state-changing, unless the user's policy (FR-038.5) classes it as a read | must |
+| FR-037.7 | THE SYSTEM SHALL bound entries per run, bytes per file, retained journals and their age, count dropped entries and mark the journal truncated | must |
+| FR-037.8 | THE SYSTEM SHALL create journals at a system-derived location and name, confined by symlink-aware validation and readable only by the user | must |
+| FR-037.9 | THE SYSTEM SHALL remove expired journals under the same confinement as creation | must |
+| FR-037.10 | THE SYSTEM SHALL flush each entry as it is written, and record concurrent calls without interleaving corruption | must |
+| FR-037.11 | WHEN the run succeeds THE SYSTEM SHOULD NOT print the summary by default | should |
+
+No requirement in this section may rely on a server's read-only
+hint. Tool and server names in the summary come from an untrusted server and are
+sanitised before a model sees them.
+
+**Constraints.**
+
+- The journal is diagnostic, not an audit log: a script runs with the user's
+  privileges and can alter or delete its own journal. Tamper resistance belongs
+  to FR-041. No document may call the journal tamper-evident.
+- Types: `ServerId`, `ToolName`, a digest newtype, a status enum with an
+  explicit unknown variant; hand-written redacting `Debug` on any type holding
+  argument bytes before digesting.
+- All bounds are named constants; per-entry size is bounded by construction.
+
+### Dry run and write policy (#573, FR-038)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-038.1 | WHEN a run is started in dry-run mode THE SYSTEM SHALL execute only calls classified as reads and SHALL NOT send calls classified as writes | must |
+| FR-038.2 | WHEN a tool has no recorded annotations, or is absent from the recorded metadata, THE SYSTEM SHALL classify it as a write | must |
+| FR-038.3 | THE SYSTEM SHALL classify using the annotations recorded in `_meta.json` at generation, not the live server's | must |
+| FR-038.4 | A wrong or hostile read-only hint SHALL NOT cause a write to execute during a dry run | must |
+| FR-038.5 | THE SYSTEM SHALL apply a user policy classifying tools by server and tool | must |
+| FR-038.6 | WHEN regeneration changes the annotations recorded for a tool THE SYSTEM SHALL NOT silently widen what a dry run executes; how such a change is detected is part of the open mechanism for FR-038.4 | must |
+| FR-038.7 | WHEN the run ends THE SYSTEM SHALL report each skipped write (server, tool, order) in a bounded report | must |
+| FR-038.8 | A skipped write SHALL NOT return a fabricated result; WHEN later steps depend on it THE SYSTEM SHALL say the report is incomplete | must |
+| FR-038.9 | WHEN the policy file is missing, unreadable or invalid THE SYSTEM SHALL fail before any call with a classified error that does not echo file contents | must |
+| FR-038.10 | THE SYSTEM SHALL state the guarantee level in help and guidance: protection against mistakes in honest scripts and against wrong hints, not against a script written to evade it | must |
+
+Comparison between recorded and live annotations belongs to the
+drift check (FR-045, #580), not to this component. FR-038.4 is satisfied by never classifying from annotations: only exact policy `reads` entries execute (section 18).
+
+**Constraints.**
+
+- Fail safe: any classification error, missing metadata or internal failure
+  resolves to "write" and is never sent as a read.
+- Report text from the server is sanitised, bounded and delimited as untrusted;
+  policy and report paths are confined and never derived from script or server
+  input; types validate at construction (`ServerId`, `ToolName`, a
+  classification enum).
+- A mock server that lies about annotations is part of the test fixtures, and
+  the hostile-annotation test comes first.
+- Dry run does not cover effects outside MCP calls (shell commands, direct file
+  writes, direct network access by the script).
+
+### One-shot tool call through the authoritative client (#574, FR-039)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-039.1 | WHEN the call command is run THE SYSTEM SHALL resolve the server with the existing server-resolution machinery and the same `ServerConfig` validation as `introspect` | must |
+| FR-039.2 | THE SYSTEM SHALL connect through the introspector's connection code for stdio, HTTP and SSE; the connect and validation steps shared by listing and calling SHALL exist once | must |
+| FR-039.3 | THE SYSTEM SHALL NOT introduce a second connection path, transport implementation or validation copy | must |
+| FR-039.4 | WHEN a call succeeds THE SYSTEM SHALL return the result with the value semantics of FR-030 ([[../codegen/spec]]); the printed form of an empty success is the one decided there | must |
+| FR-039.5 | WHEN the server reports a tool error THE SYSTEM SHALL return the one-line structured failure of single-call mode, with server text sanitised, bounded and marked as coming from the server | must |
+| FR-039.6 | WHEN the output exceeds the budget THE SYSTEM SHALL apply the runner's budget and spill rules | must |
+| FR-039.7 | WHEN the JSON argument is not a single object THE SYSTEM SHALL exit with invalid input and SHALL NOT repeat any part of the argument | must |
+| FR-039.8 | THE SYSTEM SHALL validate the tool name as a `ToolName` and the server as a `ServerId` before connecting | must |
+| FR-039.9 | WHEN the call exceeds its time limit THE SYSTEM SHALL fail with the timeout code and shut the connection down | must |
+| FR-039.10 | WHEN the call ends THE SYSTEM SHALL terminate any server process it started | must |
+| FR-039.11 | THE SYSTEM SHALL map failures to the CLI's exit codes; the classification of a tool-reported error is stated, not implied | must |
+
+**Constraints.**
+
+- The shared connect step lives in the introspector crate; the dependency
+  direction forbids the CLI owning it. The introspector's public behaviour and
+  tests are unchanged: the step is extracted, not copied.
+- Protocol negotiation is the existing connection code's; the bridge's
+  `2024-11-05` pin is not copied.
+- Result size is bounded by the layer below (stdio line cap, SSE event cap); the
+  plain HTTP JSON body is unbounded upstream, so the call's time limit is the
+  only bound there, and that is stated, not hidden ([[../introspector/spec]]
+  section 5).
+- Redacting `Debug` on any type holding configuration, headers or arguments;
+  log the `ServerConfig` wrapper, not `Transport`.
+
+### Per-script helper and retirement of the generated bridge (#575, FR-040)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-040.1 | THE SYSTEM SHALL provide a per-script helper holding pooled connections, bounded in count and lifetime, with the connect, validation and result semantics of FR-039 | must |
+| FR-040.2 | WHEN the run ends, whether it succeeds, fails or times out, THE SYSTEM SHALL close every pooled connection and leave no server process running | must |
+| FR-040.3 | THE SYSTEM SHALL route generated wrappers' tool calls through the helper | must |
+| FR-040.4 | THE SYSTEM SHALL remove from the generated bridge its own connection code, its mirrored configuration validation and the `2024-11-05` handshake pin (`runtime-bridge.ts.hbs:966`) | must |
+| FR-040.5 | THE SYSTEM SHALL list the generated-output changes and the regeneration requirement as breaking changes in the changelog, with no compatibility shim (pre-1.0) | must |
+| FR-040.6 | THE SYSTEM SHALL state the behaviour when the binary cannot be found by a script, and `setup` SHALL verify what that requires | must |
+
+This component retired the generated bridge's connection code, mirrored validation and protocol pin; the generated side is in [[../codegen/spec#14. Helper-Protocol Bridge (as built)]].
+
+**Constraints.**
+
+- Single connection path: the helper uses the shared connect step of FR-039.2.
+- Bounds on pool size, lifetime and per-call time are named constants.
+
+### Reduced-privilege script execution (#576, FR-041)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-041.1 | WHERE the helper carries all tool traffic THE SYSTEM SHALL be able to run a script with its filesystem, process-spawn and network access narrowed to what the user permits | should |
+| FR-041.2 | WHEN reduced-privilege execution is not active THE SYSTEM SHALL say so wherever it describes a run, and SHALL NOT describe the runner as sandboxed | must |
+| FR-041.3 | THE SYSTEM SHALL state what the narrowing covers and what it does not | must |
+
+Mechanism: the Node.js permission model through `--restrict` (section 17), Unix only; network is narrowed only on Node 25 and later, files and processes on every accepted line.
+
+### Pre-run typecheck (#577, FR-042)
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-042.1 | WHERE a TypeScript compiler is available THE SYSTEM SHOULD typecheck a script against the generated SDK before executing it | should |
+| FR-042.2 | WHEN the compiler is absent THE SYSTEM SHALL run the script and say the check was skipped | must |
+| FR-042.3 | THE SYSTEM SHALL bound the diagnostics it shows and treat their text as untrusted | must |
+
+A type error blocks the run before node starts (exit 2); an absent compiler or a diagnostic set made only of missing Node types is skipped with a notice; the compiler is found with `which` (section 17). The cost against runner start-up is bounded by `TYPECHECK_TIMEOUT` 60 s.
+
+### Security posture of the runner
+
+> [!danger] Scripts are not sandboxed
+> Until FR-041 lands, a script run by the runner has the user's privileges,
+> exactly as a shell command does. It reads the user's files, spawns processes
+> and reaches the network, and it can read `~/.claude/mcp.json`
+> (`runtime-bridge.ts.hbs:681`). No document, help text or generated guidance
+> may describe the runner as sandboxed or safe against hostile scripts. Dry run
+> and the journal are diagnostics, not boundaries.
+
+| Concern | Rule |
+|---------|------|
+| Untrusted text | Error text from a server is sanitised, bounded and marked as coming from the server; tool and server names shown to a model are sanitised |
+| Notices | The runner's notices travel on a channel script output cannot forge (FR-036.5) |
+| Arguments | An argument to single-call mode and to the one-shot call is a single JSON object; a malformed argument is reported without repeating its text |
+| Secrets | Journals, reports and logs hold digests, sizes and names, never values; hand-written redacting `Debug` |
+| Confinement | Spill files, journals, policy and reports live in system-chosen locations, never derived from script or server input |
+| Skill content | Text that originates from an MCP server stays inert data in a rendered skill; owned by the skill block |
+
+> [!question] Open maintainer decision
+> Whether successful tool results printed to the caller by single-call mode, the
+> runner and the one-shot call fall under the constitution's section V rule for
+> untrusted text, or are an accepted exception, is open. Wherever results are
+> printed, the documents state this as open; they claim neither sanitisation
+> nor an exception.
+
+
+### context-cost measurement command (#562)
 
 **Why.** The project's headline number has no measurement behind it. `README.md:10`, `:23` and `:133` claim 98%
 token savings; the business requirements document records the disagreement with the later "~83% maximum"
@@ -787,25 +1251,20 @@ defers.
 - The per-tool size field and the output-schema flag are fields of the single `_meta.json` v3 registry owned by
   [[../core/spec]]; this subsection defines no metadata field and never bumps the version on its own.
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: command name and placement (working name `stats`), and whether the harness is a subcommand, a test target or a benchmark.]
-- [NEEDS CLARIFICATION: how a tool definition is serialised for sizing (canonical JSON of the tool object, with or without annotations and output schema; before or after the introspector's bounds).]
-- [NEEDS CLARIFICATION: the token estimator and its documented error band; recorded in a decision record.]
-- [NEEDS CLARIFICATION: whether `index.ts` and the runtime files count in "all tool files"; where the mock servers live so this crate can use them; whether CI asserts exact figures or relations and bounds.]
+- Resolved: the command is `stats SERVER_ID [--servers-dir]` (section 16). A tool is sized by `manifest_size_bytes`, the compact serialized `ToolInfo` recorded in `_meta.json` v3. The estimator is bytes divided by 4, rounded up, labelled an estimate ([[../decisions/ADR-562-context-cost-estimator]]). `index.ts` and the runtime files are excluded from "all tool files". The mock servers live in `crates/mcp-cli/tests/fixtures/tools_mcp_server.rs`; the harness is the test target `tests/context_cost_harness.rs`, not a subcommand or a benchmark.
 
 Ask first: choosing the estimator; a tokenizer dependency (check current versions); any machine-readable output
 format or output file.
 
-**Depends on / blocks.** The static report is blocked by #568 (per-tool size and the output-schema flag in the
-`_meta.json` v3 registry); the scenario harness is not. Consumed by the documentation rewrite (#560), which may
-quote only figures this command prints. Tracked under epic #555.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-### Planned: command-line front doors for the script runner (#571) and the one-shot tool call (#574)
+### command-line front doors for the script runner (#571) and the one-shot tool call (#574)
 
 The behaviour of both commands (execution, output budget and spill, notices, the connection path, result
-semantics) is specified in [[../runtime/spec#4. Planned: Script Runner With Bounded Output (#571)]] and
-[[../runtime/spec#7. Planned: One-Shot Tool Call Through the Authoritative Client (#574)]]. This subsection holds
+semantics) is specified in [[#Script runner and bounded output (#571, FR-036)]] and
+[[#One-shot tool call through the authoritative client (#574, FR-039)]]. This subsection holds
 only what belongs to the command-line layer.
 
 **Why.** The subcommands today are `introspect`, `generate`, `skill`, `server`, `setup` and `completions` (§2);
@@ -829,30 +1288,30 @@ a second one.
 **Constraints.**
 
 - The call command is a client of the shared connect step that the introspector owns; this crate owns no
-  connection code ([[../runtime/spec#7. Planned: One-Shot Tool Call Through the Authoritative Client (#574)]]).
+  connection code ([[#One-shot tool call through the authoritative client (#574, FR-039)]]).
 - `execute_command` keeps resolving to a classified exit code and never propagates a handler failure as `Err`
   (§5); `main.rs` still calls `std::process::exit` only after classification.
 - Help text of the run command states that scripts run with the user's privileges and without a sandbox.
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: command names, flags, and how a file or standard input is chosen (working names `run`, `call`).]
-- [NEEDS CLARIFICATION: exit code of a tool-reported error (3 or 1), and whether the runner's classified tool failures map onto 3 and 4.]
+- Resolved: the commands are `run [FILE|-]` and `call <ServerFlags> -- TOOL [JSON]` (section 16). A tool-reported or JSON-RPC error exits 3, a runner timeout 4, a script that exits non-zero or dies on a signal 6 (`SCRIPT_FAILED`). In text mode the runner prints an anchor line, notices and a trailer carrying the run token; `--format json` prints one envelope.
+- Resolved (approved implementation deviation, user, 2026-11-24): the syntax is `call <ServerFlags> -- TOOL [JSON]`
+  (clap `last = true`), for example `call --from-config github -- create_issue '{"title":"x"}'` and
+  `call --http URL -- echo`. An optional positional server before `TOOL` cannot be parsed by clap. `ServerFlags` is
+  unchanged (FR-039.20), so `introspect`, `generate` and `drift` keep their positional server;
+  section 17 carries the full command table.
 - [NEEDS CLARIFICATION: whether results printed to the caller fall under the constitution's untrusted-text rule or are an accepted exception; a maintainer decision stated here and in the runtime block, with neither sanitisation nor an exception claimed until it is made.]
-- [NEEDS CLARIFICATION: how the global `--format` interacts with runner notices.]
 
 Ask first: the command names and flags; any change to `ExitCode` or to the classification table; starting the
 one-shot call before the runtime decision record is accepted.
 
-**Depends on / blocks.** The run command (#571) is not gated and builds on #570. The one-shot call (#574) is gated
-by the runtime decision record #569 ([[../decisions/ADR-569-runtime-strategy-single-mcp-client]]): if the
-generated bridge stays the only client, a Rust call path would be a second way to call tools. #574 also depends
-on the shared connect step in [[../introspector/spec]]. Tracked under epic #557.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-### Planned: saved-script commands (#579)
+### saved-script commands (#579)
 
 The storage layout, survival across regeneration, header validation and bounds are specified in
-[[../skill/spec#12. Planned Changes (script-first direction, adopted 2026-11-24)]]; this subsection holds the
+[[../skill/spec#14. Script-First Requirements]]; this subsection holds the
 command-line side.
 
 **Why.** Nothing in the CLI saves, lists or checks a script. The `skill` command writes `SKILL.md` through a
@@ -876,19 +1335,16 @@ saved scripts therefore belong beside `SKILL.md`, and the commands that touch th
   parser source excerpts never appear in output, errors or `Debug`; output text follows §12.
 - `thiserror` in `mcp-skill`, `anyhow` only here (§13).
 
-**Open decisions.**
+**Resolved and open decisions.**
 
-- [NEEDS CLARIFICATION: subcommand and flag names (working names `recipe list`, `recipe check`, `--save`).]
-- [NEEDS CLARIFICATION: the exit code for "problems found": a new `ExitCode` constant or a documented use of an existing one.]
-- [NEEDS CLARIFICATION: whether saving happens only after a successful run, and how it behaves after a partial failure ([[../runtime/spec#5. Planned: Call Journal and Partial-Failure Report (#572)]]).]
+- Resolved: `scripts list` and `scripts check` take `--server ID [--skills-dir]`, and `run --save NAME [--overwrite]` saves the script that ran (section 17). Problems found exit 5 (`CHECK_FAILED`). Saving happens only after the script exits 0.
 - [NEEDS CLARIFICATION: a check of a skill whose server directory is missing or stale: reported as unreadable, distinct from a missing tool.]
 
 Ask first: adding an `ExitCode` constant; the recipe header format (decision record, see the skill block).
 
-**Depends on / blocks.** Depends on the script runner (#571) for the save hook and on the skill-block storage
-rules. Tracked under epic #558.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-### Planned: drift check against recorded provenance (#580)
+### drift check against recorded provenance (#580)
 
 **Why.** Every `generate` run records provenance in `_meta.json` and nothing reads it back: `tool_digest` and
 `config_fingerprint` are written by `crates/mcp-codegen/src/progressive/generator.rs:866-876` and referenced
@@ -924,24 +1380,19 @@ recorded at generation. The locked `rmcp` 3.10.0 carries `ttl_ms` and `cache_sco
 - The tool-to-digest mapping exists once and is shared with `generate`; it is private to codegen today, so
   where it lives is open and decided with the registry in [[../core/spec]].
 
-**Open decisions.**
+**Resolved and open decisions.**
 
+- Resolved: the command is `drift <ServerFlags> [--name] [--progressive-output]`; it exits 5 (`CHECK_FAILED`) on drift or an endpoint that differs. `ttlMs` is reported, not honoured (section 16).
 - [NEEDS CLARIFICATION: record per-tool digests in the `_meta.json` v3 registry (makes "changed" exact) or accept name-level reporting only.]
-- [NEEDS CLARIFICATION: exit code values and names (existing: success 0, error 1, invalid input 2, server error 3, timeout 4).]
-- [NEEDS CLARIFICATION: command name and placement, a new subcommand or a flag on an existing one.]
-- [NEEDS CLARIFICATION: whether honouring `ttlMs` means more than reporting it.]
 
 Ask first: changing `ServerInfo` public fields to carry `ttl_ms` and `cache_scope`; recording per-tool digests;
 the exit code values.
 
-**Depends on / blocks.** Needs the exposure of the cache hints in [[../introspector/spec]] and, for exact
-attribution, the per-tool digest decision in the `_meta.json` v3 registry owned by #568. Independent of the
-runtime decision record. Tracked under epic #558.
+**Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-## 17. See Also
+## 20. See Also
 
 - [[../core/spec]] — shared config/redaction/exit-code primitives
 - [[../introspector/spec]], [[../codegen/spec]], [[../files/spec]], [[../skill/spec]] — crates this CLI drives directly, without going through [[../server/spec]]
-- [[#16. Planned Changes (script-first direction, adopted 2026-11-24)]] — measurement, runner and call front doors, saved scripts, drift check; not implemented
-- [[../runtime/spec]] — behaviour behind the runner and call commands (planned)
+- [[#19. Script-First Requirements and Contracts]] — requirements of the measurement, runner, call, journal, dry run, helper, restrict, typecheck, saved-script and drift commands
 - [[../decisions/ADR-569-runtime-strategy-single-mcp-client]] — gates the one-shot call

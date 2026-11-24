@@ -400,11 +400,11 @@ Ask first: giving `mcp-files` a bound that is not equal to the code-generation b
 
 **Still pending.** The runner's helpers (#571) and the bridge retirement (#575) may add or remove a
 fixed file; each follows the rule above in the same pull request
-([[../codegen/spec#14. Planned Changes (generated bridge retirement, #575)]]).
+([[../codegen/spec#15. Bridge Retirement Requirements (#575)]]).
 
 ## 11. See Also
 
 - [[../codegen/spec]] — source of `GeneratedCode` and derived resource bounds
-- [[../codegen/spec#14. Planned Changes (generated bridge retirement, #575)]] — the fixed-file rule
+- [[../codegen/spec#15. Bridge Retirement Requirements (#575)]] — the fixed-file rule
 - [[../server/spec#Per-resource locking]] — higher-layer serialization for concurrent exports to the same target
 - [[../cli/spec#generate]] — CLI-side consumer, via `export_to_filesystem_with_options` with `ExportOptions::with_confine_to`
