@@ -102,6 +102,10 @@ fn root() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API), so this end-to-end test cannot redirect the home directory there; tracked in #604"
+)]
 fn generate_observed_shapes_reads_the_tail_of_a_file_over_4_mib_and_keeps_the_newest_shape() {
     let name =
         "generate_observed_shapes_reads_the_tail_of_a_file_over_4_mib_and_keeps_the_newest_shape";
@@ -133,6 +137,10 @@ fn generate_observed_shapes_reads_the_tail_of_a_file_over_4_mib_and_keeps_the_ne
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API), so this end-to-end test cannot redirect the home directory there; tracked in #604"
+)]
 fn generate_observed_shapes_ignores_lines_that_lie_before_the_last_4_mib() {
     let name = "generate_observed_shapes_ignores_lines_that_lie_before_the_last_4_mib";
     if !node_available(name) {

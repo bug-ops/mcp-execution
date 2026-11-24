@@ -41,8 +41,17 @@ impl Scratch {
 /// Creates a [`Scratch`] directory.
 pub fn canonical_tempdir() -> Scratch {
     let dir = tempfile::tempdir().expect("create temp dir");
-    let path = dir.path().canonicalize().expect("canonicalize temp dir");
+    let path = without_verbatim_prefix(dir.path().canonicalize().expect("canonicalize temp dir"));
     Scratch { _dir: dir, path }
+}
+
+/// Drops the `\\?\` prefix Windows' `canonicalize` adds: node's `realpathSync` fails on such
+/// paths with `EISDIR` for the bare drive. A no-op for every other path.
+fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(plain) if !plain.starts_with(r"UNC\") => std::path::PathBuf::from(plain),
+        _ => path,
+    }
 }
 
 /// A tool with the given schemas and no annotations.
