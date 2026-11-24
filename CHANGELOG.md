@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-codegen`**: `callMCPTool` accepts `resultSource: 'structured'` and resolves an empty success to `undefined` (#603)
 - **`mcp-execution-introspector`**: tool annotations and title are captured into `ToolInfo.annotations` and rendered as JSDoc tags and catalog hints (#603)
 - **`mcp-execution-codegen`**: `_meta.json` stores `result_type`, its origin and `manifest_size_bytes` per tool (#603)
-- **`mcp-execution-core`**: `resolve_confined_existing`, a read-only confinement check used by the server listing, and one shared `is_bare_identifier` predicate
-- **`mcp-execution-cli`**: an unavailable server in `server info` carries its reason; `docs_examples` test guards README and rustdoc against drift
+- **`mcp-execution-core`**: `resolve_confined_existing`, a read-only confinement check used by the server listing, and one shared `is_bare_identifier` predicate (#614)
+- **`mcp-execution-cli`**: an unavailable server in `server info` carries its reason; `docs_examples` test guards README and rustdoc against drift (#614)
 
 ### Breaking
 
@@ -28,10 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated output has two more fixed files: `catalog.ts` and `_runtime/cli.ts` (#603)
 - `ToolInfo` has a new `annotations` field, and the tool digest domain is `tool-entry:v2`, so existing digests change (#603)
 - Property keys are rendered raw, quoted when not identifiers, and no longer renamed or suffixed (#603)
-- **`mcp-execution-introspector`**: the five cache accessors are removed, `Introspector` is a unit struct (`Debug`, `Default`) and `discover_server` takes `&self`
-- **`mcp-execution-skill`**: the default skill name is `{id}` instead of `{id}-progressive`, names are limited to 1-64 characters of `[a-z0-9-]`, `MAX_TOOL_FILES` is 1000, and `ScanError::MetadataEscapesDirectory` is new
-- **`mcp-execution-cli`**: `ServerInfo.status` has the new type `ServerAvailability` that carries the unavailable reason (JSON output keeps `status` and `reason`), and `setup` requires Node.js 22.18.0 or newer (23.6.0 on the 23 line)
-- **Workspace**: the `dhat-heap` feature and the `homepage` manifest field are removed
+- **`mcp-execution-introspector`**: the five cache accessors are removed, `Introspector` is a unit struct (`Debug`, `Default`) and `discover_server` takes `&self` (#614)
+- **`mcp-execution-skill`**: the default skill name is `{id}` instead of `{id}-progressive`, names are limited to 1-64 characters of `[a-z0-9-]`, `MAX_TOOL_FILES` is 1000, and `ScanError::MetadataEscapesDirectory` is new (#614)
+- **`mcp-execution-cli`**: `ServerInfo.status` has the new type `ServerAvailability` that carries the unavailable reason (JSON output keeps `status` and `reason`), and `setup` requires Node.js 22.18.0 or newer (23.6.0 on the 23 line) (#614)
+- **Workspace**: the `dhat-heap` feature and the `homepage` manifest field are removed (#614)
 
 ### Changed
 
@@ -39,22 +39,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-codegen`**: each tool has a two-stage size degrade, and an oversized `_meta.json` logs a warning (#603)
 - **`mcp-execution-skill`**: non-identifier parameter keys show as JSON literals and are omitted from the example command (#603)
 - **Specifications**: `specs/` records the script-first direction: planned requirements FR-030 to FR-046, a planned `runtime` block and two proposed decision records (ADR-569, ADR-581) (#594).
-- **Documentation**: README and usage guide are script-first, show runnable commands and imports, and no longer quote unmeasured token figures
-- **Workspace**: `unsafe_code`, `unwrap_used` and `expect_used` are denied workspace-wide and local builds deny warnings
-- **`mcp-execution-codegen`**: handshake server name and version are truncated before storage; nested unions are flattened in typed index signatures
+- **Documentation**: README and usage guide are script-first, show runnable commands and imports, and no longer quote unmeasured token figures (#614)
+- **Workspace**: `unsafe_code`, `unwrap_used` and `expect_used` are denied workspace-wide and local builds deny warnings (#614)
+- **`mcp-execution-codegen`**: handshake server name and version are truncated before storage; nested unions are flattened in typed index signatures (#614)
 
 ### Fixed
 
 - **`mcp-execution-codegen`**: generated single-call tools run from paths with spaces, non-ASCII names, symlinks and relative paths, and exit 0 on success (#603)
-- **`mcp-execution-files`**: the non-atomic write and the mtime marker write refuse symlinks
-- **`mcp-execution-server`**: the listing counts tool files whose name starts with an underscore
-- **`mcp-execution-skill`**: skill scan accepts up to 1000 tools like generation, and a metadata symlink escape has its own error
-- **`mcp-execution-cli`**: `setup` skips and warns about an entry it cannot inspect instead of aborting the walk
+- **`mcp-execution-files`**: the non-atomic write and the mtime marker write refuse symlinks (#614)
+- **`mcp-execution-server`**: the listing counts tool files whose name starts with an underscore (#614)
+- **`mcp-execution-skill`**: skill scan accepts up to 1000 tools like generation, and a metadata symlink escape has its own error (#614)
+- **`mcp-execution-cli`**: `setup` skips and warns about an entry it cannot inspect instead of aborting the walk (#614)
 
 ### Security
 
 - Updated `url` to 2.5.9 to resolve RUSTSEC-2026-0592 (stack overflow in `Url::origin()` on nested `blob:` URLs) (#596).
-- **CI**: every workflow action is pinned to a full commit SHA with the version in a comment
+- **CI**: every workflow action is pinned to a full commit SHA with the version in a comment (#614)
 
 ## [0.11.0] - 2026-11-19
 
