@@ -50,6 +50,8 @@ use crate::annotations::ToolAnnotations;
 use crate::provenance::GenerationProvenance;
 use crate::{ServerId, ToolName};
 use serde::{Deserialize, Serialize};
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// Current schema version of the `_meta.json` sidecar format.
 ///
@@ -331,6 +333,84 @@ pub struct ParameterMetadata {
 
     /// Parameter description, sourced from the tool's input JSON Schema.
     pub description: Option<String>,
+}
+
+/// Refusal reasons of [`read_server_metadata`], one variant per distinct failure.
+#[derive(Debug, thiserror::Error)]
+pub enum MetadataReadError {
+    /// The sidecar file does not exist.
+    #[error("metadata sidecar not found")]
+    NotFound,
+
+    /// The sidecar path is a symbolic link.
+    #[error("metadata sidecar is a symbolic link")]
+    Link,
+
+    /// The sidecar path is not a regular file.
+    #[error("metadata sidecar is not a regular file")]
+    NotRegularFile,
+
+    /// The sidecar exceeds the size limit.
+    #[error("metadata sidecar is {size} bytes, over the {limit} byte limit")]
+    TooLarge {
+        /// Observed size in bytes.
+        size: u64,
+        /// Maximum accepted size in bytes.
+        limit: u64,
+    },
+
+    /// The sidecar could not be read.
+    #[error("metadata sidecar is unreadable: {0}")]
+    Unreadable(#[source] io::Error),
+
+    /// The sidecar is not valid JSON of the expected shape.
+    #[error("metadata sidecar is malformed: {0}")]
+    Malformed(#[source] serde_json::Error),
+
+    /// The sidecar was written with a different schema version.
+    #[error("metadata schema version {found} does not match the expected {expected}")]
+    SchemaMismatch {
+        /// Version found in the file.
+        found: u32,
+        /// Version this build understands.
+        expected: u32,
+    },
+}
+
+/// Reads and validates the `_meta.json` sidecar inside `dir`.
+///
+/// # Errors
+///
+/// Returns a [`MetadataReadError`] naming the first refusal.
+///
+/// # Panics
+///
+/// Always panics: stub, behaviour is not implemented yet.
+#[expect(
+    clippy::todo,
+    reason = "signature stub until the reader is implemented (#618)"
+)]
+pub fn read_server_metadata(dir: &Path) -> Result<ServerMetadata, MetadataReadError> {
+    let _ = dir;
+    todo!()
+}
+
+/// Async counterpart of [`read_server_metadata`] that keeps blocking I/O off the executor.
+///
+/// # Errors
+///
+/// Returns a [`MetadataReadError`] naming the first refusal.
+///
+/// # Panics
+///
+/// Always panics: stub, behaviour is not implemented yet.
+#[expect(
+    clippy::todo,
+    reason = "signature stub until the reader is implemented (#618)"
+)]
+pub async fn read_server_metadata_async(dir: PathBuf) -> Result<ServerMetadata, MetadataReadError> {
+    let _ = dir;
+    todo!()
 }
 
 #[cfg(test)]
