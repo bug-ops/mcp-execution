@@ -28,7 +28,7 @@ const FIXTURE_BIN: &str = env!("CARGO_BIN_EXE_fixture-immediate-exit-server");
 
 #[tokio::test]
 async fn test_discover_server_stdio_handshake_failure_is_connection_failed_not_timeout() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("stdio-immediate-exit").unwrap();
 
     let config = ServerConfig::builder()

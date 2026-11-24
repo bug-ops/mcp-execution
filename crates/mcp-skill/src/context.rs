@@ -8,7 +8,7 @@ use crate::types::{
     GenerateSkillResult, MAX_USE_CASE_HINTS, SkillCategory, SkillTool, ToolExample,
 };
 use mcp_execution_core::untrusted::{
-    MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text, wrap_untrusted_block,
+    MAX_UNTRUSTED_FIELD_LEN, is_bare_identifier, sanitize_untrusted_text, wrap_untrusted_block,
 };
 use std::collections::HashMap;
 
@@ -22,10 +22,11 @@ use std::collections::HashMap;
 /// * `custom_name` - Optional caller-supplied skill name. Callers MUST validate this with
 ///   [`crate::validate_skill_name`] before passing it in — this function does not validate it
 ///   itself, matching `server_id`, which callers likewise validate upstream. When `None`, the
-///   name defaults to `{server_id}-progressive`. Either way, the resulting name is flattened with
-///   [`sanitize_untrusted_text`] before being stored in `GenerateSkillResult::skill_name` — the
-///   same flattening `generation_prompt`'s `**Skill Name**` line applies to it — so the two never
-///   disagree on control characters, invisible Unicode, or length truncation (issue #435). The
+///   name defaults to `server_id`, the skill's directory name. Either way, the resulting name is
+///   flattened with [`sanitize_untrusted_text`] before being stored in
+///   `GenerateSkillResult::skill_name` — the same flattening `generation_prompt`'s
+///   `**Skill Name**` line applies to it — so the two never disagree on control characters,
+///   invisible Unicode, or length truncation (issue #435). The
 ///   prompt's `**Skill Name**` line additionally passes through `wrap_untrusted_block`'s
 ///   `<`/`>`/`&` boundary-escaping, applied to the entire untrusted-data block as an
 ///   injection defense (issue #411, S1) — that escaping is a prompt-rendering concern, not part
@@ -44,7 +45,7 @@ use std::collections::HashMap;
 /// let context = build_skill_context("github", &tools, None, None);
 ///
 /// assert_eq!(context.server_id, "github");
-/// assert_eq!(context.skill_name, "github-progressive");
+/// assert_eq!(context.skill_name, "github");
 ///
 /// let custom = build_skill_context("github", &tools, None, Some("my-custom-skill"));
 /// assert_eq!(custom.skill_name, "my-custom-skill");
@@ -73,7 +74,7 @@ pub fn build_skill_context(
     // control-character-flattened, length-truncated text as the prompt's `**Skill Name**` line —
     // not the raw, unflattened custom name (issue #435, S1).
     let skill_name = sanitize_untrusted_text(
-        &custom_name.map_or_else(|| format!("{server_id}-progressive"), ToString::to_string),
+        &custom_name.map_or_else(|| server_id.to_string(), ToString::to_string),
         MAX_UNTRUSTED_FIELD_LEN,
     );
 
@@ -173,23 +174,13 @@ fn sanitize_use_case_hints(hints: Option<&[String]>) -> (Vec<String>, Vec<String
     (sanitized, warnings)
 }
 
-/// Whether `name` is a bare ASCII identifier (`^[A-Za-z_$][A-Za-z0-9_$]*$`), the form a
-/// generated tool file writes without quotes.
-fn is_identifier_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-}
-
 /// Display form of a raw parameter key for the SKILL.md body and generation prompt.
 ///
 /// An identifier-like key is shown verbatim. Any other key is shown as a double-quoted JSON
 /// string literal of its sanitized text, with every backtick written as `\u0060` so the result
 /// can never close a Markdown code span around it early.
 fn display_param_name(raw: &str) -> String {
-    if raw.chars().count() <= MAX_UNTRUSTED_FIELD_LEN && is_identifier_name(raw) {
+    if raw.chars().count() <= MAX_UNTRUSTED_FIELD_LEN && is_bare_identifier(raw) {
         return raw.to_string();
     }
     serde_json::Value::from(sanitize_untrusted_text(raw, MAX_UNTRUSTED_FIELD_LEN))
@@ -342,7 +333,7 @@ fn build_tool_example(tool: &ParsedToolFile) -> ToolExample {
     let params: serde_json::Map<String, serde_json::Value> = tool
         .parameters
         .iter()
-        .filter(|p| p.required && is_identifier_name(&p.name))
+        .filter(|p| p.required && is_bare_identifier(&p.name))
         .map(|p| (p.name.clone(), example_value(&p.typescript_type)))
         .collect();
 
@@ -738,7 +729,7 @@ mod tests {
         let context = build_skill_context("github", &tools, None, None);
 
         assert_eq!(context.server_id, "github");
-        assert_eq!(context.skill_name, "github-progressive");
+        assert_eq!(context.skill_name, "github");
         assert_eq!(context.tool_count, 2);
         assert_eq!(context.categories.len(), 2);
         assert_ne!(context.generation_prompt, "");
@@ -885,7 +876,7 @@ mod tests {
 
     /// Issue #435: a caller-supplied `custom_name` must be the name actually embedded in
     /// `generation_prompt`'s `**Skill Name**` line, not just `GenerateSkillResult::skill_name` —
-    /// otherwise the LLM consuming the prompt writes the stale `{server_id}-progressive` default
+    /// otherwise the LLM consuming the prompt writes the stale default (the `server_id`)
     /// into `SKILL.md`'s frontmatter regardless of what the caller asked for.
     #[test]
     fn test_build_skill_context_honors_custom_name_in_prompt() {
@@ -899,7 +890,11 @@ mod tests {
                 .generation_prompt
                 .contains("**Skill Name**: my-custom-skill")
         );
-        assert!(!context.generation_prompt.contains("github-progressive"));
+        assert!(
+            !context
+                .generation_prompt
+                .contains("**Skill Name**: github\n")
+        );
     }
 
     /// Issue #435, S1: `GenerateSkillResult::skill_name` must hold exactly the same

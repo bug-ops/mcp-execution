@@ -196,7 +196,7 @@ pub async fn run(
     info!("Output format: {}", output_format);
 
     // Create introspector
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
 
     // Discover server
     let server_info = introspector

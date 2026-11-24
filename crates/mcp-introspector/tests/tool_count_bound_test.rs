@@ -12,6 +12,10 @@
 //! `rmcp/transport-streamable-http-server` is enabled.
 
 #![cfg(feature = "test-fixtures")]
+#![expect(
+    clippy::expect_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use axum::Router;
 use mcp_execution_core::{Error, ResourceKind, ServerConfig, ServerId};
@@ -140,7 +144,7 @@ async fn spawn_fixture_server(
 async fn test_discover_server_bails_early_once_accumulated_tool_count_exceeds_max() {
     let (url, ct, call_count) = spawn_fixture_server(None).await;
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .http_transport(url)
         .connect_timeout(Duration::from_secs(5))
@@ -176,7 +180,7 @@ async fn test_discover_server_bails_early_once_accumulated_tool_count_exceeds_ma
 async fn test_discover_server_accepts_exactly_max_tool_count_across_pages() {
     let (url, ct, call_count) = spawn_fixture_server(Some(MAX_TOOL_COUNT)).await;
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .http_transport(url)
         .connect_timeout(Duration::from_secs(5))
@@ -217,7 +221,7 @@ const STDIO_FIXTURE_BIN: &str = env!("CARGO_BIN_EXE_fixture-paginated-stdio-serv
 /// failing fast with `Error::ResourceLimitExceeded`.
 #[tokio::test]
 async fn test_discover_server_stdio_bails_early_once_accumulated_tool_count_exceeds_max() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .command(STDIO_FIXTURE_BIN.to_string())
         .connect_timeout(Duration::from_secs(5))

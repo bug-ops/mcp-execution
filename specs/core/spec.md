@@ -466,6 +466,7 @@ pub const METADATA_FILE_NAME: &str = "_meta.json";
 pub const INDEX_FILE_NAME: &str = "index.ts";
 pub const CATALOG_FILE_NAME: &str = "catalog.ts";        // #566: the top-level type-only catalog
 pub const MAX_METADATA_FILE_BYTES: u64 = 1024 * 1024;    // 1 MiB; shared by producer and consumer
+pub const MAX_TOOL_COUNT: usize = 1000;                  // per-server tool bound; introspector re-exports it, skill's MAX_TOOL_FILES equals it (#585)
 pub struct ServerMetadata { schema_version: u32, server_id: ServerId, server_name: String, server_version: String, tools: Vec<ToolMetadata>, provenance: GenerationProvenance }
 pub struct ToolMetadata {
     name: ToolName, typescript_name: String, category: Option<String>, keywords: Vec<String>,
@@ -729,9 +730,22 @@ pub async fn resolve_confined_path(
     relative_dirs: &Path,
     target: Option<ConfinementTarget<'_>>,
 ) -> Result<PathBuf, ConfinementError>;
+pub async fn resolve_confined_existing(
+    base_dir: &Path,
+    relative: &Path,
+) -> Result<PathBuf, ConfinementError>;
 pub async fn write_confined_file(path: &Path, content: &[u8]) -> Result<(), ConfinementError>;
 pub fn open_confined_write(path: &Path) -> std::io::Result<std::fs::File>;
 ```
+
+`resolve_confined_existing` (issue #486) is the read-only counterpart for callers that list a
+directory inside the base and have no `segment`: it creates nothing, returns a non-existent
+joined path as-is (the caller's own existence check yields an empty result), rejects a rooted,
+prefixed or `..`-containing `relative` as `Escape`, and, when the path exists, canonicalizes and
+re-checks it against the canonicalized `base_dir` (an in-base symlink is resolved, not rejected,
+unlike `resolve_confined_path`'s segment directory). "Missing" is `tokio::fs::metadata` failing for any reason, as with `Path::exists`: a dangling symlink,
+a non-directory parent or an unreadable parent (`EACCES`) are returned joined, not as errors (the
+link is never followed, so nothing escapes). An empty `relative` returns `base_dir`.
 
 Since issue #461, `ConfinementError::InvalidSegment`'s `segment` field holds a *sanitized* form
 of the rejected segment, not the raw one — `resolve_confined_path` runs it through
@@ -839,7 +853,10 @@ guard, same residual gaps noted above — so both crates share one implementatio
 hand-rolling its own. It is synchronous and not wrapped in `spawn_blocking`, since
 `mcp-execution-files`' export path has no `tokio` runtime dependency to preserve; callers that need
 the same future-drop atomicity `write_confined_file` provides must still run it inside their own
-`spawn_blocking` (or equivalent) rather than calling it directly from async code.
+`spawn_blocking` (or equivalent) rather than calling it directly from async code. Its doc comment
+carries the same "Residual gaps, even on Unix" caveats (parent-directory symlink swap, planted
+hardlink not rejected) as `write_confined_file`, so callers integrating the primitive see them at
+the call site (issue #507).
 
 `ConfinementError` is a closed set every caller maps with a **total, 1:1** `From` impl into its
 own pre-existing, byte-identical error enum — `mcp-server::OutputDirError` and
@@ -926,6 +943,8 @@ pub const MAX_UNTRUSTED_FIELD_LEN: usize = 500;
 pub fn sanitize_untrusted_text(s: &str, max_len: usize) -> String; // flattens control chars, U+2028/U+2029, bidi override/isolate controls, and U+200B to spaces; removes bidi marks, the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and U+2060-U+2064 entirely; leaves U+200C/U+200D untouched; THEN, on the filtered result, drops all variation selectors if their whole-value total exceeds 16, else drops any run of more than 2 consecutive ones; truncates by char count
 pub fn sanitize_untrusted_inline(s: &str) -> String;  // sanitize_untrusted_text(s, MAX_UNTRUSTED_FIELD_LEN), then escapes &, <, > in place — same escaping as wrap_untrusted_block's body but with no surrounding boundary markers
 pub fn wrap_untrusted_block(context: &str, body: &str) -> String;  // escapes &, <, > in body; wraps in <untrusted-data>...</untrusted-data>
+pub const BARE_IDENTIFIER_PATTERN: &str = "^[A-Za-z_$][A-Za-z0-9_$]*$"; // JS RegExp source rendered into the runtime bridge
+pub fn is_bare_identifier(s: &str) -> bool; // the same rule in Rust; the one definition used by codegen (quoting, observed shapes) and skill (parameter display) (#600)
 ```
 Threat model: an introspected MCP server's tool names/descriptions/keywords
 are attacker-controlled from this project's perspective. Both `sanitize_untrusted_text`/

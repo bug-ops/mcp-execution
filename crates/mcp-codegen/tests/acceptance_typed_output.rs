@@ -3,6 +3,11 @@
 //! through `generate`, `tsc` and a scriptable fake MCP server.
 //!
 //! The Node-based tests skip locally, and hard-fail in CI, when the toolchain is unavailable.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod acceptance_support;
 mod support;

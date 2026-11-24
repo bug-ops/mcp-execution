@@ -10,9 +10,9 @@
 //! Property keys that are not bare identifiers render as exact quoted literals, never renamed.
 
 use crate::common::typescript::{
-    MAX_SCHEMA_RECURSION_DEPTH, is_bare_identifier, sanitize_jsdoc, ts_string_literal_exact,
+    MAX_SCHEMA_RECURSION_DEPTH, sanitize_jsdoc, ts_string_literal_exact,
 };
-use mcp_execution_core::untrusted::sanitize_untrusted_text;
+use mcp_execution_core::untrusted::{is_bare_identifier, sanitize_untrusted_text};
 use mcp_execution_introspector::MAX_SCHEMA_SIZE_BYTES;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -665,24 +665,20 @@ impl<'a> Converter<'a> {
                 self.child(&segments, member, depth, indent)
             })
             .collect();
-        Self::union(nodes)
+        self.union(nodes)
     }
 
-    /// A union of `nodes`: deduplicated in order, `unknown` when any member is `unknown`.
-    fn union(nodes: Vec<Node>) -> Node {
-        let mut unique: Vec<Node> = Vec::with_capacity(nodes.len());
-        for node in nodes {
-            if node == Node::Unknown {
-                return Node::Unknown;
-            }
-            if !unique.contains(&node) {
-                unique.push(node);
-            }
-        }
-        match unique.len() {
-            0 => Node::Unknown,
-            1 => unique.remove(0),
-            _ => Node::Union(unique),
+    /// A union of `nodes`: member unions flattened, deduplicated in order, `unknown` when any
+    /// member is `unknown` or the flattened union exceeds [`MAX_UNION_MEMBERS`].
+    fn union(&mut self, nodes: Vec<Node>) -> Node {
+        match merge_union_members(nodes) {
+            UnionMerge::Unknown => Node::Unknown,
+            UnionMerge::TooLarge => self.unknown_with(DiagnosticKind::UnionTooLarge),
+            UnionMerge::Members(mut unique) => match unique.len() {
+                0 => Node::Unknown,
+                1 => unique.remove(0),
+                _ => Node::Union(unique),
+            },
         }
     }
 
@@ -728,7 +724,7 @@ impl<'a> Converter<'a> {
                 None => self.unknown_with(DiagnosticKind::UnsupportedType),
             })
             .collect();
-        Self::union(nodes)
+        self.union(nodes)
     }
 
     fn typed(
@@ -796,7 +792,7 @@ impl<'a> Converter<'a> {
         if !self.charge(bytes) {
             return fallback;
         }
-        Self::union(literals)
+        self.union(literals)
     }
 
     fn array(&mut self, object: &'a Map<String, Value>, depth: usize, indent: usize) -> Node {
@@ -909,7 +905,7 @@ impl<'a> Converter<'a> {
         })
     }
 
-    /// The deduplicated union for a typed index signature. Every copied subtree is charged
+    /// The flattened, deduplicated union for a typed index signature. Every copied subtree is charged
     /// before it is cloned, so nested objects cannot double the tree at each level.
     fn index_union(&mut self, index: &Node, properties: &[Property], indent: usize) -> Node {
         let optional = properties.iter().any(|property| property.optional);
@@ -920,14 +916,20 @@ impl<'a> Converter<'a> {
             if *node == Node::Unknown {
                 return Node::Unknown;
             }
-            if seen.insert(node.render(RenderStyle::Compact)) {
-                let declaration = node.render(RenderStyle::Declaration);
-                let lines = declaration.matches('\n').count();
-                bytes += declaration.len() + lines * (indent + 2) + 3;
-                unique.push(node);
-            }
-            if unique.len() > MAX_UNION_MEMBERS || bytes > MAX_RENDERED_TYPE_BYTES {
-                return Node::Unknown;
+            let members = match node {
+                Node::Union(inner) => inner.as_slice(),
+                other => std::slice::from_ref(other),
+            };
+            for member in members {
+                if seen.insert(member.render(RenderStyle::Compact)) {
+                    let declaration = member.render(RenderStyle::Declaration);
+                    let lines = declaration.matches('\n').count();
+                    bytes += declaration.len() + lines * (indent + 2) + 3;
+                    unique.push(member);
+                }
+                if unique.len() > MAX_UNION_MEMBERS || bytes > MAX_RENDERED_TYPE_BYTES {
+                    return Node::Unknown;
+                }
             }
         }
         if !self.charge(bytes) {
@@ -937,7 +939,7 @@ impl<'a> Converter<'a> {
         if optional {
             members.push(Node::Primitive("undefined"));
         }
-        Self::union(members)
+        self.union(members)
     }
 
     /// `JSDoc` lines for a member: its description and the tags of [`DOC_TAG_KEYWORDS`].
@@ -1003,6 +1005,42 @@ fn tag_text(value: &Value, kind: TagValue) -> Option<String> {
     }
 }
 
+/// Outcome of [`merge_union_members`].
+#[derive(Debug, PartialEq)]
+enum UnionMerge {
+    Unknown,
+    TooLarge,
+    Members(Vec<Node>),
+}
+
+/// Flattens member unions of `nodes` and deduplicates in order.
+///
+/// Stops at the first `unknown` member or as soon as more than [`MAX_UNION_MEMBERS`] distinct
+/// members exist, so the work stays bounded by the cap however many members the schema lists.
+/// One level of flattening is enough: every `Node::Union` is built from this function, so its
+/// members are never unions themselves.
+fn merge_union_members(nodes: impl IntoIterator<Item = Node>) -> UnionMerge {
+    let mut unique: Vec<Node> = Vec::new();
+    for node in nodes {
+        let members = match node {
+            Node::Union(inner) => inner,
+            other => vec![other],
+        };
+        for member in members {
+            if member == Node::Unknown {
+                return UnionMerge::Unknown;
+            }
+            if !unique.contains(&member) {
+                if unique.len() == MAX_UNION_MEMBERS {
+                    return UnionMerge::TooLarge;
+                }
+                unique.push(member);
+            }
+        }
+    }
+    UnionMerge::Members(unique)
+}
+
 /// The members of an object-like `node`, `None` when it is not object-like.
 fn summarize(node: &Node) -> Option<Vec<MemberSummary>> {
     match node {
@@ -1062,6 +1100,46 @@ mod tests {
 
     fn compact(schema: &Value) -> String {
         convert_schema(schema).render(RenderStyle::Compact)
+    }
+
+    #[test]
+    fn typed_index_signature_flattens_member_unions() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a": {"type": ["number", "null"]}},
+            "additionalProperties": {"type": "number"}
+        });
+        assert_eq!(
+            compact(&schema),
+            "{ a?: number | null; [key: string]: number | null | undefined }"
+        );
+    }
+
+    #[test]
+    fn nested_unions_are_flattened_and_deduplicated() {
+        let schema = json!({"anyOf": [{"type": ["string", "null"]}, {"type": "string"}, {"type": "number"}]});
+        assert_eq!(compact(&schema), "string | null | number");
+    }
+
+    #[test]
+    fn merge_union_members_stops_pulling_nodes_once_over_the_cap() {
+        let total = 128;
+        let pulled = std::cell::Cell::new(0usize);
+        let nodes = (0..total).map(|group| {
+            pulled.set(pulled.get() + 1);
+            Node::Union(
+                (0..80)
+                    .map(|i| Node::Literal(format!("{}", group * 80 + i)))
+                    .collect(),
+            )
+        });
+
+        assert_eq!(merge_union_members(nodes), UnionMerge::TooLarge);
+        assert!(
+            pulled.get() <= 3,
+            "pulled {} of {total} nodes",
+            pulled.get()
+        );
     }
 
     #[test]

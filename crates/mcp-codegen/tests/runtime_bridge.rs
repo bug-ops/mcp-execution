@@ -1,5 +1,10 @@
 //! Integration tests that compile and execute the generated `_runtime/mcp-bridge.ts` under
 //! Node against fake MCP servers.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod support;
 

@@ -120,6 +120,27 @@ pub const INDEX_FILE_NAME: &str = "index.ts";
 /// ```
 pub const CATALOG_FILE_NAME: &str = "catalog.ts";
 
+/// Maximum number of tools accepted from a single MCP server (denial-of-service protection,
+/// CWE-400).
+///
+/// An MCP server is untrusted input: without this cap, a malicious or misbehaving server
+/// could return an unbounded tool list, which downstream codegen turns into one `.ts` file
+/// per tool. 1000 is generous headroom over any real-world server's tool count while still
+/// bounding the worst case.
+///
+/// Defined here, the crate every layer already depends on, so that introspection, code
+/// generation and the skill scan share one bound: data accepted by one layer is never rejected
+/// by the next for being as large as already allowed.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::MAX_TOOL_COUNT;
+///
+/// assert_eq!(MAX_TOOL_COUNT, 1000);
+/// ```
+pub const MAX_TOOL_COUNT: usize = 1000;
+
 /// Maximum size, in bytes, of a `_meta.json` sidecar that consumers will read.
 ///
 /// Shared between the producer (`mcp-execution-codegen`, which warns when a sidecar exceeds
@@ -359,6 +380,82 @@ mod tests {
         let round_tripped: ServerMetadata = serde_json::from_str(&json).unwrap();
 
         assert_eq!(round_tripped, meta);
+    }
+
+    fn json_keys(value: &serde_json::Value) -> std::collections::BTreeSet<&str> {
+        value
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// Pins the on-disk shape of `_meta.json`: a change to a field set must come with a conscious
+    /// `METADATA_SCHEMA_VERSION` bump and an update of this test.
+    #[test]
+    fn sidecar_shape_is_pinned_to_the_schema_version() {
+        let meta = ServerMetadata {
+            schema_version: METADATA_SCHEMA_VERSION,
+            server_id: ServerId::new("github").unwrap(),
+            server_name: "GitHub".to_string(),
+            server_version: "1.0.0".to_string(),
+            tools: vec![ToolMetadata {
+                name: ToolName::new("create_issue").unwrap(),
+                typescript_name: "createIssue".to_string(),
+                category: None,
+                keywords: vec![],
+                description: None,
+                parameters: vec![ParameterMetadata {
+                    name: "title".to_string(),
+                    typescript_type: "string".to_string(),
+                    required: true,
+                    description: None,
+                }],
+                annotations: None,
+                result_type: None,
+                result_type_origin: ResultTypeOrigin::Undeclared,
+                manifest_size_bytes: 0,
+            }],
+            provenance: test_provenance(),
+        };
+
+        let value = serde_json::to_value(&meta).unwrap();
+
+        assert_eq!(METADATA_SCHEMA_VERSION, 3);
+        assert_eq!(value["schema_version"], 3);
+        assert_eq!(
+            json_keys(&value),
+            [
+                "provenance",
+                "schema_version",
+                "server_id",
+                "server_name",
+                "server_version",
+                "tools"
+            ]
+            .into()
+        );
+        assert_eq!(
+            json_keys(&value["tools"][0]),
+            [
+                "annotations",
+                "category",
+                "description",
+                "keywords",
+                "manifest_size_bytes",
+                "name",
+                "parameters",
+                "result_type",
+                "result_type_origin",
+                "typescript_name"
+            ]
+            .into()
+        );
+        assert_eq!(
+            json_keys(&value["tools"][0]["parameters"][0]),
+            ["description", "name", "required", "typescript_type"].into()
+        );
     }
 
     #[test]

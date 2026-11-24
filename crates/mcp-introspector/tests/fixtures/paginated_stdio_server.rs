@@ -8,6 +8,10 @@
 //! the same coverage gap for the stdio path (issue #332): without it,
 //! `map_list_tools_bounded_error`'s `Error::ResourceLimitExceeded` mapping was
 //! only ever exercised via HTTP.
+#![expect(
+    clippy::expect_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use rmcp::model::{
     InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, Tool,

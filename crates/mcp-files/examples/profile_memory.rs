@@ -1,12 +1,15 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
+
 use mcp_execution_files::FilesBuilder;
 use std::fmt::Write as _;
 
-#[cfg(feature = "dhat-heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 fn main() {
-    #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
     println!("=== Memory Profiling: mcp-vfs ===\n");
@@ -26,17 +29,9 @@ fn main() {
         scenario_stress();
     }
 
-    #[cfg(feature = "dhat-heap")]
     println!(
         "\n=== Profiling complete. Check dhat-heap.json ===\n\
          View at: https://nnethercote.github.io/dh_view/dh_view.html"
-    );
-
-    #[cfg(not(feature = "dhat-heap"))]
-    println!(
-        "\n=== To enable DHAT profiling: ===\n\
-         1. Add to Cargo.toml: dhat = \"0.3\"\n\
-         2. Run: cargo run --example profile_memory --features dhat-heap --release"
     );
 }
 

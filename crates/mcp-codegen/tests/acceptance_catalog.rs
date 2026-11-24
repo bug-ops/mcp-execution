@@ -1,5 +1,10 @@
 //! Acceptance tests for #566 (the typed `catalog.ts`) and its #568 hints, observed through
 //! `generate`.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod acceptance_support;
 mod support;

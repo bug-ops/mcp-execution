@@ -45,7 +45,7 @@
 //!
 //! - **No LLM API**: Claude (the conversation LLM) does categorization
 //! - **Human-in-the-loop**: User can review and adjust categories
-//! - **Progressive loading**: 98% token savings (30,000 → 500-1,500 tokens)
+//! - **Typed SDK**: one TypeScript file per tool, a type-only catalog and a runtime bridge
 //! - **Type-safe**: Full TypeScript types from MCP schemas
 //! - **Discoverable**: grep-friendly headers for tool discovery
 #![warn(missing_docs, missing_debug_implementations)]

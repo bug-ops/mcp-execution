@@ -19,22 +19,14 @@ use std::path::PathBuf;
 /// real constant instead of a hardcoded literal (issue #198 S3).
 pub use mcp_execution_core::MAX_SERVER_ID_LENGTH;
 
-/// Maximum `skill_name` length, in `char`s (UX cap, with a comfortable frontmatter-budget
-/// margin as a side effect — see below).
+/// Maximum `skill_name` length, in `char`s.
 ///
-/// Counted in `char`s, not bytes, to match `GenerateSkillParams::skill_name`'s
-/// `#[schemars(length(max = ..))]` annotation: JSON Schema's `maxLength` counts Unicode code
-/// points, so an MCP client validating a candidate name against the declared schema and this
-/// crate's own [`validate_skill_name`] must agree on what "200" counts, or a multi-byte name
-/// (e.g. Cyrillic, CJK) the schema accepts as valid could still be rejected at runtime (or vice
-/// versa) purely from a unit mismatch, not an actual length problem (issue #413, S2).
-///
-/// 200 `char`s is generous as a human-readable label — the default `{server_id}-progressive`
-/// form is well under 100 `char`s even at `server_id`'s own 64-byte maximum — while still
-/// bounding worst-case UTF-8 size: 200 `char`s is at most 800 bytes (4 bytes/char), comfortably
-/// inside [`crate::parser::MAX_FRONTMATTER_SIZE`] (8 KiB), the overall cap `skill_name` shares
-/// with `description` in `SKILL.md`'s YAML frontmatter.
-pub const MAX_SKILL_NAME_LENGTH: usize = 200;
+/// The Agent Skills format limits `name` to 64 characters and requires it to equal the skill's
+/// directory name; the default name is the `server_id` (also at most 64), so the default always
+/// fits. Counted in `char`s to match `GenerateSkillParams::skill_name`'s
+/// `#[schemars(length(max = ..))]` annotation, since JSON Schema's `maxLength` counts Unicode
+/// code points.
+pub const MAX_SKILL_NAME_LENGTH: usize = MAX_SERVER_ID_LENGTH;
 
 /// Maximum length, in `char`s, of a single `use_case_hints` entry.
 ///
@@ -95,17 +87,17 @@ pub struct GenerateSkillParams {
 
     /// Custom skill name.
     ///
-    /// Default: `{server_id}-progressive`. Max 200 characters (see `validate_skill_name`'s
+    /// Default: the `server_id`, which is also the skill's directory name. Must follow the Agent
+    /// Skills `name` rule: 1-64 lowercase letters, digits and hyphens (see `validate_skill_name`'s
     /// `MAX_SKILL_NAME_LENGTH`, mirrored here as a literal since schemars attributes cannot
-    /// reference a `const`; JSON Schema's `maxLength` already counts Unicode code points, the
-    /// same unit `validate_skill_name` checks at runtime). When supplied, this name is embedded
+    /// reference a `const`). When supplied, this name is embedded
     /// in both the response's `skill_name` field and its `generation_prompt` (the `**Skill
     /// Name**` line the LLM is instructed to use in `SKILL.md`'s frontmatter) — both hold the
     /// same control-character-flattened, length-truncated text (see
     /// `mcp_execution_skill::build_skill_context`'s doc comment for the one cosmetic exception:
     /// the prompt's surrounding untrusted-data block additionally HTML-escapes `<`/`>`/`&` as an
     /// injection defense).
-    #[schemars(length(max = 200))]
+    #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
     pub skill_name: Option<String>,
 
     /// Additional context about intended use cases.
@@ -503,30 +495,35 @@ pub enum SkillNameError {
         /// Maximum allowed length ([`MAX_SKILL_NAME_LENGTH`]).
         limit: usize,
     },
+
+    /// The candidate contained a character other than a lowercase ASCII letter, digit, or
+    /// hyphen (the Agent Skills `name` rule).
+    #[error("skill_name must contain only lowercase letters, digits, and hyphens")]
+    InvalidCharacters,
 }
 
 /// Validate a custom `skill_name`.
 ///
-/// Mirrors [`validate_server_id`]'s bound-checking style. Unlike `server_id`, `skill_name` is a
-/// free-form human-readable label with no character-set restriction — non-emptiness and a
-/// length bound (counted in `char`s, matching `GenerateSkillParams::skill_name`'s
-/// `#[schemars(length(max = ..))]` annotation) are the only invariants enforced here, so that an
-/// invalid name is rejected up front instead of being rendered and written to disk only for
-/// [`crate::parser::extract_skill_metadata`] to reject the file — either for a blank `name` or
-/// once its `MAX_FRONTMATTER_SIZE` cap is exceeded (issue #413).
+/// Enforces the Agent Skills `name` rule: 1-64 lowercase ASCII letters, digits and hyphens, so
+/// the name can equal the skill's directory name (the `server_id`). An invalid name is rejected
+/// up front instead of being rendered and written to disk only for
+/// [`crate::parser::extract_skill_metadata`] to reject the file.
 ///
 /// # Errors
 ///
-/// Returns [`SkillNameError::Empty`] if `name` is empty or all whitespace, or
-/// [`SkillNameError::TooLong`] if it exceeds [`MAX_SKILL_NAME_LENGTH`] `char`s.
+/// Returns [`SkillNameError::Empty`] if `name` is empty or all whitespace,
+/// [`SkillNameError::TooLong`] if it exceeds [`MAX_SKILL_NAME_LENGTH`] `char`s, or
+/// [`SkillNameError::InvalidCharacters`] if it holds anything but lowercase letters, digits and
+/// hyphens.
 ///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_skill::validate_skill_name;
 ///
-/// assert!(validate_skill_name("github-progressive").is_ok());
-/// assert!(validate_skill_name(&"a".repeat(201)).is_err());
+/// assert!(validate_skill_name("github").is_ok());
+/// assert!(validate_skill_name("My Skill").is_err());
+/// assert!(validate_skill_name(&"a".repeat(65)).is_err());
 /// assert!(validate_skill_name("").is_err());
 /// assert!(validate_skill_name("   ").is_err());
 /// ```
@@ -540,6 +537,12 @@ pub fn validate_skill_name(name: &str) -> Result<(), SkillNameError> {
             len,
             limit: MAX_SKILL_NAME_LENGTH,
         });
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(SkillNameError::InvalidCharacters);
     }
     Ok(())
 }
@@ -573,6 +576,7 @@ mod tests {
         // above fails this test instead of leaving the declared schema silently stale
         // (mirrors `test_generate_skill_params_schema_declares_server_id_bounds`, issue #413).
         assert_eq!(props["skill_name"]["maxLength"], MAX_SKILL_NAME_LENGTH);
+        assert_eq!(props["skill_name"]["pattern"], "^[a-z0-9-]+$");
     }
 
     #[test]
@@ -664,8 +668,8 @@ mod tests {
 
     #[test]
     fn test_validate_skill_name_valid() {
-        assert!(validate_skill_name("github-progressive").is_ok());
-        assert!(validate_skill_name("My Custom Skill").is_ok());
+        assert!(validate_skill_name("github").is_ok());
+        assert!(validate_skill_name("my-server-123").is_ok());
     }
 
     #[test]
@@ -701,34 +705,31 @@ mod tests {
         assert_eq!(validate_skill_name("   \t\n  "), Err(SkillNameError::Empty));
     }
 
-    /// Issue #413, S2: `MAX_SKILL_NAME_LENGTH` and `validate_skill_name` must count `char`s,
-    /// not bytes, to agree with `GenerateSkillParams::skill_name`'s
-    /// `#[schemars(length(max = ..))]` annotation (JSON Schema's `maxLength` counts Unicode
-    /// code points). A 200-character Cyrillic name is 2 bytes/char = 400 bytes — well over
-    /// 200 bytes but exactly at the 200-char limit the schema and this validator both declare;
-    /// if the validator counted bytes, it would reject a name the schema says is valid.
     #[test]
-    fn test_validate_skill_name_counts_chars_not_bytes_for_multi_byte_text() {
-        let cyrillic_name = "я".repeat(MAX_SKILL_NAME_LENGTH);
-        assert_eq!(cyrillic_name.chars().count(), MAX_SKILL_NAME_LENGTH);
-        assert!(
-            cyrillic_name.len() > MAX_SKILL_NAME_LENGTH,
-            "sanity: 'я' is multi-byte"
-        );
+    fn test_validate_skill_name_rejects_non_slug_characters() {
+        for name in ["My Skill", "my_skill", "Github", "my.skill", "я"] {
+            assert_eq!(
+                validate_skill_name(name),
+                Err(SkillNameError::InvalidCharacters),
+                "{name}"
+            );
+        }
+    }
 
-        assert!(
-            validate_skill_name(&cyrillic_name).is_ok(),
-            "a name at exactly MAX_SKILL_NAME_LENGTH chars must be accepted regardless of its \
-             byte length"
-        );
-
-        let over_by_one_char = format!("{cyrillic_name}я");
+    #[test]
+    fn test_validate_skill_name_counts_chars_not_bytes() {
+        let cyrillic_over_limit = "я".repeat(MAX_SKILL_NAME_LENGTH + 1);
         assert_eq!(
-            validate_skill_name(&over_by_one_char),
+            validate_skill_name(&cyrillic_over_limit),
             Err(SkillNameError::TooLong {
                 len: MAX_SKILL_NAME_LENGTH + 1,
                 limit: MAX_SKILL_NAME_LENGTH
             })
         );
+    }
+
+    #[test]
+    fn test_default_skill_name_bound_equals_server_id_bound() {
+        assert_eq!(MAX_SKILL_NAME_LENGTH, MAX_SERVER_ID_LENGTH);
     }
 }

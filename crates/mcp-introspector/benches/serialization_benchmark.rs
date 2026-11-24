@@ -2,6 +2,10 @@
 //!
 //! These benchmarks measure JSON serialization/deserialization of
 //! `ServerInfo` and `ToolInfo` structures.
+#![expect(
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_execution_core::{ServerId, ToolName};

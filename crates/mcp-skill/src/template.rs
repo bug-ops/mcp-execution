@@ -40,8 +40,16 @@ static HANDLEBARS: LazyLock<Handlebars<'static>> = LazyLock::new(|| {
     // Strict mode: fail on missing variables
     hb.set_strict_mode(true);
 
+    #[expect(
+        clippy::expect_used,
+        reason = "embedded template is validated by tests"
+    )]
     hb.register_template_string("skill", SKILL_GENERATION_TEMPLATE)
         .expect("embedded skill-generation template must be valid Handlebars syntax");
+    #[expect(
+        clippy::expect_used,
+        reason = "embedded template is validated by tests"
+    )]
     hb.register_template_string("skill-md", SKILL_MD_TEMPLATE)
         .expect("embedded skill-md template must be valid Handlebars syntax");
     hb
@@ -85,6 +93,10 @@ impl Frontmatter<'_> {
     /// round-trips exactly. Keep-chomped (`|+`) block literals terminated by the closing
     /// `---` lose their final blank line in `granit-parser` 2.0, and no external consumer
     /// is guaranteed to be any more lenient.
+    #[expect(
+        clippy::expect_used,
+        reason = "Frontmatter YAML serialization is infallible"
+    )]
     fn to_yaml_block(&self) -> String {
         // PANIC: serializing two `&str` fields to YAML has no fallible step (no
         // recursion, no I/O) — this cannot fail. `serde-saphyr`'s only
@@ -141,8 +153,10 @@ impl Frontmatter<'_> {
 /// let prompt = render_generation_prompt(&context).unwrap();
 /// ```
 pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String, TemplateError> {
-    // PANIC: `GenerateSkillResult` derives `Serialize` with only primitive and
-    // standard-library types — `to_value` cannot fail for this type.
+    #[expect(
+        clippy::expect_used,
+        reason = "GenerateSkillResult holds only primitive and std types, so to_value cannot fail"
+    )]
     let mut value =
         serde_json::to_value(context).expect("GenerateSkillResult serialization is infallible");
     value["skill_name"] = serde_json::Value::String(sanitize_untrusted_text(
@@ -209,8 +223,10 @@ pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String,
 /// assert!(md.starts_with("---\n"));
 /// ```
 pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, TemplateError> {
-    // PANIC: `GenerateSkillResult` derives `Serialize` with only primitive and
-    // standard-library types — `to_value` cannot fail for this type.
+    #[expect(
+        clippy::expect_used,
+        reason = "GenerateSkillResult holds only primitive and std types, so to_value cannot fail"
+    )]
     let mut value =
         serde_json::to_value(context).expect("GenerateSkillResult serialization is infallible");
 
@@ -437,12 +453,9 @@ mod tests {
         assert!(md.contains('<'), "< must not be HTML-escaped");
     }
 
-    /// Counts frontmatter `name:` lines and cross-checks against the project's own
-    /// [`crate::parser::extract_skill_metadata`] parser (not a hand-rolled
-    /// `strip_prefix`/`find` split) — belt-and-suspenders: the line count catches key
-    /// injection even if it happened to still parse, and the real-parser round-trip
-    /// catches any other structural corruption the line count would miss.
-    fn assert_frontmatter_safe(md: &str, expected_name: &str, expected_description: &str) {
+    /// Frontmatter of `md` with its `name:` lines counted: the line count catches key injection
+    /// even if the injected key happened to still parse.
+    fn frontmatter_with_single_name_line(md: &str) -> &str {
         let after_open = md.strip_prefix("---\n").expect("must start with ---");
         let fm_end = after_open.find("\n---").expect("must have closing ---");
         let frontmatter = &after_open[..fm_end];
@@ -454,11 +467,39 @@ mod tests {
             name_count, 1,
             "YAML key injection detected in: {frontmatter}"
         );
+        frontmatter
+    }
+
+    /// Cross-checks the frontmatter against the project's own
+    /// [`crate::parser::extract_skill_metadata`] parser (not a hand-rolled
+    /// `strip_prefix`/`find` split); for names that satisfy the skill-name rule.
+    fn assert_frontmatter_safe(md: &str, expected_name: &str, expected_description: &str) {
+        frontmatter_with_single_name_line(md);
 
         let metadata = crate::parser::extract_skill_metadata(md)
             .unwrap_or_else(|e| panic!("SKILL.md must have valid frontmatter: {e}\n{md}"));
         assert_eq!(metadata.name, expected_name);
         assert_eq!(metadata.description, expected_description);
+    }
+
+    /// Like [`assert_frontmatter_safe`] but parses the YAML directly, for hostile names that
+    /// `extract_skill_metadata` rightly rejects: only the renderer's encoding is under test.
+    fn assert_frontmatter_encodes_raw_name(
+        md: &str,
+        expected_name: &str,
+        expected_description: &str,
+    ) {
+        #[derive(serde::Deserialize)]
+        struct Fields {
+            name: String,
+            description: String,
+        }
+
+        let frontmatter = frontmatter_with_single_name_line(md);
+        let fields: Fields = serde_saphyr::from_str(frontmatter)
+            .unwrap_or_else(|e| panic!("frontmatter must stay valid YAML: {e}\n{md}"));
+        assert_eq!(fields.name, expected_name);
+        assert_eq!(fields.description, expected_description);
     }
 
     #[test]
@@ -531,7 +572,7 @@ mod tests {
             let mut context = create_test_context();
             context.skill_name = attack.to_string();
             let md = render_skill_md(&context).unwrap();
-            assert_frontmatter_safe(&md, attack, "Test server");
+            assert_frontmatter_encodes_raw_name(&md, attack, "Test server");
         }
     }
 
@@ -671,7 +712,7 @@ mod tests {
             "sanitized content must still render in the body, just inert"
         );
 
-        assert_frontmatter_safe(&md, hostile, "Test server");
+        assert_frontmatter_encodes_raw_name(&md, hostile, "Test server");
     }
 
     /// Pins that `HANDLEBARS` actually has strict mode enabled, rather than relying on

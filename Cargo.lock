@@ -1456,7 +1456,9 @@ dependencies = [
  "dirs",
  "mcp-execution-codegen",
  "mcp-execution-core",
+ "mcp-execution-introspector",
  "rayon",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]
@@ -1511,7 +1513,9 @@ name = "mcp-execution-skill"
 version = "0.11.0"
 dependencies = [
  "handlebars",
+ "mcp-execution-codegen",
  "mcp-execution-core",
+ "mcp-execution-introspector",
  "regex",
  "schemars",
  "serde",

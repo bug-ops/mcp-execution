@@ -9,6 +9,11 @@
 //!
 //! Note: VFS-related benchmarks (`bench_vfs_loading`, `bench_end_to_end`) are in
 //! mcp-execution-files to avoid circular dependencies.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mcp_execution_codegen::progressive::ProgressiveGenerator;

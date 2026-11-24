@@ -7,7 +7,7 @@
 //! number by hand. The reader treats the file as untrusted: a line that breaks any rule is
 //! skipped whole.
 
-use crate::common::typescript::is_bare_identifier;
+use mcp_execution_core::untrusted::is_bare_identifier;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;

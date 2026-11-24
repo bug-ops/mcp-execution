@@ -1,3 +1,8 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mcp_execution_files::{FileSystem, FilesBuilder};
 use std::hint::black_box;

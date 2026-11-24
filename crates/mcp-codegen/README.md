@@ -6,7 +6,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.91-blue.svg)](https://github.com/bug-ops/mcp-execution)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
 
-Progressive loading TypeScript code generation for MCP tools. Achieves **98% token savings** by generating one file per tool.
+TypeScript SDK generation for MCP tools: one typed file per tool, a type-only catalog and a runtime bridge, so a model can script against a server.
 
 ## Installation
 
@@ -26,7 +26,7 @@ cargo add mcp-execution-codegen
 
 ## Usage
 
-### Progressive Loading Generation
+### SDK Generation
 
 ```rust
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
@@ -36,14 +36,14 @@ use mcp_execution_core::{ServerId, ServerConfig};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Introspect MCP server
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("github");
     let config = ServerConfig::builder()
-        .command("github-mcp-execution-server".to_string())
+        .command("github-mcp-server".to_string())
         .build();
     let info = introspector.discover_server(server_id, &config).await?;
 
-    // 2. Generate progressive loading files
+    // 2. Generate the SDK files
     let generator = ProgressiveGenerator::new()?;
     let code = generator.generate(&info, &config)?;
 
@@ -66,13 +66,6 @@ The generator produces `package.json`, `tsconfig.json`, and one `.ts` file per t
 - Execute directly via a TS-aware runtime: `tsx`, `deno`, or Node.js's native type-stripping.
 - Or type-check independently: run `tsc -p <generated-dir>` as a separate build step.
 - If using a bundler (esbuild, swc, Vite, etc.) that doesn't enforce TypeScript's `noEmit` constraint, consult your bundler's documentation for mixing `noEmit` and emitting configurations.
-
-### Token Savings
-
-| Approach | Tokens | Savings |
-|----------|--------|---------|
-| Traditional (all tools) | ~30,000 | - |
-| Progressive (1 tool) | ~500-1,500 | **98%** |
 
 ## Generated TypeScript Structure
 
@@ -111,7 +104,7 @@ When a server declares an output schema, `CreateIssueResult` is its converted ty
 - **One File Per Tool**: Separate TypeScript file for each MCP tool
 - **Type-Safe Types**: Full TypeScript parameter and result types, with unions, intersections and local references
 - **JSDoc Documentation**: Complete documentation from MCP schemas
-- **98% Token Savings**: Load only the tools you need
+- **Compact Catalog**: One type-only signature per tool in `catalog.ts`
 - **Handlebars Templates**: Customizable code generation
 
 ## Type Conversion
@@ -138,11 +131,7 @@ every bound hit, renders `unknown` for the smallest enclosing node and records a
 
 ## Performance
 
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| 10 tools | <100ms | **0.19ms** (526x faster) |
-| 50 tools | <20ms | **0.97ms** (20.6x faster) |
-| VFS export | <10ms | **1.2ms** (8.3x faster) |
+Generation timings come from the Criterion benchmark; reproduce them with `cargo bench --profile bench-fast -p mcp-execution-codegen`.
 
 ## Security
 

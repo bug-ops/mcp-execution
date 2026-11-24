@@ -28,23 +28,18 @@ related:
 
 Given a `ServerId` + `ServerConfig`, spawn/connect to the described server,
 run the MCP handshake, page through `tools/list`, and produce a `ServerInfo`
-that downstream `mcp-codegen` can turn into TypeScript. Also caches discovered
-servers in-process (`Introspector` holds a `HashMap<ServerId, ServerInfo>`).
+that downstream `mcp-codegen` can turn into TypeScript. The `Introspector` is stateless: it
+retains no discovered servers between calls (the former in-process cache and its accessors were
+removed, #470).
 
 ## 2. Public API Surface
 
 ```rust
-pub struct Introspector { /* private: HashMap<ServerId, ServerInfo> */ }
+pub struct Introspector; // stateless; derives Debug, Default
 impl Introspector {
-    pub fn new() -> Self;
-    pub async fn discover_server(&mut self, server_id: ServerId, config: &ServerConfig) -> Result<ServerInfo>;
-    pub fn get_server(&self, server_id: &ServerId) -> Option<&ServerInfo>;
-    pub fn list_servers(&self) -> Vec<&ServerInfo>;
-    pub fn server_count(&self) -> usize;
-    pub fn remove_server(&mut self, server_id: &ServerId) -> bool;
-    pub fn clear(&mut self);
+    pub const fn new() -> Self;
+    pub async fn discover_server(&self, server_id: ServerId, config: &ServerConfig) -> Result<ServerInfo>;
 }
-// Default: same as new()
 
 pub struct ServerInfo { pub id: ServerId, pub name: String, pub version: String, pub tools: Vec<ToolInfo>, pub capabilities: ServerCapabilities }
 pub struct ToolInfo { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub output_schema: Option<serde_json::Value>, pub annotations: Option<ToolAnnotations> /* #[serde(default, skip_serializing_if = "Option::is_none")] */ }
@@ -55,10 +50,12 @@ Resource-limit constants (all `pub`):
 
 | Constant | Value | Guards |
 |---|---|---|
-| `MAX_TOOL_COUNT` | 1000 | total tools returned by `tools/list` (paged) |
+| `MAX_TOOL_COUNT` | 1000 | total tools returned by `tools/list` (paged); re-exported from `mcp-core::metadata`, shared with the skill scan (#585) |
 | `MAX_TOOL_NAME_LEN` | 256 | bytes, per tool name |
 | `MAX_TOOL_DESCRIPTION_LEN` | 8 KiB | bytes, per tool description |
 | `MAX_SCHEMA_SIZE_BYTES` | 64 KiB | serialized bytes, per input **or** output schema |
+| `MAX_SERVER_NAME_LEN` | 256 | bytes kept of the handshake server name; longer values are truncated at a character boundary, not rejected (#599) |
+| `MAX_SERVER_VERSION_LEN` | 64 | bytes kept of the handshake server version; truncated likewise (#599) |
 
 `MAX_SCHEMA_SIZE_BYTES` is the dominant term multiplied through every
 downstream derived budget (`mcp-codegen::MAX_GENERATED_BYTES`,

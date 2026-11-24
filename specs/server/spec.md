@@ -47,6 +47,7 @@ own LLM API key.
 ```rust
 // crate root re-exports
 pub use clock::{Clock, SystemClock};
+pub use output_dir::{OutputDirError, relative_subpath, resolve_output_dir};
 pub use service::GeneratorService;
 pub use state::StateManager;
 pub use types::{CategorizedTool, GeneratedServerInfo, IntrospectServerParams,
@@ -312,11 +313,14 @@ issue #381). rmcp never echoes a no-initialize version (`2026-07-28`) via
 `base_dir`, if given, is confined to `servers_base_dir` via
 `resolve_list_base_dir` (issue #236's fix — previously an absolute or
 escaping `base_dir` silently fell back to the default instead of being
-rejected). Confinement is lexical first (`Path::join` + `starts_with`, which
-catches even a non-existent target and a Windows root-without-prefix path
+rejected). Confinement is delegated to the read-only
+`mcp_execution_core::resolve_confined_existing` (issue #486): lexical first
+(catches even a non-existent target and a Windows root-without-prefix path
 like `\pwn\evil`), then, if the joined path exists, re-checked via
 canonicalization against the canonicalized root (catches a symlink planted
-inside it). Since issue #404, the scan is raced against client-issued
+inside it). Nothing is created. A path whose metadata cannot be read (dangling symlink,
+non-directory or unreadable parent) is treated as missing and lists as empty, as the
+previous `exists()`-based check did. Since issue #404, the scan is raced against client-issued
 cancellation via the same `tokio::select! { biased; ... }` pattern as
 `introspect_server`/`generate_skill` (`biased` so cancellation
 deterministically wins over an in-progress poll). The scan itself
@@ -326,11 +330,10 @@ always-present re-export entry point, matched case-insensitively against
 `INDEX_FILE_NAME` for consistency with `disambiguate_output_filename`'s own
 handling of `index` — issue #477), `catalog.ts` (`CATALOG_FILE_NAME`, the
 type-only signature catalog of #566, matched the same way; it is not a tool,
-FR-032.10) and files starting with `_`, and the subdirectory's mtime as
-`generated_at`. The `_` rule was written as defensive; known limitation #598:
-a tool whose TypeScript name starts with an underscore is a real per-tool file
-that this count misses (the runtime files live under `_runtime/`, a directory,
-so they never reach this filter). Known limitation, not a requirement.
+FR-032.10), and the subdirectory's mtime as `generated_at`. `_`-prefixed
+`.ts` files are counted: the generator prefixes a digit-leading tool name with
+`_` (`_1st_tool.ts`), and the runtime files live under `_runtime/`, a directory,
+so they never reach this filter (issue #598).
 
 ### `generate_skill`
 
@@ -528,12 +531,13 @@ applies this at the `InvalidServerId` construction site; the
 `From<ConfinementError>` impl (see above) does the same for the path
 re-derived from a rejected `ConfinementError::InvalidSegment`.
 
-`resolve_list_base_dir` (`service.rs`) is a **third**, deliberately separate
-implementation of a related but weaker idea — it stays out of scope for #395
-(see [[../core/spec#`confinement` module (`src/confinement.rs`)]] and §11
-below): it is read-only (`read_dir`), constructs `OutputDirError` variants
-directly, and is exhaustively matched at two call sites, so `OutputDirError`
-must stay fully constructible/matchable outside the confinement module.
+`resolve_list_base_dir` (`service.rs`) validates with `relative_subpath` and
+delegates the read-only confinement walk to
+`mcp_execution_core::resolve_confined_existing` (issue #486; see
+[[../core/spec#`confinement` module (`src/confinement.rs`)]]), mapping
+`ConfinementError` through the same `From` impl as `resolve_output_dir`.
+`OutputDirError` is exhaustively matched at two call sites, so it must stay
+fully constructible/matchable outside the confinement module.
 
 ## 7. Prompt Injection Defense
 
@@ -715,11 +719,10 @@ environment's fault — I/O failure, task join error, serialization failure).
   MAX_TOOL_FILES}`, `mcp-core::{ServerConfig, ServerId,
   sanitize_path_for_error, validate_server_id_slug, ServerIdSlugError,
   untrusted::*, confinement::{ConfinementError, ConfinementTarget,
-  resolve_confined_path}}` (the `confinement::*` items, since #395, used only
-  by `output_dir::resolve_output_dir`; `resolve_list_base_dir` reuses
-  `output_dir.rs`'s own `relative_subpath` and hand-rolls its own, weaker
-  confinement check rather than calling `resolve_confined_path`, since it is
-  out of scope for the confinement consolidation — see §6).
+  resolve_confined_path, resolve_confined_existing}}` (the `confinement::*`
+  items: `resolve_confined_path` since #395 by `output_dir::resolve_output_dir`;
+  `resolve_confined_existing` since #486 by `resolve_list_base_dir`, which also
+  reuses `output_dir.rs`'s `relative_subpath` — see §6).
   `validate_server_id` is no longer imported from `mcp-skill` (issue #401) —
   the three tool handlers (`introspect_server`, `generate_skill`,
   `save_skill`) now validate `server_id` via

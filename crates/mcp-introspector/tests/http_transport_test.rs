@@ -11,6 +11,11 @@
 //! tests) so that `rmcp/transport-streamable-http-server` is enabled.
 
 #![cfg(feature = "test-fixtures")]
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use axum::Router;
 use axum::extract::{Request, State};
@@ -171,7 +176,7 @@ async fn spawn_fixture_server_with(
 async fn test_discover_server_http_lists_tools_and_metadata() {
     let (url, ct, captured_header) = spawn_fixture_server(Duration::ZERO, Duration::ZERO).await;
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .http_transport(url)
         .header(TEST_HEADER_NAME.to_string(), "propagated-value".to_string())
@@ -213,7 +218,7 @@ async fn test_discover_server_http_handshake_is_initialize_at_latest() {
     };
     let (url, ct, _captured_header) = spawn_fixture_server_with(handler, Duration::ZERO).await;
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .http_transport(url)
         .connect_timeout(Duration::from_secs(5))
@@ -242,7 +247,7 @@ async fn test_discover_server_http_handshake_is_initialize_at_latest() {
 async fn test_discover_server_sse_transport_also_works() {
     let (url, ct, _captured_header) = spawn_fixture_server(Duration::ZERO, Duration::ZERO).await;
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .sse_transport(url)
         .connect_timeout(Duration::from_secs(5))
@@ -271,7 +276,7 @@ async fn test_discover_server_http_discover_timeout_fires() {
     let (url, ct, _captured_header) =
         spawn_fixture_server(Duration::ZERO, Duration::from_secs(30)).await;
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .http_transport(url)
         .connect_timeout(Duration::from_secs(5))
@@ -312,7 +317,7 @@ async fn test_discover_server_http_connect_timeout_fires() {
     let (url, ct, _captured_header) =
         spawn_fixture_server(Duration::from_secs(30), Duration::ZERO).await;
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .http_transport(url)
         .connect_timeout(Duration::from_millis(150))
@@ -357,7 +362,7 @@ async fn test_discover_server_http_reserved_header_collision_is_legible() {
     let addr = listener.local_addr().expect("listener has a local addr");
     drop(listener); // nothing listens at `addr` from this point on
 
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let config = ServerConfig::builder()
         .http_transport(format!("http://{addr}/mcp"))
         .header("Accept".to_string(), "text/html".to_string())

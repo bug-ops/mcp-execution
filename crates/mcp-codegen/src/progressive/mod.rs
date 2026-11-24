@@ -1,22 +1,16 @@
-//! Progressive loading code generation module.
+//! Typed TypeScript SDK generation module.
 //!
-//! Generates TypeScript code for progressive loading where each tool
-//! is in a separate file. This enables Claude Code to load only the
-//! tools it needs, achieving significant token savings.
+//! Generates one TypeScript file per tool, a type-only catalog and a runtime
+//! bridge, so a model can read only the signatures it needs and script
+//! against the server.
 //!
 //! # Architecture
 //!
-//! Progressive loading differs from the traditional WASM approach:
-//!
-//! **Traditional (WASM)**:
-//! - All tools in one large file
-//! - Loaded upfront (all 30 tools at once)
-//! - ~30,000 tokens per server
-//!
-//! **Progressive Loading**:
-//! - One file per tool
-//! - Loaded on-demand (`ls`, `cat` specific tool)
-//! - ~500-1,500 tokens per tool (98% savings)
+//! - One file per tool, with parameter and result types
+//! - `catalog.ts` lists one type-only signature per tool
+//! - Files are read on demand (`ls`, `cat` a specific tool)
+//! - Importing a module when a script runs puts nothing into a model's context; only text the
+//!   model reads does
 //!
 //! # File Structure
 //!
@@ -44,7 +38,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Introspect server
-//! let mut introspector = Introspector::new();
+//! let introspector = Introspector::new();
 //! let server_id = ServerId::new("github").unwrap();
 //! let config = ServerConfig::builder()
 //!     .command("/path/to/github-server".to_string())
@@ -81,8 +75,6 @@
 //! $ cat ~/.claude/servers/github/createIssue.ts
 //! // TypeScript code for createIssue tool
 //! ```
-//!
-//! This achieves 98% token savings compared to loading all tools upfront.
 //!
 //! # Feature Flag
 //!

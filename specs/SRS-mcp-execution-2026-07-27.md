@@ -122,7 +122,7 @@ graph LR
 - **User interfaces**: a `clap`-derived command-line interface only; no GUI.
 - **Hardware interfaces**: none beyond a standard POSIX/Windows filesystem
   and process-spawning capability.
-- **Software interfaces**: Node.js 18+ (external, executes generated
+- **Software interfaces**: Node.js 22.18.0 (23.6.0 on the 23 line) or later (external, executes generated
   output); `tsx`/`deno` (external, alternative execution runtimes; not
   invoked by this project itself).
 - **Communication interfaces**: stdio (subprocess JSON-RPC, both as an MCP
@@ -327,6 +327,9 @@ re-connecting.
      `ServerInfo` without a new connection attempt.
   2. `list_servers`/`server_count`/`remove_server`/`clear` operate on the same
      cache.
+- *Status*: superseded by #470. The cache and the accessors above were removed
+  because no production caller used them; `Introspector` is stateless and
+  `discover_server` takes `&self`.
 - *Dependencies*: FR-001
 
 #### 3.2.2 Progressive Loading Code Generation
@@ -636,7 +639,7 @@ for the single-target views.
 - *Dependencies*: FR-001, FR-003
 
 **FR-019**: The system shall validate that the local runtime is ready to
-execute generated tools: Node.js is present and at least version 18.0.0,
+execute generated tools: Node.js is present and at least version 22.18.0 (23.6.0 on the 23 line),
 generated `.ts` files are executable (on Unix), and `~/.claude/mcp.json`
 exists.
 
@@ -646,7 +649,7 @@ exists.
 - *Priority*: Should
 - *Acceptance criteria*:
   1. `setup` fails with a clear error if `node --version` is missing or
-     below 18.0.0.
+     below 22.18.0 (23.6.0 on the 23 line).
   2. On Unix, every `.ts` file under `~/.claude/servers/` is made
      executable, and the count of files changed is reported.
   3. On non-Unix platforms, `setup` reports `servers_dir_found: false` and

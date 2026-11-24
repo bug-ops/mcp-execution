@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/mcp-execution-introspector/**/*.rs"
+applyTo: "crates/mcp-introspector/**/*.rs"
 ---
 # Copilot Instructions: mcp-execution-introspector
 

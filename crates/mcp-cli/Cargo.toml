@@ -6,9 +6,8 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
-description = "CLI for MCP progressive loading code generation"
-keywords = ["mcp", "cli", "codegen", "progressive-loading"]
+description = "CLI that generates a typed TypeScript SDK from MCP servers"
+keywords = ["mcp", "cli", "codegen", "typescript"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 

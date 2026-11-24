@@ -492,6 +492,10 @@ where
             if !pending_admission.is_empty() {
                 match semaphore.poll_acquire(cx) {
                     Poll::Ready(Some(permit)) => {
+                        #[expect(
+                            clippy::expect_used,
+                            reason = "pop follows the non-empty check above"
+                        )]
                         let message = pending_admission
                             .pop_front()
                             .expect("just checked pending_admission is non-empty");
@@ -583,6 +587,7 @@ where
 /// `rmcp=info`, not merged with it -- `tracing_subscriber`'s `Directive` ordering does not compare
 /// level, so a same-target `add_directive` call overwrites the existing entry. Both behaviors are
 /// pinned by tests below rather than assumed.
+#[expect(clippy::expect_used, reason = "static directive string is valid")]
 fn cap_rmcp_log_level(filter: EnvFilter) -> EnvFilter {
     filter.add_directive(
         "rmcp=info"
@@ -652,6 +657,10 @@ async fn main() -> Result<()> {
 }
 
 #[cfg(test)]
+#[expect(
+    unsafe_code,
+    reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+)]
 mod tests {
     use super::{
         AsyncRead, EnvFilter, GetExtensions, JsonRpcMessage, LOG_FORMAT_ENV_VAR, LogFormat,

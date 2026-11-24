@@ -112,7 +112,7 @@ service-level Availability target (no hosted component exists).
 
 | ID | Requirement | Target | Measurement |
 |----|------------|--------|-------------|
-| NFR-PERF-010 | Memory usage generating 1000 tools | < 256 MB (README target) | Reported achieved: ~2 MB (`README.md` Performance table); also profiled via a dedicated `dhat`-based heap-profiling example (`crates/mcp-files/examples/profile_memory.rs`, `dhat-heap` feature) |
+| NFR-PERF-010 | Memory usage generating 1000 tools | < 256 MB (README target) | Reported achieved: ~2 MB (`README.md` Performance table); also profiled via a dedicated `dhat`-based heap-profiling example (`crates/mcp-files/examples/profile_memory.rs`) |
 | NFR-PERF-011 | Bounded resource consumption per untrusted input | See CWE-400 bound table in [[#4.1 Confidentiality]]/[[#4.3 Integrity]] below | Unit tests at each bound's exact boundary value (`MAX_TOOL_COUNT`, `MAX_SCHEMA_SIZE_BYTES`, `MAX_GENERATED_FILES`/`MAX_GENERATED_BYTES`, `MAX_EXPORT_FILES`/`MAX_EXPORT_BYTES`, `MAX_PENDING_SESSIONS`/`MAX_TOTAL_PENDING_BYTES`, `MAX_REQUEST_LINE_SIZE`/`MAX_RESPONSE_LINE_SIZE`) |
 
 ### 2.3 Capacity
@@ -273,7 +273,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | ID | Requirement | Details |
 |----|------------|---------|
 | NFR-COM-010 | OS support (build/run this project itself) | Linux, macOS, Windows — pre-built binaries published for macOS (arm64/amd64), Linux (amd64/arm64); Windows built from source/release zip per `README.md` |
-| NFR-COM-011 | Runtime dependency for executing generated output | Node.js ≥ 18.0.0, checked by `setup` |
+| NFR-COM-011 | Runtime dependency for executing generated output | Node.js ≥ 22.18.0 (23.6.0 on the 23 line), checked by `setup` |
 | NFR-COM-012 | Coexistence with other MCP-aware tools sharing `~/.claude/mcp.json` | `McpServerEntry` deserialization warns (not fails) on unrecognized top-level keys (e.g. another tool's `disabled`/`alwaysAllow` keys), so this project's CLI can read a config file shared with tools it doesn't otherwise know about |
 
 > [!note] Not Applicable
@@ -330,7 +330,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | ID | Method | Environment | Frequency |
 |----|--------|-------------|-----------|
 | NFR-PERF-001, NFR-PERF-002 | `criterion` benchmark | Local dev machine / CI (`cargo bench --no-run --profile bench-fast` build-only in CI; full run is manual) | Ad hoc / per performance-sensitive change |
-| NFR-PERF-010 | `dhat`-based heap profiling (`profile_memory` example, `dhat-heap` feature) | Local dev machine | Ad hoc |
+| NFR-PERF-010 | `dhat`-based heap profiling (`profile_memory` example) | Local dev machine | Ad hoc |
 | NFR-SEC-001–025 | Unit + integration test suite (`cargo nextest run --all-features --workspace`) | CI (`test` job) | Every push/PR |
 | NFR-SEC-021 (advisories/licenses/sources) | `cargo-deny` | CI (`security` job) | Every push/PR |
 | NFR-MNT-010–014 | `cargo nextest run`, `cargo test --doc` | CI | Every push/PR |
@@ -363,7 +363,6 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 > - [ ] What value should the output budget of a script run take
 >   (NFR-PERF-031), and what runner start-up overhead is acceptable
 >   (NFR-PERF-032)?
-> - [ ] What is the minimum supported Node.js version (NFR-POR-020, #564)?
 > - [ ] Do successful tool results printed to the caller fall under the
 >   untrusted-text boundary rule, or are they an accepted exception
 >   (NFR-SEC-054)?
@@ -407,7 +406,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | ID | Requirement | Details |
 |----|------------|---------|
 | NFR-COM-020 | The `_meta.json` version 3 bump is a breaking change | Existing version 2 directories are rejected with a message that says to regenerate; the bump happens once, with one registry of fields; the change is recorded in `CHANGELOG.md` and no compatibility shim is added before 1.0 (FR-034, #568) |
-| NFR-POR-020 | Minimum Node.js version for running generated files and scripts | Open: the value is to be decided (#564). `setup` accepts Node.js 18 today (NFR-COM-011), and whether the generated files run there is unverified |
+| NFR-POR-020 | Minimum Node.js version for running generated files and scripts | Node.js 22.18.0 (23.6.0 on the 23 line) or later, the first versions that run `.ts` files without a flag; `setup` enforces it (NFR-COM-011, #564). A script runner may need a higher floor (#571) |
 
 ## See Also
 

@@ -113,8 +113,12 @@ related:
   threshold like `too_many_lines` breaks the build until the now-unfulfilled
   `#[expect]` is deleted; do not pad a function back over the threshold just
   to keep the attribute satisfied.
-- `#![deny(unsafe_code)]` in every crate except `mcp-server`/`mcp-cli` (which
-  don't need it) — no crate in this workspace uses `unsafe`.
+- `unsafe_code = "deny"` workspace-wide (`[workspace.lints.rust]`); the only
+  exceptions are `#[expect(unsafe_code)]` on test modules that wrap edition-2024
+  `env::set_var`. `clippy::unwrap_used`/`expect_used` are denied outside tests
+  (`clippy.toml` exempts `#[cfg(test)]` code; integration tests, benches and
+  examples carry a file-level `#![expect]`), and `.cargo/config.toml` sets
+  `build.warnings = "deny"` (escape hatch: `--config build.warnings=warn`).
 - `#![warn(missing_docs, missing_debug_implementations)]` everywhere: every
   `pub` item is documented, every `pub` type derives or hand-implements
   `Debug`.

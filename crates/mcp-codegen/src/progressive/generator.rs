@@ -11,7 +11,7 @@
 //! use mcp_execution_core::{ServerId, ServerConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut introspector = Introspector::new();
+//! let introspector = Introspector::new();
 //! let server_id = ServerId::new("github").unwrap();
 //! let config = ServerConfig::builder().command("/path/to/server".to_string()).build()?;
 //! let info = introspector.discover_server(server_id, &config).await?;
@@ -49,7 +49,9 @@ use mcp_execution_core::metadata::{
 };
 use mcp_execution_core::provenance::{GenerationProvenance, ToolDigestEntry};
 use mcp_execution_core::{Error, Result, ServerConfig};
-use mcp_execution_introspector::{ServerInfo, ToolInfo};
+use mcp_execution_introspector::{
+    MAX_SERVER_NAME_LEN, MAX_SERVER_VERSION_LEN, ServerInfo, ToolInfo,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Files emitted by every `generate`/`generate_with_categories` call regardless of tool
@@ -899,8 +901,8 @@ impl ProgressiveGenerator<'_> {
         });
 
         IndexContext {
-            server_name: sanitize_jsdoc(&server_info.name, 256),
-            server_version: sanitize_jsdoc(&server_info.version, 64),
+            server_name: sanitize_jsdoc(&server_info.name, MAX_SERVER_NAME_LEN),
+            server_version: sanitize_jsdoc(&server_info.version, MAX_SERVER_VERSION_LEN),
             tool_count: server_info.tools.len(),
             tools,
             categories: category_groups,

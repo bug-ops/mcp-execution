@@ -518,6 +518,14 @@ fn write_confined_file_blocking(path: &Path, content: &[u8]) -> std::io::Result<
 /// A pre-existing regular file is still opened and truncated normally: this only rejects a
 /// symlink at the final path component, not an ordinary overwrite.
 ///
+/// **Residual gaps, even on Unix**: `O_NOFOLLOW` only guards the *terminal* component. Something
+/// with write access further up the path could swap a parent directory for a symlink after the
+/// caller's confinement check but before this call, and the open would then traverse it. A
+/// hardlink planted at `path` (same filesystem) is not a symlink either, so it is not rejected:
+/// the write clobbers whatever the hardlink points at, and a `rename` of a staged file opened
+/// through one would leave the victim holding attacker-controlled content. See
+/// [`write_confined_file`] for the full discussion.
+///
 /// # Errors
 ///
 /// Returns an error if the symlink check (Windows only) or the open failed — including the
@@ -560,10 +568,175 @@ pub fn open_confined_write(path: &Path) -> std::io::Result<std::fs::File> {
     options.open(path)
 }
 
+/// Resolves `relative` under `base_dir` for a read-only scan, confining the result to `base_dir`
+/// without creating anything.
+///
+/// This is the read-only sibling of [`resolve_confined_path`], for callers that address a
+/// directory *inside* the base (no per-server `segment`) and only list it. Unlike the writing
+/// walk, nothing is created and a missing `base_dir` or target is not an error: a path that does
+/// not exist yet is returned lexically joined, so the caller's own existence check yields an
+/// empty result. When the joined path exists it is canonicalized and re-checked against the
+/// canonicalized `base_dir`, which rejects a symlink planted inside `base_dir` that points
+/// outside it. Unlike [`resolve_confined_path`]'s segment directory, an in-base symlink is
+/// resolved and reconfirmed rather than rejected outright.
+///
+/// "Missing" means `tokio::fs::metadata` (which follows symlinks) fails for any reason, as with
+/// [`Path::exists`]: a dangling symlink, a non-directory parent, or an unreadable parent
+/// (`EACCES`) are all returned lexically joined rather than as errors. This is deliberate: the
+/// link is never followed, so nothing escapes, and the caller's own existence check yields an
+/// empty result.
+///
+/// An empty `relative` returns `base_dir` unchanged. An absolute or `..`-containing `relative` is
+/// rejected as [`ConfinementError::Escape`], since [`Path::starts_with`] compares components
+/// without normalizing `..` and so cannot catch it lexically.
+///
+/// # Errors
+///
+/// Returns [`ConfinementError::Escape`] if `relative` is rooted, prefixed, or contains `..`, or
+/// if the joined path resolves outside `base_dir`; [`ConfinementError::Io`] if canonicalizing
+/// an existing path fails.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::resolve_confined_existing;
+/// use std::path::Path;
+/// use tempfile::TempDir;
+///
+/// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+/// let base = TempDir::new().unwrap();
+/// let missing = resolve_confined_existing(base.path(), Path::new("not/there")).await.unwrap();
+/// assert_eq!(missing, base.path().join("not/there"));
+/// assert!(!missing.exists());
+/// # });
+/// ```
+pub async fn resolve_confined_existing(
+    base_dir: &Path,
+    relative: &Path,
+) -> Result<PathBuf, ConfinementError> {
+    if relative.as_os_str().is_empty() {
+        return Ok(base_dir.to_path_buf());
+    }
+    let escapes = |path: &Path| ConfinementError::Escape {
+        path: sanitize_path_for_error(path),
+    };
+    if relative.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(escapes(relative));
+    }
+
+    let joined = base_dir.join(relative);
+    if !joined.starts_with(base_dir) {
+        return Err(escapes(&joined));
+    }
+    // Follows symlinks and treats any error as "missing", like `Path::exists`.
+    if tokio::fs::metadata(&joined).await.is_err() {
+        return Ok(joined);
+    }
+
+    let canonical_root = tokio::fs::canonicalize(base_dir).await?;
+    let canonical_joined = tokio::fs::canonicalize(&joined).await?;
+    if !canonical_joined.starts_with(&canonical_root) {
+        return Err(escapes(&joined));
+    }
+    Ok(canonical_joined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn empty_relative_returns_base_unchanged() {
+        let base = TempDir::new().unwrap();
+        let resolved = resolve_confined_existing(base.path(), Path::new(""))
+            .await
+            .unwrap();
+        assert_eq!(resolved, base.path());
+    }
+
+    #[tokio::test]
+    async fn missing_base_and_target_resolve_without_creating_anything() {
+        let base = TempDir::new().unwrap();
+        let missing_base = base.path().join("no-base");
+        let resolved = resolve_confined_existing(&missing_base, Path::new("a/b"))
+            .await
+            .unwrap();
+        assert_eq!(resolved, missing_base.join("a/b"));
+        assert!(!missing_base.exists());
+    }
+
+    #[tokio::test]
+    async fn existing_directory_is_canonicalized() {
+        let base = TempDir::new().unwrap();
+        std::fs::create_dir_all(base.path().join("a/b")).unwrap();
+        let resolved = resolve_confined_existing(base.path(), Path::new("a/b"))
+            .await
+            .unwrap();
+        assert_eq!(resolved, base.path().canonicalize().unwrap().join("a/b"));
+    }
+
+    #[tokio::test]
+    async fn parent_and_absolute_components_are_rejected() {
+        let base = TempDir::new().unwrap();
+        for bad in ["../x", "a/../../x", "/etc"] {
+            let err = resolve_confined_existing(base.path(), Path::new(bad))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ConfinementError::Escape { .. }), "{bad}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_escaping_base_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), base.path().join("link")).unwrap();
+        let err = resolve_confined_existing(base.path(), Path::new("link"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfinementError::Escape { .. }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dangling_symlink_is_treated_as_missing() {
+        let base = TempDir::new().unwrap();
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(base.path().join("gone"), &link).unwrap();
+        let resolved = resolve_confined_existing(base.path(), Path::new("link"))
+            .await
+            .unwrap();
+        assert_eq!(resolved, link);
+    }
+
+    #[tokio::test]
+    async fn metadata_error_is_treated_as_missing() {
+        let base = TempDir::new().unwrap();
+        std::fs::write(base.path().join("file"), "x").unwrap();
+        let resolved = resolve_confined_existing(base.path(), Path::new("file/child"))
+            .await
+            .unwrap();
+        assert_eq!(resolved, base.path().join("file/child"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_staying_inside_base_is_resolved() {
+        let base = TempDir::new().unwrap();
+        std::fs::create_dir(base.path().join("real")).unwrap();
+        std::os::unix::fs::symlink(base.path().join("real"), base.path().join("link")).unwrap();
+        let resolved = resolve_confined_existing(base.path(), Path::new("link"))
+            .await
+            .unwrap();
+        assert_eq!(resolved, base.path().canonicalize().unwrap().join("real"));
+    }
 
     #[tokio::test]
     async fn target_none_returns_segment_dir_and_creates_nothing_beyond_it() {

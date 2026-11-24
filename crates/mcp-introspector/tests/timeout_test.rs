@@ -82,13 +82,18 @@ async fn wait_for_file_contents(path: &Path, timeout: Duration) -> String {
 /// `PATH`.
 const FIXTURE_BIN: &str = env!("CARGO_BIN_EXE_fixture-slow-mcp-server");
 
+/// Time the fixture gets to start and report its pid before a test depends on
+/// it. Startup under `nextest` has been observed to exceed 150 ms (#592), so
+/// tests that read the pid file must not let a short timeout race the start.
+const FIXTURE_STARTUP_BUDGET: Duration = Duration::from_secs(3);
+
 /// The fixture delays the start of the handshake itself, so the rmcp `serve`
 /// call blocks waiting for a response. With a short `connect_timeout`,
 /// `discover_server` must fail with `Error::Timeout { operation: "connect" }`
 /// well before the fixture's 30s handshake delay would elapse.
 #[tokio::test]
 async fn test_discover_server_connect_timeout_fires() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-connect-timeout").unwrap();
 
     let config = ServerConfig::builder()
@@ -121,7 +126,7 @@ async fn test_discover_server_connect_timeout_fires() {
 /// must fail with `Error::Timeout { operation: "list_all_tools" }`.
 #[tokio::test]
 async fn test_discover_server_discover_timeout_fires() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-discover-timeout").unwrap();
 
     let config = ServerConfig::builder()
@@ -159,7 +164,7 @@ async fn test_discover_server_discover_timeout_fires() {
 /// before ever running - leaking the process.
 #[tokio::test]
 async fn test_discover_server_connect_timeout_kills_child_process() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-connect-timeout-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
@@ -170,7 +175,7 @@ async fn test_discover_server_connect_timeout_kills_child_process() {
         .arg("30000".to_string()) // fixture delays the handshake by 30s
         .arg("0".to_string())
         .arg(pid_path.display().to_string())
-        .connect_timeout(Duration::from_millis(150))
+        .connect_timeout(FIXTURE_STARTUP_BUDGET)
         .build()
         .unwrap();
 
@@ -197,7 +202,7 @@ async fn test_discover_server_connect_timeout_kills_child_process() {
 /// but for a `discover_timeout` (i.e. `tools/list` hangs after a successful handshake).
 #[tokio::test]
 async fn test_discover_server_discover_timeout_kills_child_process() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-discover-timeout-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
@@ -235,7 +240,7 @@ async fn test_discover_server_discover_timeout_kills_child_process() {
 /// `discover_server` succeeds and does not spuriously time out.
 #[tokio::test]
 async fn test_discover_server_succeeds_when_within_timeouts() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-fast-server").unwrap();
 
     let config = ServerConfig::builder()
@@ -259,7 +264,7 @@ async fn test_discover_server_succeeds_when_within_timeouts() {
 /// not merely that the call itself succeeded.
 #[tokio::test]
 async fn test_discover_server_success_kills_child_process() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-success-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
@@ -303,7 +308,7 @@ async fn test_discover_server_success_kills_child_process() {
 /// `tokio::process::Child` does not kill on drop by default.
 #[tokio::test]
 async fn test_dropping_discover_server_future_kills_child_process() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-drop-future-kills-child").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");
@@ -314,25 +319,23 @@ async fn test_dropping_discover_server_future_kills_child_process() {
         .arg("30000".to_string()) // fixture delays the handshake by 30s
         .arg("0".to_string())
         .arg(pid_path.display().to_string())
-        // Long enough that our own 150ms sleep below wins the race, not
+        // Long enough that the cancellation below wins the race, not
         // Introspector's internal timeout handling (already covered above).
-        .connect_timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(30))
         .build()
         .unwrap();
 
-    tokio::select! {
+    let pid_contents = tokio::select! {
         _ = introspector.discover_server(server_id, &config) => {
             panic!("discover_server should not complete before the simulated cancellation");
         }
-        () = tokio::time::sleep(Duration::from_millis(150)) => {
-            // Simulates the cancellation branch winning `tokio::select!` in
-            // `mcp-execution-server`'s `introspect_server` handler, which
-            // drops the `discover_server` future (and the `Child` it owns)
-            // right here.
-        }
-    }
-
-    let pid_contents = wait_for_file_contents(&pid_path, Duration::from_secs(2)).await;
+        // Cancels only once the fixture has reported its pid, so the check
+        // below never races the fixture's startup time. Winning this branch
+        // simulates the cancellation branch of `mcp-execution-server`'s
+        // `introspect_server` handler, which drops the `discover_server`
+        // future (and the `Child` it owns).
+        contents = wait_for_file_contents(&pid_path, FIXTURE_STARTUP_BUDGET) => contents,
+    };
     let pid: u32 = pid_contents
         .trim()
         .parse()
@@ -359,7 +362,7 @@ const ENV_MARKER_VAR: &str = "MCP_EXECUTION_TEST_ENV_MARKER";
 /// struct.
 #[tokio::test]
 async fn test_discover_server_passes_env_and_cwd_to_child_process() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test-env-cwd").unwrap();
 
     let pid_file = tempfile::NamedTempFile::new().expect("create temp pid file");

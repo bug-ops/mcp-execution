@@ -139,23 +139,6 @@ pub fn sanitize_ts_identifier(s: &str) -> String {
     result
 }
 
-/// Anchored pattern source (JavaScript `RegExp` syntax) matching the ASCII identifiers that
-/// render as bare property keys.
-///
-/// Rendered into the generated runtime bridge so its observed-shape recorder applies the same
-/// predicate as the converter's bare-key rule instead of a hand-copied pattern;
-/// [`is_bare_identifier`] is the same predicate in Rust.
-pub(crate) const TS_IDENTIFIER_PATTERN: &str = "^[A-Za-z_$][A-Za-z0-9_$]*$";
-
-/// Whether `s` matches [`TS_IDENTIFIER_PATTERN`]: an ASCII identifier usable as a bare key.
-pub(crate) fn is_bare_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-}
-
 /// Sanitizes a server-controlled string for safe interpolation into `JSDoc` block comments.
 ///
 /// Neutralizes control characters (C0, DEL, C1 — everything `char::is_control` reports —
@@ -288,16 +271,6 @@ mod tests {
         // from the empty-string case (`""` never enters the loop at all).
         assert_eq!(sanitize_ts_identifier("日本語"), "_");
         assert_eq!(sanitize_ts_identifier("---"), "_");
-    }
-
-    #[test]
-    fn is_bare_identifier_matches_the_ascii_identifier_pattern() {
-        for key in ["id", "_private", "$ref", "a1", "A_b$"] {
-            assert!(is_bare_identifier(key), "{key}");
-        }
-        for key in ["", "1st", "per-page", "a.b", "two words", "naïve", "x*/y"] {
-            assert!(!is_bare_identifier(key), "{key}");
-        }
     }
 
     #[test]

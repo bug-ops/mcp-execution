@@ -28,7 +28,6 @@
 //! let server_id = ServerId::new("github").unwrap();
 //! ```
 
-#![deny(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations)]
 
 mod command;
@@ -73,8 +72,8 @@ pub use path::{
 
 // Re-export the shared path-confinement walk
 pub use confinement::{
-    ConfinementError, ConfinementTarget, open_confined_write, resolve_confined_path,
-    write_confined_file,
+    ConfinementError, ConfinementTarget, open_confined_write, resolve_confined_existing,
+    resolve_confined_path, write_confined_file,
 };
 
 // Re-export Debug-redaction helpers shared by secret-shaped fields

@@ -20,7 +20,8 @@ use mcp_execution_core::untrusted::{
     wrap_untrusted_block,
 };
 use mcp_execution_core::{
-    ServerConfig, ServerId, sanitize_path_for_error, validate_server_id_slug, write_confined_file,
+    ServerConfig, ServerId, resolve_confined_existing, sanitize_path_for_error,
+    validate_server_id_slug, write_confined_file,
 };
 use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::{Introspector, ToolInfo};
@@ -331,7 +332,7 @@ impl GeneratorService {
         // discovery, making the cancelled path deterministic rather than
         // depending on `tokio::select!`'s (default-randomised) poll order.
         let introspector_handle = self.introspector_for(server_id).await;
-        let mut introspector = introspector_handle.lock().await;
+        let introspector = introspector_handle.lock().await;
         let discover_outcome = tokio::select! {
             biased;
             () = ct.cancelled() => None,
@@ -831,26 +832,17 @@ impl GeneratorService {
                         if entry.path().is_dir() {
                             let id = entry.file_name().to_string_lossy().to_string();
 
-                            // Count per-tool .ts files. Excludes `CATALOG_FILE_NAME` (the
-                            // package's type-only signature catalog, likewise not a tool) and
-                            // `INDEX_FILE_NAME`, the
-                            // package's always-present re-export entry point, which is not
-                            // itself a tool (issue #477); compared case-insensitively to
-                            // match `disambiguate_output_filename`'s own case-insensitive
-                            // handling of `index` (issue #312), since a tool named `Index`
-                            // would otherwise collide with it on a case-insensitive
-                            // filesystem. Also excludes files starting with `_` — real
-                            // generator output never produces a top-level `_`-prefixed
-                            // `.ts` file (`_meta.json` isn't `.ts`, and the runtime bridge
-                            // lives in the `_runtime/` subdirectory), so this clause is
-                            // defensive rather than covering a file that exists today.
+                            // Count per-tool .ts files, excluding the non-tool entries
+                            // `CATALOG_FILE_NAME` and `INDEX_FILE_NAME` (issue #477), compared
+                            // case-insensitively as `disambiguate_output_filename` does (issue
+                            // #312). `_`-prefixed files are tools: the generator prefixes a
+                            // digit-leading tool name with `_` (issue #598).
                             let tool_count = std::fs::read_dir(entry.path()).map_or(0, |e| {
                                 e.flatten()
                                     .filter(|f| {
                                         let name = f.file_name();
                                         let name = name.to_string_lossy();
                                         name.ends_with(".ts")
-                                            && !name.starts_with('_')
                                             && !name.eq_ignore_ascii_case(INDEX_FILE_NAME)
                                             && !name.eq_ignore_ascii_case(CATALOG_FILE_NAME)
                                     })
@@ -969,6 +961,7 @@ impl GeneratorService {
             .ok_or_else(|| McpError::internal_error("generate_skill cancelled by client", None))?
             .map_err(|e| match e {
                 ScanError::MissingMetadata { .. }
+                | ScanError::MetadataEscapesDirectory { .. }
                 | ScanError::UnsupportedSchema { .. }
                 | ScanError::StaleMetadata { .. } => {
                     McpError::invalid_params(format!("Failed to scan tools directory: {e}"), None)
@@ -1004,7 +997,7 @@ impl GeneratorService {
         // Build context. The validated custom name (if any) is threaded straight into
         // `build_skill_context` so it's the name actually embedded in `generation_prompt`, not
         // just an after-the-fact override of `result.skill_name` that leaves the prompt still
-        // instructing the stale `{server_id}-progressive` default (issue #435).
+        // instructing the stale `{server_id}` default (issue #435).
         let mut result = build_skill_context(
             &params.server_id,
             &scan_result.tools,
@@ -1263,48 +1256,17 @@ fn build_stdio_server_config(
 
 /// Resolves `list_generated_servers`'s `base_dir` override, confining it to `servers_base_dir`.
 ///
-/// Unlike [`resolve_output_dir`], there is no `server_id` segment here — a `base_dir` override
-/// addresses the servers directory itself, not a subdirectory keyed by an id — so it is
-/// validated with the cheaper, I/O-free [`relative_subpath`] (rejecting an absolute path or a
-/// `..` component) and then joined onto `servers_base_dir`. The joined path is confinement-
-/// checked lexically first - `Path::join` replaces the whole path when `relative` is itself
-/// rooted without a prefix (e.g. `\pwn\evil` on Windows, which is not `is_absolute()` but still
-/// escapes on join) - and this lexical check runs even when the joined path does not exist yet,
-/// matching every other confinement check in [`resolve_output_dir`] (including its final,
-/// deliberately-not-created component, output_dir.rs:306-310), rather than being the one path in
-/// this crate that skips it. When the joined path exists, it is additionally canonicalized and
-/// re-checked against the canonicalized `servers_base_dir` to catch a symlink planted inside it
-/// that points outside (the same class of check `resolve_output_dir` performs for `output_dir`,
-/// see issue #216). This call only scans (`read_dir`), so unlike `resolve_output_dir` nothing is
-/// created: a confined path that does not exist yet is returned as-is, and the caller's existing
-/// `exists() && is_dir()` check yields an empty listing for it.
+/// There is no `server_id` segment here - a `base_dir` override addresses the servers directory
+/// itself - so the I/O-free [`relative_subpath`] rejects an absolute path or a `..` component
+/// first, and the shared read-only [`resolve_confined_existing`] then does the lexical and
+/// symlink-aware confinement check. Nothing is created: a confined path that does not exist yet
+/// is returned as-is, and the caller's `exists() && is_dir()` check yields an empty listing.
 async fn resolve_list_base_dir(
     servers_base_dir: &Path,
     base_dir_override: Option<&Path>,
 ) -> Result<PathBuf, OutputDirError> {
     let relative = relative_subpath(base_dir_override)?;
-    if relative.as_os_str().is_empty() {
-        return Ok(servers_base_dir.to_path_buf());
-    }
-
-    let joined = servers_base_dir.join(&relative);
-    if !joined.starts_with(servers_base_dir) {
-        return Err(OutputDirError::Escape {
-            path: sanitize_path_for_error(&joined),
-        });
-    }
-    if !joined.exists() {
-        return Ok(joined);
-    }
-
-    let canonical_root = tokio::fs::canonicalize(servers_base_dir).await?;
-    let canonical_joined = tokio::fs::canonicalize(&joined).await?;
-    if !canonical_joined.starts_with(&canonical_root) {
-        return Err(OutputDirError::Escape {
-            path: sanitize_path_for_error(&joined),
-        });
-    }
-    Ok(canonical_joined)
+    Ok(resolve_confined_existing(servers_base_dir, &relative).await?)
 }
 
 /// Classifies an [`mcp_execution_core::Error`] from the introspection pipeline into an
@@ -4654,7 +4616,7 @@ mod tests {
     /// filter's own extension check) and the `_runtime/` subdirectory (not a file) alongside it
     /// (issue #477).
     #[tokio::test]
-    async fn test_list_generated_servers_tool_count_excludes_index_and_underscore_files() {
+    async fn test_list_generated_servers_tool_count_excludes_index_and_non_ts_files() {
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
@@ -4693,6 +4655,36 @@ mod tests {
         let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
 
         assert_eq!(parsed.servers[0].id, "my-server");
+        assert_eq!(parsed.servers[0].tool_count, 2);
+    }
+
+    /// A tool whose name starts with a digit is generated as `_<name>.ts` (see the codegen
+    /// identifier sanitizer) and must still be counted (issue #598).
+    #[tokio::test]
+    async fn test_list_generated_servers_counts_digit_leading_tool_files() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let server_dir = temp_dir.path().join("my-server");
+        tokio::fs::create_dir_all(&server_dir).await.unwrap();
+        for name in ["index.ts", "plain.ts", "_1st_tool.ts"] {
+            tokio::fs::write(server_dir.join(name), "export {}")
+                .await
+                .unwrap();
+        }
+
+        let service =
+            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
+        let result = service
+            .list_generated_servers(
+                Parameters(ListGeneratedServersParams { base_dir: None }),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let text = result.content[0].as_text().unwrap();
+        let parsed: ListGeneratedServersResult = serde_json::from_str(&text.text).unwrap();
+
         assert_eq!(parsed.servers[0].tool_count, 2);
     }
 
@@ -5220,7 +5212,7 @@ mod tests {
     /// Issue #435: a valid custom `skill_name` must be honored end to end through the actual
     /// `generate_skill` MCP handler — this is the exact layer the original bug lived in (the
     /// handler called `build_skill_context` before threading the custom name through, so
-    /// `generation_prompt` always embedded the `{server_id}-progressive` default regardless of
+    /// `generation_prompt` always embedded the `{server_id}` default name regardless of
     /// what was requested). Covers FR-001/FR-005: `generation_prompt` contains the custom name,
     /// the stale default does not appear, and `result.skill_name` matches what's in the prompt.
     #[tokio::test]
@@ -5295,7 +5287,9 @@ mod tests {
             parsed.generation_prompt
         );
         assert!(
-            !parsed.generation_prompt.contains("test-server-progressive"),
+            !parsed
+                .generation_prompt
+                .contains("**Skill Name**: test-server"),
             "generation_prompt must not fall back to the default name: {}",
             parsed.generation_prompt
         );

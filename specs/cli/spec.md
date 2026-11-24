@@ -531,7 +531,7 @@ single source of truth:
   handshake (the entry's own full configured timeout applies), the
   authoritative single-target check.
 
-`ServerEntry.status`/`ServerInfo.status` are typed as a closed
+`ServerEntry.status` is typed as a closed
 `ServerStatus` enum (`Available`/`Unavailable`,
 `#[serde(rename_all = "lowercase")]`), not a bare `String` — a **breaking**
 type change from the pre-#318 CLI, though it serializes identically
@@ -550,9 +550,11 @@ found" wrapping):
   structured `ServerInfo` with `"status": "unavailable"` through the
   normal `output_format` path — not a raw, unformatted `anyhow` error —
   while still returning `ExitCode::ERROR` (issue #305). Only a genuinely
-  absent entry propagates as `Err` (and thus a raw error report). A known
-  gap: `ServerInfo` has no field naming *why* the server is unavailable
-  (invalid config vs. failed handshake).
+  absent entry propagates as `Err` (and thus a raw error report). The
+  `ServerInfo.status` is a `ServerAvailability` enum (`Available`, or `Unavailable { reason }`), so a reason
+  cannot exist without the unavailable status and vice versa (#480). It is flattened into the output as
+  `"status": "available"`, or `"status": "unavailable"` plus `"reason": {"kind":"invalid_configuration"|"introspection_failed","message":"..."}`,
+  whose message went through `escape_error_text`; `ServerEntry` is unchanged.
 - `server validate` on a present-but-invalid entry reports the actual
   `build_core_config`/precheck failure message in `ValidationResult` (e.g.
   `"Server '{name}' has an invalid configuration: {e}"`), not the generic
@@ -581,7 +583,10 @@ itself was already safe (issue #346, S1).
 ## 10. `setup` Command (`commands/setup.rs`)
 
 Validates the local runtime is ready to execute generated tools:
-1. Checks `node --version` is ≥ 18.0.0 (hard error if missing/older).
+1. Checks `node --version` is a version that runs `.ts` files without a flag (hard error if missing or
+   older): 22.18.0 or later on the 22 line, 23.6.0 or later on the 23 line, and any later major. Node.js 18 and
+   20, 22.6 to 22.17 (which need `--experimental-strip-types`) and 23.0 to 23.5 are rejected, and the error names
+   the minimum (`NodeVersion`, #564). The same minimum appears in the README and the usage guide.
 2. On Unix only: makes every `.ts` file executable (`files_made_executable`
    count) anywhere under `~/.claude/servers/`, at any depth — the walk
    recurses into nested subdirectories (e.g. `{server-id}/_runtime/`) rather
@@ -638,7 +643,10 @@ entries (e.g. a transient I/O error from `next_entry()`), is logged as a
 `tracing::warn!` and treated as exhausted rather than aborting the command —
 the walk resumes with the next sibling entry instead of propagating the
 error via `?`. This applies uniformly at every recursion depth below the
-root, not only to the server-id level.
+root, not only to the server-id level. The same skip-and-warn rule covers a
+single entry's failures (#503): an entry whose `file_type()` fails is skipped, and a `.ts` file whose
+`metadata()` or `set_permissions()` call fails (`make_executable`) is skipped with a warning and not counted in
+`files_made_executable`, so one problematic file never aborts the walk.
 
 The walk's root (`~/.claude/servers/` itself) is the one exception: failing
 to *open* the root is still fatal and propagates as an error. Unlike a
@@ -929,17 +937,6 @@ the exit code values.
 **Depends on / blocks.** Needs the exposure of the cache hints in [[../introspector/spec]] and, for exact
 attribution, the per-tool digest decision in the `_meta.json` v3 registry owned by #568. Independent of the
 runtime decision record. Tracked under epic #558.
-
-### Planned: minimum Node.js version accepted by `setup` (#564)
-
-**Why.** `setup` documents and enforces a floor of Node.js 18: `check_node_version` rejects only a major version
-below 18 (`crates/mcp-cli/src/commands/setup.rs:229`), and its module documentation and error text say 18.0.0
-(`setup.rs:4`, `:69`, `:233`). Whether the generated files run on that version, and what the script runner
-needs, is not established; the runner's floor is an open decision in
-[[../runtime/spec#4. Planned: Script Runner With Bounded Output (#571)]]. This is a defect with its own
-issue and acceptance: no requirement is added here, and §10 changes in the pull request that fixes #564.
-
-**Depends on / blocks.** Ask first for any change to the accepted versions. Informs the Node floor of #571.
 
 ## 17. See Also
 

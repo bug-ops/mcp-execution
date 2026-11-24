@@ -1,5 +1,10 @@
 //! Acceptance test for #565: pathologically deep schemas of every nesting kind degrade instead
 //! of overflowing the stack.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use mcp_execution_codegen::common::ts_types::{RenderStyle, convert_schema};
 use serde_json::Value;

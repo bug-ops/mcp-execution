@@ -1,5 +1,10 @@
 //! Acceptance tests for #568 wiring: stated annotations reach the generated tool file as fixed
 //! `JSDoc` tags, and unstated ones do not.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 mod acceptance_support;
 

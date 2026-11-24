@@ -13,8 +13,8 @@
 //! needed at all.
 
 use mcp_execution_core::metadata::{
-    CATALOG_FILE_NAME, INDEX_FILE_NAME, MAX_METADATA_FILE_BYTES, METADATA_FILE_NAME,
-    METADATA_SCHEMA_VERSION, ServerMetadata,
+    CATALOG_FILE_NAME, INDEX_FILE_NAME, MAX_METADATA_FILE_BYTES, MAX_TOOL_COUNT,
+    METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ServerMetadata,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -27,7 +27,10 @@ use std::sync::LazyLock;
 use thiserror::Error;
 
 /// Maximum number of tools accepted from a single sidecar (denial-of-service protection).
-pub const MAX_TOOL_FILES: usize = 500;
+///
+/// Equal to [`MAX_TOOL_COUNT`], the introspection bound, so every directory that generation can
+/// produce is accepted by the scan.
+pub const MAX_TOOL_FILES: usize = MAX_TOOL_COUNT;
 
 /// Maximum sidecar file size to read in bytes, shared with the producer through
 /// [`MAX_METADATA_FILE_BYTES`].
@@ -51,6 +54,7 @@ pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024;
 // Locates the raw YAML block between a SKILL.md's `---` delimiters. The
 // block's contents are handed to `serde-saphyr` for actual parsing, so this
 // regex never inspects individual field values (see `extract_skill_metadata`).
+#[expect(clippy::expect_used, reason = "literal regex pattern is valid")]
 static FRONTMATTER_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^---\s*\n([\s\S]*?)\n---").expect("valid regex"));
 
@@ -76,6 +80,16 @@ pub enum ScanError {
     #[error("metadata sidecar not found: {path} (was the server directory regenerated?)")]
     MissingMetadata {
         /// Sanitized path of the expected sidecar file.
+        path: String,
+    },
+
+    /// The `_meta.json` sidecar resolves outside the server directory (a symlink escape).
+    ///
+    /// Distinct from [`ScanError::MissingMetadata`] so that a fail-closed path-confinement
+    /// rejection is never mistaken for a server that simply has not been generated yet.
+    #[error("metadata sidecar resolves outside the server directory: {path}")]
+    MetadataEscapesDirectory {
+        /// Sanitized path of the sidecar file as it was looked up (not its symlink target).
         path: String,
     },
 
@@ -272,8 +286,9 @@ fn parsed_tool_file_from_metadata(
 ///
 /// Returns `ScanError` if the directory doesn't exist, the sidecar is
 /// missing or malformed, the sidecar's tool count exceeds
-/// [`MAX_TOOL_FILES`], or a sidecar entry's `.ts` file is missing from disk
-/// ([`ScanError::StaleMetadata`]).
+/// [`MAX_TOOL_FILES`], the sidecar is a symlink that leaves the directory
+/// ([`ScanError::MetadataEscapesDirectory`]), or a sidecar entry's `.ts` file is missing from
+/// disk ([`ScanError::StaleMetadata`]).
 ///
 /// # Examples
 ///
@@ -306,7 +321,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
     let canonical_meta = match tokio::fs::canonicalize(&meta_path).await {
         Ok(path) if path.starts_with(&canonical_base) => path,
         Ok(_) => {
-            return Err(ScanError::MissingMetadata {
+            return Err(ScanError::MetadataEscapesDirectory {
                 path: sanitize_path_for_error(&meta_path),
             });
         }
@@ -500,6 +515,11 @@ pub enum SkillMetadataError {
         /// Maximum allowed length (`MAX_SKILL_NAME_LENGTH`).
         limit: usize,
     },
+
+    /// The frontmatter `name` held a character other than a lowercase ASCII letter, digit, or
+    /// hyphen (the Agent Skills `name` rule).
+    #[error("skill_name must contain only lowercase letters, digits, and hyphens")]
+    NameInvalidCharacters,
 }
 
 /// Fixed vocabulary of `serde-saphyr` failure kinds, keyed by [`serde_saphyr::Error`] variant.
@@ -808,6 +828,9 @@ pub fn extract_skill_metadata(
         Err(crate::types::SkillNameError::TooLong { len, limit }) => {
             return Err(SkillMetadataError::NameTooLong { len, limit });
         }
+        Err(crate::types::SkillNameError::InvalidCharacters) => {
+            return Err(SkillMetadataError::NameInvalidCharacters);
+        }
     }
     let description = require_field(frontmatter.description, "description")?;
 
@@ -1099,6 +1122,39 @@ mod tests {
         let result = scan_tools_directory(temp_dir.path()).await;
 
         assert!(matches!(result, Err(ScanError::MissingMetadata { .. })));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_scan_tools_directory_symlinked_sidecar_escaping_directory_is_distinct_error() {
+        let outside = TempDir::new().unwrap();
+        let outside_meta = outside.path().join("elsewhere.json");
+        tokio::fs::write(&outside_meta, "{}").await.unwrap();
+        let server_dir = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(&outside_meta, server_dir.path().join(METADATA_FILE_NAME))
+            .unwrap();
+
+        let result = scan_tools_directory(server_dir.path()).await;
+
+        assert!(
+            matches!(result, Err(ScanError::MetadataEscapesDirectory { .. })),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_skill_metadata_name_with_invalid_characters_rejected() {
+        let content = "---\nname: My Skill\ndescription: test\n---\n# Test";
+
+        assert!(matches!(
+            extract_skill_metadata(content),
+            Err(SkillMetadataError::NameInvalidCharacters)
+        ));
+    }
+
+    #[test]
+    fn test_max_tool_files_equals_the_introspection_bound() {
+        assert_eq!(MAX_TOOL_FILES, MAX_TOOL_COUNT);
     }
 
     #[tokio::test]

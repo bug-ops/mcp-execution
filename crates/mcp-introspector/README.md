@@ -34,7 +34,7 @@ use mcp_execution_core::{ServerId, ServerConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
 
     let server_id = ServerId::new("github").unwrap();
     let config = ServerConfig::builder()
@@ -116,7 +116,7 @@ let config = ServerConfig::builder()
 
 | Type | Description |
 |------|-------------|
-| `Introspector` | Main introspection service with caching |
+| `Introspector` | Stateless introspection service (`discover_server`) |
 | `ServerInfo` | Discovered server metadata and tools |
 | `ToolInfo` | Tool name, description, and JSON schema |
 | `ServerCapabilities` | Flags for tools, resources, prompts support |

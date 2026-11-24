@@ -6,21 +6,6 @@ use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{Introspector, ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 
-/// Tests introspector creation
-#[test]
-fn test_introspector_creation() {
-    let introspector = Introspector::new();
-    assert_eq!(introspector.server_count(), 0);
-    assert!(introspector.list_servers().is_empty());
-}
-
-/// Tests default trait implementation
-#[test]
-fn test_introspector_default() {
-    let introspector = Introspector::default();
-    assert_eq!(introspector.server_count(), 0);
-}
-
 /// Tests server info structure
 #[test]
 fn test_server_info_creation() {
@@ -69,68 +54,6 @@ fn test_tool_info_creation() {
     assert_eq!(tool.name.as_str(), "send_message");
     assert_eq!(tool.description, "Sends a message to a chat");
     assert!(tool.output_schema.is_some());
-}
-
-/// Tests getting nonexistent server
-#[test]
-fn test_get_nonexistent_server() {
-    let introspector = Introspector::new();
-    let server_id = ServerId::new("nonexistent").unwrap();
-
-    assert!(introspector.get_server(&server_id).is_none());
-}
-
-/// Tests server removal
-#[test]
-fn test_server_removal() {
-    let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test").unwrap();
-
-    // Remove nonexistent server
-    assert!(!introspector.remove_server(&server_id));
-
-    // Add server manually for testing
-    let _info = ServerInfo {
-        id: server_id.clone(),
-        name: "Test".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
-        },
-    };
-
-    // Manually insert (in real code, use discover_server)
-    // For this test, we validate the removal logic works
-    assert!(!introspector.remove_server(&server_id));
-}
-
-/// Tests clearing all servers
-#[test]
-fn test_clear_servers() {
-    let mut introspector = Introspector::new();
-
-    // Clear empty introspector
-    introspector.clear();
-    assert_eq!(introspector.server_count(), 0);
-}
-
-/// Tests listing servers
-#[test]
-fn test_list_empty_servers() {
-    let introspector = Introspector::new();
-    let servers = introspector.list_servers();
-
-    assert!(servers.is_empty());
-}
-
-/// Tests server count
-#[test]
-fn test_server_count() {
-    let introspector = Introspector::new();
-    assert_eq!(introspector.server_count(), 0);
 }
 
 /// Tests `ServerInfo` serialization
@@ -212,34 +135,6 @@ fn test_introspector_is_send_sync() {
 
     assert_send::<Introspector>();
     assert_sync::<Introspector>();
-}
-
-/// Tests concurrent access to introspector
-#[tokio::test]
-async fn test_concurrent_introspector_access() {
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    let introspector = Arc::new(Mutex::new(Introspector::new()));
-
-    let mut handles = vec![];
-
-    // Spawn multiple tasks accessing introspector concurrently
-    for i in 0..10 {
-        let introspector_clone = Arc::clone(&introspector);
-        let handle = tokio::spawn(async move {
-            let intro = introspector_clone.lock().await;
-            assert_eq!(intro.server_count(), 0);
-            drop(intro); // Explicitly drop lock before returning
-            i
-        });
-        handles.push(handle);
-    }
-
-    // Wait for all tasks
-    for handle in handles {
-        handle.await.unwrap();
-    }
 }
 
 /// Tests Debug implementation for `ServerInfo`
@@ -349,19 +244,6 @@ fn test_complex_tool_schema() {
     assert!(tool.output_schema.is_some());
 }
 
-/// Tests that multiple servers can be managed
-#[test]
-fn test_multiple_server_management() {
-    let mut introspector = Introspector::new();
-
-    // Start with empty
-    assert_eq!(introspector.server_count(), 0);
-
-    // Clear should be safe on empty
-    introspector.clear();
-    assert_eq!(introspector.server_count(), 0);
-}
-
 /// Tests `discover_server` with empty command
 #[test]
 fn test_discover_server_empty_command() {
@@ -402,7 +284,7 @@ fn test_discover_server_shell_operators() {
 /// Tests `discover_server` with nonexistent command
 #[tokio::test]
 async fn test_discover_server_nonexistent_command() {
-    let mut introspector = Introspector::new();
+    let introspector = Introspector::new();
     let server_id = ServerId::new("test").unwrap();
 
     // A bare (non-absolute) binary name passes construction-time validation
@@ -513,37 +395,6 @@ fn test_server_capabilities_clone() {
     assert_eq!(cloned.supports_prompts, caps.supports_prompts);
 }
 
-/// Tests `list_servers` returns references
-#[test]
-fn test_list_servers_references() {
-    let introspector = Introspector::new();
-    let servers = introspector.list_servers();
-
-    // Should return empty vec of references
-    assert_eq!(servers.len(), 0);
-}
-
-/// Tests `get_server` returns reference
-#[test]
-fn test_get_server_reference() {
-    let introspector = Introspector::new();
-    let server_id = ServerId::new("test").unwrap();
-
-    let server = introspector.get_server(&server_id);
-    assert!(server.is_none());
-}
-
-/// Tests `remove_server` returns bool correctly
-#[test]
-fn test_remove_server_return_value() {
-    let mut introspector = Introspector::new();
-    let server_id = ServerId::new("test").unwrap();
-
-    // Remove non-existent - should return false
-    assert!(!introspector.remove_server(&server_id));
-    assert_eq!(introspector.server_count(), 0);
-}
-
 /// Tests `ServerInfo` with many tools
 #[test]
 fn test_server_info_with_many_tools() {
@@ -622,20 +473,6 @@ fn test_tool_info_long_description() {
 
     assert_eq!(tool.description.len(), 10000);
     assert_eq!(tool.description, long_desc);
-}
-
-/// Tests clear with empty introspector
-#[test]
-fn test_clear_empty() {
-    let mut introspector = Introspector::new();
-
-    introspector.clear();
-    assert_eq!(introspector.server_count(), 0);
-
-    // Multiple clears should be safe
-    introspector.clear();
-    introspector.clear();
-    assert_eq!(introspector.server_count(), 0);
 }
 
 /// Tests `ServerCapabilities` Debug
@@ -722,29 +559,4 @@ fn test_server_info_serialization_with_tools() {
     let deserialized: ServerInfo = serde_json::from_str(&json).expect("Deserialization failed");
     assert_eq!(deserialized.tools.len(), 1);
     assert_eq!(deserialized.tools[0].name.as_str(), "test_tool");
-}
-
-/// Tests concurrent `list_servers` calls
-#[tokio::test]
-async fn test_concurrent_list_servers() {
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    let introspector = Arc::new(Mutex::new(Introspector::new()));
-    let mut handles = vec![];
-
-    for _ in 0..20 {
-        let intro_clone = Arc::clone(&introspector);
-        let handle = tokio::spawn(async move {
-            let intro = intro_clone.lock().await;
-            let servers = intro.list_servers();
-            assert_eq!(servers.len(), 0);
-            drop(intro); // Explicitly drop the lock
-        });
-        handles.push(handle);
-    }
-
-    for handle in handles {
-        handle.await.unwrap();
-    }
 }

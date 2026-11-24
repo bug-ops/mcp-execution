@@ -35,11 +35,12 @@ related:
 
 ## What This Project Does
 
-**mcp-execution** generates TypeScript code from MCP (Model Context
-Protocol) server tool definitions using a *progressive loading* pattern —
-one file per tool — so Claude Code loads only the tools it actually needs
-(~500-1,500 tokens/tool) instead of an entire server's tool manifest
-upfront (~30,000 tokens), a 93-98% token-budget reduction. It also exposes
+**mcp-execution** turns an MCP (Model Context Protocol) server into a typed
+TypeScript SDK that a model programs against — one file per tool, a
+type-only catalog and a runtime bridge — so loops, joins and large results
+stay in code and only the answer reaches the context window. The project
+publishes no measured context-cost figures; measurement is planned (#562).
+It also exposes
 that same generation capability *as an MCP server itself*, letting Claude
 Code drive tool categorization with its own natural-language understanding
 instead of a second LLM call, and it can render Claude Code `SKILL.md`

@@ -66,10 +66,11 @@ pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError>;
 // Rules: non-empty, <= 64 bytes, only [a-z0-9-]. Delegates to
 // mcp_execution_core::validate_server_id_slug — the authoritative owner of this invariant.
 
-pub const MAX_SKILL_NAME_LENGTH: usize = 200; // chars, not bytes (own constant — skill_name has
-// no character-set restriction, so it isn't delegated to mcp-execution-core the way server_id
-// is). Counted in chars to agree with GenerateSkillParams::skill_name's schemars maxLength,
-// which JSON Schema also counts in Unicode code points (issue #413, S2).
+pub const MAX_SKILL_NAME_LENGTH: usize = MAX_SERVER_ID_LENGTH; // 64 chars (Agent Skills `name` limit; the
+// default name is the server id, so it always fits). Counted in chars to agree with
+// GenerateSkillParams::skill_name's schemars maxLength (issue #413, S2).
+// validate_skill_name: non-blank, <= 64 chars, only [a-z0-9-] (SkillNameError::{Empty, TooLong,
+// InvalidCharacters}); GenerateSkillParams::skill_name declares the same maxLength and pattern (#582).
 pub fn validate_skill_name(name: &str) -> Result<(), SkillNameError>;
 // Rules: non-empty (or non-blank) after trim, <= 200 chars (chars().count(), not str::len()).
 // No character-set restriction (free-form human-readable label). Called by both mcp-cli's
@@ -88,7 +89,7 @@ pub const MAX_USE_CASE_HINTS: usize = 20; // entry-count bound (schemars maxItem
 // stop an unbounded number of entries; build_generation_prompt truncates to this many, dropping
 // the excess rather than erroring (critic finding M1 on #429).
 
-pub const MAX_TOOL_FILES: usize = 500;
+pub const MAX_TOOL_FILES: usize = MAX_TOOL_COUNT; // core::metadata::MAX_TOOL_COUNT (1000), the introspection bound: every directory generation can produce is scannable (#585)
 pub const MAX_FILE_SIZE: u64 = MAX_METADATA_FILE_BYTES; // 1 MiB, _meta.json size cap, shared with mcp-codegen (core::metadata)
 pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024; // 8 KiB, extracted YAML block cap
 pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError>;
@@ -125,7 +126,9 @@ never recover parameter descriptions). Now:
    same split — `NotFound` → `ScanError::MissingMetadata`, any other kind →
    `ScanError::Io` — and requires the resolved sidecar path to
    `starts_with(canonical_base)` — defends against a symlinked
-   `_meta.json` escaping the directory (path-traversal via symlink).
+   `_meta.json` escaping the directory (path-traversal via symlink); that
+   rejection is its own `ScanError::MetadataEscapesDirectory`, never
+   `MissingMetadata` (#483).
 2. Size-checks the sidecar (`MAX_FILE_SIZE`, which is `mcp_core::metadata::MAX_METADATA_FILE_BYTES`,
    the same constant `mcp-codegen` warns against when it writes a larger sidecar; above it the scan
    returns `ScanError::FileTooLarge` while generation itself succeeded), then reads `schema_version` from a minimal
@@ -200,7 +203,7 @@ the sidecar stores) or nested deeper than 8 (`MAX_EXAMPLE_DEPTH`) yields the pla
 through `group_by_category` — is resolved as the very first step inside
 `build_skill_context`, from its own `custom_name: Option<&str>` parameter:
 the caller's override when `Some`, else the default
-`{server_id}-progressive`. Either way, the resolved name is immediately
+`server_id` (the skill's directory name, #582). Either way, the resolved name is immediately
 flattened with `sanitize_untrusted_text` (idempotent against
 `build_generation_prompt`'s own identical call below) so
 `GenerateSkillResult::skill_name` holds exactly the same
@@ -458,7 +461,8 @@ content straight through to `extract_skill_metadata` and never calls `validate_s
 itself — so before this fix, `save_skill`'s `name` was bounded only by `MAX_FRONTMATTER_SIZE` (8
 KiB), while every other path bounded it at 200 chars. `extract_skill_metadata` is the one `pub`
 chokepoint both paths share, so the bound lives here rather than being duplicated in the
-`save_skill` handler. `SkillNameError::TooLong` maps onto `SkillMetadataError::NameTooLong`;
+`save_skill` handler. `SkillNameError::TooLong` maps onto `SkillMetadataError::NameTooLong`, `SkillNameError::InvalidCharacters` onto
+`SkillMetadataError::NameInvalidCharacters` (a frontmatter `name` must follow the Agent Skills rule, #582);
 `SkillNameError::Empty` maps onto the existing `SkillMetadataError::MissingField { field: "name" }`
 — unreachable via this call site today, since `require_field` already rejects a blank `name`
 first, but mapped rather than panicking so the match stays safe if that ordering ever changes.
@@ -566,14 +570,14 @@ defends error text that can be LLM-facing (issue #461).
 
 ## 9. Error Conditions
 
-`ScanError`: `Io`, `DirectoryNotFound`, `MissingMetadata`,
+`ScanError`: `Io`, `DirectoryNotFound`, `MissingMetadata`, `MetadataEscapesDirectory` (#483),
 `MetadataParse`, `UnsupportedSchema { found, expected }`, `TooManyFiles`, `FileTooLarge`,
 `StaleMetadata`. `UnsupportedSchema`'s message carries "re-run 'generate' to regenerate this
 server" guidance, matching its sibling `StaleMetadata` (issue #468).
 
 `SkillMetadataError`: `MissingFrontmatter`, `FrontmatterTooLarge`,
 `InvalidYaml`, `MissingField`, `NameTooLong { len, limit }` (issue #419 — `name` exceeded
-`MAX_SKILL_NAME_LENGTH`; see §7).
+`MAX_SKILL_NAME_LENGTH`; see §7), `NameInvalidCharacters` (#582).
 
 `OutputPathError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
 confinement now validates `server_id` via `mcp_execution_core::validate_server_id_slug`, the
@@ -671,6 +675,11 @@ tool count or a category list (`context.rs:362-380`), which gives a host nothing
 | FR-043.7 | THE SYSTEM SHALL generate a description that says what the skill covers and when to use it, within the Agent Skills description limit, from sanitised fields only | should |
 | FR-043.8 | WHERE the host supports it THE SYSTEM MAY include the catalog when the skill loads, bounded by the named catalog byte bound owned by [[../codegen/spec]], wrapped in the untrusted-data boundary with escaping, with a static fallback; the body SHALL be complete and correct when nothing is included | may |
 | FR-043.9 | THE SYSTEM SHALL ensure that text originating from an MCP server (names, descriptions, categories, keywords, hints, catalog content) stays inert data in a rendered skill, so that the host loading the skill treats none of it as anything but text, in the deterministic render and in the prompt-then-save path, and SHALL pin each path with regression tests that use hostile fixtures | must |
+
+**Landed early (#582).** FR-043.5 and the character-set and length half of FR-043.6 are implemented: the default
+name is the server id, and `validate_skill_name` enforces 1-64 lowercase letters, digits and hyphens (also applied
+to a saved skill's frontmatter `name`). The equality of a custom name with its directory and the validated name type
+remain planned.
 
 **Constraints.**
 

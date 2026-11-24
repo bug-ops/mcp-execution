@@ -98,6 +98,7 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
 /// `rmcp=info`, not merged with it -- `tracing_subscriber`'s `Directive` ordering does not compare
 /// level, so a same-target `add_directive` call overwrites the existing entry. Both behaviors are
 /// pinned by tests below rather than assumed.
+#[expect(clippy::expect_used, reason = "static directive string is valid")]
 fn cap_rmcp_log_level(filter: EnvFilter) -> EnvFilter {
     filter.add_directive(
         "rmcp=info"
@@ -470,6 +471,10 @@ fn classify_core_error(core_error: &CoreError) -> ExitCode {
 }
 
 #[cfg(test)]
+#[expect(
+    unsafe_code,
+    reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+)]
 mod tests {
     use super::*;
     use mcp_execution_core::ResourceKind;
