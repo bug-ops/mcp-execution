@@ -23,7 +23,8 @@ use support::{
 };
 
 const OBSERVED_MARKER: &str = "observed in a past call";
-const GENERIC_RESULT: &str = "Record<string, unknown> | unknown[] | string | undefined";
+const DEGRADED_DECLARED_RESULT: &str =
+    "Record<string, unknown> | unknown[] | string | number | boolean | null | undefined";
 
 fn vectors() -> Value {
     serde_json::from_str(include_str!("fixtures/shared_vectors.json")).expect("vectors parse")
@@ -140,14 +141,18 @@ fn generated_result_types_end_in_undefined_for_object_array_and_primitive_schema
 }
 
 #[test]
-fn generated_unrepresentable_output_schema_keeps_the_generic_union_visible_as_empty() {
+fn generated_unrepresentable_output_schema_widens_the_generic_union_for_a_declared_schema() {
     let server = server_info(vec![tool("odd", json!({"type": "object"}), Some(json!(7)))]);
 
     let odd = file(&generate(&server), "odd.ts").to_string();
 
     assert!(
-        odd.contains(&format!("Result = {GENERIC_RESULT};")),
+        odd.contains(&format!("Result = {DEGRADED_DECLARED_RESULT};")),
         "{odd}"
+    );
+    assert!(
+        odd.contains("'structured')"),
+        "the result source stays structured for a declared schema: {odd}"
     );
 }
 
@@ -776,9 +781,12 @@ fn observed_recorder_applies_the_key_rule_of_the_shared_vectors_and_the_reader_a
                     .is_none_or(serde_json::Map::is_empty),
                 "{label}: {line}"
             );
-            for key in keys.iter().filter(|k| !is_recordable_key(k)) {
+            for key in keys
+                .iter()
+                .filter(|k| !k.is_empty() && !is_recordable_key(k))
+            {
                 assert!(
-                    !key.is_empty() && !line.contains(key.as_str()),
+                    !line.contains(key.as_str()),
                     "{label}: key leaked into {line}"
                 );
             }

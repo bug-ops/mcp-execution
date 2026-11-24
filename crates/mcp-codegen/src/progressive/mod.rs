@@ -97,11 +97,12 @@ mod annotations;
 mod catalog;
 pub mod generator;
 mod observed;
+mod tool_types;
 pub mod types;
 
 // Re-export main types
 pub use generator::ProgressiveGenerator;
 pub use types::{
-    BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolCategorization, ToolContext,
+    BridgeContext, CategoryInfo, IndexContext, ResultSource, ToolCategorization, ToolContext,
     ToolSummary,
 };

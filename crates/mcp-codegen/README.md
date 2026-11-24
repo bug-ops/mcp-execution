@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 > [!TIP]
-> Generated files include: one `.ts` file per tool, `index.ts` re-exports, and `_runtime/mcp-bridge.ts` helper.
+> Generated files include: one `.ts` file per tool, `index.ts` re-exports, `catalog.ts` (one type-only signature per tool), and the `_runtime/mcp-bridge.ts` and `_runtime/cli.ts` helpers.
 
 ### Generated Files: `tsconfig.json` is a Leaf Configuration
 
@@ -76,18 +76,18 @@ The generator produces `package.json`, `tsconfig.json`, and one `.ts` file per t
 
 ## Generated TypeScript Structure
 
-Each tool file includes full TypeScript interfaces:
+Each tool file includes full TypeScript types:
 
 ```typescript
 /**
- * Creates a new issue in a GitHub repository
- * @param params - Tool parameters
- * @returns Tool execution result
+ * @tool create_issue
+ * @server github
+ * @description Creates a new issue in a GitHub repository
  */
 export async function createIssue(
   params: CreateIssueParams
 ): Promise<CreateIssueResult> {
-  return (await callMCPTool('github', 'create_issue', params)) as CreateIssueResult;
+  return (await callMCPTool('github', 'create_issue', params, 'content')) as CreateIssueResult;
 }
 
 export type CreateIssueParams = {
@@ -98,30 +98,43 @@ export type CreateIssueParams = {
   /** Issue body (optional) */
   body?: string;
 };
+
+export type CreateIssueResult = Record<string, unknown> | unknown[] | string | undefined;
 ```
+
+When a server declares an output schema, `CreateIssueResult` is its converted type followed by
+`| undefined` (an empty success), and the function asks the bridge for the result's
+`structuredContent`.
 
 ## Features
 
 - **One File Per Tool**: Separate TypeScript file for each MCP tool
-- **Type-Safe Interfaces**: Full TypeScript parameter and result types
+- **Type-Safe Types**: Full TypeScript parameter and result types, with unions, intersections and local references
 - **JSDoc Documentation**: Complete documentation from MCP schemas
 - **98% Token Savings**: Load only the tools you need
 - **Handlebars Templates**: Customizable code generation
 
 ## Type Conversion
 
-JSON Schema types are converted to TypeScript:
+JSON Schema is converted by one converter, `common::ts_types::convert_schema`, for parameter
+types, result types and the catalog:
 
 | JSON Schema | TypeScript |
 |-------------|------------|
-| `string` | `string` |
-| `number` | `number` |
-| `boolean` | `boolean` |
-| `array` | `T[]` |
-| `object` | `{ [key: string]: T }` |
+| `string`, `number`, `integer`, `boolean`, `null` | `string`, `number`, `number`, `boolean`, `null` |
+| `enum`, `const` | union of literals, in declared order without duplicates |
+| `type: [..]`, `oneOf`, `anyOf` | union |
+| `allOf` | intersection (up to 8 members) |
+| `array` | `T[]` (`unknown[]` for tuples) |
+| `object` | members, plus an index signature unless `additionalProperties` is `false` |
+| local `$ref` | resolved against the same document, cycles cut with `unknown` |
+
+Property keys are never renamed: a key that is not a plain identifier renders as a quoted
+literal with its raw value (`'per-page'?: number`). Anything outside the supported subset, and
+every bound hit, renders `unknown` for the smallest enclosing node and records a diagnostic.
 
 > [!NOTE]
-> Optional parameters use `?` suffix in TypeScript interfaces.
+> Optional parameters use `?` suffix in TypeScript types.
 
 ## Performance
 

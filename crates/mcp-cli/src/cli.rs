@@ -514,6 +514,15 @@ pub enum Commands {
         #[arg(long)]
         progressive_output: Option<PathBuf>,
 
+        /// Result shapes recorded by a past run of the generated tools
+        ///
+        /// A JSON-lines file the generated runtime bridge appends to when
+        /// `MCPBRIDGE_OBSERVE_SHAPES=<file>` is set. Only the last 4 MiB are read, so a long
+        /// recording never fails the command. A shape becomes a type hint on the result of a
+        /// tool that declares no output schema.
+        #[arg(long, value_name = "FILE")]
+        observed_shapes: Option<PathBuf>,
+
         /// Preview files that would be generated without writing to disk
         #[arg(long)]
         dry_run: bool,
@@ -587,12 +596,14 @@ impl fmt::Debug for Commands {
                 flags,
                 name,
                 progressive_output,
+                observed_shapes,
                 dry_run,
             } => f
                 .debug_struct("Generate")
                 .field("flags", flags)
                 .field("name", name)
                 .field("progressive_output", progressive_output)
+                .field("observed_shapes", observed_shapes)
                 .field("dry_run", dry_run)
                 .finish(),
             Self::Server { action } => f.debug_struct("Server").field("action", action).finish(),
@@ -790,6 +801,25 @@ mod tests {
         if let Commands::Generate { flags, .. } = cli.command {
             assert_eq!(flags.connect_timeout_secs, Some(5));
             assert_eq!(flags.discover_timeout_secs, Some(90));
+        } else {
+            panic!("Expected Generate command");
+        }
+    }
+
+    #[test]
+    fn test_cli_parsing_generate_observed_shapes() {
+        let cli = Cli::parse_from([
+            "mcp-cli",
+            "generate",
+            "server",
+            "--observed-shapes",
+            "/tmp/observed.jsonl",
+        ]);
+        if let Commands::Generate {
+            observed_shapes, ..
+        } = cli.command
+        {
+            assert_eq!(observed_shapes, Some(PathBuf::from("/tmp/observed.jsonl")));
         } else {
             panic!("Expected Generate command");
         }

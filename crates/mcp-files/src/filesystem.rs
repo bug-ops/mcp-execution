@@ -109,7 +109,10 @@ const STALE_ARTIFACT_MIN_AGE: Duration = Duration::from_mins(5);
 /// needed for that path, and equality means a `FileSystem` built from that crate's normal
 /// output can never be deterministically rejected here for simply being "as large as codegen
 /// already allows" (the same M1 consistency issue #198 identified between codegen and
-/// introspection, one layer down). This check remains meaningful defense-in-depth for a
+/// introspection, one layer down). The codegen value is `MAX_TOOL_COUNT` plus its seven fixed
+/// files (`index.ts`, `catalog.ts`, the runtime bridge, `_runtime/cli.ts`, `package.json`,
+/// `tsconfig.json`, `_meta.json`), so adding or removing a fixed generated file moves this
+/// bound with it and needs no edit here. This check remains meaningful defense-in-depth for a
 /// `FileSystem` built directly (e.g. via `FilesBuilder`) with an unbounded file count,
 /// bypassing that upstream cap.
 ///
@@ -126,7 +129,10 @@ pub const MAX_EXPORT_FILES: usize =
 /// Maximum total bytes across every file a single export call will write.
 ///
 /// Equal to `mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES` for the same
-/// consistency reason as [`MAX_EXPORT_FILES`].
+/// consistency reason as [`MAX_EXPORT_FILES`]. The codegen value is `MAX_TOOL_COUNT` times a
+/// per-tool bound that covers the tool file, its `_meta.json` entry, its `catalog.ts` entry and
+/// its `index.ts` line (a tool that would exceed the bound is rendered in a degraded form),
+/// plus a bound on the files that do not scale with the tool count.
 ///
 /// # Examples
 ///

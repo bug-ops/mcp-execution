@@ -466,10 +466,12 @@ rl.on('line', (line) => {{
 }
 
 /// Harness that calls `callMCPTool('fake', 'noop', {})` once, printing `RESOLVED: <json>` or
-/// `REJECTED: <message>` and exiting 0 in either case (the fake servers below never hang, so no
-/// watchdog is needed) — the assertions inspect stdout rather than the exit code.
+/// `REJECTED: <message>` (followed by ` SERVER_MESSAGE: <text>` when the rejection is an
+/// `McpToolError` carrying server text) and exiting 0 in either case (the fake servers below
+/// never hang, so no watchdog is needed) — the assertions inspect stdout rather than the exit
+/// code.
 pub const SINGLE_CALL_HARNESS_TS: &str = r"
-import { callMCPTool } from './mcp-bridge.js';
+import { callMCPTool, McpToolError } from './mcp-bridge.js';
 
 callMCPTool('fake', 'noop', {}).then(
   (result: unknown) => {
@@ -477,7 +479,10 @@ callMCPTool('fake', 'noop', {}).then(
     process.exit(0);
   },
   (err: unknown) => {
-    console.log('REJECTED:', String(err));
+    const server = err instanceof McpToolError && err.serverMessage !== undefined
+      ? ' SERVER_MESSAGE: ' + err.serverMessage
+      : '';
+    console.log('REJECTED:', String(err) + server);
     process.exit(0);
   }
 );

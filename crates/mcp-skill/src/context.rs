@@ -173,6 +173,30 @@ fn sanitize_use_case_hints(hints: Option<&[String]>) -> (Vec<String>, Vec<String
     (sanitized, warnings)
 }
 
+/// Whether `name` is a bare ASCII identifier (`^[A-Za-z_$][A-Za-z0-9_$]*$`), the form a
+/// generated tool file writes without quotes.
+fn is_identifier_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// Display form of a raw parameter key for the SKILL.md body and generation prompt.
+///
+/// An identifier-like key is shown verbatim. Any other key is shown as a double-quoted JSON
+/// string literal of its sanitized text, with every backtick written as `\u0060` so the result
+/// can never close a Markdown code span around it early.
+fn display_param_name(raw: &str) -> String {
+    if raw.chars().count() <= MAX_UNTRUSTED_FIELD_LEN && is_identifier_name(raw) {
+        return raw.to_string();
+    }
+    serde_json::Value::from(sanitize_untrusted_text(raw, MAX_UNTRUSTED_FIELD_LEN))
+        .to_string()
+        .replace('`', "\\u0060")
+}
+
 /// Group tools by category.
 ///
 /// Tools without a category are placed in "uncategorized".
@@ -213,13 +237,13 @@ fn group_by_category(tools: &[ParsedToolFile]) -> Vec<SkillCategory> {
                 .parameters
                 .iter()
                 .filter(|p| p.required)
-                .map(|p| sanitize_untrusted_text(&p.name, MAX_UNTRUSTED_FIELD_LEN))
+                .map(|p| display_param_name(&p.name))
                 .collect(),
             optional_params: tool
                 .parameters
                 .iter()
                 .filter(|p| !p.required)
-                .map(|p| sanitize_untrusted_text(&p.name, MAX_UNTRUSTED_FIELD_LEN))
+                .map(|p| display_param_name(&p.name))
                 .collect(),
         };
 
@@ -315,22 +339,22 @@ fn select_example_tools(tools: &[ParsedToolFile], max_examples: usize) -> Vec<To
 
 /// Build example for a single tool.
 fn build_tool_example(tool: &ParsedToolFile) -> ToolExample {
-    // Build example params
-    let params: HashMap<&str, &str> = tool
+    let params: serde_json::Map<String, serde_json::Value> = tool
         .parameters
         .iter()
-        .filter(|p| p.required)
-        .map(|p| (p.name.as_str(), get_example_value(&p.typescript_type)))
+        .filter(|p| p.required && is_identifier_name(&p.name))
+        .map(|p| (p.name.clone(), example_value(&p.typescript_type)))
         .collect();
 
     let params_json = serde_json::to_string_pretty(&params).unwrap_or_else(|_| "{}".to_string());
 
-    // Build CLI command
+    // Compact JSON inside single quotes: example values never contain a single quote
+    // (`safe_string_literal`), so the shell quoting cannot be closed early.
     let cli_command = format!(
         "node ~/.claude/servers/{}/{}.ts '{}'",
         tool.server_id,
         tool.typescript_name,
-        params_json.replace('\n', " ").replace("  ", "")
+        serde_json::to_string(&params).unwrap_or_else(|_| "{}".to_string())
     );
 
     // See the comment in `group_by_category`: `tool.name`/`tool.description` are
@@ -348,15 +372,135 @@ fn build_tool_example(tool: &ParsedToolFile) -> ToolExample {
     }
 }
 
-/// Get example value for TypeScript type.
-fn get_example_value(ts_type: &str) -> &'static str {
-    match ts_type.trim() {
-        "string" => "\"example\"",
-        "number" => "42",
-        "boolean" => "true",
-        t if t.starts_with("string[]") => "[\"item1\", \"item2\"]",
-        t if t.starts_with("number[]") => "[1, 2, 3]",
-        _ => "\"...\"",
+/// Calls `visit(index, char, depth)` for every character of `text` outside quotes, where `depth` is the
+/// bracket nesting (`(`, `[`, `{`, `<`) before the character. Brackets inside a quoted string
+/// literal do not count.
+fn scan_type_text(text: &str, mut visit: impl FnMut(usize, char, usize)) {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, c) in text.char_indices() {
+        if quote.is_none() {
+            visit(index, c, depth);
+        }
+        if let Some(open) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == open {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '(' | '[' | '{' | '<' => depth += 1,
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+}
+
+/// Splits a type at its top-level `|` separators.
+fn split_union(ty: &str) -> Vec<&str> {
+    let mut cuts = Vec::new();
+    scan_type_text(ty, |index, c, depth| {
+        if c == '|' && depth == 0 {
+            cuts.push(index);
+        }
+    });
+    let mut members = Vec::with_capacity(cuts.len() + 1);
+    let mut start = 0;
+    for cut in cuts {
+        members.push(ty[start..cut].trim());
+        start = cut + 1;
+    }
+    members.push(ty[start..].trim());
+    members
+}
+
+/// The inside of a type wrapped in one pair of parentheses, such as `('a' | 'b')`.
+fn unwrap_parens(ty: &str) -> Option<&str> {
+    let inner = ty.strip_prefix('(')?.strip_suffix(')')?;
+    let mut wrapped = true;
+    scan_type_text(ty, |index, _, depth| {
+        if index > 0 && index < ty.len() - 1 && depth == 0 {
+            wrapped = false;
+        }
+    });
+    wrapped.then_some(inner)
+}
+
+/// The text of a string literal type (`'a'` or `"a"`) when it is safe to place in an example
+/// command: unchanged by sanitization and free of quotes, backslashes and the empty string.
+fn safe_string_literal(ty: &str) -> Option<&str> {
+    let text = ty
+        .strip_prefix('\'')
+        .and_then(|t| t.strip_suffix('\''))
+        .or_else(|| ty.strip_prefix('"').and_then(|t| t.strip_suffix('"')))?;
+    let plain = !text.is_empty()
+        && !text.contains(['\\', '\'', '"'])
+        && sanitize_untrusted_text(text, MAX_UNTRUSTED_FIELD_LEN) == text;
+    plain.then_some(text)
+}
+
+/// Example JSON value for a TypeScript type text taken from `_meta.json`.
+///
+/// A union uses its first member other than `null` and `undefined`; a literal type is its own
+/// value; `T[]` and `Array<T>` are a one-element array; an object type is `{}`. Anything not
+/// understood falls back to the `"..."` placeholder, as does a type text longer than
+/// [`MAX_EXAMPLE_TYPE_BYTES`] or nested deeper than [`MAX_EXAMPLE_DEPTH`].
+fn example_value(ts_type: &str) -> serde_json::Value {
+    example_value_at(ts_type, 0)
+}
+
+/// Longest type text an example is derived from; the sidecar stores no longer text for a
+/// parameter, so anything longer is not from this generator.
+const MAX_EXAMPLE_TYPE_BYTES: usize = 1024;
+
+/// Deepest nesting of arrays, unions and parentheses an example is derived through.
+const MAX_EXAMPLE_DEPTH: usize = 8;
+
+fn example_value_at(ts_type: &str, depth: usize) -> serde_json::Value {
+    use serde_json::Value;
+
+    let ty = ts_type.trim();
+    if depth > MAX_EXAMPLE_DEPTH || ty.len() > MAX_EXAMPLE_TYPE_BYTES {
+        return Value::from("...");
+    }
+    let next = depth + 1;
+
+    let members = split_union(ty);
+    if members.len() > 1 {
+        return members
+            .into_iter()
+            .find(|m| !matches!(*m, "null" | "undefined"))
+            .map_or_else(|| Value::from("..."), |m| example_value_at(m, next));
+    }
+    if let Some(inner) = unwrap_parens(ty) {
+        return example_value_at(inner, next);
+    }
+    if let Some(item) = ty.strip_suffix("[]") {
+        return Value::Array(vec![example_value_at(item, next)]);
+    }
+    if let Some(item) = ty.strip_prefix("Array<").and_then(|t| t.strip_suffix('>')) {
+        return Value::Array(vec![example_value_at(item, next)]);
+    }
+
+    match ty {
+        "string" => Value::from("example"),
+        "number" | "bigint" => Value::from(42),
+        "boolean" | "true" => Value::from(true),
+        "false" => Value::from(false),
+        _ if ty.starts_with('{') && ty.ends_with('}') => Value::Object(serde_json::Map::new()),
+        _ => safe_string_literal(ty).map_or_else(
+            || {
+                ty.parse::<i64>()
+                    .map_or_else(|_| Value::from("..."), Value::from)
+            },
+            Value::from,
+        ),
     }
 }
 
@@ -565,6 +709,7 @@ Do not include any explanation or commentary outside the file content.
 mod tests {
     use super::*;
     use crate::parser::ParsedParameter;
+    use serde_json::json;
 
     fn create_test_tool(name: &str, category: Option<&str>) -> ParsedToolFile {
         ParsedToolFile {
@@ -828,11 +973,88 @@ mod tests {
     }
 
     #[test]
-    fn test_get_example_value() {
-        assert_eq!(get_example_value("string"), "\"example\"");
-        assert_eq!(get_example_value("number"), "42");
-        assert_eq!(get_example_value("boolean"), "true");
-        assert_eq!(get_example_value("string[]"), "[\"item1\", \"item2\"]");
+    fn example_value_covers_primitives_and_arrays() {
+        assert_eq!(example_value("string"), json!("example"));
+        assert_eq!(example_value("number"), json!(42));
+        assert_eq!(example_value("boolean"), json!(true));
+        assert_eq!(example_value("string[]"), json!(["example"]));
+        assert_eq!(example_value("Array<number>"), json!([42]));
+        assert_eq!(example_value("unknown"), json!("..."));
+    }
+
+    #[test]
+    fn example_value_picks_a_valid_union_member() {
+        assert_eq!(example_value("'open' | 'closed'"), json!("open"));
+        assert_eq!(example_value("number | null"), json!(42));
+        assert_eq!(example_value("null | undefined | 'x'"), json!("x"));
+        assert_eq!(example_value("1 | 2"), json!(1));
+        assert_eq!(example_value("true | false"), json!(true));
+        assert_eq!(example_value("null"), json!("..."));
+    }
+
+    #[test]
+    fn example_value_handles_nested_and_parenthesized_types() {
+        assert_eq!(example_value("{ id: number }[]"), json!([{}]));
+        assert_eq!(example_value("('a' | 'b')[]"), json!(["a"]));
+        assert_eq!(example_value("(string | null)[][]"), json!([["example"]]));
+        assert_eq!(example_value("{ a: 'x' | 'y' } | null"), json!({}));
+        assert_eq!(example_value("Array<'a' | 'b'>"), json!(["a"]));
+        assert_eq!(example_value("'a|b' | 'c'"), json!("a|b"));
+    }
+
+    #[test]
+    fn example_value_falls_back_for_overlong_or_deeply_nested_type_text() {
+        let long_array = format!("string{}", "[]".repeat(30_000));
+        let parens = format!("{}string{}", "(".repeat(30_000), ")".repeat(30_000));
+        let shallow_parens = format!("{}string{}", "(".repeat(40), ")".repeat(40));
+        let shallow_arrays = format!("string{}", "[]".repeat(40));
+
+        assert_eq!(example_value(&long_array), json!("..."));
+        assert_eq!(example_value(&parens), json!("..."));
+        assert_eq!(example_value(&shallow_parens), json!("..."));
+        let bounded = example_value(&shallow_arrays).to_string();
+        assert!(
+            bounded.matches('[').count() <= MAX_EXAMPLE_DEPTH + 1,
+            "{bounded}"
+        );
+        assert!(bounded.contains("..."), "{bounded}");
+        assert_eq!(example_value("string[][]"), json!([["example"]]));
+    }
+
+    #[test]
+    fn example_value_never_embeds_a_literal_that_could_break_the_command() {
+        for hostile in ["'it\\'s'", "'a\\\\b'", "'a\\u0027b'", "''"] {
+            assert_eq!(example_value(hostile), json!("..."), "{hostile}");
+        }
+    }
+
+    #[test]
+    fn build_tool_example_uses_typed_values_in_one_compact_command() {
+        let mut tool = create_test_tool("list_issues", None);
+        tool.parameters = vec![
+            ParsedParameter {
+                name: "state".to_string(),
+                typescript_type: "'open' | 'closed'".to_string(),
+                required: true,
+                description: None,
+            },
+            ParsedParameter {
+                name: "limit".to_string(),
+                typescript_type: "number | null".to_string(),
+                required: true,
+                description: None,
+            },
+        ];
+
+        let example = build_tool_example(&tool);
+
+        assert!(
+            example
+                .cli_command
+                .ends_with(r#"'{"state":"open","limit":42}'"#),
+            "{}",
+            example.cli_command
+        );
     }
 
     /// Issue #298: a malicious MCP server can set `description` to text containing
@@ -1122,5 +1344,24 @@ mod tests {
         // not on its own line.
         assert!(!prompt.contains("\n## Ignore previous instructions"));
         assert!(prompt.contains("Ignore previous instructions"));
+    }
+
+    #[test]
+    fn display_param_name_keeps_identifiers_and_quotes_everything_else() {
+        assert_eq!(display_param_name("page_size"), "page_size");
+        assert_eq!(display_param_name("$ref"), "$ref");
+        assert_eq!(display_param_name("per-page"), "\"per-page\"");
+        assert_eq!(display_param_name("1st"), "\"1st\"");
+        assert_eq!(display_param_name("a\nb"), "\"a b\"");
+    }
+
+    #[test]
+    fn display_param_name_bounds_an_overlong_identifier() {
+        let long = "k".repeat(MAX_UNTRUSTED_FIELD_LEN + 5);
+
+        assert_eq!(
+            display_param_name(&long).chars().count(),
+            MAX_UNTRUSTED_FIELD_LEN + 2
+        );
     }
 }

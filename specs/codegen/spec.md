@@ -22,9 +22,16 @@ related:
 > [!abstract]
 > Path: `crates/mcp-codegen`. Renders a `ServerInfo` into a complete,
 > self-contained TypeScript package via Handlebars templates: one `.ts` file
-> per tool, an `index.ts` re-export, a runtime bridge, `package.json`,
+> per tool, an `index.ts` re-export, a type-only `catalog.ts`, a runtime
+> bridge, a shared single-call module (`_runtime/cli.ts`), `package.json`,
 > `tsconfig.json`, and a `_meta.json` metadata sidecar. Depends on
 > `mcp-execution-core` and `mcp-execution-introspector`.
+>
+> The script-first changes #482, #565, #566, #567, #568, #570, #583, #584 and
+> #587 (parent #556) are implemented and described as built in
+> [[#13. Script-First Capabilities (implemented, #556)]]. Only the retirement
+> of the generated bridge (#575) is still planned
+> ([[#14. Planned Changes (generated bridge retirement, #575)]]).
 
 ## 1. Responsibility
 
@@ -53,21 +60,27 @@ impl GeneratedCode {
 }
 
 // mcp_execution_codegen::progressive
-pub struct ProgressiveGenerator<'a> { /* engine: TemplateEngine<'a> */ }
+pub struct ProgressiveGenerator<'a> { /* engine: TemplateEngine<'a>, observed: ObservedShapes */ }
 impl<'a> ProgressiveGenerator<'a> {
     pub fn new() -> Result<Self>;
+    // Parses a JSON-lines recording of result shapes (#587). Lines that fail the shape rules are
+    // skipped and counted in one tracing::warn!; the last valid line wins per (server id, raw
+    // tool name). Parsing is internal, so ObservedShapes stays out of the public API. Without
+    // this call the output is unchanged. See [[#13.8 Observed result shapes (#587)]].
+    pub fn with_observed_shapes(self, jsonl: &str) -> Self;
     pub fn generate(&self, server_info: &ServerInfo, server_config: &ServerConfig) -> Result<GeneratedCode>;
     pub fn generate_with_categories(&self, server_info: &ServerInfo, server_config: &ServerConfig, categorizations: &HashMap<String, ToolCategorization>) -> Result<GeneratedCode>;
 }
 pub struct ToolCategorization { pub category: String, pub keywords: Vec<String>, pub short_description: String }
 
-// Four of BridgeContext's fields (forbidden_chars, forbidden_env_names, forbidden_env_prefix,
-// env_name_charset_pattern) are private with read-only accessor methods of the same name —
+// Five of BridgeContext's fields (forbidden_chars, forbidden_env_names, forbidden_env_prefix,
+// env_name_charset_pattern, identifier_pattern) are private with read-only accessor methods of the same name —
 // each could fail open (e.g. an empty forbidden_chars, or an env_name_charset_pattern of ""
 // which `new RegExp('')` matches every string against) if a caller bypassed Default via a
 // struct literal, so `pub` fields aren't used for these. The remaining fields — the DoS
 // size/count ceilings (max_arg_count and siblings, see [[#9. Resource-Exhaustion Bounds
-// (CWE-400)]]) and env_name_charset_desc (message text only, not enforcement) — are plain
+// (CWE-400)]]), the server-message and recorder bounds, and env_name_charset_desc (message text
+// only, not enforcement) — are plain
 // `pub`: a wrong value there cannot fail open, only reject more (or less clearly) than
 // intended, so the accessor ceremony buys nothing. `BridgeContext::default()` is the only
 // construction path (no `derive(Default)`, no `Deserialize`) — see [[#Runtime bridge]] and
@@ -82,26 +95,42 @@ pub struct BridgeContext {
     pub max_header_count: usize,
     pub max_header_value_len: usize,
     pub env_name_charset_desc: String,
+    pub max_server_message_len: usize,          // MAX_UNTRUSTED_FIELD_LEN (code points)
+    pub max_variation_selector_run: usize,      // core untrusted::MAX_VARIATION_SELECTOR_RUN
+    pub max_total_variation_selectors: usize,   // core untrusted::MAX_TOTAL_VARIATION_SELECTORS
+    pub observed_shape_max_depth: usize,        // OBSERVED_SHAPE_MAX_DEPTH = 4
+    pub observed_shape_max_keys: usize,         // OBSERVED_SHAPE_MAX_KEYS = 16
+    pub observed_shape_max_key_len: usize,      // OBSERVED_SHAPE_MAX_KEY_LEN = 32
+    pub observed_shape_max_line_bytes: usize,   // OBSERVED_SHAPE_MAX_LINE_BYTES = 8192
 }
 impl BridgeContext {
     pub fn forbidden_chars(&self) -> &[String];
     pub fn forbidden_env_names(&self) -> &[String];
     pub fn forbidden_env_prefix(&self) -> &str;
     pub fn env_name_charset_pattern(&self) -> &str;
+    pub fn identifier_pattern(&self) -> &str; // TS_IDENTIFIER_PATTERN, escaped via sanitize_ts_string_literal
 }
 impl Default for BridgeContext { /* populates every field from mcp_execution_core: forbidden_chars()/forbidden_env_names()/forbidden_env_prefix()/env_name_charset_pattern()/env_name_charset_desc() and the MAX_* constants — hand-written, so it can never render a fail-open (empty) bridge. forbidden_chars, env_name_charset_pattern, and env_name_charset_desc are each passed through sanitize_ts_string_literal before storing, so a future Rust-side value containing `'`/`\` renders as a valid (and correct) TS string literal rather than breaking or silently changing what it matches. */ }
 
-pub const MAX_GENERATED_FILES: usize; // = introspector::MAX_TOOL_COUNT + 5 (fixed files)
-pub const MAX_GENERATED_BYTES: usize; // = 2 * MAX_TOOL_COUNT * (MAX_TOOL_NAME_LEN + MAX_TOOL_DESCRIPTION_LEN + MAX_SCHEMA_SIZE_BYTES)
+pub const MAX_GENERATED_FILES: usize; // = introspector::MAX_TOOL_COUNT + FIXED_FILE_COUNT (7)
+pub const MAX_GENERATED_BYTES: usize; // = MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX, see [[#9. Resource-Exhaustion Bounds (CWE-400)]]
+
+// mcp_execution_codegen::progressive
+pub enum ResultSource { Content, Structured } // serde snake_case; how a tool function asks the bridge for its result
 
 // mcp_execution_codegen::common::typescript
 pub const MAX_SCHEMA_RECURSION_DEPTH: usize = 128; // see [[#Recursion Depth Bound]]
 pub fn to_camel_case(s: &str) -> String;
 pub fn to_pascal_case(s: &str) -> String;
 pub fn sanitize_ts_identifier(s: &str) -> String; // collapses invalid-char runs to one '_'; prefixes '_' if leading digit/empty
-pub fn json_type_to_typescript(json_type: &str) -> &'static str;
-pub fn json_schema_to_typescript(schema: &serde_json::Value) -> String; // depth-capped at MAX_SCHEMA_RECURSION_DEPTH
-pub fn extract_properties(schema: &serde_json::Value) -> Vec<serde_json::Value>;
+
+// mcp_execution_codegen::common::ts_types — the one schema-to-TypeScript converter (#565, #584)
+pub fn convert_schema(schema: &serde_json::Value) -> ConvertedType; // never panics/errors/fetches; deterministic
+pub struct ConvertedType { /* opaque */ }
+impl ConvertedType { pub fn render(&self, style: RenderStyle) -> String; }
+pub enum RenderStyle { Declaration, Compact } // multi-line with member JSDoc (tool files) | one line, no JSDoc (catalog, stored texts)
+// pub(crate) only: diagnostics(), dropped_diagnostics(), root_degraded(), is_object_like(), members(),
+// SchemaDiagnostic, SchemaPath, DiagnosticKind, MemberSummary and the bound constants.
 
 // mcp_execution_codegen::template_engine
 pub struct TemplateEngine<'a> { /* handlebars: Handlebars<'a> */ }
@@ -138,6 +167,10 @@ behavior to "no categorization at all" (regression-tested: an empty-but-
 `Some` map must not synthesize a spurious "uncategorized" `CategoryInfo`
 group).
 
+`ToolInfo.annotations` (captured by [[../introspector/spec]]) is read by generation only to
+render hint tags/markers, to fill `_meta.json` and to feed the provenance digest entries; no code path branches on a hint
+([[#13.5 Annotations in generated output (#568)]]).
+
 `ToolContext::short_description` (populated for each tool's JSDoc header) is
 a plain `String`, not `Option<String>`: `create_tool_context` always falls
 back to the tool's own (sanitized) `description` when no categorization
@@ -146,26 +179,30 @@ header always has a short description to render.
 
 ## 4. Output: Generated File Set
 
-For a server with N tools, exactly `N + 5` files:
+For a server with N tools, exactly `N + 7` files (`FIXED_FILE_COUNT` = 7;
+`MAX_GENERATED_FILES` = `MAX_TOOL_COUNT` + 7, and `mcp-files`' export bound equals it, see
+[[../files/spec]]):
 
 | File | Content |
 |---|---|
-| `{typescriptName}.ts` × N | One per tool: JSDoc header, exported async function, `{Name}Params`/`{Name}Result` types, CLI-mode self-execution block (`if (import.meta.url === ...)`) |
-| `index.ts` | Re-exports every tool (grouped by category if provided) + `callMCPTool` from the runtime bridge |
-| `_runtime/mcp-bridge.ts` | Connection management + JSON-RPC client (see [[#Runtime bridge]]) |
+| `{typescriptName}.ts` × N | One per tool: a single JSDoc header (`@tool`, `@server`, optional `@category`/`@keywords`/`@description`, annotation tags), the exported async function, `{Name}Params`/`{Name}Result` types, and one trailing line `runIfMain(import.meta.url, {name});`. No inline command-line block, no fixed explanatory comments (#567) |
+| `index.ts` | Re-exports every tool (grouped by category if provided) + `callMCPTool` from the runtime bridge. Unchanged by the script-first work |
+| `catalog.ts` | Type-only signatures, one per tool, sorted by TypeScript name (see [[#13.4 Typed tool catalog (#566)]]) |
+| `_runtime/mcp-bridge.ts` | Connection management + JSON-RPC client (see [[#8. Runtime Bridge (`_runtime/mcp-bridge.ts`)]]) |
+| `_runtime/cli.ts` | Shared single-call module exporting `runIfMain` (see [[#13.6 Single-call mode (#567, #570, #583)]]); static text, identical for every server, no server-supplied data |
 | `package.json` | `{"type":"module","devDependencies":{"@types/node":"^22"}}` |
 | `tsconfig.json` | `target: ES2022`, `module`/`moduleResolution: NodeNext`, `strict: true`, `noEmit: true`, `allowImportingTsExtensions: true`, `skipLibCheck: true`, `types: ["node"]` |
-| `_meta.json` | `mcp_execution_core::metadata::ServerMetadata` (schema_version, server_id/name/version, per-tool metadata incl. **raw, unsanitized** parameter descriptions, and `provenance`: a `generated_at` timestamp plus a `ConfigFingerprint`/`ToolDigest` pair computed from the same `server_config`/`server_info.tools` this call is generating from — see [[../core/spec#provenance module (src/provenance.rs)]]) |
+| `_meta.json` | `mcp_execution_core::metadata::ServerMetadata`, schema version 3, written as **compact** JSON (`serde_json::to_string`): per-tool metadata incl. **raw, unsanitized** parameter names and descriptions, annotations, stored result type, result-type origin and manifest size; and `provenance` (a `generated_at` timestamp plus a `ConfigFingerprint`/`ToolDigest` pair computed from the same `server_config`/`server_info.tools` this call is generating from — see [[../core/spec#provenance module (src/provenance.rs)]], [[../core/spec#`metadata` module (`src/metadata.rs`)]]) |
 
 Each tool's `{Name}Params` is emitted as a `type` alias, not an `interface` —
 only a `type` alias gets the implicit `Record<string, unknown>`-compatible
 index signature `callMCPTool`'s parameter requires; an `interface` is not
-structurally assignable there. Each tool's `{Name}Result` is
-`Record<string, unknown> | unknown[] | string` — a union, not a bare
-`interface { [key: string]: unknown }` — reflecting that `callMCPTool`
-resolves to a parsed JSON object/array, plain text, or (for a non-text
-content item) the content object itself; callers must narrow the type
-before accessing a field on the result.
+structurally assignable there. Params and Result texts come from the one converter
+([[#13.1 Schema-to-TypeScript conversion (#565, #584)]]); the Result rules are in
+[[#13.2 Typed results (#482)]]. Every `{Name}Result` ends in `| undefined`, because an empty
+success is a normal outcome (FR-030.6). The types a tool file declares are the types
+`callMCPTool` resolves to only up to what the server sends: nothing validates a result against
+its schema.
 
 `package.json`/`tsconfig.json` are regenerated on every `generate` call —
 documented as **read-only, not meant to be extended** (e.g. via
@@ -193,22 +230,32 @@ into a consumer's own build).
     tools named `getUser`/`GetUser` collide with each other.
   Indexed by **position**, not by raw name, since two tools can share
   an identical raw name.
-- `json_schema_to_typescript`/`extract_properties` similarly disambiguate
-  sibling property names that sanitize to the same identifier (e.g. `a-b`
-  and `a.b` both → `a_b`) — the second becomes `a_b_2`.
+- `RESERVED_OUTPUT_NAMES` is `["index", "catalog", "runIfMain", "callMCPTool"]`: a tool whose
+  TypeScript name equals one of them (case-insensitively, as for `index`) is disambiguated, never
+  the generated file or export (FR-032.9, #583: a tool function named `runIfMain` or
+  `callMCPTool` would shadow the module's own import).
+- Property keys are **never renamed or suffixed**: the Params type uses the raw schema key, bare
+  when it is an ASCII identifier (`^[A-Za-z_$][A-Za-z0-9_$]*$`), otherwise as a quoted literal
+  produced by `ts_string_literal_exact`, and the object is sent to the server with exactly those
+  keys (#584). A key that has no exact literal (over 500 chars, or text the sanitizer would
+  change) is omitted from the type, the object gains `[key: string]: unknown`, and a
+  `KeyNotRepresentable` diagnostic is recorded. The old `a-b`/`a.b` → `a_b`/`a_b_2` scheme no
+  longer exists; `_meta.json` `parameters[].name` holds the raw key.
 
 ## 6. Recursion Depth Bound
 
 `common::typescript::MAX_SCHEMA_RECURSION_DEPTH` (`= 128`) bounds how far
-`json_schema_to_typescript` and the JSDoc description sanitizer
+the converter (`convert_schema`; every descent counts: a property, an item type, a composition
+member, an `additionalProperties` schema and a `$ref` hop) and the JSDoc description sanitizer
 (`sanitize_schema_jsdoc_descriptions`/`sanitize_schema_jsdoc_value` in
-`progressive::generator`) will descend into a nested `object`/`array`
-schema before treating the remaining branch as opaque (`unknown`/
-`unknown[]`, or leaving a `description` unsanitized) rather than recursing
-further. Both functions log a single `tracing::warn!` per call the first
-time any branch trips the cap (not once per clipped branch).
+`progressive::generator`) will descend into a nested schema
+before treating the remaining branch as opaque (`unknown`, with a `DepthExceeded` diagnostic in
+the converter, or leaving a `description` unsanitized) rather than recursing
+further. The sanitizer logs a single `tracing::warn!` per call the first
+time any branch trips the cap (not once per clipped branch); the converter records one
+diagnostic per clipped node, bounded by `MAX_DIAGNOSTICS`.
 
-This is **defense-in-depth for direct callers of these two `pub` functions
+This is **defense-in-depth for direct callers of these `pub` functions
 with a hand-built `serde_json::Value`**, not a fix for a reachable
 wire-path denial of service: a schema arriving over the wire from an MCP
 server's `tools/list` response is deserialized by `serde_json`, which
@@ -236,6 +283,7 @@ actual injection-safety mechanism given `no_escape` is set:
 |---|---|---|
 | `sanitize_jsdoc(s, max_len)` | Every control character (C0, DEL, C1 — everything `char::is_control` reports — plus U+2028/U+2029, which ECMAScript treats as line terminators) is *replaced with a space*; the Unicode bidi embedding/override controls (U+202A-U+202E), isolate controls (U+2066-U+2069), and U+200B (ZERO WIDTH SPACE, issue #425 — a genuine break opportunity, so spaced rather than removed) are likewise replaced with a space; the weaker bidi directional marks (U+200E/U+200F/U+061C, issue #422), the Unicode Tags block (U+E0000-U+E007F), U+FEFF, and the U+2060-U+2064 invisible-operator run (issue #425) are removed entirely; U+200C/U+200D are deliberately left untouched (orthographically load-bearing) — all by delegating to `mcp_execution_core::untrusted::sanitize_untrusted_text`; **then** `*/` (JSDoc comment terminator) is escaped to `*\/`; truncation to `max_len` chars runs last | tool/server descriptions, categories, keywords rendered into `.ts` JSDoc comments |
 | `sanitize_ts_string_literal(s)` | the **raw** input is truncated to `MAX_UNTRUSTED_FIELD_LEN` (500 chars) *first*; **then** backslash, single-quote, `\r`/`\n`, U+2028/U+2029 are escaped, in that order; **then** the escaped result is passed through `mcp_execution_core::untrusted::sanitize_untrusted_text` with no further length cap (the input is already bounded) to neutralize any remaining invisible-payload character — the Unicode Tags block, bidi embedding/override/isolate controls, bidi directional marks, and zero-width/invisible operators, plus variation-selector runs/totals over `sanitize_untrusted_text`'s own thresholds (issue #432). This also flattens any other control character (tabs, C0/C1) the escape step above doesn't specifically handle to a space, the same way `sanitize_jsdoc` does | tool name / server id embedded as single-quoted TS string literals (`callMCPTool('{{{server_id_literal}}}', ...)`) |
+| `ts_string_literal_exact(s)` (`pub(crate)`) | returns the body of a single-quoted literal that evaluates back to exactly `s`, or `None`: backslash, quote, `\n`, `\r`, `\t`, other control characters and U+2028/U+2029 are escaped; `None` above `MAX_UNTRUSTED_FIELD_LEN` (500) chars, or when `sanitize_untrusted_text` would change the escaped text (bidi controls, Tags block, zero-width operators, variation-selector runs). A literal that would be truncated or altered is a different value, so it is never rendered as if it were the declared one | enum/const string members and quoted property keys rendered by the converter |
 | `sanitize_schema_jsdoc_descriptions(value)` | recursively applies `sanitize_jsdoc` to every `"description"` key in the input JSON Schema before it's embedded in a tool's JSDoc, up to [[#Recursion Depth Bound]] | `input_schema` field of `ToolContext` |
 
 > [!warning]
@@ -360,28 +408,119 @@ Responsibilities:
   (so a bad URL/header is reported precisely) but then rejected as
   "unsupported transport" (forward-compatibility groundwork noted in the
   source for a future http/sse bridge).
-- Result extraction handles: JSON-shaped text content (parsed), plain text,
-  `structuredContent`-only responses (MCP spec 2025-06-18+), and a
-  documented gap — a genuinely empty (`content: []`, no
-  `structuredContent`) success response is currently indistinguishable from
-  a misbehaving server and is surfaced as a thrown error.
+- `callMCPTool(serverId, toolName, params, resultSource = 'content')` takes an optional fourth
+  argument, `'structured' | 'content'` (`ResultSource`). Result extraction:
+  - `isError` result: `McpToolError('tool_error')`; JSON-RPC `error`: `McpToolError('rpc_error')`;
+    transport failure, timeout or a malformed response: `McpToolError('call_failed')`. It throws
+    nothing else (any other thrown value is wrapped as `call_failed`).
+  - `resultSource === 'structured'` and a non-null `structuredContent`: return it, even when
+    `content` is populated (FR-030.4). The generator passes `'structured'` for every tool that
+    declares an output schema, at every degrade stage, so extraction never depends on byte budgets.
+  - Otherwise JSON-shaped text content is parsed, plain text is returned, a non-text content item
+    is returned as the item itself, and `structuredContent` is the fallback when `content` is
+    empty or its first item is null.
+  - Empty `content` with no `structuredContent` resolves to `undefined` and does not throw
+    (FR-030.6); it is not recorded as an observed shape.
+- `McpToolError extends Error { kind: 'tool_error' | 'rpc_error' | 'call_failed';
+  serverMessage?: string; serverMessageTruncated: boolean }` (#570, A5):
+  - `.message` is fixed bridge text. Server text (an `isError` result's text, falling back to its
+    `structuredContent` as JSON; a JSON-RPC `error.message`, including the one of a failed
+    `initialize`) goes only into `serverMessage`, after `boundServerText`. A server text that is
+    not a string is dropped, not coerced.
+  - `boundServerText` mirrors `mcp_execution_core::untrusted::sanitize_untrusted_text` exactly
+    (control, bidi, zero-width, Tags-block handling, and both variation-selector rules) and
+    truncates by **code points** to `MAX_SERVER_MESSAGE_LEN` (= `MAX_UNTRUSTED_FIELD_LEN`, 500),
+    setting `serverMessageTruncated`. The three constants are rendered from `BridgeContext`; the
+    shared vectors in `tests/fixtures/shared_vectors.json` (`untrusted_text`) run the TypeScript
+    and the Rust implementation against the same cases.
+  - Breaking: scripts that matched server wording in `error.message` must read `serverMessage`.
+- The opt-in observed-shape recorder is in [[#13.8 Observed result shapes (#587)]].
 
 ## 9. Resource-Exhaustion Bounds (CWE-400)
 
 - `enforce_tool_count_bound` rejects before any per-tool rendering if
-  `tools.len() + 5 > MAX_GENERATED_FILES`.
+  `tools.len() + FIXED_FILE_COUNT > MAX_GENERATED_FILES`.
 - `add_tracked` checks both the running byte total (`MAX_GENERATED_BYTES`)
   and file count (`MAX_GENERATED_FILES`) **incrementally, as each file is
   produced** — not only after the whole `GeneratedCode` is assembled — so
-  an oversized `ServerInfo` (or a `_meta.json` sidecar re-embedding every
-  tool's schema, pushing the total over the edge) is rejected as soon as
-  the offending file is generated, never holding the full amplified output
-  in memory first.
+  an oversized `ServerInfo` is rejected as soon as the offending file is generated, never
+  holding the full amplified output in memory first. This incremental check remains the backstop
+  for direct library callers; for an introspection-valid `ServerInfo` it never fires (below).
 - Both bounds are **derived from**, not independently chosen relative to,
   `mcp-introspector`'s own `MAX_TOOL_COUNT`/`MAX_TOOL_NAME_LEN`/etc. — a
   `ServerInfo` that already cleared introspection's bounds can never be
   deterministically rejected here for simply being "as large as
   introspection already allows."
+
+### Provable bytes bound (FR-030.8)
+
+| Constant (`progressive/generator.rs`) | Value / definition |
+|---|---|
+| `PER_TOOL_BYTES_MAX` | `2 * (MAX_TOOL_NAME_LEN + MAX_TOOL_DESCRIPTION_LEN + MAX_SCHEMA_SIZE_BYTES)` = 147,968 |
+| `MAX_GENERATED_BYTES` | `MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX` = 148,230,144 (about 148.2 MB) |
+| `FIXED_FILES_BYTES_MAX` | 256 KiB: the bridge, `_runtime/cli.ts`, `package.json`, `tsconfig.json` and the headers of `index.ts`, `catalog.ts`, `_meta.json` (a test keeps the real output under half of it) |
+| `INDEX_ENTRY_MAX_BYTES`, `CATALOG_ENTRY_MAX_BYTES` | 4096 each |
+| `PER_TOOL_RENDER_BUDGET` | `PER_TOOL_BYTES_MAX - CATALOG_ENTRY_MAX_BYTES - INDEX_ENTRY_MAX_BYTES` |
+| `STORED_TYPE_TEXT_MAX_BYTES` | 1024 |
+| `TOOL_FILE_DEGRADED_MAX`, `META_ENTRY_DEGRADED_MAX` | const expressions over capped inputs only (see below) |
+
+`MAX_GENERATED_BYTES` keeps the per-tool basis of the pre-#556 value (one `2 *` factor over name +
+description + one schema, 147,968,000 bytes at 1,000 tools) and adds `FIXED_FILES_BYTES_MAX`
+for the files that do not scale with the tool count. The per-tool term is a bound on everything
+one tool contributes to its tool file, its `_meta.json` entry, its `catalog.ts` entry and its
+`index.ts` line, not a count of one schema.
+
+**Two-stage per-tool degrade.** For each tool the generator measures `T` (the tool file's bytes)
+and `M` (the bytes of its compact `_meta.json` entry, plus 1 for the comma). The stage logic lives in
+`ProgressiveGenerator::render_within_budget`; the per-tool conversions and the `DegradeStage`
+(`Full`, `ResultGeneric`, `AllGeneric`) live in the internal `progressive/tool_types.rs`
+(`ToolConversions`, `ToolTypes`; `pub(crate)`, no public API).
+
+- **Stage A** applies whenever the tool's total `T + M` exceeds `PER_TOOL_RENDER_BUDGET`,
+  regardless of whether the input or the output side caused it; a declared result type can
+  therefore be dropped because of a large input schema. Stage A makes the result generic: the
+  observed-shape hint is dropped, `{Name}Result` becomes the generic union (see
+  [[#13.2 Typed results (#482)]]), the stored `result_type` is `None`, and the origin is
+  `Degraded` when a schema was declared.
+- **Stage B** applies when the total still exceeds the budget after Stage A. It then also replaces
+  Params with `Record<string, unknown>` and stores `parameters: []`.
+- The order is fixed so the output is deterministic; the bound proof relies only on Stage B. Stage A
+  or B can be reached well below `MAX_SCHEMA_SIZE_BYTES`, for example by an input schema of about
+  1,500 small properties, because each `_meta` parameter entry costs about 80 B. Each stage step
+  emits one `tracing::warn!` (tool, size, budget). The skill then shows no parameters for a tool
+  degraded at Stage B.
+- **Why Stage B fits.** It contains only capped inputs: name ≤ 256 B (three places in the file,
+  two in the entry, each ×6 for `\u00XX` escaping), the sanitized description and short
+  description, the categorization (assumed ≤ 1 KiB, ×6), the title (≤ 500 chars × 4 B, in two
+  places), four hint tags, and fixed template text. `TOOL_FILE_DEGRADED_MAX` and
+  `META_ENTRY_DEGRADED_MAX` are const expressions over those caps, and a compile-time `assert!`
+  checks `TOOL_FILE_DEGRADED_MAX + META_ENTRY_DEGRADED_MAX + CATALOG_ENTRY_MAX_BYTES +
+  INDEX_ENTRY_MAX_BYTES <= PER_TOOL_BYTES_MAX`. The assert checks the arithmetic over the modelled
+  constants only; the adversarial-fixture tests are what prove that rendered output stays within
+  them.
+- **Conclusion.** For an introspection-valid `ServerInfo`, total output ≤ `MAX_TOOL_COUNT` ×
+  `PER_TOOL_BYTES_MAX` + `FIXED_FILES_BYTES_MAX`, so the incremental check never fires.
+- **Stated assumptions.** (1) Categorization stays within `mcp-server`'s own caps (category 100,
+  keywords 500, short description 320). (2) FR-030.8 assumes only the server name/version copy in
+  `_meta.json` is unbounded at introspection: `index.ts` already caps both (256 and 64
+  characters), but `_meta.json` stores `server_name`/`server_version` raw. A larger input from a
+  direct library caller is still rejected cleanly by the incremental check. Known limitation:
+  #599.
+- `mcp-files`' `MAX_EXPORT_FILES`/`MAX_EXPORT_BYTES` equal these values through the existing
+  derivation ([[../files/spec]]).
+
+### `_meta.json` against the skill scan cap
+
+`_meta.json` is compact JSON, which removes indentation from every entry and makes the per-entry
+measurement above exact. Stored result and parameter type texts are capped at
+`STORED_TYPE_TEXT_MAX_BYTES` (1024): a longer `result_type` is stored as `None`, a longer
+`parameters[].typescript_type` as `"unknown"`, so per-tool growth over v2 is bounded. The cap the
+skill scan accepts is `mcp_execution_core::metadata::MAX_METADATA_FILE_BYTES` (1 MiB), shared by
+producer and consumer (`mcp-skill`'s `MAX_FILE_SIZE` is defined from it). **Behaviour above the
+cap:** generation still succeeds, because the tool files are usable directly, and emits one
+`tracing::warn!` naming the size, the cap and the consequence; the skill scan (and the server tools
+reusing it) then returns `ScanError::FileTooLarge`. Generation is not rejected because v2 could
+already exceed the cap for large servers.
 
 ## 10. Error Conditions
 
@@ -389,7 +528,8 @@ Responsibilities:
 |---|---|
 | Tool count would exceed `MAX_GENERATED_FILES` | `ResourceLimitExceeded { resource: ResourceKind::ToolCount { server_id }, .. }` |
 | Running byte total exceeds `MAX_GENERATED_BYTES` | `ResourceLimitExceeded { resource: ResourceKind::GeneratedOutputSize, .. }` |
-| Malformed property schema (`name`/`type` not a string) | `ValidationError` |
+| Malformed or unsupported schema node | **No error**: the converter never fails; the node renders `unknown` and a diagnostic is recorded ([[#13.1 Schema-to-TypeScript conversion (#565, #584)]]) |
+| Rendered catalog exceeds `MAX_CATALOG_BYTES` (only for more than `MAX_TOOL_COUNT` entries or an oversized server name) | `ResourceLimitExceeded { resource: ResourceKind::GeneratedOutputSize, .. }` |
 | Handlebars render failure | `SerializationError` (message embeds Handlebars' own error text) |
 | `_meta.json` serialization failure | `SerializationError` |
 | `GeneratedCode::add_file` called with a `path` already present in the collection | `DuplicateGeneratedFilePath { path }` — the original entry is left untouched, not overwritten; defense-in-depth once `resolve_typescript_names` already seeds its own collision set with this generator's reserved output filenames, not a path this generator expects to hit in practice (issue #312) |
@@ -406,30 +546,33 @@ Responsibilities:
   `MAX_EXPORT_BYTES` are set **equal to** this crate's
   `MAX_GENERATED_FILES`/`MAX_GENERATED_BYTES`, not independently chosen.
 - **Produced for** `mcp-skill`/`mcp-server`: the `_meta.json` sidecar
-  (schema owned by `mcp-core::metadata`).
+  (schema owned by `mcp-core::metadata`, version 3). Both consumers exempt
+  `mcp_execution_core::metadata::CATALOG_FILE_NAME` from their tool-file scans, and `mcp-skill`'s
+  `MAX_FILE_SIZE` is `MAX_METADATA_FILE_BYTES`, the cap this crate warns against.
+- **Consumes** `mcp-core::annotations::{Hint, ToolAnnotations}` (carried on `ToolInfo.annotations`),
+  `mcp-core::metadata::{ResultTypeOrigin, CATALOG_FILE_NAME, MAX_METADATA_FILE_BYTES}` and
+  `mcp-core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN,
+  MAX_TOTAL_VARIATION_SELECTORS}` (rendered into the bridge).
+- **Consumed by** `mcp-cli`'s `generate --observed-shapes` through
+  `ProgressiveGenerator::with_observed_shapes`.
 
 ## 12. Edge Cases & Notable Behaviors
 
 - A tool name containing only invalid identifier characters (e.g. all
   non-ASCII) sanitizes to a bare `_`, then gets disambiguated if colliding.
-- A schema property whose sanitized name collides with a JS/TS reserved
-  word is *not* itself special-cased (only the top-level tool function name
-  is reserved-word-aware); collision handling there is purely
-  sibling-vs-sibling.
-- `disambiguate_identifier`'s `used` set is scoped per schema object level —
-  two independent nested objects can each reuse the same disambiguated name
-  without conflict (verified by
-  `test_disambiguate_identifier_reuses_base_across_independent_scopes`).
+- Property keys are rendered raw (bare or quoted), so a key that is a JS/TS reserved word is a
+  legal property name and needs no special case; only the top-level tool function name is
+  reserved-word-aware.
 - `sanitize_ts_identifier` collapses an entire run of consecutive
   invalid/underscore-producing characters into a single `_`, not one `_`
   per character — a name like `café_menu_日本語` sanitizes to `caf_menu_`,
   and regenerating a server whose tools have such names can produce
   different identifiers than an older generated package did.
-- `ProgressiveGenerator::create_tool_context`/`create_tool_metadata` both
-  consume a single `extract_property_data` call per tool rather than
-  extracting twice — the JSDoc-sanitized `PropertyInfo` half feeds the
-  `.ts` template, the raw-description half feeds `_meta.json`, sharing one
-  schema walk (issue #295).
+- `ProgressiveGenerator::render_within_budget` converts each tool's schemas once
+  (`ToolConversions`); the tool file, the catalog entry and the `_meta.json` entry are all rendered
+  from that one conversion at the same degrade stage (FR-032.11, issue #295's single-walk rule).
+- An object schema with no properties renders `{ [key: string]: unknown }` when
+  `additionalProperties` is absent or `true`, and `Record<string, never>` when it is `false`.
 - Two `generate`/`generate_with_categories` calls against identical `ServerInfo`/`ServerConfig`
   input agree on `_meta.json`'s `provenance.config_fingerprint` and `provenance.tool_digest` —
   only `provenance.generated_at` differs between runs (issue #468). `_meta.json`'s digest is
@@ -438,356 +581,298 @@ Responsibilities:
   suffixes or by a changed `categorizations` map — see
   [[../core/spec#What provenance does and does not answer]].
 
-## 13. Planned Changes (script-first direction, adopted 2026-11-24)
+## 13. Script-First Capabilities (implemented, #556)
+
+> [!info] Provenance of this section
+> Written from the architect's plan (`.local/handoff/2026-11-24T13-07-44-architect.md`, revision 3)
+> and the code as merged, for issues #583, #565, #482, #587, #584, #570, #567, #566 and #568
+> (parent #556). Requirement IDs are those of the project requirements document plus a suffix
+> (`FR-032.4` is the fourth requirement of FR-032). Where the plan and the code differ, the code
+> is described. Several packages changed generated bytes for every server (lossless types, slimmer
+> files, quiet output, a catalog, `| undefined` on every result); each is listed under "Breaking"
+> in `CHANGELOG.md`, and there is no compatibility shim before 1.0.
+
+### 13.1 Schema-to-TypeScript conversion (#565, #584)
+
+One converter, `common::ts_types::convert_schema(&Value) -> ConvertedType`, serves input schemas,
+output schemas and catalog signatures (FR-031.11). It walks a schema once into a private IR with
+bounds and diagnostics, and renders it as `Declaration` (tool files: multi-line, member JSDoc) or
+`Compact` (catalog and stored texts: one line, no JSDoc, never longer than `Declaration`). The
+size budget counts the `Declaration` form, so the `Compact` form always fits. The old
+`json_schema_to_typescript`, `json_type_to_typescript`, `extract_properties` and the
+`PropertyInfo`/`extract_property_data` pair are removed (breaking, FR-030.7: no output-only path).
+`$ref` resolves against the root document.
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-031.1 | `enum`/`const`: a union of the literal members (or the single literal) in declared order, deduplicated. An enum over `MAX_UNION_MEMBERS` renders its base primitive when all members share one JSON type, otherwise `unknown`, plus `UnionTooLarge` | implemented |
+| FR-031.2 | `oneOf`/`anyOf`: a union. `allOf`: an intersection up to `MAX_INTERSECTION_MEMBERS` (8), `unknown` plus `IntersectionTooLarge` beyond. A node with several parts renders their intersection | implemented |
+| FR-031.3 | `type` as an array: the union of the listed types; `null` renders `null`; optional (member may be absent) stays distinct from nullable | implemented |
+| FR-031.4 | A local `$ref` (JSON Pointer into the same document) is resolved with cycle detection and an expansion bound | implemented |
+| FR-031.5 | A non-local ref renders `unknown` plus `NonLocalRef`, an unresolvable one `UnresolvedRef`; nothing is fetched. A cyclic ref is cut at its first re-entry (the ref is already on the expansion stack) with `unknown` plus `CyclicRef`; non-cyclic refs count against `MAX_REF_EXPANSIONS` (64 per root), beyond it `RefExpansionLimit` | implemented |
+| FR-031.6 | An unsupported construct renders `unknown` for the smallest enclosing node plus a diagnostic. **Deliberate deviation, see below** | implemented with deviation |
+| FR-031.7 | The converter returns the type with a structured diagnostic list (JSON-pointer `SchemaPath`, sanitized and capped at 256 chars, plus a `DiagnosticKind`), at most `MAX_DIAGNOSTICS` (32) plus a dropped count | implemented |
+| FR-031.8 | `format`, `default`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems` render as JSDoc tags (`@format`, ...) on the member, `sanitize_jsdoc`-ed and capped at 256 chars, in the `Declaration` form only | implemented |
+| FR-031.9 | `additionalProperties`: absent or `true` gives `[key: string]: unknown`; `false` gives none; a schema gives a typed index signature (see S1 below) | implemented, amended |
+| FR-031.10 | Output is byte-identical across runs (declared property and union order) | implemented |
+| FR-031.11 | One converter for Params, Result and catalog signatures | implemented |
+
+**Deviation from FR-031.6 (A8, approved by the user).** Narrowing-only keywords (`not`, `if`/`then`/
+`else`, `patternProperties`, `propertyNames`, `dependentSchemas`/`dependentRequired`/`dependencies`,
+`unevaluatedProperties`/`unevaluatedItems`, `contains`, `uniqueItems`, `multipleOf`) are deliberately
+**not** turned into `unknown`: the node keeps its superset rendering and a `NarrowingKeywordIgnored`
+diagnostic is recorded. Tuples (`items` as an array, `prefixItems`) render `unknown[]` plus a
+`TupleItems` diagnostic. A `$ref` with non-annotation sibling keywords resolves the ref and ignores
+the siblings, recording `RefSiblingsIgnored`; annotation siblings (`description`, `title`,
+`default`, ...) record nothing. `nullable` and `$schema` are ignored (not 2020-12 vocabulary).
+**Rationale (#565):** the type should be as close as possible to what the server accepts, and a
+sound superset loses less than `unknown`. This supersedes the original wording of FR-031.6 for
+these constructs.
+
+**Bounds** (all `pub(crate)` in `ts_types.rs`): `MAX_SCHEMA_RECURSION_DEPTH` 128 (every descent
+counts); `MAX_UNION_MEMBERS` = **128** (raised from the planned 64 to match the protected
+acceptance test); `MAX_INTERSECTION_MEMBERS` 8; `MAX_REF_EXPANSIONS` 64; `MAX_DIAGNOSTICS` 32;
+`MAX_RENDERED_TYPE_BYTES` = `MAX_SCHEMA_SIZE_BYTES` (64 KiB), charged per node, so a small schema
+whose references multiply cannot amplify past the budget. Hitting a bound yields `unknown` at the
+smallest node plus one diagnostic, never an error or a hang.
+
+**Typed index signature (S1).** WHEN an object schema has representable properties and an
+`additionalProperties` schema THE SYSTEM SHALL render a single object type whose index signature
+value is the deduplicated union of the converted `additionalProperties` type, followed by each
+property type in declared order, followed by `undefined` when any property is optional (e.g. `{ a?:
+string; [key: string]: number | string | undefined }`). It SHALL NOT render an intersection for
+this case (`{a?: string} & {[k: string]: number}` cannot be satisfied). The index value SHALL be
+`unknown` when the union would exceed `MAX_UNION_MEMBERS` (128), contains `unknown`, or would exceed
+the rendered-size budget (`MAX_RENDERED_TYPE_BYTES`). No diagnostic is recorded. WHEN there are no
+representable properties the index value is the converted `additionalProperties` type alone. This
+applies to input and output schemas alike, because there is one converter. An absent
+`additionalProperties` adds an index signature, so the compiler no longer flags typos in excess
+properties (FR-031.9 as written).
+
+**Property keys and literals (#584).** A key that is an ASCII identifier renders bare; any other
+key renders quoted through `ts_string_literal_exact` ([[#7. Injection Defense (Sanitization Pipeline)]]).
+Keys are never renamed or suffixed, and `_meta.json` `parameters[].name` holds the raw key. A key
+with no exact literal is omitted, and the object gains `[key: string]: unknown` plus
+`KeyNotRepresentable`. Enum and const strings follow the same rule: if any member cannot be
+represented exactly (for example a 600-character string), the node renders its base primitive plus
+`LiteralNotRepresentable`.
+
+**Public result and root state.** `ConvertedType` is opaque; `root_degraded()` is true **only** when
+the root itself became `unknown` and a diagnostic exists at the root path. The A8 diagnostics
+`NarrowingKeywordIgnored` and `RefSiblingsIgnored` keep the declared superset type in use (they do
+not degrade the root). A root `{}` with no diagnostic renders `unknown` and is not degraded.
+`is_object_like()` (the root is an object, or a union/intersection of object-like members) gates
+Params: a non-object-like input schema renders `Record<string, unknown>` plus a warning.
+`members()` lists the root's representable members (raw name, `Compact` type text, required) and
+feeds `_meta.json` parameters.
+
+**Diagnostics surface.** One `tracing::warn!` per tool and role (input, output, observed, budget)
+giving the count and up to 4 kinds. They are not stored in `_meta.json` (FR-030.9 is met by the
+warning). Server strings reach the output only via `sanitize_jsdoc` (comments) or
+`ts_string_literal_exact` (literals and keys). Ask first: changing the public converter functions
+(`convert_schema`, `ConvertedType::render`, `RenderStyle`).
+
+### 13.2 Typed results (#482)
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-030.1 | WHEN a tool declares an output schema the converter can represent, `{Name}Result` is derived from it whatever the root (object, array, primitive, type array, composition), as `<Declaration text> \| undefined` | implemented |
+| FR-030.2 | WHEN a tool declares no output schema, `{Name}Result` is `Record<string, unknown> \| unknown[] \| string \| undefined` | implemented |
+| FR-030.3 | **Amended (Q1).** WHEN a tool declares an output schema and its declared result type is not used (the converter degraded the root, or the per-tool budget degraded the result at Stage A or Stage B) THE SYSTEM SHALL keep the structured result source and SHALL emit `{Name}Result` as `Record<string, unknown> \| unknown[] \| string \| number \| boolean \| null \| undefined`, because `structuredContent` may be any JSON value. Tools without an output schema keep `Record<string, unknown> \| unknown[] \| string \| undefined`. Generation does not fail | implemented |
+| FR-030.4 | A tool that declares an output schema and returns non-null `structuredContent` gets it from the runtime, whether or not `content` is populated | implemented (see [[#8. Runtime Bridge (`_runtime/mcp-bridge.ts`)]]) |
+| FR-030.5 | Without `structuredContent` the value is returned as before; it is never validated against the schema | implemented |
+| FR-030.6 | A success with empty `content` and no `structuredContent` resolves to `undefined` and does not throw. The printed form of an empty success in single-call mode is nothing, exit 0 | implemented |
+| FR-030.7 | One converter for output schemas, no output-only path | implemented |
+| FR-030.8 | The generated-bytes bound is derived so an introspection-valid `ServerInfo` is never rejected at generation | implemented ([[#9. Resource-Exhaustion Bounds (CWE-400)]]) |
+| FR-030.9 | A degraded output schema surfaces its diagnostic in a `tracing::warn!` | implemented |
+
+Every Result type ends in `| undefined` (the `void` member of the old open decision is `undefined`
+on all tools). The generated tool function passes `result_source` (`'structured'` when the tool
+declares an output schema, else `'content'`) as the fourth argument of `callMCPTool`, independent
+of the degrade stage: extraction semantics never depend on byte budgets. `ResultSource` is a
+public enum (`Content`, `Structured`). `_meta.json` records `result_type` (the `Compact` text,
+`None` above 1024 bytes or when degraded) and `result_type_origin` (`declared`, `degraded`,
+`undeclared`).
+
+### 13.3 Per-tool budget and degrade
+
+Specified in [[#9. Resource-Exhaustion Bounds (CWE-400)]] (two stages, constants, proof,
+assumptions).
+
+### 13.4 Typed tool catalog (#566)
+
+`catalog.ts` is a top-level, type-only file with one signature per tool.
+
+**Why a `.ts`, at the top level.** A `.ts` file is type-checked under the existing tsconfig, whereas
+a `.d.ts` would be skipped because of `skipLibCheck`. It sits at the top level, not under `_runtime/`,
+so a directory listing shows it beside `index.ts` as the second detail level (FR-032.6).
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-032.1 | Exactly one catalog per server, one entry per tool | implemented |
+| FR-032.2 | An entry holds the TypeScript name, the Params type, the Result type (both `Compact`), a one-line description (sanitized, at most `CATALOG_DESCRIPTION_CHARS` = 120) and, when hints are stated, `@hints readOnly=true destructive=false` (only stated hints; fixed tokens) | implemented |
+| FR-032.3 | Valid TypeScript that type-checks and imports nothing: `export interface Catalog { name(params: P): Promise<R>; ... }` | implemented |
+| FR-032.4 | Entries sorted by TypeScript name; byte-identical output for identical input | implemented |
+| FR-032.5 | A description is reduced to its first line, sanitized and capped | implemented |
+| FR-032.6 | The header documents the three detail levels: `index.ts` (names), `catalog.ts` (signatures), `<tool>.ts` (full) | implemented |
+| FR-032.7 | An entry over `CATALOG_ENTRY_MAX_BYTES` (4096) degrades to `name(params: Record<string, unknown>): Promise<unknown>` with `@see ./name.ts`; no tool is ever dropped. The file is bounded by `MAX_CATALOG_BYTES` = `CATALOG_HEADER_MAX_BYTES` (4096) + `MAX_TOOL_COUNT` × `CATALOG_ENTRY_MAX_BYTES`; exceeding it is `ResourceLimitExceeded` | implemented |
+| FR-032.8 | The catalog counts in the file and byte bounds (`FIXED_FILE_COUNT` is 7; the per-tool budget reserves `CATALOG_ENTRY_MAX_BYTES`) and passes the incremental check | implemented |
+| FR-032.9 | `catalog` is in `RESERVED_OUTPUT_NAMES`: a colliding tool is disambiguated, not the catalog | implemented |
+| FR-032.10 | `mcp-skill`'s `verify_tool_files_on_disk` and `mcp-server`'s directory-listing tool count exempt `CATALOG_FILE_NAME` (`mcp_execution_core::metadata`), so it is neither counted as a tool nor reported as unreferenced | implemented |
+| FR-032.11 | The catalog and each tool file are rendered from the same converted types in one pass | implemented |
+
+Untrusted text: names, descriptions and enum literals are sanitized as in [[#7. Injection Defense (Sanitization Pipeline)]];
+hint markers are fixed tokens, never server text; the optional annotation title is not in the catalog.
+
+### 13.5 Annotations in generated output (#568)
+
+The fields of `_meta.json` v3 are defined once, in [[../core/spec#`metadata` module (`src/metadata.rs`)]];
+capture is in [[../introspector/spec]].
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-034.20 | Each stated hint renders as a JSDoc tag with a fixed name and value in the tool file: `@readOnlyHint true\|false`, `@destructiveHint`, `@idempotentHint`, `@openWorldHint` | implemented |
+| FR-034.21 | A hint that is not stated, or a tool with no annotations, renders no tag and no default | implemented |
+| FR-034.22 | The title renders only as `@title <text>` through `sanitize_jsdoc` capped at 256 chars | implemented |
+| FR-034.23 | Hints are rendered as server-declared values, never verified properties | implemented |
+| FR-034.24 | `_meta.json` stores annotations, `result_type`, `result_type_origin` and `manifest_size_bytes` (the length of the compact `serde_json::to_vec` of the `ToolInfo`); one schema bump, to 3 | implemented |
+| FR-034.25 | No generation code branches on an annotation | implemented |
+| FR-034.26 | Contradictory hints (read-only with destructive) are rendered as advertised | implemented |
+
+Annotations enter the provenance digest entries (`ToolDigestEntry.annotations`): the presence of the
+annotations value and the four hints, three-valued; the title text is excluded (domain tag
+`tool-entry:v2`, see [[../core/spec#`provenance` module (`src/provenance.rs`)]]). Per-tool digests,
+a catalog reference and stored converter diagnostics were resolved to "out".
+
+### 13.6 Single-call mode (#567, #570, #583)
+
+Tool files are slim and delegate to `_runtime/cli.ts`, a static module (no server data, so the
+top-level ask-first does not apply) that exports `runIfMain(moduleUrl, tool)`. Each tool file ends
+with `runIfMain(import.meta.url, {name});`. The shebang line stays (`setup` chmods `.ts` files to
+0755). The direct-run defect #583 (the old `import.meta.url` vs `` `file://${argv[1]}` `` comparison
+failed for a path with a space, non-ASCII characters or a symlink, so the file exited 0 without
+running) is fixed in the shared module; it is no longer a separate item from #567.
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| FR-033.1 | One shared module per server holds the single-call behaviour; tool files delegate | implemented (`_runtime/cli.ts`) |
+| FR-033.2 | Header information is emitted once per tool file | implemented |
+| FR-033.3 | No fixed explanatory comment before `{Name}Result` (an `@observed` hint, [[#13.8 Observed result shapes (#587)]], is the only comment there) | implemented |
+| FR-033.4 | A tool file run directly with a JSON argument behaves as FR-035 states (this changes the old block's stdout/stderr shape) | implemented |
+| FR-033.5 | Importing a tool file executes no command-line code | implemented |
+| FR-033.6 | `@tool` and `@keywords` appear exactly once and stay greppable | implemented |
+| FR-033.7 | Exported names `{name}`, `{Name}Params`, `{Name}Result` and the `index.ts` re-exports are unchanged | implemented |
+| FR-033.8 | The shared module is counted in the bounds (`FIXED_FILE_COUNT` 7); it lives under `_runtime/`, which the directory listing ignores | implemented |
+| FR-033.9 | No server-supplied text in the shared module; tool files embed names and server ids only through the string-literal sanitizer | implemented |
+| FR-033.10 | The average tool file is at most 50% of the recorded master baseline on the integration fixture | implemented (tested) |
+| FR-035.1 | Success: one compact JSON line on stdout, then exit 0 inside the write callback; an empty success writes nothing and exits 0 | implemented |
+| FR-035.2 | Failure: exactly one JSON line on stderr, `{"error": <fixed message>, "kind": "invalid_arguments"\|"tool_error"\|"rpc_error"\|"call_failed"}` plus `server_message` and `server_message_truncated` when the server supplied text; exit 1 inside the write callback | implemented |
+| FR-035.3 | With `MCPBRIDGE_DEBUG` not `1`, no stack or internal path; with it, a `stack` field is added and the bridge's own debug lines may precede the failure line | implemented |
+| FR-035.4 | The argument is `argv[2]` as one JSON object; a missing or empty argument means `{}`; text that is not valid JSON or not an object gives `invalid_arguments` and the argument text is never echoed | implemented |
+| FR-035.5 | Server text is carried only in `server_message` (sanitized, truncated to 500 code points, `server_message_truncated` set), never in `error`, so it cannot pass for the tool's own wording | implemented |
+| FR-035.6 | A throw that is not an `McpToolError` yields `kind: "call_failed"` and a fixed message | implemented |
+| FR-035.7 | Exit 0 for success only, 1 for every failure; there are no distinct non-zero codes | implemented |
+| FR-035.8 | The relocation by #567 preserves FR-035.1 to FR-035.7 | implemented |
+
+**Entry detection.** `realpathSync(fileURLToPath(moduleUrl))` is compared with
+`realpathSync(argv[1])`; if `realpath` throws, the side falls back to `path.resolve`; an undefined
+`argv[1]` is "not the entry point". So a symlinked directory, a path with spaces or non-ASCII
+characters and a relative path all match. **Exit after drain:** `process.exit` is called inside the
+`write` callback because an exit straight after a write to a pipe can cut buffered output, and live
+bridge child handles keep the process alive, so `exitCode` alone would hang (a result over 128 KiB
+through a pipe arrives complete). The module is static text with a golden test; it adds no
+dependency and uses no `eval` or dynamic import.
+
+Successful results are printed as the server returned them (compact JSON). This specification
+claims neither sanitisation nor an exception for them; whether the untrusted-text boundary rule
+applies to successful results printed by single-call mode, the runner and the one-shot call is a
+maintainer decision that remains open ([[../runtime/spec]]).
+
+### 13.7 Reserved names
+
+`RESERVED_OUTPUT_NAMES` = `index`, `catalog`, `runIfMain`, `callMCPTool` (see
+[[#5. TypeScript Identifier Resolution]]).
+
+### 13.8 Observed result shapes (#587)
+
+An opt-in recorder lets a generated bridge learn the JSON shape of results from tools that declare
+no output schema, and a later `generate` shows it as a hint.
+
+**Recording.** WHEN the environment variable `MCPBRIDGE_OBSERVE_SHAPES=<file>` is set THE SYSTEM
+SHALL append, after each successful call that returned a value (not for an empty success), one JSON
+line `{"server","tool","shape"}`, where `shape` is a JSON-Schema fragment of JSON types only, never
+of values: `null`, `boolean`, `integer`/`number`, `string`, `array` (the first element's shape as
+`items`), `object`. When the variable is unset nothing is written. Failures are swallowed and
+debug-logged; recording never affects the call.
+
+**Key rule (S7) and bounds.** An object keeps its keys only when it has at most 16 keys and every
+key matches `^[A-Za-z_$][A-Za-z0-9_$]*$` and is at most 32 characters; otherwise it is recorded as
+`{"type":"object","additionalProperties":<shape of its first value>}`, so IDs, emails, paths and
+UUIDs used as map keys never reach the record. Nesting stops at depth 4. A line over 8192 bytes
+**including the trailing newline** is not recorded. Every bound is a Rust constant in
+`progressive/observed.rs` (`OBSERVED_SHAPE_MAX_DEPTH` = 4, `OBSERVED_SHAPE_MAX_KEYS` = 16,
+`OBSERVED_SHAPE_MAX_KEY_LEN` = 32, `OBSERVED_SHAPE_MAX_LINE_BYTES` = 8192) and the identifier
+pattern is `TS_IDENTIFIER_PATTERN`; all are rendered into the bridge from Rust through
+`BridgeContext` (the pattern through `sanitize_ts_string_literal`, private with an accessor), so
+the TypeScript recorder hand-copies no bound. The shared vectors file (`observed_key_rule`) runs the
+recorder and the Rust reader against the same cases.
+
+**File safety.** The file is opened append-only (`O_APPEND`, created `0600`), with no-follow
+(`O_NOFOLLOW`) and non-blocking (`O_NONBLOCK`, so a FIFO cannot hang the open). After opening, the
+descriptor must be a regular file owned by the current user with no group or other permission bits
+(where `process.getuid` exists); otherwise recording is silently skipped (debug-logged).
+
+**Reader and rendering.** `ProgressiveGenerator::with_observed_shapes(&str)` parses the JSON lines
+and treats them as untrusted: a line is skipped (counted in one warning) if it is not valid JSON, is
+longer than 8192 bytes, is deeper than 4, breaks the key rule, or uses a keyword outside `type`,
+`properties`, `required`, `items`, `additionalProperties`. The last valid line wins per (server id,
+raw tool name); recorded objects are closed (`additionalProperties: false` unless the recorder wrote
+one). A shape is used **only for tools without an output schema**: it is converted, rendered in
+`Compact` form (at most `STORED_TYPE_TEXT_MAX_BYTES`), and shown as a JSDoc line above
+`{Name}Result`: "Result shape observed in a past call, not declared by the server: ...". The type
+itself stays generic and nothing is stored in `_meta.json`. Stage A of the budget degrade drops the
+hint. The CLI front door is `generate --observed-shapes <file>` ([[../cli/spec]]), which reads only
+the last 4 MiB.
+
+> [!warning] Accepted residual risk (user-accepted)
+> Identifier-like data keys still pass the key rule and are recorded: for example usernames, or
+> hex IDs that start with a letter such as `deadbeef12`, when used as keys of a small object. The
+> recorder keeps key names of objects with at most 16 identifier-shaped keys; it cannot tell a
+> schema-like key from a data key. The file is opt-in and private (`0600`, owner-only), and the
+> hint is rendered through `sanitize_jsdoc`.
+
+### 13.9 `_meta.json` v3
+
+Version 3 is the single schema bump of the package (`METADATA_SCHEMA_VERSION` = 3). The fields are
+registered in [[../core/spec#`metadata` module (`src/metadata.rs`)]]. The generated file is compact
+JSON, stored type texts are capped at 1 KiB, and the shared `MAX_METADATA_FILE_BYTES` (1 MiB) cap
+and the oversize behaviour are in [[#9. Resource-Exhaustion Bounds (CWE-400)]]. A v2 sidecar is
+rejected by consumers with the existing unsupported-schema error ([[../skill/spec#ScanError]]), so
+every server directory generated before the upgrade must be regenerated.
+
+### 13.10 Known limitations (tracked, not requirements)
+
+- #598: the server listing misses tool files whose name starts with an underscore (the listing
+  skips names beginning with `_`).
+- #599: `server_name` and `server_version` are unbounded in `_meta.json` (see the FR-030.8
+  assumption in §9).
+- #600, #601: cosmetic refactors.
+
+## 14. Planned Changes (generated bridge retirement, #575)
 
 > [!warning] Not implemented
-> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
-> When a change lands, its content moves into the as-built sections above and the subsection is
-> removed in the same pull request.
+> Nothing in this section exists in the code yet. When the change lands, its content moves into
+> the as-built sections above and this section is removed in the same pull request.
 
-Requirement IDs are the IDs of the project requirements document plus a suffix (`FR-032.4` is the
-fourth requirement of FR-032). `run`, `call` and "catalog" are working names. Several packages
-below change generated bytes for every server (lossless types, slimmer files, quiet output, a
-catalog), so byte-identical output for tools without an output schema is not a requirement of any
-of them. Each lists its change under "Breaking" in `CHANGELOG.md`; there is no compatibility shim
-before 1.0.
-
-> [!info] Fixed-file rule (applies to #566, #567, #571 and #575)
-> Today every generation emits `FIXED_FILE_COUNT` = 5 fixed files: `index.ts`, the runtime bridge,
-> `package.json`, `tsconfig.json` and `_meta.json`
-> (`crates/mcp-codegen/src/progressive/generator.rs:56`). `MAX_GENERATED_FILES` is the introspection
-> tool-count bound plus that constant (`generator.rs:77-78`), and `mcp-files` sets its export bound
-> equal to it ([[../files/spec]], planned section on the export bounds). A change that adds or
-> removes a fixed generated file updates, in the same pull request: `FIXED_FILE_COUNT`; the equal
-> bounds in `mcp-files`; and the "tool count + 5" and `N + 5` wording in
-> [[#2. Public API Surface]], [[#4. Output: Generated File Set]] and
-> [[#9. Resource-Exhaustion Bounds (CWE-400)]]. The final value is the sum of what has merged, not
-> a number chosen in advance. The subsections below refer to this rule and do not restate it.
-
-### Planned: typed results (#482)
-
-**Why.** Every tool's result type is the fixed line `export type {{typescript_name}}Result =
-Record<string, unknown> | unknown[] | string;` (`templates/progressive/tool.ts.hbs:79`). The
-introspector admits an output schema per tool, bounded at `MAX_SCHEMA_SIZE_BYTES`
-(`crates/mcp-introspector/src/lib.rs:1266-1287`), and stores it as
-`ToolInfo.output_schema: Option<serde_json::Value>` (`lib.rs:245`), but the generator reads it only
-for the provenance digest (`generator.rs:873`). The runtime returns `structuredContent` only when
-`content` is empty (`templates/progressive/runtime-bridge.ts.hbs:1142-1144`) and otherwise parses
-`content[0].text` (`:1172-1183`), so a declared type can describe a value a script never
-receives. An empty success throws (`:1152-1154`).
-
-**Requirements**
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-030.1 | WHEN a tool declares an output schema that the shared converter (the lossless-types subsection, #565) can represent THE SYSTEM SHALL emit `{Name}Result` derived from it, whatever the schema root (object, array, primitive, type array, composition) | must |
-| FR-030.2 | WHEN a tool declares no output schema THE SYSTEM SHALL keep the result declaration as the generic union (`Record<string, unknown> \| unknown[] \| string`, plus a `void` member if the open decision below goes that way) | must |
-| FR-030.3 | WHEN the converter cannot represent the root of an output schema THE SYSTEM SHALL emit the generic union for that tool, record a diagnostic, and NOT fail generation | must |
-| FR-030.4 | WHEN a tool that declares an output schema returns non-null `structuredContent` THE SYSTEM SHALL make the generated runtime return it, whether or not `content` is also populated | must |
-| FR-030.5 | WHEN a tool declares an output schema and the server returns no `structuredContent` THE SYSTEM SHALL return the value as today and SHALL NOT validate it against the schema or claim a validated shape | must |
-| FR-030.6 | WHEN a call succeeds with empty `content` and no `structuredContent` THE SYSTEM SHALL treat it as a successful empty result and SHALL NOT throw | must |
-| FR-030.7 | THE SYSTEM SHALL use the one converter of FR-031 for output schemas and SHALL NOT keep an output-only conversion path | must |
-| FR-030.8 | THE SYSTEM SHALL derive the generated-bytes bound so that a `ServerInfo` that passed introspection, with an output schema per tool, is never rejected at generation (see Constraints) | must |
-| FR-030.9 | WHEN generation degrades an output schema to the generic union THE SYSTEM SHOULD surface the diagnostic and NOT discard it silently | should |
-
-**Constraints**
-- Server-supplied strings in an output schema (property names, enum and const literals,
-  descriptions) reach generated text only through the sanitizers of
-  [[#7. Injection Defense (Sanitization Pipeline)]]
-  ([[../constitution#V. Security (the dominant concern of this codebase)]]).
-- Recursion and size bounds are those of FR-031; this package adds none of its own.
-- Generated-bytes bound, re-derived. `MAX_GENERATED_BYTES` is `2 * MAX_TOOL_COUNT * (name +
-  description + one schema)` (`generator.rs:98-102`) and so counts one schema per tool, while
-  introspection admits an input schema and an output schema per tool. The bound is re-derived from
-  introspection's per-tool bounds, counting both schemas and every rendering of them (tool file,
-  `_meta.json`, and the catalog if it is a separate file), either proving the worst case fits or
-  raising the factor. `mcp-files::MAX_EXPORT_BYTES` stays equal to the result, and the check stays
-  incremental ([[#9. Resource-Exhaustion Bounds (CWE-400)]]). The value is open.
-- Type safety: the converter returns a typed outcome (type text plus diagnostics), not a bare string
-  that callers must interpret.
-- No runtime validation of results against schemas, and no fetching of references.
-
-**Open decisions**
-- [NEEDS CLARIFICATION: Does the `structuredContent` preference apply to every tool or only to tools that declare an output schema? The bridge is generated once per server, so per-tool behaviour needs schema presence passed to the call.]
-- [NEEDS CLARIFICATION: Which tools get the `void` member: all tools or only tools without an output schema? FR-030.2 holds either way.]
-- [NEEDS CLARIFICATION: Printed form of an empty success (nothing, an explicit marker line, or a structured line). This subsection owns the decision; the quiet single-call subsection (#570) and the one-shot call in [[../runtime/spec]] refer to it.]
-- [NEEDS CLARIFICATION: Inline type literal or separately emitted named type for `{Name}Result`; treatment of an empty-object output schema; where the diagnostic of FR-030.9 surfaces (debug log, `generate` summary, measurement report).]
-- [NEEDS CLARIFICATION: Stored form of the result type in `_meta.json` v3 (rendered text or structured). Owned by the registry in [[../core/spec]].]
-- [NEEDS CLARIFICATION: The re-derived value of the generated-bytes bound.]
-
-Ask first: applying the `structuredContent` preference to tools without an output schema (it
-changes what existing scripts receive); adding a dependency; raising the derived factor of the
-bytes bound.
-
-**Depends on / blocks.** Depends on #565 (converter) and #568 (stored form, registry). Blocks #566
-(the catalog prints result types). Shares the generated-bytes change with #566 and #567. The
-value semantics are carried over to the per-script helper by #575.
-
-### Planned: lossless schema-to-TypeScript types (#565)
-
-**Why.** The converter understands only `type` values of object, array and the primitives.
-`json_type_to_typescript` maps a type name to a fixed type
-(`crates/mcp-codegen/src/common/typescript.rs:209-219`) and `json_schema_to_typescript_at_depth`
-reads `type`, `properties`, `required` and `items` and nothing else (`typescript.rs:268-330`). An
-`enum` renders as its base type, a `type` array falls to `unknown`, and `oneOf`, `anyOf`, `allOf`,
-`$ref`, `additionalProperties`, `format` and `default` are ignored. The per-tool parameters type is
-built through `extract_properties` (`typescript.rs:364`) and `extract_property_data`
-(`generator.rs:747`). A script author, usually a model, reads these signatures to decide which
-arguments to pass.
-
-**Requirements.** One converter serves input schemas, output schemas and catalog signatures. This
-subsection owns the converter; the typed-results subsection (#482) owns where it is applied to
-output schemas.
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-031.1 | WHEN a schema has `enum` or `const` THE SYSTEM SHALL render a union of the literal members, or the single literal, in declared order without duplicates | must |
-| FR-031.2 | WHEN a schema has `oneOf` or `anyOf` THE SYSTEM SHALL render the union of its members; WHEN it has `allOf` THE SYSTEM SHALL render an intersection up to a bounded member count and `unknown` with a diagnostic beyond it | must |
-| FR-031.3 | WHEN `type` is an array THE SYSTEM SHALL render the union of the listed types, with `null` rendered as `null`, and SHALL keep "may be absent" (optional member) distinct from "may be null" | must |
-| FR-031.4 | WHEN a schema has a `$ref` that is a local JSON Pointer into the same document THE SYSTEM SHALL resolve it with cycle detection and an expansion bound | must |
-| FR-031.5 | WHEN a `$ref` is not local, cannot be resolved, or is cyclic beyond the bound THE SYSTEM SHALL render `unknown` for that node, record a diagnostic, and fetch nothing | must |
-| FR-031.6 | WHEN a construct is outside the supported subset THE SYSTEM SHALL render `unknown` for the smallest enclosing node and record a diagnostic instead of failing generation | must |
-| FR-031.7 | WHEN the converter finishes THE SYSTEM SHALL return the rendered type together with a structured list of diagnostics (a bounded, sanitized node path and a reason kind), not only a log line | must |
-| FR-031.8 | WHEN a schema carries `format`, `default`, or numeric, length or item bounds THE SYSTEM SHOULD emit them as JSDoc tags on the member, sanitized and length-capped | should |
-| FR-031.9 | WHEN an object schema has `additionalProperties` THE SYSTEM SHOULD render an index signature of `unknown` for absent or `true`, none for `false`, and the converted type for a schema | should |
-| FR-031.10 | WHEN the same schema is converted twice THE SYSTEM SHALL produce byte-identical output (declared property and union order, no hash-order dependence) | must |
-| FR-031.11 | THE SYSTEM SHALL use this one converter for per-tool parameter types, per-tool result types and catalog signatures | must |
-
-**Constraints**
-- Server-supplied enum and const string values are untrusted string literals: each goes through
-  `sanitize_ts_string_literal` ([[#7. Injection Defense (Sanitization Pipeline)]]). That function
-  truncates its raw input at `MAX_UNTRUSTED_FIELD_LEN` (500,
-  `crates/mcp-core/src/untrusted.rs:35`), and a truncated literal is a different value, so a
-  member that would be truncated MUST NOT be rendered as if it were the declared value (mechanism
-  open). Descriptions, `format`, `default` and `pattern` text go through `sanitize_jsdoc` with a
-  length cap; property names keep the identifier rules of
-  [[#5. TypeScript Identifier Resolution]].
-- Resource bounds (CWE-400): recursion stays under `MAX_SCHEMA_RECURSION_DEPTH`
-  (`typescript.rs:75`, see [[#6. Recursion Depth Bound]]); union members, intersection members and
-  reference expansions are bounded separately; the total rendered size per schema is bounded by a
-  limit derived from `MAX_SCHEMA_SIZE_BYTES`, so a small schema whose references multiply cannot
-  amplify past the generated-bytes budget. Hitting a bound yields `unknown` plus a diagnostic,
-  never an error or a hang.
-- The converter lives in one module with a table-driven test matrix, and every rendered type is
-  type-checked in tests. It is not inlined in a template.
-- Type safety: the converter's public result is a typed struct, not a `String`. Changing its public
-  function is ask-first because the typed-results and catalog packages share it.
-
-**Open decisions**
-- [NEEDS CLARIFICATION: Concrete bounds: union members, intersection members, reference expansions, rendered size, and whether the depth cap stays at 128 for the richer node kinds.]
-- [NEEDS CLARIFICATION: An `enum` above the member bound renders the base primitive type or `unknown`.]
-- [NEEDS CLARIFICATION: Recursive `$defs`: expand to the bound and cut with `unknown`, or emit named aliases (which changes file layout and the name rules of [[#5. TypeScript Identifier Resolution]]).]
-- [NEEDS CLARIFICATION: `$ref` with sibling keywords (merge or ignore with a diagnostic), `nullable: true` of the OpenAPI dialect, and other `$schema` dialects.]
-- [NEEDS CLARIFICATION: Where diagnostics surface for a user (debug log, `generate` summary, measurement report), and whether the JSDoc tags of FR-031.8 also appear in the catalog, where they cost bytes.]
-
-Ask first: adding a dependency (a schema-to-TypeScript crate or a reference resolver); changing the
-converter's public function; changing how property names are rendered.
-
-Related defect, not a requirement here: parameter keys that are not valid identifiers are renamed in
-the type while the object is sent to the server unchanged (`generator.rs:788`,
-`sanitize_ts_identifier`); tracked as #584.
-
-**Depends on / blocks.** No dependencies. Blocks #482 and #566. `_meta.json` records the generated
-types in the form the registry in [[../core/spec]] decides (#568).
-
-### Planned: typed tool catalog (#566)
-
-**Why.** To learn what a generated server offers, an agent opens tool files. The generated skill
-teaches `ls`, `cat <tool>.ts` and `grep -l` (`crates/mcp-skill/src/templates/skill-md.hbs:18-35`).
-The closest overview today is `index.ts` (`templates/progressive/index.ts.hbs`): a JSDoc list of
-tool names, short descriptions and keywords followed by re-exports, with no parameter or result
-types, so the model still opens every file it wants to call.
-
-**Requirements**
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-032.1 | WHEN `generate` runs THE SYSTEM SHALL emit exactly one catalog per server with one entry per tool | must |
-| FR-032.2 | WHEN an entry is rendered THE SYSTEM SHALL include the tool's TypeScript name, its parameters type (FR-031), its result type (FR-030), a one-line description, and annotation markers when annotations are known (FR-034) | must |
-| FR-032.3 | THE SYSTEM SHALL write the catalog as valid TypeScript declarations that type-check without importing runtime code | must |
-| FR-032.4 | THE SYSTEM SHALL order entries by TypeScript name and produce byte-identical output for identical input | must |
-| FR-032.5 | WHEN a description is longer than one line or contains control or invisible characters THE SYSTEM SHALL reduce it to one sanitized, length-capped line with the existing sanitizers | must |
-| FR-032.6 | THE SYSTEM SHOULD offer three detail levels (names only, the catalog, the full tool file) and SHOULD make the names-only level derivable without reading any tool file | should |
-| FR-032.7 | WHEN the entries exceed the catalog byte bound THE SYSTEM SHALL still emit a valid catalog, degrading entry detail, and SHALL NOT drop tools silently | must |
-| FR-032.8 | THE SYSTEM SHALL count the catalog in the generated-file and generated-byte bounds and reject an over-budget run through the incremental check, not after assembly | must |
-| FR-032.9 | WHEN a tool's name would collide with the catalog's file or export name THE SYSTEM SHALL disambiguate the tool, not the catalog | must |
-| FR-032.10 | THE SYSTEM SHALL ensure the skill scan and the server's directory listing neither count the catalog as a tool nor warn that it is unreferenced | must |
-| FR-032.11 | THE SYSTEM SHALL render the catalog and each tool file from the same converted types in one pass | must |
-
-**Constraints**
-- Catalog byte bound. A named constant (working name: the catalog byte bound), derived from the
-  generated-bytes budget (`generator.rs:98-102`) so that the catalog's worst case, across the
-  largest tool count introspection admits, fits inside the re-derived budget of the typed-results
-  subsection (#482). Its value is open. The skill's optional load-time catalog injection is bounded
-  by this same constant ([[../skill/spec]]).
-- Fixed-file rule (above): if the catalog is a new file, `FIXED_FILE_COUNT` grows by one in this
-  pull request, `RESERVED_OUTPUT_NAMES` (`generator.rs:1123`, today `["index"]`) gains its name so
-  the collision of issue #312 does not return, and the scanners are exempted. If the catalog
-  extends `index.ts`, no file bound changes.
-- Scanners. `verify_tool_files_on_disk` (`crates/mcp-skill/src/parser.rs:393`) and the tool count
-  of the server's directory listing (`crates/mcp-server/src/service.rs:845-856`, which excludes
-  only `index.ts` and names starting with `_`) would report a new top-level `.ts` file.
-- Untrusted text: names, descriptions, enum literals (through the converter) and annotation titles
-  are sanitized as in [[#7. Injection Defense (Sanitization Pipeline)]]; descriptions are inert text
-  and annotation markers are fixed tokens, never server text.
-- Targets (provisional, measured with the harness of #562 on in-repo fixtures; open): a median
-  entry of about 250 bytes without parameter docs, and a whole catalog of about a tenth of the
-  tool files' bytes for the reference server.
-
-**Open decisions**
-- [NEEDS CLARIFICATION: New file or extension of `index.ts`. A new file raises `FIXED_FILE_COUNT` and needs scanner exemptions; extending `index.ts` keeps both unchanged but mixes declarations with the re-exports scripts import.]
-- [NEEDS CLARIFICATION: File name, location (top level or under `_runtime/`, whose names the listing already ignores) and extension (`.ts` or `.d.ts`), if a new file.]
-- [NEEDS CLARIFICATION: Entry format (`declare function` signatures, an interface with a member per tool, other), the written form of result type and markers, and whether parameter docs are included.]
-- [NEEDS CLARIFICATION: Behaviour above the byte bound (truncate descriptions, drop parameter detail, or split); the reference fixtures and their byte targets; whether the catalog is recorded in or checked against `_meta.json`.]
-
-Ask first: choosing new file versus extension; raising the derived factor of the bytes bound;
-exempting a top-level file from the scanners; adding a dependency.
-
-**Depends on / blocks.** Depends on #565 and #482; soft dependency on #568 (markers). Blocks #578
-(skill injection) and the catalog byte targets of #562. Shares the fixed-file rule with #567 and
-#571.
-
-### Planned: slim tool files with a shared command-line module (#567)
-
-**Why.** More than half of a tool file is text identical across tools
-(`templates/progressive/tool.ts.hbs`, 105 lines): the header JSDoc (lines 2-14) is repeated almost
-verbatim in the function JSDoc (lines 17-38); `{Name}Result` carries a fixed comment block (lines
-68-78); and a command-line block is copied into every file (lines 81-105). An agent that opens a
-tool file for its signature pays for all of it, and the bytes count against the generation bounds.
-
-**Requirements.** This package is a refactor: the behaviour of single-call mode equals the
-command-line block on the base branch at merge time, whichever of this package and the quiet
-single-call package (#570) merges first. The stack-trace field of the failure object is not pinned
-here.
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-033.1 | THE SYSTEM SHALL generate once per server a shared module holding the single-call behaviour, and tool files SHALL delegate to it instead of embedding the block | must |
-| FR-033.2 | THE SYSTEM SHALL emit header information once per tool file, not in both the header and the function JSDoc | must |
-| FR-033.3 | THE SYSTEM SHALL NOT emit the fixed explanatory comment before `{Name}Result` | must |
-| FR-033.4 | WHEN a tool file is run directly with a JSON argument THE SYSTEM SHALL behave as the command-line block on the base branch does (argument default, stdout payload, stderr object, exit codes) | must |
-| FR-033.5 | WHEN a tool file is imported by another module THE SYSTEM SHALL execute no command-line code and no side effect | must |
-| FR-033.6 | THE SYSTEM SHALL keep the tool name and keywords greppable in the tool file, because the skill teaches `grep -l "<keyword>"` over tool files | must |
-| FR-033.7 | THE SYSTEM SHALL keep the exported names (`{name}`, `{Name}Params`, `{Name}Result`) and the `index.ts` re-exports unchanged by this package | must |
-| FR-033.8 | THE SYSTEM SHALL count the shared module in the bounds per the fixed-file rule and keep the skill scan and the server's directory listing in agreement with it present | must |
-| FR-033.9 | THE SYSTEM SHALL carry no server-supplied text in the shared module; tool files embed names and server ids only through the existing string-literal sanitizer | must |
-| FR-033.10 | THE SYSTEM SHOULD reduce the average tool file by at least half on the reference fixtures | should |
-
-**Constraints**
-- Fixed-file rule (above): the shared module is a fixed file.
-- The module is static text rendered like the runtime bridge (identical for every server except
-  bound-derived fields), with a golden test. Rendered tool files and the module type-check, and a
-  test runs a generated file against an in-repo mock server before and after the change.
-- Argument parsing introduces no `eval` or dynamic import.
-
-**Open decisions**
-- [NEEDS CLARIFICATION: Module name, location (names starting with `_` are ignored by the directory listing, `service.rs:851`; a top-level file needs scanner exemptions) and how a tool file tells the module which file is the entry point.]
-- [NEEDS CLARIFICATION: Keep or drop the `#!/usr/bin/env node` first line; which header copy survives; where the fixed `@param`/`@returns`/`@throws` text goes.]
-- [NEEDS CLARIFICATION: Reference fixtures, and whether the 50% target is measured after #565 and #482 enlarge the types; whether `_meta.json` or the sidecar check must know the module (a metadata field would need a row in the registry in [[../core/spec]] before the v3 bump lands).]
-
-Ask first: placing the module at the top level; changing anything in the header that grep-based
-discovery uses.
-
-The direct-run defect (the check at `tool.ts.hbs:83` compares `import.meta.url` with
-`` `file://${process.argv[1]}` ``, which does not match for a path with a space or a symlink, so the
-file exits 0 without running) is #583 and is not part of this package.
-
-**Depends on / blocks.** No dependency; either merge order with #570. Shares the fixed-file rule
-with #566 and #571. Reshaped or retired by #575 if the generated bridge is retired.
-
-### Planned: annotations in generated output (#568)
-
-Code-generation side only. The fields of `_meta.json` v3 are defined once, in the registry in
-[[../core/spec]]; capture is specified in [[../introspector/spec]]. This block defines no metadata
-field of its own.
-
-**Why.** `ToolInfo` has four fields and the introspector copies only name, description and the two
-schemas (`crates/mcp-introspector/src/lib.rs:237-246`, `:1295-1300`), so a server's annotations
-(title and the read-only, destructive, idempotent and open-world hints) never reach generated
-output. The tool-file JSDoc carries no hint, and the digest entry is built from name, description
-and the two schemas (`generator.rs:866-875`).
-
-**Requirements**
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-034.20 | WHEN a tool's `ToolInfo` carries annotations THE SYSTEM SHOULD render each known hint as a JSDoc tag with a fixed tag name and a fixed value in that tool's file | should |
-| FR-034.21 | WHEN a hint is not stated, or the tool has no annotations, THE SYSTEM SHALL render no tag for it and SHALL NOT render a default such as "not read-only" | must |
-| FR-034.22 | WHEN annotations carry a title THE SYSTEM SHALL render it only through `sanitize_jsdoc` with a length cap, as the one server-supplied text in the annotation tags | must |
-| FR-034.23 | THE SYSTEM SHALL word every rendering as a server-declared hint, never as a verified property | must |
-| FR-034.24 | WHEN generation writes `_meta.json` THE SYSTEM SHALL write the annotation, result-type and size fields of the registry from `ToolInfo` and SHALL NOT add a field outside it or a second schema bump | must |
-| FR-034.25 | THE SYSTEM SHALL NOT branch on any annotation in generation to relax a check or choose a code path | must |
-| FR-034.26 | WHEN stated hints contradict each other (for example read-only with destructive) THE SYSTEM SHOULD render the values as advertised without reinterpreting them | should |
-
-**Constraints**
-- Untrusted hints ([[../constitution#V. Security (the dominant concern of this codebase)]]): hint
-  values are booleans and carry no text; tag names and values are fixed tokens. A missing
-  annotation is never read as safe.
-- The annotation payload counts toward the per-tool introspection bounds and the incremental
-  generated-bytes check ([[#9. Resource-Exhaustion Bounds (CWE-400)]]).
-- The JSDoc tags and catalog markers are a display of the registry, not a second source of truth.
-
-**Open decisions**
-- [NEEDS CLARIFICATION: Tag names and layout of the JSDoc tags, and how the catalog abbreviates them (a fixed token set).]
-- [NEEDS CLARIFICATION: Whether annotations enter the provenance digest entries built at `generator.rs:866-875`. Decided in the registry in [[../core/spec]] before the v3 bump lands; including them is the recommendation recorded there.]
-- [NEEDS CLARIFICATION: Precedence of the SDK's tool-level title and the annotation title. Owned by the introspector and the registry.]
-
-Ask first: adding annotations to the digest; making any generator or consumer read a hint for a
-decision.
-
-**Depends on / blocks.** #568 owns the one `_meta.json` bump. This subsection blocks #566 (markers)
-and the static report of #562; the dry-run package (#573) consumes the stored hints.
-
-### Planned: quiet single-call output (#570)
-
-**Why.** The only supported single call, `node <tool>.ts '<json>'`, writes straight into a model's
-context. The block at `templates/progressive/tool.ts.hbs:81-105` prints the result with
-`JSON.stringify(result, null, 2)` (line 93), prints failures as an indented `{ error, stack }` to
-stderr (lines 97-101), and parses the argument inside the same handler (line 87), so a malformed
-argument fails with a `SyntaxError` whose message embeds an excerpt of the input. Failure text is
-also server-supplied: the bridge throws `Tool returned error: ${errorMessage}` with the server's
-text, unbounded and unsanitised (`runtime-bridge.ts.hbs:1126-1133`).
-
-**Requirements.** Works on today's generated bridge; not gated by the runtime decision (#569).
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-035.1 | WHEN a single call succeeds THE SYSTEM SHALL print the result as compact JSON on one line to stdout and exit 0 | must |
-| FR-035.2 | WHEN a single call fails THE SYSTEM SHALL print exactly one line of structured JSON to stderr with a message and a failure kind, and exit non-zero | must |
-| FR-035.3 | WHILE debug mode is off THE SYSTEM SHALL NOT include a stack trace or internal file path in failure output; WHILE it is on THE SYSTEM SHOULD include the stack | must |
-| FR-035.4 | THE SYSTEM SHALL take the argument as a single JSON object; WHEN it is not valid JSON or not an object THE SYSTEM SHALL report an invalid-arguments failure that reproduces no part of the argument text | must |
-| FR-035.5 | WHEN a failure message originates from an MCP server THE SYSTEM SHALL strip control characters, truncate it to a fixed bound, mark the truncation, and mark the text as coming from the server so it cannot pass as the tool's own wording | must |
-| FR-035.6 | WHEN a failure has no usable message THE SYSTEM SHOULD still emit a valid one-line object with a generic message and a failure kind | should |
-| FR-035.7 | THE SYSTEM SHALL keep exit 0 for success only and a non-zero exit for every failure | must |
-| FR-035.8 | WHEN the command-line block is relocated by #567 THE SYSTEM SHALL preserve FR-035.1 to FR-035.7 | must |
-
-**Constraints**
-- Untrusted-text rule ([[../constitution#V. Security (the dominant concern of this codebase)]]).
-  Whether successful results printed by single-call mode, the runner and the one-shot call (the
-  latter two in [[../runtime/spec]]) fall under the boundary rule or are an accepted exception is
-  an open maintainer decision. This subsection claims neither sanitisation nor an exception for
-  successful results. Error text is sanitised, bounded and marked as coming from the server
-  (FR-035.5).
-- The truncation bound is rendered from a Rust constant into the template (the `BridgeContext`
-  pattern of [[#2. Public API Surface]]), not hand-copied, and derives from an existing bound where
-  one applies (for example `MAX_UNTRUSTED_FIELD_LEN`, `crates/mcp-core/src/untrusted.rs:35`).
-- The printed form of an empty success is owned by the typed-results subsection (#482). The output
-  budget and spill-to-file belong to the runner and the one-shot call, not to single-call mode.
-- No dependency is added to the generated package (Node built-ins only). Output shape is tested by
-  running a generated file against an in-repo mock server (success, tool error, invalid arguments,
-  oversized error, debug on and off). This is a breaking change to the stdout and stderr shape; no
-  flag restores the old form.
-
-**Open decisions**
-- [NEEDS CLARIFICATION: The successful-result decision above: apply the boundary rule or record an exception. Made by the maintainer.]
-- [NEEDS CLARIFICATION: Debug switch: reuse `MCPBRIDGE_DEBUG` (`runtime-bridge.ts.hbs:143`), which also logs call parameters (`:1090`), or add a narrower stack-only switch.]
-- [NEEDS CLARIFICATION: Field names and failure-kind vocabulary (and alignment with the CLI exit categories), how the server-text marking is expressed inside a JSON string, and the numeric truncation bound.]
-
-Ask first: distinct non-zero exit codes in generated files; the exact marker for server text;
-adding a dependency.
-
-**Depends on / blocks.** Not gated by #569. Either merge order with #567. Refers to #482 (empty
-success). #571 and #574 reuse the failure shape.
+> [!info] Fixed-file rule
+> Every generation emits `FIXED_FILE_COUNT` = 7 fixed files: `index.ts`, `catalog.ts`, the runtime
+> bridge, `_runtime/cli.ts`, `package.json`, `tsconfig.json` and `_meta.json`
+> (`crates/mcp-codegen/src/progressive/generator.rs`). `MAX_GENERATED_FILES` is the introspection
+> tool-count bound plus that constant, and `mcp-files` sets its export bound equal to it
+> ([[../files/spec]]). A change that adds or removes a fixed generated file updates, in the same
+> pull request, `FIXED_FILE_COUNT`, the equal bounds in `mcp-files`, and the "tool count + 7" and
+> `N + 7` wording in [[#2. Public API Surface]], [[#4. Output: Generated File Set]] and
+> [[#9. Resource-Exhaustion Bounds (CWE-400)]].
 
 ### Planned: retirement of the generated bridge (#575)
 
@@ -828,12 +913,13 @@ generated file.
 **Depends on / blocks.** Gated by #569; depends on #574 (one-shot call path) and the helper in
 [[../runtime/spec]]. Relates to #567 (shared module) and #571.
 
-## 14. See Also
+## 15. See Also
 
 - [[../introspector/spec]] — source of `ServerInfo`/`ToolInfo`
 - [[../files/spec]] — consumer of `GeneratedCode`
 - [[../server/spec#save_categorized_tools]] — MCP-tool caller of `generate_with_categories`
 - [[../cli/spec#generate]] — CLI caller of `generate`
-- [[../core/spec]] — registry of `_meta.json` v3 fields (planned section)
+- [[../core/spec]] — registry of `_meta.json` v3 fields, annotation types, provenance digest
 - [[../runtime/spec]] — script runner, one-shot call and per-script helper (planned block)
-- [[#13. Planned Changes (script-first direction, adopted 2026-11-24)]] — script-first changes, not yet implemented
+- [[#13. Script-First Capabilities (implemented, #556)]] — as-built text of #482, #565, #566, #567, #568, #570, #583, #584, #587
+- [[#14. Planned Changes (generated bridge retirement, #575)]] — the one change still planned in this block

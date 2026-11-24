@@ -42,8 +42,11 @@ related:
    independent (and driftable) implementations of the same rule:
    - `cli` — `OutputFormat`, `ExitCode`, `ServerConnectionString` (used by
      `mcp-cli`).
-   - `metadata` — the `_meta.json` sidecar schema shared by `mcp-codegen`
+   - `metadata` — the `_meta.json` sidecar schema (version 3) shared by `mcp-codegen`
      (producer) and `mcp-skill`/`mcp-server` (consumers).
+   - `annotations` (#568) — `Hint`, `AnnotationTitle`, `ToolAnnotations`: the typed, sanitized
+     shape of the untrusted tool annotations that `mcp-introspector` captures, `mcp-codegen`
+     renders and stores, and `provenance` hashes.
    - `provenance` (issue #468) — `GenerationProvenance`/`ConfigFingerprint`/`ToolDigest`, the
      generation-timestamp-and-fingerprint data `mcp-codegen` stamps into every
      `metadata::ServerMetadata` it writes, computed from the same `ServerConfig`/tool list a
@@ -458,13 +461,63 @@ call `LogFormat::resolve` and then build the same `.boxed()`-branched
 ### `metadata` module (`src/metadata.rs`)
 
 ```rust
-pub const METADATA_SCHEMA_VERSION: u32 = 2;
+pub const METADATA_SCHEMA_VERSION: u32 = 3;
 pub const METADATA_FILE_NAME: &str = "_meta.json";
 pub const INDEX_FILE_NAME: &str = "index.ts";
+pub const CATALOG_FILE_NAME: &str = "catalog.ts";        // #566: the top-level type-only catalog
+pub const MAX_METADATA_FILE_BYTES: u64 = 1024 * 1024;    // 1 MiB; shared by producer and consumer
 pub struct ServerMetadata { schema_version: u32, server_id: ServerId, server_name: String, server_version: String, tools: Vec<ToolMetadata>, provenance: GenerationProvenance }
-pub struct ToolMetadata { name: ToolName, typescript_name: String, category: Option<String>, keywords: Vec<String>, description: Option<String>, parameters: Vec<ParameterMetadata> }
+pub struct ToolMetadata {
+    name: ToolName, typescript_name: String, category: Option<String>, keywords: Vec<String>,
+    description: Option<String>, parameters: Vec<ParameterMetadata>,
+    annotations: Option<ToolAnnotations>,       // v3
+    result_type: Option<String>,                // v3
+    result_type_origin: ResultTypeOrigin,       // v3
+    manifest_size_bytes: u64,                   // v3
+}
+pub enum ResultTypeOrigin { Declared, Degraded, Undeclared } // serde snake_case
 pub struct ParameterMetadata { name, typescript_type, required, description: Option<String> }
 ```
+
+#### Registry of v3 fields (single registry for the whole specification package)
+
+No other block defines a metadata field of its own; every other block refers here. Version 3 is
+the one bump of the script-first package (FR-034.1, FR-034.2).
+
+| Field (per tool) | Meaning | Needed by | Resolution |
+|---|---|---|---|
+| `annotations` | `Option<ToolAnnotations>`: `None` when the server sent neither annotations nor a usable title; otherwise a sanitized optional title and four three-valued hints (never `false` for "not stated", never the SDK default) | FR-034, FR-032, FR-038 | in |
+| `result_type` | Compact TypeScript text of the result type the tool file declares, **rendered text** (not structured). `None` above `STORED_TYPE_TEXT_MAX_BYTES` (1024) or when the result degraded to the generic form | FR-030 | in |
+| `result_type_origin` | `declared`, `degraded` (the server declared an output schema but the generic type is used) or `undeclared`. This is the stored output-schema flag, and it distinguishes "declared but not translated" | FR-046, FR-030 | in |
+| `manifest_size_bytes` | Length of the compact `serde_json::to_vec` of the introspected, sanitized `ToolInfo` (after the introspector's bounds, including annotations and output schema) | FR-046 | in |
+| `parameters[].name` | The **raw** schema key (never renamed or suffixed, #584); `parameters[].typescript_type` is `"unknown"` above 1024 bytes | FR-031 | in |
+| Per-tool digests | Name the changed tool in a drift report | FR-045 | out for this package; still planned with #580 ([[#6. Planned Changes (script-first direction, adopted 2026-11-24)]]) |
+| Annotations inside the digest entries | An annotation-only change reads as drift | FR-045, FR-034 | in (see [[#`provenance` module (`src/provenance.rs`)]]) |
+| Catalog reference, converter diagnostics | | FR-032, FR-031 | out (diagnostics are `tracing::warn!` only) |
+
+| ID | Requirement | Status |
+|---|---|---|
+| FR-034.1 | `METADATA_SCHEMA_VERSION` is 3 and every field marked "in" is persisted | implemented |
+| FR-034.2 | No second bump for a registry field; every candidate row is resolved | implemented |
+| FR-034.3 | No annotations stored as absent; an unstated hint stored as not stated, never `false`, never the SDK default | implemented |
+| FR-034.4 | A consumer reading a sidecar whose `schema_version` is not 3 fails with the existing unsupported-schema error before the typed parse | implemented ([[../skill/spec#ScanError]]) |
+| FR-034.5 | The sidecar types live in `mcp-core::metadata`; annotations obey the untrusted-hint rule of [[../introspector/spec#9. Annotation Capture (#568)]] | implemented |
+| FR-034.6 | The stored title is sanitized and length-capped (`AnnotationTitle`) | implemented |
+| FR-046.1 | `manifest_size_bytes` and `result_type_origin` are the per-tool size and output-schema flag the measurement needs; no measurement-specific field exists | implemented |
+
+**Size cap.** `MAX_METADATA_FILE_BYTES` is the cap `mcp-skill` applies when reading the sidecar
+(`MAX_FILE_SIZE` is defined from it) and the size at which `mcp-codegen` warns when writing it. A
+sidecar above it still generates; the skill scan then returns `ScanError::FileTooLarge`
+([[../codegen/spec#9. Resource-Exhaustion Bounds (CWE-400)]]). The producer writes compact JSON.
+
+**What the version bump costs the user.** A sidecar consumer reads `schema_version` through a
+minimal probe before the typed parse and returns `ScanError::UnsupportedSchema` ("unsupported
+metadata schema version: found {found}, expected {expected} (re-run 'generate' to regenerate this
+server)"). Every server directory generated before the v3 upgrade is therefore unreadable to the
+skill scan and to the server tools that read the sidecar until the user reruns
+`mcp-execution-cli generate --from-config <SERVER>`. This repeats the 1-to-2 bump of v0.10; the
+README carries a warning in the v0.10 callout form and `CHANGELOG.md` a "Breaking" entry.
+
 `server_id`/`name` are `ServerId`/`ToolName` (issue #317, previously bare `String`); both
 newtypes' derived `Serialize`/`Deserialize` round-trip through a plain JSON string, so this is
 not a wire-format change. `typescript_name` stays `String` — it is a generated TypeScript
@@ -477,10 +530,10 @@ change; consumers compare it and fail loudly on mismatch (see
 [[../skill/spec#ScanError]]).
 
 `INDEX_FILE_NAME` (issue #487) is the filename of the generated re-export entry point
-(`index.ts`) `mcp-codegen` always emits alongside per-tool files. Shared so `mcp-server`'s
-`list_generated_servers` tool-count scan and `mcp-skill`'s sidecar-verification pass both
-recognize it as the package's aggregator file rather than a per-tool `.ts` file, matched
-case-insensitively — see
+(`index.ts`) `mcp-codegen` always emits alongside per-tool files; `CATALOG_FILE_NAME` (#566) is the
+filename of the type-only catalog. Shared so `mcp-server`'s `list_generated_servers` tool-count scan
+and `mcp-skill`'s sidecar-verification pass both recognize each as a package file rather than a
+per-tool `.ts` file, matched case-insensitively in the server scan — see
 [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]].
 
 `provenance` (issue #468) is required, not `Option`: a `schema_version: 1` sidecar has no
@@ -490,13 +543,33 @@ probe struct, *before* attempting a typed `ServerMetadata` deserialization (see
 carries real provenance; an `Option` would encode a state the version check has already ruled
 out.
 
+### `annotations` module (`src/annotations.rs`, #568)
+
+```rust
+pub enum Hint { StatedTrue, StatedFalse, NotStated }   // serde snake_case; impl From<Option<bool>>
+pub struct AnnotationTitle(String);                    // private field
+impl AnnotationTitle { pub fn new(raw: &str) -> Option<Self>; pub fn as_str(&self) -> &str; }
+pub struct ToolAnnotations { pub title: Option<AnnotationTitle>, pub read_only: Hint, pub destructive: Hint, pub idempotent: Hint, pub open_world: Hint }
+```
+
+Annotations are **untrusted, advisory** values: the server is the only source and nothing verifies
+them. Each hint is three-valued so "the server said `false`" differs from "the server said
+nothing"; no consumer may read a missing annotation as safe, and no code branches on a hint to relax
+a check or choose a path. `AnnotationTitle::new` runs `sanitize_untrusted_text(raw,
+MAX_UNTRUSTED_FIELD_LEN)` and returns `None` when the result is empty; the serde form is a
+`String` routed through `try_from`/`into`, so deserialization re-sanitizes and rejects an empty
+title (the inner string is private, so an unsanitized title cannot exist). `ToolAnnotations` has
+**no `Default`**: every field value is legal, and "no annotations" is `Option::None` on the carrying
+type (`ToolInfo.annotations`, `ToolMetadata.annotations`), never an all-`NotStated` value. Contradictory
+hints (read-only with destructive) are stored as advertised.
+
 ### `provenance` module (`src/provenance.rs`)
 
 ```rust
 pub struct GenerationProvenance { generated_at: DateTime<Utc>, config_fingerprint: ConfigFingerprint, tool_digest: ToolDigest }
 pub struct ConfigFingerprint(String); // 64 lowercase hex chars (SHA-256)
 pub struct ToolDigest(String);        // 64 lowercase hex chars (SHA-256)
-pub struct ToolDigestEntry<'a> { name: &'a str, description: &'a str, input_schema: &'a Value, output_schema: Option<&'a Value> }
+pub struct ToolDigestEntry<'a> { name: &'a str, description: &'a str, input_schema: &'a Value, output_schema: Option<&'a Value>, annotations: Option<&'a ToolAnnotations> }
 pub struct DigestFormatError { value: String } // not exactly 64 lowercase hex chars
 impl GenerationProvenance { pub fn capture(config: &ServerConfig, tools: &[ToolDigestEntry<'_>]) -> Self; }
 impl ConfigFingerprint { pub fn compute(config: &ServerConfig) -> Self; }
@@ -550,6 +623,14 @@ walk that type-tags every variant and sorts object keys at hash time), the resul
 digests are sorted, and the sorted sequence is hashed into the aggregate — giving a total order
 even for two tools sharing a name. `output_schema`'s `Option` wrapper gets an explicit presence
 byte in the same framing `cwd` already uses, so `None` and `Some(Value::Null)` hash differently.
+
+**Annotations in the entry (#568).** After the schemas, each entry feeds its annotations: one byte
+for whether an annotations value is present at all, then (when present) the four hints with
+three-valued framing (`NotStated` 0, `StatedFalse` 1, `StatedTrue` 2), so a stated `false` hashes
+differently from an unstated hint, and `None` differs from an all-`NotStated` value. The **title text
+is never hashed**, so a retitle is not drift (the title matters only through the annotations value
+existing). The entry domain tag is `mcp-execution:tool-entry:v2` (was `v1`): the preimage changed, so
+every digest recorded before this change differs, which the schema-version bump already makes moot.
 
 `GenerationProvenance::capture(config, tools)` stamps `Utc::now()` and computes both digests
 from the same `ServerConfig`/tool list a `generate` call is generating from, so the recorded
@@ -910,16 +991,18 @@ as a fix: it would visibly alter legitimate content. Instead, two length-based c
 the per-character filter above, not before (ordering matters — see below), on the filtered
 string:
 
-1. **Whole-value total** (`MAX_TOTAL_VARIATION_SELECTORS`, private, currently 16): if the value's
+1. **Whole-value total** (`MAX_TOTAL_VARIATION_SELECTORS`, `pub` since #570, currently 16): if the value's
    total variation-selector count, summed across every run regardless of how it's distributed
    across base characters, exceeds this bound, every variation selector in the value is dropped.
-2. **Per-run threshold** (`MAX_VARIATION_SELECTOR_RUN`, private, currently 2), applied only when
+2. **Per-run threshold** (`MAX_VARIATION_SELECTOR_RUN`, `pub` since #570, currently 2), applied only when
    the total stays under the bound above: a run of at most 2 consecutive variation selectors is
    left untouched (covers the normal single-selector case plus the occasional legitimate second
    selector); a longer run is dropped in full.
 
 Both constants and the "drop the whole run/value, not just the excess" choice are documented in
-code in `src/untrusted.rs`.
+code in `src/untrusted.rs`. The constants are `pub` so `mcp-codegen` can render them into the
+generated bridge's `boundServerText` instead of copying them; shared test vectors pin the Rust and
+TypeScript implementations together.
 
 A per-run-only check (the original #431 implementation) is not sufficient on its own: an attacker
 who distributes the payload as many short runs — each at or below the per-run threshold, each
@@ -978,11 +1061,11 @@ it would require either a request-wide (not per-field) budget threaded through e
 
 | Consumer | What it depends on from `mcp-core` |
 |---|---|
-| `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result` |
-| `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`), `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
+| `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result`, `annotations::{AnnotationTitle, Hint, ToolAnnotations}` |
+| `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`, v3), `annotations::*`, `provenance::ToolDigestEntry` (with `annotations`), `untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN, MAX_TOTAL_VARIATION_SELECTORS}` (rendered into the bridge),  `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen`; `confinement::open_confined_write` directly (issue #504) |
 | `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `metadata::{INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
+| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
 | `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth
@@ -1046,84 +1129,18 @@ and byte-preserving of each variant's existing `Display` message.
 ## 6. Planned Changes (script-first direction, adopted 2026-11-24)
 
 > [!warning] Not implemented
-> Nothing in this section exists in the code yet. Each subsection names its tracking issue.
-> When a change lands, its content moves into the as-built sections above and the subsection is
-> removed in the same pull request.
+> The `_meta.json` v3 bump, the annotation types and the measurement fields (#568, #562's metadata
+> row) are implemented and described as built in [[#`metadata` module (`src/metadata.rs`)]],
+> [[#`annotations` module (`src/annotations.rs`, #568)]] and [[#`provenance` module (`src/provenance.rs`)]].
+> What remains here is the per-tool digest granularity (#580). When it lands, its content moves into
+> the as-built sections above and this section is removed in the same pull request.
 
-### Planned: `_meta.json` schema version 3 (#568)
-
-**Why.** `METADATA_SCHEMA_VERSION` is `2` (`crates/mcp-core/src/metadata.rs:65`) and `ToolMetadata`
-(`metadata.rs:179`) carries only name, TypeScript name, category, keywords, description and
-parameters. Several planned capabilities need a new per-tool field in this sidecar: tool
-annotations (FR-034), the generated result type (FR-030, #482), a per-tool manifest size and an
-output-schema flag (FR-046, #562), and possibly per-tool digests (FR-045, #580). A schema bump
-invalidates every existing sidecar, so the package makes exactly one bump. This subsection is the
-single registry of v3 fields for the whole specification package; no other block defines a
-metadata field of its own and every other block refers here.
-
-**Registry of v3 fields.**
-
-| Field (per tool unless stated) | Purpose | Needed by | Status |
-|---|---|---|---|
-| Annotations: optional title and four hints, each stated-true, stated-false or not stated | Read/write distinction, markers in the catalog and in JSDoc, honest documentation | FR-034, FR-032, FR-038 | in |
-| Generated result type | Records what the tool file declares as the result, so consumers need not re-parse TypeScript. Stored form (rendered text or structured) is open | FR-030 | in |
-| Manifest size in bytes | Static context-cost report without the original server | FR-046 | in |
-| Flag: server declared an output schema | Distinct from "declared but not translated" in the result type | FR-046, FR-030 | in |
-| Per-tool digests (name to digest) | Name the changed tool in a drift report | FR-045 | candidate, decide before the bump lands |
-| Annotations inside the digest entries | Make an annotation-only change visible as drift | FR-045, FR-034 | candidate, decide before the bump lands (recommended: include) |
-| Catalog reference | Link a tool entry to its catalog line | FR-032 | candidate, decide before the bump lands |
-| Converter diagnostics (nodes the schema-to-type converter degraded) | Report lossy translation | FR-031 | candidate, decide before the bump lands |
-
-**Requirements.**
-
-| ID | Requirement | Priority |
-|---|---|---|
-| FR-034.1 | THE SYSTEM SHALL raise `METADATA_SCHEMA_VERSION` from 2 to 3 once, and SHALL persist in the sidecar every field marked "in" in the registry above | must |
-| FR-034.2 | THE SYSTEM SHALL NOT raise the schema version a second time for any field listed in the registry; every candidate row SHALL be resolved to "in" or "out" before the bump lands | must |
-| FR-034.3 | WHEN a tool advertises no annotations THE SYSTEM SHALL store annotations as absent, and WHEN a hint is not stated THE SYSTEM SHALL store it as not stated, never as `false` and never as the SDK default | must |
-| FR-034.4 | WHEN a consumer reads a sidecar whose `schema_version` is not 3 THE SYSTEM SHALL fail with the existing unsupported-schema error before attempting the typed parse | must |
-| FR-034.5 | THE SYSTEM SHALL keep the sidecar types in `mcp-core::metadata`, extend the sidecar drift test to every new field, and hold annotations to the same untrusted-hint rule as in [[../introspector/spec#Planned: capture tool annotations (#568)]] | must |
-| FR-034.6 | WHERE the annotation title is stored THE SYSTEM SHALL store it sanitised and length-capped with the rules of `untrusted`, so no consumer receives raw server text from this field | must |
-
-**Today's rejection of an older sidecar, and what the bump costs the user.** A sidecar consumer
-reads `schema_version` through a minimal probe before the typed parse
-(`crates/mcp-skill/src/parser.rs:342-347`) and returns `ScanError::UnsupportedSchema` whose text is
-"unsupported metadata schema version: found {found}, expected {expected} (re-run 'generate' to
-regenerate this server)" (`parser.rs:90-95`). The v3 bump therefore makes every server directory
-generated before the upgrade unreadable to the skill scan and to the server tools that read the
-sidecar, until the user reruns `mcp-execution-cli generate --from-config <SERVER>`. This repeats
-the 1-to-2 bump of v0.10 (README callout at `README.md:193-194`; CHANGELOG entry at
-`CHANGELOG.md:105`). The pull request that lands the bump must carry a README warning in the form
-of the v0.10 callout, and a "Breaking" CHANGELOG entry with its pull-request link. Neither is part
-of this specification pull request.
-
-**Constraints.** The sidecar is a wire contract between `mcp-codegen` (producer) and
-`mcp-skill`/`mcp-server` (consumers); a bump is the sanctioned way to change it. Text that
-originates from a server (the annotation title) is untrusted under the constitution's security
-section; hint values are booleans and carry no text. Illegal states are unrepresentable: a hint is
-a three-valued type, not an `Option<bool>` or a string. No compatibility shim before 1.0.
-
-**Open decisions.**
-
-- [NEEDS CLARIFICATION: Stored form of the generated result type: rendered TypeScript text or a structured form; and whether degraded-node diagnostics are stored (#482, #565).]
-- [NEEDS CLARIFICATION: Meaning of "manifest size": serialised bytes of the tool's raw `tools/list` entry or of the sanitised `ToolInfo`; whether it is capped by the existing size constants (jointly with #562).]
-- [NEEDS CLARIFICATION: Whether the SDK tool-level title and the annotation title are both stored, and which wins when both are present.]
-- [NEEDS CLARIFICATION: Whether a field records that annotations were absent versus captured by an older binary. Old directories are rejected, not migrated, so this may be unnecessary.]
-- [NEEDS CLARIFICATION: Whether any mitigation beyond the README warning is wanted, for example a helper that regenerates every server.]
-- Ask first: resolving any candidate row; choosing the stored form of the result type; adding a field outside the registry; adding a dependency.
-
-**Depends on / blocks.** Owns the bump for #482, #562, #566, #580. Blocks #562 (static report) and
-#573 (dry run). Blocked by nothing.
-
-### Planned: provenance digest granularity (#580, #568)
+### Planned: provenance digest granularity (#580)
 
 **Why.** `GenerationProvenance` holds `generated_at`, a `config_fingerprint` and one aggregate
-`tool_digest` (`crates/mcp-core/src/provenance.rs:650-657`). The aggregate is built by hashing each
-tool entry on its own, sorting those hashes and hashing the sequence (`provenance.rs:531`,
-`:563`); the per-tool hashes are then discarded. The entries are built from name, description,
-input schema and output schema only (`crates/mcp-codegen/src/progressive/generator.rs:866-875`).
-The drift check (FR-045) compares a live listing with this record, so what it can say is fixed by
-what is recorded.
+`tool_digest`. The aggregate is built by hashing each tool entry on its own, sorting those hashes
+and hashing the sequence; the per-tool hashes are then discarded. The drift check (FR-045) compares a
+live listing with this record, so what it can say is fixed by what is recorded.
 
 **What the record can and cannot tell.**
 
@@ -1132,66 +1149,39 @@ what is recorded.
 | Does the live tool list differ from the one generated from? | Yes, from the aggregate digest; reordering alone is not drift |
 | Which tools were added or removed? | Yes, by name, by comparing the live names with the sidecar's `tools` list |
 | Which tool, present on both sides, changed? | No: the aggregate does not say |
-| Did only a hint flip, for example to read-only? | No: annotations are not in the entries |
+| Did only a hint flip, for example to read-only? | **Yes since #568**: the four hints (not the title) are in the digest entries |
 | Do two tools sharing a raw name differ individually? | No, and names are not deduplicated at introspection (see [[../introspector/spec#7. Edge Cases & Notable Behaviors]]) |
 
-**Candidate changes** (both are v3 registry rows above, to be decided before the bump lands).
-
-1. Per-tool digests recorded beside the aggregate, so a drift report can name a changed tool.
-   Duplicate raw names make a name-keyed map ambiguous; the keying is open.
-2. Annotations inside the digest entries, so an annotation-only change reads as drift. Recommended:
-   include them. The bump already invalidates every v2 sidecar, so "it changes existing digests"
-   is not an objection.
+**Remaining candidate change.** Per-tool digests recorded beside the aggregate, so a drift report can
+name a changed tool. Duplicate raw names make a name-keyed map ambiguous; the keying is open. Because
+the schema is already at version 3, recording them needs a further bump, which is ask-first.
 
 **Requirements.**
 
 | ID | Requirement | Priority |
 |---|---|---|
 | FR-045.1 | WHEN the drift check needs to name a changed tool THE SYSTEM SHALL have per-tool digests recorded in the sidecar; otherwise it SHALL report only that the list differs | must |
-| FR-034.7 | WHERE annotations are included in the digest entries THE SYSTEM SHALL feed each hint as stated-true, stated-false or not stated, with distinct framing, so an absent hint and `false` hash differently | must |
+| FR-034.7 | WHERE annotations are included in the digest entries THE SYSTEM SHALL feed each hint as stated-true, stated-false or not stated, with distinct framing, so an absent hint and `false` hash differently | implemented (#568) |
 | FR-045.2 | THE SYSTEM SHALL compute the live digest with the same entry mapping and function that `generate` uses, and that mapping SHALL exist once | must |
 | FR-045.3 | THE SYSTEM SHALL keep the existing secrecy guarantee: no credential value, argument value or header value enters any preimage | must |
 | FR-045.4 | THE SYSTEM SHALL word results as "the server changed", never "your files are out of date byte for byte" (see the provenance wording rule above) | must |
 
 **Constraints.** The digest preimage is a persisted contract: it is built from explicitly sorted,
 length-framed fields and never from `Debug` or serialised JSON (hashing section above). Any change
-to it changes every recorded digest, so it is ask-first and lands only with the v3 bump.
+to it changes every recorded digest, so it is ask-first and lands only with a schema bump.
 
 **Open decisions.**
 
 - [NEEDS CLARIFICATION: Include per-tool digests, and key them by name, by position, or as a multiset, given duplicate raw names. Whether the aggregate stays beside them or is derived from them.]
-- [NEEDS CLARIFICATION: Include annotations in the entries (recommended: include). If included, whether the title is part of the preimage or only the four hints.]
-- [NEEDS CLARIFICATION: Whether a changed preimage takes a new domain tag, and where the shared entry mapping lives (it is private to codegen today); candidate: beside `ToolDigestEntry` in this crate.]
+- [NEEDS CLARIFICATION: Where the shared entry mapping lives (it is private to codegen today, `ProgressiveGenerator::create_metadata_file`); candidate: beside `ToolDigestEntry` in this crate.]
 - Ask first: any change to the preimage, the domain tags or the framing primitive; adding a dependency.
 
-**Depends on / blocks.** Part of the v3 bump owned by #568. Blocks the "name the changed tool"
-part of #580.
-
-### Planned: metadata needed for measurement (#562)
-
-**Why.** The reproducible measurement (FR-046) needs a per-tool manifest size and an
-output-schema flag, and cannot recover them after generation. Those two fields are rows of the v3
-registry above; this block defines nothing further.
-
-**Requirements.**
-
-| ID | Requirement | Priority |
-|---|---|---|
-| FR-046.1 | THE SYSTEM SHALL record the per-tool manifest size and the output-schema flag as the registry rows state, and SHALL NOT add a measurement-specific field outside the registry | must |
-
-**Constraints.** The static report is blocked by #568; the scenario harness is not. No output is
-called "savings".
-
-**Open decisions.**
-
-- [NEEDS CLARIFICATION: How a tool definition is serialised for sizing: canonical JSON of the tool object, with or without annotations and output schema, and before or after the introspector's bounds. Owned jointly with the manifest-size row above.]
-
-**Depends on / blocks.** Blocked by #568. Blocks the static report of #562.
+**Depends on / blocks.** Blocks the "name the changed tool" part of #580.
 
 ## 7. See Also
 
 - [[../introspector/spec]] — primary consumer of `ServerConfig`/`validate_server_config`
-- [[#6. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — v3 field registry and digest granularity
+- [[#6. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — per-tool digest granularity (#580), not implemented; the v3 field registry is in §2 `metadata`
 - [[../cli/spec]] — consumer of `cli::{OutputFormat,ExitCode}` and the error-classification contract
 - [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]] / [[../skill/spec#8. `resolve_skill_output_path` — Path Confinement]] — the two `confinement::resolve_confined_path` consumers
 - [[../constitution]] — security principles this crate embodies workspace-wide

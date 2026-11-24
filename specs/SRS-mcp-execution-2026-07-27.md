@@ -33,8 +33,9 @@ related:
 
 > [!warning] Planned content
 > Section [[#3.2.8 Planned: Script-First Capabilities]] (FR-030 to FR-046) is
-> the one exception: it records adopted but unimplemented requirements and is
-> marked planned throughout. Every other `SHALL` statement is as described
+> the one exception: it records adopted requirements, of which FR-030 to FR-035
+> (#556) are now implemented and marked so, and the rest are unimplemented and
+> marked planned. Every other `SHALL` statement is as described
 > above.
 
 ## 1. Introduction
@@ -372,7 +373,7 @@ without parsing the generated TypeScript.
 - *Acceptance criteria*:
   1. Every `generate`/`generate_with_categories` call emits `_meta.json`
      conforming to `mcp_execution_core::metadata::ServerMetadata`, tagged
-     with `METADATA_SCHEMA_VERSION` (`2`, since #468/#497). `ServerMetadata`
+     with `METADATA_SCHEMA_VERSION` (`3`, since #568; `2` since #468/#497). `ServerMetadata`
      requires a `provenance: GenerationProvenance` field — `generated_at`
      plus a SHA-256 `ConfigFingerprint` over the non-secret structure of the
      `&ServerConfig` passed into `generate`/`generate_with_categories`, and a
@@ -943,8 +944,11 @@ previously-resolved path.
 
 #### 3.2.8 Planned: Script-First Capabilities
 
-> [!warning] Planned, not implemented
-> Nothing in this subsection exists in the code. These statements record the
+> [!warning] Planned, partly implemented
+> FR-030 to FR-035 (#482, #565, #566, #567, #568, #570; parent #556) are
+> implemented: each carries a "Status: implemented" line and its detail is in
+> the as-built text of [[codegen/spec#13. Script-First Capabilities (implemented, #556)]].
+> FR-036 to FR-046 do not exist in the code. These statements record the
 > requirements of the direction adopted on 2026-11-24
 > ([[BRD-mcp-execution-2026-07-27#Direction (adopted 2026-11-24)]]) and are
 > not restatements of tested behaviour. Detail, constraints and open decisions
@@ -954,8 +958,9 @@ previously-resolved path.
 > (#569) and `specs/decisions/ADR-581-code-mode-interoperability.md` (#581).
 > The first gates FR-037 to FR-041.
 >
-> Verification method for every requirement here: **Planned, not yet
-> implemented.**
+> Verification method: FR-030 to FR-035 are verified by the acceptance and
+> unit tests cited in the codegen, core, introspector, skill and cli specs;
+> every other requirement here is **planned, not yet implemented.**
 
 > [!info] Traceability
 > Traces to: [[BRD-mcp-execution-2026-07-27#Planned script-first capabilities]]
@@ -965,7 +970,9 @@ schema, generate a result type that follows that schema and shall prefer a
 tool call's structured content over its text content. The system shall keep a
 generic result declaration for a tool without an output schema.
 
-- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Detail*: [[codegen/spec#13.2 Typed results (#482)]].
+- *Status*: implemented. A degraded declared result keeps the structured
+  source and the widened JSON union; every result type ends in `| undefined`.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-030
 
 **FR-031** (#565): The system shall represent in generated types the schema
@@ -973,7 +980,10 @@ constructs that constrain a tool's arguments (allowed values, alternatives,
 nullability, local references) or shall fall back to an explicit unknown type.
 The system shall perform the conversion within named resource bounds.
 
-- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Detail*: [[codegen/spec#13.1 Schema-to-TypeScript conversion (#565, #584)]].
+- *Status*: implemented, with one deliberate deviation approved by the user:
+  narrowing-only keywords and tuples are not turned into `unknown`; the
+  superset type is kept with a diagnostic (FR-031.6).
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-031
 
 **FR-032** (#566): The system shall generate, for each server, a typed catalog
@@ -982,15 +992,17 @@ annotation markers, and shall offer three detail levels (names, catalog, full
 tool file). The system shall generate the catalog and the tool files from the
 same converted types so that they cannot disagree.
 
-- *Detail*: [[codegen/spec]], "Planned Changes"; [[files/spec]] where a
+- *Detail*: [[codegen/spec#13.4 Typed tool catalog (#566)]]; [[files/spec]] where a
   fixed file is added.
+- *Status*: implemented (`catalog.ts`, top level, type-only).
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-032
 
 **FR-033** (#567): The system shall generate tool files that do not repeat a
 fixed command-line block and shall provide that behaviour through a shared
-module, with the behaviour of a single call unchanged.
+module (`_runtime/cli.ts`). The single-call output shape is the one of FR-035.
 
-- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Detail*: [[codegen/spec#13.6 Single-call mode (#567, #570, #583)]].
+- *Status*: implemented. The direct-run defect #583 is fixed in the shared module.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-033
 
 **FR-034** (#568): The system shall capture the annotations a server reports
@@ -999,8 +1011,10 @@ persist them in `_meta.json` version 3. The system shall define the version 3
 fields in one registry and shall reject a version 2 directory with a message
 that says to regenerate.
 
-- *Detail*: [[core/spec]] (registry), [[introspector/spec]] (capture),
-  [[codegen/spec]] (writing), "Planned Changes".
+- *Detail*: [[core/spec#`metadata` module (`src/metadata.rs`)]] (registry), [[introspector/spec#9. Annotation Capture (#568)]] (capture),
+  [[codegen/spec#13.5 Annotations in generated output (#568)]] (writing).
+- *Status*: implemented. FR-034.12's size bound is the title cap only; the
+  payload is not added to the per-tool size checks at introspection.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-034
 
 **FR-035** (#570): The system shall make the single-call output of a generated
@@ -1009,7 +1023,8 @@ stack trace unless debugging is requested. The system shall accept a single
 JSON object as the argument and shall report a malformed argument without
 repeating its text.
 
-- *Detail*: [[codegen/spec]], "Planned Changes".
+- *Detail*: [[codegen/spec#13.6 Single-call mode (#567, #570, #583)]].
+- *Status*: implemented. An empty success prints nothing and exits 0.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-035
 
 **FR-036** (#571): The system shall provide a runner that executes a script
@@ -1199,7 +1214,8 @@ written) and the in-memory-only session table in `mcp-execution-server`
 | FR-027 | Test (regression, secret-substring assertion) | Secret never appears in `Debug` output | Passing |
 | FR-028 | Test (regression, forged-boundary attempt) | Sanitization + boundary both hold under attack input | Passing |
 | FR-029 | Test (unit, symlink-at-boundary scenarios) | Fresh-resolution-per-write and boundary-symlink rejection both confirmed | Passing |
-| FR-030 to FR-046 | Planned, not yet implemented | Criteria are stated per requirement in [[#3.2.8 Planned: Script-First Capabilities]] and in each block spec's "Planned Changes" | Planned |
+| FR-030 to FR-035 | Test (acceptance, unit, tsc and node runs of generated code) | Criteria in [[codegen/spec#13. Script-First Capabilities (implemented, #556)]] and the core, introspector, skill and cli specs | Passing |
+| FR-036 to FR-046 | Planned, not yet implemented | Criteria are stated per requirement in [[#3.2.8 Planned: Script-First Capabilities]] and in each block spec's "Planned Changes" | Planned |
 
 > [!note]
 > "Passing" reflects the existing, already-implemented test suite this SRS

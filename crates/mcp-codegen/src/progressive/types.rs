@@ -10,6 +10,24 @@ use crate::progressive::observed::{
 };
 use serde::{Deserialize, Serialize};
 
+/// How the generated tool function asks the runtime bridge for a tool's result.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_codegen::progressive::ResultSource;
+///
+/// assert_eq!(serde_json::to_string(&ResultSource::Structured).unwrap(), "\"structured\"");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultSource {
+    /// The text content of the result; used when the server declares no output schema.
+    Content,
+    /// The result's `structuredContent`; used when the server declares an output schema.
+    Structured,
+}
+
 /// Context for rendering a single tool template.
 ///
 /// Contains all data needed to generate one tool file in the
@@ -18,8 +36,7 @@ use serde::{Deserialize, Serialize};
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ToolContext;
-/// use serde_json::json;
+/// use mcp_execution_codegen::progressive::{ResultSource, ToolContext};
 ///
 /// let context = ToolContext {
 ///     server_id: "github".to_string(),
@@ -28,8 +45,11 @@ use serde::{Deserialize, Serialize};
 ///     server_id_literal: "github".to_string(),
 ///     typescript_name: "createIssue".to_string(),
 ///     description: "Creates a new issue".to_string(),
-///     input_schema: json!({"type": "object"}),
-///     properties: vec![],
+///     params_description: None,
+///     params_type: "{ title: string }".to_string(),
+///     result_type: "unknown | undefined".to_string(),
+///     result_source: ResultSource::Content,
+///     observed_hint: None,
 ///     category: Some("issues".to_string()),
 ///     keywords: Some("create,issue,new,bug".to_string()),
 ///     short_description: "Create a new issue".to_string(),
@@ -52,11 +72,17 @@ pub struct ToolContext {
     pub typescript_name: String,
     /// Human-readable description
     pub description: String,
-    /// JSON Schema for input parameters, with `description` fields sanitized
-    /// for safe interpolation into `JSDoc` block comments (see issue #102).
-    pub input_schema: serde_json::Value,
-    /// Extracted properties for template rendering
-    pub properties: Vec<PropertyInfo>,
+    /// Description of the whole input schema, sanitized for a `JSDoc` comment
+    pub params_description: Option<String>,
+    /// TypeScript type of the parameters, in the multi-line declaration form
+    pub params_type: String,
+    /// TypeScript type of the result, ending in `| undefined` for an empty success
+    pub result_type: String,
+    /// Which part of the tool result the generated function asks the bridge for
+    pub result_source: ResultSource,
+    /// `JSDoc` text describing a result shape observed in a past call, for tools that declare
+    /// no output schema
+    pub observed_hint: Option<String>,
     /// Optional category for tool grouping
     pub category: Option<String>,
     /// Optional keywords for discovery via grep/search
@@ -67,37 +93,6 @@ pub struct ToolContext {
     pub short_description: String,
     /// `JSDoc` tag lines for the annotations the server stated, empty when none were
     pub annotation_tags: Vec<String>,
-}
-
-/// Information about a single parameter property.
-///
-/// Used in Handlebars templates to render parameter type definitions.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::progressive::PropertyInfo;
-///
-/// let prop = PropertyInfo {
-///     name: "title".to_string(),
-///     typescript_type: "string".to_string(),
-///     description: Some("Issue title".to_string()),
-///     required: true,
-/// };
-///
-/// assert_eq!(prop.name, "title");
-/// assert!(prop.required);
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PropertyInfo {
-    /// Property name
-    pub name: String,
-    /// TypeScript type (e.g., "string", "number", "boolean")
-    pub typescript_type: String,
-    /// Optional description from schema
-    pub description: Option<String>,
-    /// Whether the property is required
-    pub required: bool,
 }
 
 /// Context for rendering the index.ts template.
@@ -472,8 +467,11 @@ mod tests {
             server_id_literal: "github".to_string(),
             typescript_name: "createIssue".to_string(),
             description: "Creates an issue".to_string(),
-            input_schema: json!({"type": "object"}),
-            properties: vec![],
+            params_description: None,
+            params_type: "{}".to_string(),
+            result_type: "unknown | undefined".to_string(),
+            result_source: ResultSource::Content,
+            observed_hint: None,
             category: Some("issues".to_string()),
             keywords: Some("create,issue,new".to_string()),
             short_description: "Create a new issue".to_string(),
@@ -488,17 +486,15 @@ mod tests {
     }
 
     #[test]
-    fn test_property_info() {
-        let prop = PropertyInfo {
-            name: "title".to_string(),
-            typescript_type: "string".to_string(),
-            description: Some("Issue title".to_string()),
-            required: true,
-        };
-
-        assert_eq!(prop.name, "title");
-        assert_eq!(prop.typescript_type, "string");
-        assert!(prop.required);
+    fn test_result_source_serializes_as_template_literal() {
+        assert_eq!(
+            serde_json::to_value(ResultSource::Content).unwrap(),
+            json!("content")
+        );
+        assert_eq!(
+            serde_json::to_value(ResultSource::Structured).unwrap(),
+            json!("structured")
+        );
     }
 
     #[test]

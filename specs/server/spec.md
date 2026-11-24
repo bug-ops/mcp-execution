@@ -324,9 +324,13 @@ deterministically wins over an in-progress poll). The scan itself
 `.ts` files per subdirectory, excluding `index.ts` (the package's
 always-present re-export entry point, matched case-insensitively against
 `INDEX_FILE_NAME` for consistency with `disambiguate_output_filename`'s own
-handling of `index` — issue #477) and files starting with `_` (defensive:
-real generator output never places a `_`-prefixed `.ts` file at this level),
-and the subdirectory's mtime as `generated_at`.
+handling of `index` — issue #477), `catalog.ts` (`CATALOG_FILE_NAME`, the
+type-only signature catalog of #566, matched the same way; it is not a tool,
+FR-032.10) and files starting with `_`, and the subdirectory's mtime as
+`generated_at`. The `_` rule was written as defensive; known limitation #598:
+a tool whose TypeScript name starts with an underscore is a real per-tool file
+that this count misses (the runtime files live under `_runtime/`, a directory,
+so they never reach this filter). Known limitation, not a requirement.
 
 ### `generate_skill`
 
@@ -795,7 +799,7 @@ rules of the skill block have to hold for what `save_skill` writes.
 Ask first: any exception to FR-043.13; any change to the declared tool schemas beyond bounds
 that mirror the runtime rule.
 
-**Depends on / blocks.** Same dependencies as the skill block (#566, #571). The handlers change together with the
+**Depends on / blocks.** Same dependencies as the skill block (#566, implemented; #571, not implemented). The handlers change together with the
 skill block in one pull request, as the project's specification rule requires. Tracked under epic #558.
 
 **Deferred.** Search and execute tools for clients that have no shell (a gateway over the generated servers) are

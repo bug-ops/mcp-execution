@@ -2008,13 +2008,13 @@ fn test_runtime_bridge_returns_structured_content_when_content_empty() {
     );
 }
 
-/// Regression guard for #255: a successful response with an empty `content` array and no
-/// `structuredContent` at all must surface as a clear rejection, not crash on an unguarded
-/// `content[0]` dereference.
+/// Regression guard for #255 and #482: a successful response with an empty `content` array and
+/// no `structuredContent` at all is a valid empty success that resolves to `undefined`, not a
+/// rejection and not a crash on an unguarded `content[0]` dereference.
 ///
 /// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
 #[test]
-fn test_runtime_bridge_rejects_empty_content_without_structured_content() {
+fn test_runtime_bridge_resolves_empty_content_without_structured_content_to_undefined() {
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
@@ -2032,7 +2032,7 @@ fn test_runtime_bridge_rejects_empty_content_without_structured_content() {
     });
 
     let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
-        "test_runtime_bridge_rejects_empty_content_without_structured_content",
+        "test_runtime_bridge_resolves_empty_content_without_structured_content_to_undefined",
         &bridge.content,
         &mcp_json,
         SINGLE_CALL_HARNESS_TS,
@@ -2046,9 +2046,9 @@ fn test_runtime_bridge_rejects_empty_content_without_structured_content() {
         "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
-        stdout.contains("REJECTED:"),
-        "an empty content array with no structuredContent must reject with a clear error, not \
-         crash or silently resolve: stdout: {stdout}, stderr: {stderr}"
+        stdout.contains("RESOLVED: undefined"),
+        "an empty content array with no structuredContent must resolve to undefined, not \
+         reject: stdout: {stdout}, stderr: {stderr}"
     );
     assert!(
         !stdout.contains("Cannot read properties"),
@@ -2153,7 +2153,7 @@ fn test_runtime_bridge_falls_back_to_structured_content_on_null_first_content_el
 
 /// Regression guard for #262: a successful response carrying a literal `structuredContent: null`
 /// alongside an empty `content` array must be treated the same as an absent `structuredContent`
-/// (i.e. reject with the standard empty-content error), not returned as if `null` were real data.
+/// (i.e. an empty success resolving to `undefined`), not returned as if `null` were real data.
 ///
 /// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
 #[test]
@@ -2191,15 +2191,15 @@ fn test_runtime_bridge_treats_null_structured_content_as_absent() {
         "harness process itself must exit 0 regardless of resolve/reject: stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
-        stdout.contains("REJECTED:") && stdout.contains("no content and no structuredContent"),
-        "a literal structuredContent: null must be treated as absent and reject with the \
-         standard empty-content error, not resolve with null: stdout: {stdout}, stderr: {stderr}"
+        stdout.contains("RESOLVED: undefined"),
+        "a literal structuredContent: null must be treated as absent and resolve to undefined, \
+         not resolve with null: stdout: {stdout}, stderr: {stderr}"
     );
 }
 
 /// Regression guard for #262: an `isError: true` response with an empty `content` array but a
-/// populated `structuredContent` must surface that structured detail in the thrown error message
-/// instead of discarding it behind a generic 'Unknown error'.
+/// populated `structuredContent` must surface that structured detail in the error's
+/// `serverMessage` (never in `message`) instead of discarding it.
 ///
 /// Skips (does not fail) when `tsc` or `node` is not on `PATH`.
 #[test]
@@ -2239,12 +2239,219 @@ fn test_runtime_bridge_surfaces_structured_content_on_tool_error() {
     assert!(
         stdout.contains("REJECTED:")
             && stdout.contains("Tool returned error")
-            && stdout.contains(r#"{"reason":"boom"}"#),
-        "an isError response with populated structuredContent must surface it in the error \
-         message instead of falling back to 'Unknown error': stdout: {stdout}, stderr: {stderr}"
+            && stdout.contains(r#"SERVER_MESSAGE: {"reason":"boom"}"#),
+        "an isError response with populated structuredContent must surface it in \
+         serverMessage: stdout: {stdout}, stderr: {stderr}"
     );
+    let rejection = stdout
+        .lines()
+        .find(|l| l.starts_with("REJECTED:"))
+        .unwrap_or_default();
     assert!(
-        !stdout.contains("Unknown error"),
-        "structuredContent detail must take priority over the generic fallback: stdout: {stdout}"
+        !rejection
+            .split(" SERVER_MESSAGE:")
+            .next()
+            .unwrap_or_default()
+            .contains("boom"),
+        "server text must stay out of the error message: {rejection}"
+    );
+}
+
+fn rendered_bridge() -> String {
+    let code = ProgressiveGenerator::new()
+        .expect("Failed to create generator")
+        .generate(&create_test_server_info(), &test_config())
+        .expect("Failed to generate code");
+    code.files
+        .iter()
+        .find(|f| f.path == "_runtime/mcp-bridge.ts")
+        .expect("_runtime/mcp-bridge.ts not found")
+        .content
+        .clone()
+}
+
+fn fake_mcp_json(script_path: &str) -> serde_json::Value {
+    json!({ "mcpServers": { "fake": { "command": "node", "args": [script_path] } } })
+}
+
+/// Fake server that answers `method` with the JSON-RPC `error` object `error_js` and everything
+/// else normally.
+fn failing_fake_server_js(method: &str, error_js: &str) -> String {
+    format!(
+        r"
+const readline = require('readline');
+const rl = readline.createInterface({{ input: process.stdin, terminal: false }});
+rl.on('line', (line) => {{
+  if (line.trim().length === 0) return;
+  const message = JSON.parse(line);
+  if (message.method === {method:?}) {{
+    process.stdout.write(JSON.stringify({{ jsonrpc: '2.0', id: message.id, error: {error_js} }}) + '\n');
+  }} else if (message.method === 'initialize') {{
+    process.stdout.write(JSON.stringify({{ jsonrpc: '2.0', id: message.id, result: {{ protocolVersion: '2024-11-05', capabilities: {{}}, serverInfo: {{ name: 'fake', version: '0.0.0' }} }} }}) + '\n');
+  }}
+}});
+"
+    )
+}
+
+/// Runs one successful call with `MCPBRIDGE_OBSERVE_SHAPES` pointing at a file prepared by
+/// `prepare`, returning that file's content afterwards (empty when it does not exist).
+#[cfg(unix)]
+fn run_with_recorder_target(test_name: &str, prepare: impl FnOnce(&std::path::Path)) -> String {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target = dir.path().join("observed.jsonl");
+    prepare(&target);
+    let script = write_test_script(&respond_once_fake_server_js(
+        r#"{ "content": [{ "type": "text", "text": "{\"a\":1}" }] }"#,
+    ));
+    let target_arg = target.to_string_lossy().into_owned();
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        test_name,
+        &rendered_bridge(),
+        &fake_mcp_json(&script),
+        SINGLE_CALL_HARNESS_TS,
+        &[("MCPBRIDGE_OBSERVE_SHAPES", &target_arg)],
+    ) else {
+        return "SKIPPED".to_string();
+    };
+    assert!(success, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains(r#"RESOLVED: {"a":1}"#),
+        "the call itself must succeed whatever the recorder does: {stdout}"
+    );
+    if target.is_file() {
+        std::fs::read_to_string(&target).unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runtime_bridge_recorder_skips_a_preexisting_group_readable_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let recorded = run_with_recorder_target(
+        "test_runtime_bridge_recorder_skips_a_preexisting_group_readable_file",
+        |target| {
+            std::fs::write(target, "seed\n").unwrap();
+            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        },
+    );
+
+    if recorded != "SKIPPED" {
+        assert_eq!(recorded, "seed\n", "a 0644 file must not be appended to");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runtime_bridge_recorder_does_not_follow_a_symlink() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, "victim\n").unwrap();
+    // A private, user-owned regular file passes the ownership and mode checks, so only the
+    // no-follow open can stop the append.
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let victim_for_link = victim.clone();
+
+    let _ = run_with_recorder_target(
+        "test_runtime_bridge_recorder_does_not_follow_a_symlink",
+        move |target| std::os::unix::fs::symlink(&victim_for_link, target).unwrap(),
+    );
+
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "victim\n");
+}
+
+#[test]
+fn test_runtime_bridge_non_string_server_message_is_dropped_not_turned_into_call_failed() {
+    let name =
+        "test_runtime_bridge_non_string_server_message_is_dropped_not_turned_into_call_failed";
+    let script = write_test_script(&failing_fake_server_js(
+        "tools/call",
+        "{ code: -32000, message: { nested: true } }",
+    ));
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        name,
+        &rendered_bridge(),
+        &fake_mcp_json(&script),
+        SINGLE_CALL_HARNESS_TS,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(success, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains("REJECTED: McpToolError: Tool execution failed"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("SERVER_MESSAGE"), "{stdout}");
+}
+
+#[test]
+fn test_runtime_bridge_init_error_keeps_the_truncation_flag() {
+    let name = "test_runtime_bridge_init_error_keeps_the_truncation_flag";
+    let script = write_test_script(&failing_fake_server_js(
+        "initialize",
+        "{ code: -32000, message: 'a'.repeat(5000) }",
+    ));
+    let harness = r"
+import { callMCPTool, McpToolError } from './mcp-bridge.js';
+callMCPTool('fake', 'noop', {}).then(
+  () => { console.log('UNEXPECTED_SUCCESS'); process.exit(0); },
+  (e: unknown) => {
+    const err = e as McpToolError;
+    console.log(JSON.stringify({
+      kind: err.kind,
+      truncated: err.serverMessageTruncated,
+      length: err.serverMessage?.length,
+      message: err.message,
+    }));
+    process.exit(0);
+  }
+);
+";
+    let Some((success, stdout, stderr)) = compile_and_run_bridge_harness(
+        name,
+        &rendered_bridge(),
+        &fake_mcp_json(&script),
+        harness,
+        &[],
+    ) else {
+        return;
+    };
+
+    assert!(success, "stdout: {stdout}\nstderr: {stderr}");
+    let seen: serde_json::Value =
+        serde_json::from_str(stdout.lines().last().unwrap_or_default()).expect("harness JSON");
+    assert_eq!(seen["kind"], "rpc_error", "{seen}");
+    assert_eq!(seen["truncated"], true, "{seen}");
+    assert_eq!(seen["length"], 500, "{seen}");
+    assert!(
+        !seen["message"].as_str().unwrap().contains("aaaa"),
+        "{seen}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runtime_bridge_recorder_does_not_block_on_a_fifo() {
+    let recorded = run_with_recorder_target(
+        "test_runtime_bridge_recorder_does_not_block_on_a_fifo",
+        |target| {
+            let made = std::process::Command::new("mkfifo")
+                .arg(target)
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(made, "mkfifo is required on unix test hosts");
+        },
+    );
+
+    assert!(
+        recorded.is_empty() || recorded == "SKIPPED",
+        "nothing is written into a FIFO: {recorded:?}"
     );
 }

@@ -254,10 +254,19 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
             flags,
             name,
             progressive_output,
+            observed_shapes,
             dry_run,
         } => {
             let source = ServerSource::try_from(flags)?;
-            commands::generate::run(source, name, progressive_output, dry_run, output_format).await
+            commands::generate::run(
+                source,
+                name,
+                progressive_output,
+                observed_shapes,
+                dry_run,
+                output_format,
+            )
+            .await
         }
         Commands::Server { action } => commands::server::run(action, output_format).await,
         Commands::Setup => commands::setup::run(output_format).await,

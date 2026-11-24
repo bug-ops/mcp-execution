@@ -219,10 +219,11 @@ mod tests {
             "name": "test_tool",
             "name_literal": "test_tool",
             "server_id_literal": "test",
-            "properties": [],
-            "has_required_properties": false,
-            "annotation_tags": [],
-            "input_schema": {}
+            "short_description": "Test tool",
+            "params_type": "Record<string, unknown>",
+            "result_type": "unknown | undefined",
+            "result_source": "content",
+            "annotation_tags": []
         });
 
         let result = engine.render("progressive/tool", &tool_context);

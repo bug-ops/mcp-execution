@@ -11,98 +11,28 @@
 {{#if short_description}}
  * @description {{short_description}}
 {{/if}}
- */
-import { callMCPTool } from './_runtime/mcp-bridge.ts';
-
-/**
-{{#if short_description}}
- * {{short_description}}
-{{else}}
- * {{description}}
-{{/if}}
-{{#if input_schema.description}}
- *
- * {{input_schema.description}}
-{{/if}}
-{{#if category}}
- *
- * @category {{category}}
-{{/if}}
-{{#if keywords}}
- * @keywords {{keywords}}
-{{/if}}
 {{#each annotation_tags}}
  * {{this}}
 {{/each}}
- *
- * @param params - Tool parameters
- * @returns Tool execution result
- * @throws {Error} If tool execution fails
  */
+import { callMCPTool } from './_runtime/mcp-bridge.ts';
+import { runIfMain } from './_runtime/cli.ts';
+
 export async function {{typescript_name}}(
   params: {{typescript_name}}Params
 ): Promise<{{typescript_name}}Result> {
-  return (await callMCPTool('{{{server_id_literal}}}', '{{{name_literal}}}', params)) as {{typescript_name}}Result;
+  return (await callMCPTool('{{{server_id_literal}}}', '{{{name_literal}}}', params, '{{result_source}}')) as {{typescript_name}}Result;
 }
 
-/**
- * Parameters for {{typescript_name}} tool.
-{{#if input_schema.description}}
- *
- * {{input_schema.description}}
+{{#if params_description}}
+/** {{params_description}} */
 {{/if}}
- */
 {{!-- type alias, not interface: only aliases get an implicit index signature for Record<string, unknown> --}}
-export type {{typescript_name}}Params = {
-{{#each properties}}
-  {{#if description}}
-  /**
-   * {{description}}
-   */
-  {{/if}}
-{{#if required}}
-  {{name}}: {{{typescript_type}}};
-{{else}}
-  {{name}}?: {{{typescript_type}}};
+export type {{typescript_name}}Params = {{{params_type}}};
+
+{{#if observed_hint}}
+/** {{observed_hint}} */
 {{/if}}
-{{/each}}
-};
+export type {{typescript_name}}Result = {{{result_type}}};
 
-/**
- * Result type for {{typescript_name}} tool.
- *
- * `callMCPTool` returns a parsed JSON object or array for JSON-shaped text content, a bare
- * string for plain-text content, or the content item itself (an object) for non-text content
- * types — this union reflects all three, rather than narrowing to an object-only shape.
- * Refer to the MCP server documentation for the specific shape this tool actually returns.
- *
- * Narrow before accessing a property, e.g.:
- * `if (typeof result === 'object' && result !== null && !Array.isArray(result)) { result.foo }`
- */
-export type {{typescript_name}}Result = Record<string, unknown> | unknown[] | string;
-
-// CLI mode: Execute when run directly
-// This enables autonomous execution via: node {{typescript_name}}.ts '{"param":"value"}'
-if (import.meta.url === `file://${process.argv[1]}`) {
-  (async () => {
-    try {
-      // Parse parameters from command line argument
-      const params = JSON.parse(process.argv[2] || '{}');
-
-      // Execute the tool
-      const result = await {{typescript_name}}(params as {{typescript_name}}Params);
-
-      // Output result as JSON
-      console.log(JSON.stringify(result, null, 2));
-      process.exit(0);
-    } catch (error) {
-      // Output error as JSON
-      const errorObj = error instanceof Error
-        ? { error: error.message, stack: error.stack }
-        : { error: String(error) };
-
-      console.error(JSON.stringify(errorObj, null, 2));
-      process.exit(1);
-    }
-  })();
-}
+runIfMain(import.meta.url, {{typescript_name}});

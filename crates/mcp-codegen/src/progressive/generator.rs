@@ -31,21 +31,21 @@
 //! ```
 
 use crate::common::types::{GeneratedCode, GeneratedFile};
-use crate::common::typescript::{
-    MAX_SCHEMA_RECURSION_DEPTH, disambiguate_identifier, extract_properties,
-    sanitize_ts_identifier, to_camel_case,
+use crate::common::typescript::{sanitize_jsdoc, sanitize_ts_identifier, to_camel_case};
+use crate::progressive::annotations::{catalog_hints, jsdoc_tags};
+use crate::progressive::catalog::{
+    CATALOG_DESCRIPTION_CHARS, CATALOG_ENTRY_MAX_BYTES, CatalogEntry, render_catalog,
 };
-use crate::progressive::annotations::jsdoc_tags;
-use crate::progressive::catalog::{CATALOG_ENTRY_MAX_BYTES, render_catalog};
+use crate::progressive::observed::ObservedShapes;
+use crate::progressive::tool_types::{DegradeStage, ToolConversions, ToolTypes};
 use crate::progressive::types::{
-    BridgeContext, CategoryInfo, IndexContext, PropertyInfo, ToolCategorization, ToolContext,
-    ToolSummary,
+    BridgeContext, CategoryInfo, IndexContext, ToolCategorization, ToolContext, ToolSummary,
 };
 use crate::template_engine::TemplateEngine;
 use mcp_execution_core::ResourceKind;
 use mcp_execution_core::metadata::{
-    CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, METADATA_SCHEMA_VERSION,
-    ParameterMetadata, ResultTypeOrigin, ServerMetadata, ToolMetadata,
+    CATALOG_FILE_NAME, INDEX_FILE_NAME, MAX_METADATA_FILE_BYTES, METADATA_FILE_NAME,
+    METADATA_SCHEMA_VERSION, ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::provenance::{GenerationProvenance, ToolDigestEntry};
 use mcp_execution_core::{Error, Result, ServerConfig};
@@ -117,14 +117,26 @@ pub(crate) const PER_TOOL_RENDER_BUDGET: usize =
 /// stored as absent.
 pub(crate) const STORED_TYPE_TEXT_MAX_BYTES: usize = 1024;
 
+/// One tool rendered at its final [`DegradeStage`].
+struct RenderedTool {
+    code: String,
+    metadata: ToolMetadata,
+    types: ToolTypes,
+}
+
 /// Upper bound on a fully degraded tool file, built only from capped inputs: the fixed
 /// template text, the tool name in three places, the sanitized description and short
-/// description, the categorization, and the title in two places.
+/// description, the input schema description, the categorization, the title in two places and
+/// the four hint tags.
 pub(crate) const TOOL_FILE_DEGRADED_MAX: usize = TOOL_FILE_FIXED_BYTES
     + 3 * mcp_execution_introspector::MAX_TOOL_NAME_LEN * ESCAPE_EXPANSION
-    + 2 * 256 * 4
+    + 3 * 256 * 4
     + CATEGORIZATION_BYTES_MAX * ESCAPE_EXPANSION
-    + 2 * TITLE_BYTES_MAX;
+    + 2 * TITLE_BYTES_MAX
+    + HINT_TAGS_BYTES_MAX;
+
+/// Bytes of the four hint tag lines (`@readOnlyHint true` and siblings), with room to spare.
+const HINT_TAGS_BYTES_MAX: usize = 4 * 64;
 
 /// Upper bound on a fully degraded `_meta.json` tool entry, built only from capped inputs: the
 /// fixed JSON structure, the raw name and TypeScript name, the raw description, the
@@ -139,8 +151,7 @@ pub(crate) const META_ENTRY_DEGRADED_MAX: usize = META_ENTRY_FIXED_BYTES
 /// `_runtime/cli.ts`, `package.json`, `tsconfig.json`, and the headers of `index.ts`,
 /// `catalog.ts` and `_meta.json`.
 ///
-/// ASSUMPTION: 256 KiB covers these files with room to spare; Track 1 checks it against the
-/// real output.
+/// `test_fixed_files_fit_the_fixed_files_budget` keeps the real output under half of it.
 pub(crate) const FIXED_FILES_BYTES_MAX: usize = 256 * 1024;
 
 // This checks the arithmetic over the modelled constants only: whether those constants really
@@ -256,6 +267,7 @@ const TSCONFIG_JSON: &str = r#"{
 #[derive(Debug)]
 pub struct ProgressiveGenerator<'a> {
     engine: TemplateEngine<'a>,
+    observed: ObservedShapes,
 }
 
 impl ProgressiveGenerator<'_> {
@@ -278,14 +290,22 @@ impl ProgressiveGenerator<'_> {
     /// ```
     pub fn new() -> Result<Self> {
         let engine = TemplateEngine::new()?;
-        Ok(Self { engine })
+        Ok(Self {
+            engine,
+            observed: ObservedShapes::default(),
+        })
     }
 
     /// Supplies observed result shapes recorded by a past run of the generated runtime bridge.
     ///
-    /// `jsonl` holds one JSON object per line. The caller bounds its size. Shapes only ever
-    /// describe tools without a declared output schema. Without this call the output is
-    /// unchanged.
+    /// `jsonl` holds one JSON object per line; the caller bounds its size. A line that is not
+    /// valid JSON, exceeds 8192 bytes, nests deeper than 4 levels, breaks the recorder's key
+    /// rule or uses a keyword outside `type`/`properties`/`required`/`items`/
+    /// `additionalProperties` is skipped, with one warning counting the skipped lines. Valid
+    /// lines of another server are ignored without a warning. The last valid line wins per
+    /// tool name. A shape is
+    /// rendered only as a `JSDoc` hint on the result type of a tool that declares no output
+    /// schema. Without this call the output is unchanged.
     ///
     /// # Examples
     ///
@@ -295,7 +315,8 @@ impl ProgressiveGenerator<'_> {
     /// let generator = ProgressiveGenerator::new().unwrap().with_observed_shapes("");
     /// ```
     #[must_use]
-    pub const fn with_observed_shapes(self, _jsonl: &str) -> Self {
+    pub fn with_observed_shapes(mut self, jsonl: &str) -> Self {
+        self.observed = ObservedShapes::parse(jsonl);
         self
     }
 
@@ -453,7 +474,7 @@ impl ProgressiveGenerator<'_> {
         let mut total_bytes = 0usize;
         let typescript_names = resolve_typescript_names(&server_info.tools);
 
-        let tool_metadata = self.emit_tool_files(
+        let (tool_metadata, catalog_entries) = self.emit_tool_files(
             server_info,
             categorizations,
             &typescript_names,
@@ -469,7 +490,7 @@ impl ProgressiveGenerator<'_> {
             &mut total_bytes,
         )?;
 
-        Self::emit_catalog_file(server_info, &mut code, &mut total_bytes)?;
+        Self::emit_catalog_file(server_info, catalog_entries, &mut code, &mut total_bytes)?;
 
         self.emit_scaffolding_files(&mut code, &mut total_bytes)?;
 
@@ -501,7 +522,8 @@ impl ProgressiveGenerator<'_> {
 
     /// Renders one `.ts` file per tool with categorization metadata, tracking each into `code`.
     ///
-    /// Returns per-tool [`ToolMetadata`] in tool order for the `_meta.json` sidecar.
+    /// Returns the per-tool [`ToolMetadata`] for the `_meta.json` sidecar and the catalog entries,
+    /// both in tool order.
     fn emit_tool_files(
         &self,
         server_info: &ServerInfo,
@@ -509,42 +531,30 @@ impl ProgressiveGenerator<'_> {
         typescript_names: &[String],
         code: &mut GeneratedCode,
         total_bytes: &mut usize,
-    ) -> Result<Vec<ToolMetadata>> {
+    ) -> Result<(Vec<ToolMetadata>, Vec<CatalogEntry>)> {
         let server_id = server_info.id.as_str();
         let mut tool_metadata = Vec::with_capacity(server_info.tools.len());
+        let mut catalog_entries = Vec::with_capacity(server_info.tools.len());
 
         for (idx, tool) in server_info.tools.iter().enumerate() {
-            let tool_name = tool.name.as_str();
-            let categorization = categorizations.get(tool_name);
+            let categorization = categorizations.get(tool.name.as_str());
             let typescript_name = typescript_names.get(idx).cloned().unwrap_or_default();
-            let extracted_properties =
-                Self::extract_property_data(&tool.input_schema).map_err(|source| {
-                    Self::wrap_tool_generation_error(tool, "extract property schema", source)
-                })?;
-            let properties_for_context = extracted_properties
-                .iter()
-                .map(|(info, _)| info.clone())
-                .collect();
-            let tool_context = Self::create_tool_context(
+            let observed = self.observed.shape_for(server_id, tool.name.as_str());
+            let conversions = ToolConversions::new(tool, observed);
+            let rendered = self.render_within_budget(
                 server_id,
                 tool,
                 categorization,
-                typescript_name.clone(),
-                properties_for_context,
-            );
-            let tool_code = self
-                .engine
-                .render("progressive/tool", &tool_context)
-                .map_err(|source| {
-                    Self::wrap_tool_generation_error(tool, "render tool template", source)
-                })?;
+                &typescript_name,
+                &conversions,
+            )?;
 
             add_tracked(
                 code,
                 total_bytes,
                 GeneratedFile {
-                    path: format!("{}.ts", tool_context.typescript_name),
-                    content: tool_code,
+                    path: format!("{typescript_name}.ts"),
+                    content: rendered.code,
                 },
             )
             .map_err(|source| {
@@ -552,20 +562,112 @@ impl ProgressiveGenerator<'_> {
             })?;
 
             tracing::debug!(
-                "Generated tool file: {}.ts (category: {:?})",
-                tool_context.typescript_name,
+                "Generated tool file: {typescript_name}.ts (category: {:?})",
                 categorization.map(|c| &c.category)
             );
 
-            tool_metadata.push(Self::create_tool_metadata(
+            catalog_entries.push(Self::create_catalog_entry(
                 tool,
                 categorization,
-                typescript_name,
-                extracted_properties,
+                &typescript_name,
+                &rendered.types,
             ));
+            tool_metadata.push(rendered.metadata);
         }
 
-        Ok(tool_metadata)
+        Ok((tool_metadata, catalog_entries))
+    }
+
+    /// Renders one tool at the most specific [`DegradeStage`] whose tool file plus `_meta.json`
+    /// entry fit [`PER_TOOL_RENDER_BUDGET`], warning once per stage it steps down.
+    ///
+    /// The last stage is returned even if it still exceeded the budget: it contains only
+    /// capped inputs (see [`TOOL_FILE_DEGRADED_MAX`] and [`META_ENTRY_DEGRADED_MAX`]).
+    fn render_within_budget(
+        &self,
+        server_id: &str,
+        tool: &ToolInfo,
+        categorization: Option<&ToolCategorization>,
+        typescript_name: &str,
+        conversions: &ToolConversions<'_>,
+    ) -> Result<RenderedTool> {
+        let mut stage = DegradeStage::Full;
+        loop {
+            let types = conversions.build(stage);
+            let context = Self::create_tool_context(
+                server_id,
+                tool,
+                categorization,
+                typescript_name.to_string(),
+                &types,
+            );
+            let code = self
+                .engine
+                .render("progressive/tool", &context)
+                .map_err(|source| {
+                    Self::wrap_tool_generation_error(tool, "render tool template", source)
+                })?;
+            let metadata = Self::create_tool_metadata(
+                tool,
+                categorization,
+                typescript_name.to_string(),
+                &types,
+            )
+            .map_err(|source| {
+                Self::wrap_tool_generation_error(tool, "build tool metadata", source)
+            })?;
+            let entry_bytes = serde_json::to_vec(&metadata)
+                .map_err(|source| {
+                    Self::wrap_tool_generation_error(
+                        tool,
+                        "measure tool metadata",
+                        Error::SerializationError {
+                            message: "failed to serialize tool metadata".to_string(),
+                            source: Some(source),
+                        },
+                    )
+                })?
+                .len()
+                + 1;
+            let size = code.len() + entry_bytes;
+            match stage.next() {
+                Some(next) if size > PER_TOOL_RENDER_BUDGET => {
+                    tracing::warn!(
+                        tool = ?tool.name.as_str(),
+                        size_bytes = size,
+                        budget_bytes = PER_TOOL_RENDER_BUDGET,
+                        ?stage,
+                        "tool exceeds its share of the output budget; degrading its types"
+                    );
+                    stage = next;
+                }
+                _ => {
+                    return Ok(RenderedTool {
+                        code,
+                        metadata,
+                        types,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Builds the catalog entry of one tool from its rendered types.
+    fn create_catalog_entry(
+        tool: &ToolInfo,
+        categorization: Option<&ToolCategorization>,
+        typescript_name: &str,
+        types: &ToolTypes,
+    ) -> CatalogEntry {
+        let text =
+            categorization.map_or(tool.description.as_str(), |c| c.short_description.as_str());
+        CatalogEntry {
+            typescript_name: typescript_name.to_string(),
+            description: sanitize_jsdoc(text, CATALOG_DESCRIPTION_CHARS),
+            params_type: types.params_compact.clone(),
+            result_type: types.result_compact.clone(),
+            hints: tool.annotations.as_ref().and_then(catalog_hints),
+        }
     }
 
     /// Builds and renders `index.ts` with category grouping, tracking it into `code`.
@@ -601,13 +703,14 @@ impl ProgressiveGenerator<'_> {
     /// Renders `catalog.ts`, tracking it into `code`.
     fn emit_catalog_file(
         server_info: &ServerInfo,
+        entries: Vec<CatalogEntry>,
         code: &mut GeneratedCode,
         total_bytes: &mut usize,
     ) -> Result<()> {
         add_tracked(
             code,
             total_bytes,
-            render_catalog(&sanitize_jsdoc(&server_info.name, 256), Vec::new())?,
+            render_catalog(&sanitize_jsdoc(&server_info.name, 256), entries)?,
         )?;
 
         tracing::debug!("Generated {}", CATALOG_FILE_NAME);
@@ -687,21 +790,17 @@ impl ProgressiveGenerator<'_> {
     /// collisions across a server's tools are disambiguated consistently between the tool
     /// file and its `index.ts` re-export.
     ///
-    /// `properties` must come from [`extract_property_data`](Self::extract_property_data) run
-    /// against `tool.input_schema`. It is taken as a parameter rather than derived internally
-    /// so that callers generating both the tool context and [`ToolMetadata`] for the same tool
-    /// (see [`create_tool_metadata`](Self::create_tool_metadata)) can share a single schema
-    /// walk instead of parsing and sanitizing the same schema twice (issue #295).
+    /// `types` must be built from the same tool's schemas (see [`ToolConversions`]); it is
+    /// taken as a parameter so the tool file and its `_meta.json` entry share one conversion.
     ///
-    /// Takes no `&self`: unlike [`extract_property_data`](Self::extract_property_data), nothing
-    /// here reads generator state (the `Handlebars` engine is only touched by the caller, when
-    /// rendering the context this returns).
+    /// Takes no `&self`: nothing here reads generator state (the `Handlebars` engine is only
+    /// touched by the caller, when rendering the context this returns).
     fn create_tool_context(
         server_id: &str,
-        tool: &mcp_execution_introspector::ToolInfo,
+        tool: &ToolInfo,
         categorization: Option<&ToolCategorization>,
         typescript_name: String,
-        properties: Vec<PropertyInfo>,
+        types: &ToolTypes,
     ) -> ToolContext {
         let description = sanitize_jsdoc(&tool.description, 256);
         // Falls back to the tool's own description when no LLM categorization is
@@ -718,8 +817,15 @@ impl ProgressiveGenerator<'_> {
             server_id_literal: sanitize_ts_string_literal(server_id),
             typescript_name,
             description,
-            input_schema: sanitize_schema_jsdoc_descriptions(tool.input_schema.clone()),
-            properties,
+            params_description: tool
+                .input_schema
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(|text| sanitize_jsdoc(text, 256)),
+            params_type: types.params_declaration.clone(),
+            result_type: types.result_declaration.clone(),
+            result_source: types.result_source,
+            observed_hint: types.observed_hint.clone(),
             category: categorization.map(|c| sanitize_jsdoc(&c.category, 128)),
             keywords: categorization.map(|c| render_keywords_for_jsdoc(&c.keywords)),
             short_description,
@@ -821,159 +927,50 @@ impl ProgressiveGenerator<'_> {
         }
     }
 
-    /// Extracts property information from JSON Schema, discarding raw descriptions.
-    ///
-    /// Converts JSON Schema properties into `PropertyInfo` structures
-    /// suitable for template rendering. Sibling property names that sanitize to the same
-    /// TypeScript identifier (e.g. `a-b` and `a.b` both becoming `a_b`) are disambiguated
-    /// with a numeric suffix, since these become fields of the same generated `Params`
-    /// interface and an undetected collision would produce a duplicate, non-compiling field.
-    ///
-    /// Test-only: production code calls [`extract_property_data`](Self::extract_property_data)
-    /// directly and shares the single resulting `Vec` between
-    /// [`create_tool_context`](Self::create_tool_context) and
-    /// [`create_tool_metadata`](Self::create_tool_metadata) instead of extracting twice (issue
-    /// #295). This wrapper remains for tests that only care about the sanitized half.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if schema is malformed or type conversion fails.
-    #[cfg(test)]
-    fn extract_property_infos(schema: &serde_json::Value) -> Result<Vec<PropertyInfo>> {
-        Ok(Self::extract_property_data(schema)?
-            .into_iter()
-            .map(|(info, _raw_description)| info)
-            .collect())
-    }
-
-    /// Extracts property information from JSON Schema, alongside each property's raw
-    /// (un-sanitized) description.
-    ///
-    /// Callers that only need the JSDoc-sanitized `PropertyInfo` for template rendering (e.g.
-    /// [`create_tool_context`](Self::create_tool_context)) can discard the raw-description half.
-    /// Consumers that need the description as originally authored — e.g. the `_meta.json`
-    /// sidecar built by [`create_tool_metadata`](Self::create_tool_metadata), which is JSON
-    /// consumed by Rust rather than text interpolated into a JS comment — use the raw half
-    /// instead, so they are not subject to JSDoc-safety truncation/escaping that doesn't apply
-    /// to their format (issue #141). Both are derived from a single call per tool rather than
-    /// two, since re-walking and re-sanitizing the same schema twice is wasted work (issue
-    /// #295).
-    ///
-    /// Takes no `&self`: this only walks the `schema` it is given, and does not touch
-    /// generator state.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if schema is malformed or type conversion fails.
-    fn extract_property_data(
-        schema: &serde_json::Value,
-    ) -> Result<Vec<(PropertyInfo, Option<String>)>> {
-        let raw_properties = extract_properties(schema);
-
-        let mut properties = Vec::new();
-        let mut used_names = HashSet::new();
-        for prop in raw_properties {
-            let raw_name = prop["name"]
-                .as_str()
-                .ok_or_else(|| Error::ValidationError {
-                    field: "name".to_string(),
-                    reason: "Property name is not a string".to_string(),
-                })?
-                .to_string();
-
-            let typescript_type = prop["type"]
-                .as_str()
-                .ok_or_else(|| Error::ValidationError {
-                    field: "type".to_string(),
-                    reason: "Property type is not a string".to_string(),
-                })?
-                .to_string();
-
-            let required = prop["required"].as_bool().unwrap_or(false);
-
-            // Extract description if available (looked up by the raw schema key, before
-            // sanitization, since that's what the input schema is actually keyed by)
-            let raw_description = schema.as_object().and_then(|obj| {
-                obj.get("properties")
-                    .and_then(|props| props.as_object())
-                    .and_then(|props| props.get(&raw_name))
-                    .and_then(|prop_schema| prop_schema.as_object())
-                    .and_then(|obj| obj.get("description"))
-                    .and_then(|desc| desc.as_str())
-                    .map(str::to_string)
-            });
-            let description = raw_description
-                .as_deref()
-                .map(|desc| sanitize_jsdoc(desc, 256));
-
-            let base_name = sanitize_ts_identifier(&raw_name);
-            properties.push((
-                PropertyInfo {
-                    name: disambiguate_identifier(&base_name, &mut used_names),
-                    typescript_type,
-                    description,
-                    required,
-                },
-                raw_description,
-            ));
-        }
-
-        Ok(properties)
-    }
-
     /// Builds structured metadata for a single tool, for the `_meta.json` sidecar.
     ///
     /// Unlike [`create_tool_context`](Self::create_tool_context), `name`, `description`, and
-    /// parameter descriptions all use the RAW, unsanitized MCP values: the sidecar is a data
-    /// contract consumed by other Rust code, not interpolated into a `JSDoc` comment, so
-    /// JSDoc-safety sanitization (truncation, `*/`-escaping, newline-flattening) would only
-    /// lose fidelity. Parameter descriptions come from
-    /// [`extract_property_data`](Self::extract_property_data)'s raw half rather than the
-    /// JSDoc-sanitized `PropertyInfo` used for template rendering, which is what fully fixes
-    /// the data loss described in issue #141 (the old regex-based parser could not recover
-    /// parameter descriptions from the generated TypeScript at all).
-    ///
-    /// `properties` must come from [`extract_property_data`](Self::extract_property_data) run
-    /// against `tool.input_schema` — passed in rather than derived internally so this can share
-    /// a single schema walk with [`create_tool_context`](Self::create_tool_context) for the same
-    /// tool instead of parsing and sanitizing the same schema twice (issue #295).
+    /// parameter names and descriptions all use the RAW, unsanitized MCP values: the sidecar is a
+    /// data contract consumed by other Rust code, not interpolated into a `JSDoc` comment, so
+    /// JSDoc-safety sanitization (truncation, `*/`-escaping, newline-flattening) would only lose
+    /// fidelity (issue #141). Parameters, the stored result type and its origin come from
+    /// `types`, the same rendering the tool file was built from.
     ///
     /// Takes no `&self`: this only transforms the arguments it is given, and does not touch
     /// generator state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SerializationError`] if the tool manifest cannot be serialized to
+    /// measure it (should not happen with these plain-data types).
     fn create_tool_metadata(
         tool: &ToolInfo,
         categorization: Option<&ToolCategorization>,
         typescript_name: String,
-        properties: Vec<(PropertyInfo, Option<String>)>,
-    ) -> ToolMetadata {
+        types: &ToolTypes,
+    ) -> Result<ToolMetadata> {
         let description = (!tool.description.is_empty()).then(|| tool.description.clone());
         let category = categorization.map(|c| c.category.clone());
         let keywords = categorization.map_or_else(Vec::new, |c| c.keywords.clone());
+        let manifest_size_bytes = serde_json::to_vec(tool)
+            .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+            .map_err(|source| Error::SerializationError {
+                message: "failed to serialize the tool manifest".to_string(),
+                source: Some(source),
+            })?;
 
-        ToolMetadata {
+        Ok(ToolMetadata {
             name: tool.name.clone(),
             typescript_name,
             category,
             keywords,
             description,
-            parameters: properties
-                .into_iter()
-                .map(|(p, raw_description)| ParameterMetadata {
-                    name: p.name,
-                    typescript_type: p.typescript_type,
-                    required: p.required,
-                    description: raw_description,
-                })
-                .collect(),
+            parameters: types.parameters.clone(),
             annotations: tool.annotations.clone(),
-            result_type: None,
-            result_type_origin: if tool.output_schema.is_some() {
-                ResultTypeOrigin::Declared
-            } else {
-                ResultTypeOrigin::Undeclared
-            },
-            manifest_size_bytes: 0,
-        }
+            result_type: types.stored_result_type.clone(),
+            result_type_origin: types.origin,
+            manifest_size_bytes,
+        })
     }
 
     /// Builds the `_meta.json` sidecar file from per-tool metadata already collected
@@ -1014,11 +1011,20 @@ impl ProgressiveGenerator<'_> {
             provenance,
         };
 
-        let content =
-            serde_json::to_string_pretty(&meta).map_err(|e| Error::SerializationError {
-                message: format!("failed to serialize {METADATA_FILE_NAME}"),
-                source: Some(e),
-            })?;
+        let content = serde_json::to_string(&meta).map_err(|e| Error::SerializationError {
+            message: format!("failed to serialize {METADATA_FILE_NAME}"),
+            source: Some(e),
+        })?;
+
+        if u64::try_from(content.len()).is_ok_and(|size| size > MAX_METADATA_FILE_BYTES) {
+            tracing::warn!(
+                size_bytes = content.len(),
+                cap_bytes = MAX_METADATA_FILE_BYTES,
+                "{METADATA_FILE_NAME} exceeds the size the skill scan accepts; the tool files \
+                 are still usable directly, but scanning this server will fail until it has \
+                 fewer or smaller tools"
+            );
+        }
 
         Ok(GeneratedFile {
             path: METADATA_FILE_NAME.to_string(),
@@ -1099,30 +1105,6 @@ fn add_tracked(
     }
 
     Ok(())
-}
-
-/// Sanitizes a server-controlled string for safe interpolation into `JSDoc` block comments.
-///
-/// Neutralizes control characters (C0, DEL, C1 — everything `char::is_control` reports —
-/// plus U+2028 LINE SEPARATOR/U+2029 PARAGRAPH SEPARATOR, which ECMAScript treats as line
-/// terminators even though they aren't in the control-character category) by delegating to
-/// the shared [`mcp_execution_core::untrusted::sanitize_untrusted_text`], which *replaces*
-/// each with a space rather than deleting it — deleting would glue adjacent words together
-/// (`"tab\tseparated"` -> `"tabseparated"`) and, more importantly, would let a control
-/// character sitting between `*` and `/` collapse into a live `JSDoc` comment terminator once
-/// removed. This neutralization runs *before* the `*/` escape step for exactly that reason:
-/// escaping first would see no `*/` match (the control character still separates them), then
-/// deleting/collapsing that character afterward would reopen the comment. Truncation to
-/// `max_len` runs last, after escaping, so a `*/` straddling the truncation boundary is
-/// already widened to `*\/` and cannot be split back into a bare `*/` by the cut.
-pub(crate) fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
-    let neutralized = mcp_execution_core::untrusted::sanitize_untrusted_text(s, usize::MAX);
-    let sanitized = neutralized.replace("*/", "*\\/");
-    if sanitized.chars().count() > max_len {
-        sanitized.chars().take(max_len).collect()
-    } else {
-        sanitized
-    }
 }
 
 /// Joins `ToolCategorization::keywords` into the comma-separated form `JSDoc` rendering displays
@@ -1250,7 +1232,7 @@ const RESERVED_WORDS: &[&str] = &[
 /// two differ): a tool whose sanitized name matches one of these would otherwise silently
 /// overwrite this generator's own fixed output file (issue #312) instead of being disambiguated
 /// like any other name collision.
-const RESERVED_OUTPUT_NAMES: &[&str] = &["index", "catalog"];
+const RESERVED_OUTPUT_NAMES: &[&str] = &["index", "catalog", "runIfMain", "callMCPTool"];
 
 /// Resolves a collision-free TypeScript identifier for each tool, in tool order.
 ///
@@ -1321,71 +1303,13 @@ fn disambiguate_output_filename(base: &str, used_lower: &mut HashSet<String>) ->
     }
 }
 
-fn sanitize_schema_jsdoc_descriptions(mut value: serde_json::Value) -> serde_json::Value {
-    let mut cap_hit = false;
-    sanitize_schema_jsdoc_value(&mut value, 0, &mut cap_hit);
-    if cap_hit {
-        // Known limitation: unlike `json_schema_to_typescript` (called once per property via
-        // `extract_properties`), `create_tool_context` calls this once per tool directly on
-        // the whole `input_schema` — but this warning still carries no tool/server identifier
-        // to correlate it back to the originating `generate_with_categories` call.
-        tracing::warn!(
-            max_depth = MAX_SCHEMA_RECURSION_DEPTH,
-            "schema nesting exceeded MAX_SCHEMA_RECURSION_DEPTH; descriptions beyond that depth \
-             were left unsanitized"
-        );
-    }
-    value
-}
-
-/// Sanitizes every `description` field in `value`'s tree in place, recursing into nested
-/// objects and arrays up to [`MAX_SCHEMA_RECURSION_DEPTH`] — see that constant's docs for what
-/// this cap actually defends against (this crate's `pub` API surface, not a reachable wire-path
-/// schema). `cap_hit` is set (never cleared) the first time any branch trips the cap, so the
-/// public wrapper can log once per call rather than once per clipped branch.
-///
-/// `value` is (a clone of) a tool's `input_schema`, called on the schema's true top level with
-/// no depth peeled off beforehand (unlike [`typescript::extract_properties`]'s call path into
-/// `json_schema_to_typescript`) — so `depth` here always matches the schema's real JSON
-/// nesting. Beyond the depth cap, remaining branches are left unsanitized rather than
-/// continuing to recurse.
-///
-/// [`typescript::extract_properties`]: crate::common::typescript::extract_properties
-fn sanitize_schema_jsdoc_value(value: &mut serde_json::Value, depth: usize, cap_hit: &mut bool) {
-    if depth >= MAX_SCHEMA_RECURSION_DEPTH {
-        *cap_hit = true;
-        return;
-    }
-
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, child) in map.iter_mut() {
-                if key == "description" {
-                    if let Some(description) = child.as_str() {
-                        *child = serde_json::Value::String(sanitize_jsdoc(description, 256));
-                    } else {
-                        *child = serde_json::Value::Null;
-                    }
-                } else {
-                    sanitize_schema_jsdoc_value(child, depth + 1, cap_hit);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                sanitize_schema_jsdoc_value(child, depth + 1, cap_hit);
-            }
-        }
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod acceptance_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progressive::types::ResultSource;
     use mcp_execution_core::{ServerId, ToolName};
     use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
     use serde_json::json;
@@ -1440,11 +1364,52 @@ mod tests {
         }
     }
 
+    fn types_for(tool: &ToolInfo) -> ToolTypes {
+        ToolConversions::new(tool, None).build(DegradeStage::Full)
+    }
+
     fn test_config() -> mcp_execution_core::ServerConfig {
         mcp_execution_core::ServerConfig::builder()
             .command("test-command".to_string())
             .build()
             .unwrap()
+    }
+
+    /// Guards the `FIXED_FILES_BYTES_MAX` term of `MAX_GENERATED_BYTES`: the files that do not
+    /// scale with the tool count must fit the bound the provable total is derived from.
+    #[test]
+    fn test_fixed_files_fit_the_fixed_files_budget() {
+        let mut server_info = create_test_server_info();
+        server_info.tools.clear();
+
+        let code = ProgressiveGenerator::new()
+            .unwrap()
+            .generate(&server_info, &test_config())
+            .unwrap();
+
+        let total: usize = code.files.iter().map(|f| f.content.len()).sum();
+        assert_eq!(code.file_count(), FIXED_FILE_COUNT);
+        assert!(
+            total * 2 <= FIXED_FILES_BYTES_MAX,
+            "fixed files take {total} B; keep at least half of {FIXED_FILES_BYTES_MAX} B spare"
+        );
+    }
+
+    #[test]
+    fn test_tools_named_like_imported_helpers_are_disambiguated() {
+        let mut server_info = create_test_server_info();
+        server_info.tools[0].name = ToolName::new("runIfMain").unwrap();
+        server_info.tools[1].name = ToolName::new("call_m_c_p_tool").unwrap();
+
+        let names = resolve_typescript_names(&server_info.tools);
+
+        assert_eq!(names[0], "runIfMain_2");
+        assert_ne!(names[1], "callMCPTool");
+        let code = ProgressiveGenerator::new()
+            .unwrap()
+            .generate(&server_info, &test_config())
+            .unwrap();
+        assert!(code.files.iter().any(|f| f.path == "runIfMain_2.ts"));
     }
 
     #[test]
@@ -1800,13 +1765,12 @@ mod tests {
             ],
             short_description: "Send a message".to_string(),
         };
-        let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
         let context = ProgressiveGenerator::create_tool_context(
             "test-server",
             &tool,
             Some(&categorization),
             "sendMessage".to_string(),
-            properties,
+            &types_for(&tool),
         );
 
         assert_eq!(context.server_id, "test-server");
@@ -1815,8 +1779,8 @@ mod tests {
         assert_eq!(context.server_id_literal, "test-server");
         assert_eq!(context.typescript_name, "sendMessage");
         assert_eq!(context.description, "Sends a message");
-        assert_eq!(context.properties.len(), 1);
-        assert_eq!(context.properties[0].name, "text");
+        assert!(context.params_type.contains("text: string"));
+        assert_eq!(context.result_source, ResultSource::Content);
         assert_eq!(context.category, Some("messaging".to_string()));
         assert_eq!(context.keywords, Some("send, message, chat".to_string()));
         assert_eq!(context.short_description, "Send a message".to_string());
@@ -1932,13 +1896,12 @@ mod tests {
             annotations: None,
         };
 
-        let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
         let context = ProgressiveGenerator::create_tool_context(
             "test-server",
             &tool,
             None,
             "formatDocument".to_string(),
-            properties,
+            &types_for(&tool),
         );
 
         assert_eq!(
@@ -1971,20 +1934,17 @@ mod tests {
             annotations: None,
         };
 
-        let properties = ProgressiveGenerator::extract_property_infos(&tool.input_schema).unwrap();
         let context = ProgressiveGenerator::create_tool_context(
             "test-server",
             &tool,
             None,
             "sendMessage".to_string(),
-            properties,
+            &types_for(&tool),
         );
 
-        let expected = sanitize_schema_jsdoc_descriptions(tool.input_schema);
-        assert_eq!(context.input_schema, expected);
         assert_eq!(
-            context.input_schema["description"],
-            json!("Schema *\\/ injected next")
+            context.params_description.as_deref(),
+            Some("Schema *\\/ injected next")
         );
     }
 
@@ -2236,122 +2196,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_property_infos() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "User name"
-                },
-                "age": {
-                    "type": "number"
-                }
-            },
-            "required": ["name"]
-        });
-
-        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
-
-        assert_eq!(props.len(), 2);
-
-        // Find name property
-        let name_prop = props.iter().find(|p| p.name == "name").unwrap();
-        assert_eq!(name_prop.typescript_type, "string");
-        assert_eq!(name_prop.description, Some("User name".to_string()));
-        assert!(name_prop.required);
-
-        // Find age property
-        let age_prop = props.iter().find(|p| p.name == "age").unwrap();
-        assert_eq!(age_prop.typescript_type, "number");
-        assert!(!age_prop.required);
-    }
-
-    #[test]
-    fn test_extract_property_infos_sanitizes_malicious_property_name() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "x: string }; export const pwned = 1; interface J {": {
-                    "type": "string",
-                    "description": "Evil property"
-                }
-            },
-            "required": []
-        });
-
-        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
-
-        assert_eq!(props.len(), 1);
-        assert!(!props[0].name.contains(['{', '}', ';', ':', ' ']));
-        // The description lookup must still succeed even though the property
-        // name used for the lookup differs from the sanitized display name.
-        assert_eq!(props[0].description, Some("Evil property".to_string()));
-    }
-
-    #[test]
-    fn test_extract_property_infos_disambiguates_colliding_sibling_names() {
-        // "a-b" and "a.b" both sanitize to "a_b"; since both become fields of the same
-        // top-level `Params` interface, the collision must be disambiguated rather than
-        // producing a duplicate, non-compiling field.
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "a-b": {"type": "string"},
-                "a.b": {"type": "number"}
-            },
-            "required": []
-        });
-
-        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
-        let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
-        names.sort_unstable();
-
-        assert_eq!(names, vec!["a_b", "a_b_2"]);
-    }
-
-    #[test]
-    fn test_extract_property_infos_disambiguates_collision_introduced_by_collapsing() {
-        // Before issue #192's collapsing fix, "a-b" -> "a_b" and "a--b" -> "a__b" were
-        // distinct identifiers; collapsing consecutive invalid runs now sanitizes both to
-        // "a_b", introducing a *new* collision that must still be disambiguated rather than
-        // producing a duplicate, non-compiling field.
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "a-b": {"type": "string"},
-                "a--b": {"type": "number"}
-            },
-            "required": []
-        });
-
-        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
-        let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
-        names.sort_unstable();
-
-        assert_eq!(names, vec!["a_b", "a_b_2"]);
-    }
-
-    #[test]
-    fn test_extract_property_infos_disambiguates_three_way_collision() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "a-b": {"type": "string"},
-                "a.b": {"type": "number"},
-                "a b": {"type": "boolean"}
-            },
-            "required": []
-        });
-
-        let props = ProgressiveGenerator::extract_property_infos(&schema).unwrap();
-        let mut names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
-        names.sort_unstable();
-
-        assert_eq!(names, vec!["a_b", "a_b_2", "a_b_3"]);
-    }
-
-    #[test]
     fn test_generate_disambiguates_colliding_top_level_params() {
         let generator = ProgressiveGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
@@ -2372,15 +2216,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            tool.content.matches("a_b:").count() + tool.content.matches("a_b?:").count(),
+            tool.content.matches("'a-b'?: string").count(),
             1,
-            "field 'a_b' must appear exactly once in the Params interface: {}",
+            "key 'a-b' must appear once, quoted with its raw value: {}",
             tool.content
         );
         assert_eq!(
-            tool.content.matches("a_b_2:").count() + tool.content.matches("a_b_2?:").count(),
+            tool.content.matches("'a.b'?: number").count(),
             1,
-            "disambiguated field 'a_b_2' must appear exactly once in the Params interface: {}",
+            "key 'a.b' must appear once, quoted with its raw value: {}",
+            tool.content
+        );
+        assert!(
+            !tool.content.contains("a_b"),
+            "keys are never renamed: {}",
             tool.content
         );
     }
@@ -2405,8 +2254,16 @@ mod tests {
             .unwrap();
 
         assert!(
-            !tool.content.contains("export const pwned"),
+            tool.content
+                .lines()
+                .all(|line| !line.trim_start().starts_with("export const pwned")),
             "raw property name must not inject a top-level statement: {}",
+            tool.content
+        );
+        assert!(
+            tool.content
+                .contains("'x: string }; export const pwned = evil(); interface J {'?: string"),
+            "the hostile key must stay inside a quoted literal: {}",
             tool.content
         );
     }
@@ -2706,15 +2563,15 @@ mod tests {
             .find(|line| line.contains("return (await callMCPTool("))
             .expect("generated tool file must contain a callMCPTool(...) invocation");
 
-        // The call site must still be a syntactically closed invocation: `params))` and the
-        // trailing `as ...Result;` cast must survive as live code, not be swallowed into an
-        // unterminated string literal along with everything after it.
+        // The call site must still be a syntactically closed invocation: the `params` argument
+        // and the trailing `as ...Result;` cast must survive as live code, not be swallowed into
+        // an unterminated string literal along with everything after it.
         assert!(
-            call_site_line.contains("params))"),
+            call_site_line.contains("params, 'content'))"),
             "the params argument and closing parens must survive as live code, not be \
              swallowed into the tool name's string literal: {call_site_line}"
         );
-        let suffix = call_site_line.split("params))").nth(1).unwrap();
+        let suffix = call_site_line.split("params, 'content'))").nth(1).unwrap();
         assert!(
             suffix.trim_start().starts_with("as ") && suffix.trim_end().ends_with(';'),
             "the cast-and-semicolon after the call must survive as live code, not be swallowed \
@@ -3132,143 +2989,6 @@ mod tests {
             1,
             "index.ts must export the disambiguated second identifier exactly once"
         );
-    }
-
-    #[test]
-    fn test_sanitize_schema_jsdoc_drops_non_string_descriptions() {
-        let sanitized = sanitize_schema_jsdoc_descriptions(json!({
-            "type": "object",
-            "description": {"text": "Schema */ injected\nnext"},
-            "properties": {
-                "title": {
-                    "type": "string",
-                    "description": ["Title */ injected\nnext"]
-                }
-            }
-        }));
-
-        assert!(sanitized["description"].is_null());
-        assert!(sanitized["properties"]["title"]["description"].is_null());
-    }
-
-    #[test]
-    fn test_sanitize_schema_jsdoc_recurses_into_array_items() {
-        let sanitized = sanitize_schema_jsdoc_descriptions(json!({
-            "type": "object",
-            "properties": {
-                "tags": {
-                    "type": "array",
-                    "items": [
-                        {
-                            "type": "string",
-                            "description": "Tag */ injected\nnext"
-                        }
-                    ]
-                }
-            }
-        }));
-
-        let description = sanitized["properties"]["tags"]["items"][0]["description"]
-            .as_str()
-            .unwrap();
-
-        assert_eq!(description, "Tag *\\/ injected next");
-    }
-
-    /// Builds a schema with `depth` nested `type: "array"` levels, each carrying its own
-    /// `description`, wrapping a `string` leaf that also has a `description`.
-    ///
-    /// Assembled directly via `serde_json::Map`/`Value` (like
-    /// `typescript::tests::nested_array_schema`) so building this fixture can't itself
-    /// overflow the stack, and using `"array"`/`"items"` rather than `"object"`/`"properties"`
-    /// so each `depth` step costs exactly one recursion level in
-    /// [`sanitize_schema_jsdoc_value`] — unlike an `"object"`/`"properties"`-nested schema,
-    /// where the intermediate `properties` map itself consumes a level (see
-    /// [`sanitize_schema_jsdoc_value`]'s doc comment) — making it possible to predict exactly
-    /// which nesting level lands on either side of [`MAX_SCHEMA_RECURSION_DEPTH`].
-    fn nested_array_schema_with_descriptions(depth: usize, description: &str) -> serde_json::Value {
-        let mut schema = json!({"type": "string", "description": description});
-        for _ in 0..depth {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                "type".to_string(),
-                serde_json::Value::String("array".to_string()),
-            );
-            map.insert("items".to_string(), schema);
-            map.insert(
-                "description".to_string(),
-                serde_json::Value::String(description.to_string()),
-            );
-            schema = serde_json::Value::Object(map);
-        }
-        schema
-    }
-
-    /// Walks `depth` `"items"` hops into `value`, returning the schema found there.
-    fn nth_level(value: &serde_json::Value, depth: usize) -> serde_json::Value {
-        let mut v = value.clone();
-        for _ in 0..depth {
-            v = v["items"].clone();
-        }
-        v
-    }
-
-    #[test]
-    fn test_sanitize_schema_jsdoc_bounds_deeply_nested_schema() {
-        // Issue #303: `input_schema` is attacker-controlled and this sanitizer used to
-        // recurse into every nested object/array with no depth limit; this is
-        // defense-in-depth for the pub API surface (see `MAX_SCHEMA_RECURSION_DEPTH`'s docs
-        // in `typescript.rs`), not a fix for a wire-reachable schema. Asserts the cap's actual
-        // observable effect rather than just "doesn't panic": a `description` one level below
-        // the cap is still sanitized, while one at the cap is left untouched because the
-        // function stops recursing before ever reaching it.
-        const MALICIOUS: &str = "desc */ injected\nnext";
-        let depth = MAX_SCHEMA_RECURSION_DEPTH + 10;
-        let schema = nested_array_schema_with_descriptions(depth, MALICIOUS);
-
-        let sanitized = sanitize_schema_jsdoc_descriptions(schema);
-
-        let just_below_cap = nth_level(&sanitized, MAX_SCHEMA_RECURSION_DEPTH - 1);
-        let below_description = just_below_cap["description"]
-            .as_str()
-            .expect("description below the cap must still be a string");
-        assert!(
-            !below_description.contains("*/"),
-            "description one level below the cap must be sanitized: {below_description}"
-        );
-
-        let at_cap = nth_level(&sanitized, MAX_SCHEMA_RECURSION_DEPTH);
-        let at_cap_description = at_cap["description"]
-            .as_str()
-            .expect("description at the cap must still be a string");
-        assert_eq!(
-            at_cap_description, MALICIOUS,
-            "description at the cap must be left untouched — the function must stop \
-             recursing before reaching it"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_schema_jsdoc_survives_pathologically_deep_input() {
-        // Issue #303: a caller of this crate's `pub` API could hand it a `Value` nested far
-        // beyond any depth reachable via introspection (see `MAX_SCHEMA_RECURSION_DEPTH`'s
-        // docs). Must not stack overflow at 5,000+ levels, however that `Value` was built.
-        //
-        // Runs on a dedicated large-stack thread because `serde_json::Value`'s own `Drop` is
-        // recursive and unrelated to this fix: dropping a sufficiently deep `Value` overflows
-        // the *default* thread stack merely by going out of scope, regardless of how it was
-        // traversed beforehand — see `typescript::tests::run_on_large_stack` for the full
-        // rationale.
-        std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                let schema = nested_array_schema_with_descriptions(5_000, "leaf");
-                let sanitized = sanitize_schema_jsdoc_descriptions(schema);
-                assert!(sanitized.is_object());
-            })
-            .expect("spawn test thread")
-            .join()
-            .expect("test thread panicked");
     }
 
     #[test]

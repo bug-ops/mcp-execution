@@ -60,13 +60,13 @@ fixes them.
 |------|----------|
 | Tools are called only by the generated TypeScript bridge; no non-test Rust code calls a tool on any client path (the one `call_tool` match in `crates/` is a comment about a macro) | `crates/mcp-server/src/service.rs:1200` |
 | The Rust client connects, lists tools page by page under the connect and discover timeouts, then drops the client | `crates/mcp-introspector/src/lib.rs:419` (`discover_server`), `:1009` (`connect_and_list_tools`), `:1077` and `:1141` (the two `serve` call sites) |
-| Every generated tool file imports the bridge by a relative path and runs when it is the entry point | `crates/mcp-codegen/templates/progressive/tool.ts.hbs:15`, `:83` |
+| Every generated tool file imports the bridge by a relative path and ends with `runIfMain(import.meta.url, tool)`, which runs the tool when the file is the process entry point (shared `_runtime/cli.ts`, #567/#583) | `crates/mcp-codegen/templates/progressive/tool.ts.hbs`, `cli.ts.hbs` |
 | The bridge speaks stdio only: a validated http or sse entry is then rejected as unsupported | `crates/mcp-codegen/templates/progressive/runtime-bridge.ts.hbs:644-649` |
 | The bridge handshake is pinned to protocol `2024-11-05` | `runtime-bridge.ts.hbs:966` |
 | The bridge reads `~/.claude/mcp.json` itself at call time and spawns the server inside the process that runs the script | `runtime-bridge.ts.hbs:680-681`, `:906` |
 | The bridge mirrors the Rust configuration validation, with constants rendered from Rust | `runtime-bridge.ts.hbs:634-665`; [[../codegen/spec]] section 8 |
-| An empty successful result is thrown as an error | `runtime-bridge.ts.hbs:1153` |
-| The bridge has no output bound, no call record and no write policy | `runtime-bridge.ts.hbs:1085` (`callMCPTool`) |
+| An empty successful result resolves to `undefined` (no error; #482); `callMCPTool` throws only `McpToolError` with server text kept in `serverMessage` (#570) | `runtime-bridge.ts.hbs` (`extractResult`, `McpToolError`); [[../codegen/spec#8. Runtime Bridge (`_runtime/mcp-bridge.ts`)]] |
+| The bridge has no output bound, no call record and no write policy (it only has the opt-in observed-shape recorder of #587, which records types and never values) | `runtime-bridge.ts.hbs` (`callMCPTool`) |
 | The CLI has no subcommand that runs a script or calls a tool | [[../cli/spec]] section 2 |
 | Exit codes: success 0, error 1, invalid input 2, server error 3, timeout 4 | `crates/mcp-core/src/cli.rs:139-183`; [[../cli/spec]] section 5 |
 | `setup` accepts Node.js 18 and later | `crates/mcp-cli/src/commands/setup.rs:229` |
@@ -83,7 +83,7 @@ Resolution of which components wait for #569:
 
 | Component | Issue | Waits for #569 | Reason |
 |-----------|-------|----------------|--------|
-| Quiet single-call output | #570 | No | Changes only the generated tool file's output; specified in [[../codegen/spec]] |
+| Quiet single-call output | #570 | No | Changes only the generated tool file's output; implemented, specified in [[../codegen/spec#13.6 Single-call mode (#567, #570, #583)]] |
 | Script runner with bounded output | #571 | No | Built on today's generated bridge and does not add a client |
 | Call journal and failure report | #572 | Yes | Where it is written, and by which process, differs between the bridge and a Rust process |
 | Dry run and write policy | #573 | Yes | Where policy is enforced, and how hard, depends on whether tool traffic leaves the script process |
@@ -471,8 +471,8 @@ not gated. Tracked under epic #557.
 | Block | Planned contract |
 |-------|------------------|
 | [[../cli/spec]] | Front doors for the runner (#571) and the one-shot call (#574), exit-code classification (section 5 there), `setup`'s Node check (#564) |
-| [[../codegen/spec]] | Quiet single-call output (#570), generated wrappers calling the helper and bridge retirement (#575), file-count bound chain, the printed form of an empty success |
-| [[../core/spec]] | The one registry of `_meta.json` fields; annotations (#568) feed #573 and #572; this block defines no metadata field of its own |
+| [[../codegen/spec]] | Generated wrappers calling the helper and bridge retirement (#575), file-count bound chain. Implemented already: quiet single-call output (#570) and the printed form of an empty success (nothing, exit 0; [[../codegen/spec#13.6 Single-call mode (#567, #570, #583)]]) |
+| [[../core/spec]] | The one registry of `_meta.json` fields (v3, implemented with #568); the stored annotations feed #573 and #572; this block defines no metadata field of its own |
 | [[../introspector/spec]] | The shared connect step used by listing and calling (#574, #575) |
 | [[../decisions/ADR-569-runtime-strategy-single-mcp-client]] | The gate in section 3 |
 

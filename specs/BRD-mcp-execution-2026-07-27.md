@@ -469,9 +469,13 @@ shared between this BRD and the SRS for traceability.
 
 ### Planned script-first capabilities
 
-> [!warning] Planned, not implemented
-> FR-030 to FR-046 are accepted but not built. Each entry has status
-> **Planned** and a tracking issue. Detail lives in the block specs'
+> [!warning] Planned, partly implemented
+> FR-030 to FR-035 (#482, #565, #566, #567, #568, #570; parent #556) are
+> implemented and described as built in
+> [[codegen/spec#13. Script-First Capabilities (implemented, #556)]]; their
+> entries below keep the original wording and status **Planned** as the
+> record of the request. FR-036 to FR-046 are accepted but not built. Detail
+> lives in the block specs'
 > "Planned Changes" sections and in the new [[runtime/spec]] block;
 > formal statements are in [[SRS-mcp-execution-2026-07-27#3.2.8 Planned: Script-First Capabilities]].
 > The runtime strategy (#569) gates FR-037, FR-038, FR-039, FR-040 and FR-041.

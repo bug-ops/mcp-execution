@@ -273,9 +273,16 @@ fn generate_unrepresentable_output_schema_is_degraded_and_generation_succeeds() 
 
     assert_eq!(meta.tools[0].result_type, None);
     assert_eq!(meta.tools[0].result_type_origin, ResultTypeOrigin::Degraded);
+    let tool_file = file(&code, "odd.ts");
     assert!(
-        file(&code, "odd.ts").contains("Record<string, unknown> | unknown[] | string | undefined"),
-        "a degraded result keeps the generic union and stays visible as possibly empty"
+        tool_file.contains(
+            "Record<string, unknown> | unknown[] | string | number | boolean | null | undefined"
+        ),
+        "a degraded declared result widens to every JSON value and stays visible as empty"
+    );
+    assert!(
+        tool_file.contains("'structured')"),
+        "the result source stays structured for a declared schema"
     );
 }
 

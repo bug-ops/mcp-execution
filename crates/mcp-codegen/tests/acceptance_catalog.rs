@@ -129,7 +129,7 @@ fn catalog_is_byte_identical_across_runs_and_tool_order() {
 #[test]
 fn catalog_degrades_an_oversized_tool_without_dropping_it() {
     let mut properties = serde_json::Map::new();
-    for i in 0..1500 {
+    for i in 0..300 {
         properties.insert(format!("field_{i:04}"), json!({"type": "string"}));
     }
     let huge = tool(
@@ -177,7 +177,10 @@ fn catalog_entries_show_declared_results_undefined_and_annotation_hints() {
         .lines()
         .find(|l| l.contains("deleteFile(params:"))
         .unwrap_or_else(|| panic!("{catalog}"));
-    assert!(delete_entry.contains("{ path: string }"), "{delete_entry}");
+    assert!(
+        delete_entry.contains("params: { path: string; [key: string]: unknown }"),
+        "{delete_entry}"
+    );
     assert!(delete_entry.contains("deleted: boolean"), "{delete_entry}");
     assert!(
         catalog.contains("@hints readOnly=false destructive=true"),

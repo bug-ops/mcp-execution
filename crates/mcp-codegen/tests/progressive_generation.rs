@@ -7,7 +7,7 @@
 mod support;
 
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
-use mcp_execution_core::{Error, ServerId, ToolName};
+use mcp_execution_core::{ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
 use std::collections::HashMap;
@@ -39,21 +39,14 @@ fn test_progressive_generator_creates_correct_number_of_files() {
 }
 
 /// Issue #458: the per-tool error wrapper in `emit_tool_files` (extract/render/track stages)
-/// was previously only exercised by unit tests calling the private wrapper helper directly,
-/// never by a real failure driven through the public `generate_with_categories` entry point.
-///
-/// Of the three stages, `extract property schema` can't fail through this entry point:
-/// `extract_properties` always yields well-typed `name`/`type` strings regardless of input.
-/// `render tool template` and `track generated tool file` are both reachable, but only from a
-/// structurally invalid `ServerInfo` that `mcp-introspector` itself can never produce (it always
-/// builds `input_schema` as a JSON object, and bounds schema size far below what `track` needs
-/// to trip) — i.e. only from a direct library caller that hand-builds a `ToolInfo`, not from a
-/// real MCP server round-trip. This test exercises `render`: `TemplateEngine` runs in Handlebars
-/// strict mode, and `tool.ts.hbs` does `{{#if input_schema.description}}` — a JSON *array*
-/// `input_schema` fails that path navigation (only objects/scalars survive it), at effectively
-/// no cost, unlike forcing the `track` stage's byte-count check.
+/// A non-object `input_schema` used to be the only cheap way to drive the `render tool
+/// template` failure (#458) through the public entry point. The converter now degrades a
+/// non-object root to generic parameters instead of failing, so no render or track failure is
+/// reachable through `generate_with_categories` any more; the per-tool error wrapper keeps its
+/// unit tests in `progressive/generator.rs`. This test pins the new behavior: generation
+/// succeeds and the parameters are the generic record type.
 #[test]
-fn test_generate_with_categories_wraps_non_object_schema_as_script_generation_error() {
+fn test_generate_with_categories_degrades_non_object_schema_to_generic_params() {
     let server_info = ServerInfo {
         id: ServerId::new("bulk-server").unwrap(),
         name: "Bulk Server".to_string(),
@@ -73,23 +66,22 @@ fn test_generate_with_categories_wraps_non_object_schema_as_script_generation_er
     };
     let generator = ProgressiveGenerator::new().expect("Failed to create generator");
 
-    let result = generator.generate_with_categories(&server_info, &test_config(), &HashMap::new());
+    let code = generator
+        .generate_with_categories(&server_info, &test_config(), &HashMap::new())
+        .expect("a non-object input schema degrades instead of failing");
 
-    match result {
-        Err(Error::ScriptGenerationError {
-            tool,
-            message,
-            source,
-        }) => {
-            assert_eq!(tool, "malformed_tool");
-            assert_eq!(message, "failed to render tool template");
-            assert!(
-                source.is_some(),
-                "source must be preserved for exit-code classification"
-            );
-        }
-        other => panic!("expected ScriptGenerationError wrapping a render failure, got {other:?}"),
-    }
+    let tool_file = code
+        .files
+        .iter()
+        .find(|f| f.path == "malformedTool.ts")
+        .expect("malformedTool.ts not found");
+    assert!(
+        tool_file
+            .content
+            .contains("export type malformedToolParams = Record<string, unknown>;"),
+        "{}",
+        tool_file.content
+    );
 }
 
 #[test]
@@ -160,7 +152,7 @@ fn test_progressive_tool_file_structure() {
     // callMCPTool can actually return (issue #182)
     assert!(
         content.contains(
-            "export type createIssueResult = Record<string, unknown> | unknown[] | string;"
+            "export type createIssueResult = Record<string, unknown> | unknown[] | string | undefined;"
         ),
         "Missing widened Result type union"
     );
@@ -532,10 +524,10 @@ fn test_progressive_tool_with_complex_types() {
     // Should handle array type
     assert!(content.contains("items: string[]"), "Missing array type");
 
-    // Should handle object type
+    // Should handle an object without declared properties as an open object
     assert!(
-        content.contains("config?: Record<string, unknown>"),
-        "Missing object type"
+        content.contains("config?: {\n    [key: string]: unknown;\n  };"),
+        "Missing object type: {content}"
     );
 
     // Should handle number type
@@ -603,6 +595,112 @@ fn test_generated_tool_passes_tsc_noemit() {
         "tsc --noEmit failed on the real generated package:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A typed `additionalProperties` next to declared properties must render a `Params` type a
+/// caller can actually construct: TypeScript rejects properties that do not match a typed index
+/// signature, so the index value type has to cover them.
+#[test]
+fn test_typed_additional_properties_params_are_constructible_under_tsc() {
+    let test_name = "test_typed_additional_properties_params_are_constructible_under_tsc";
+    if !require_ts_toolchain(test_name, true) {
+        return;
+    }
+    let server_info = ServerInfo {
+        id: ServerId::new("typed-extra").unwrap(),
+        name: "Typed Extra".to_string(),
+        version: "1.0.0".to_string(),
+        tools: vec![ToolInfo {
+            name: ToolName::new("tag_item").unwrap(),
+            description: "Tags an item".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "label": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": {"type": "number"}
+            }),
+            output_schema: None,
+            annotations: None,
+        }],
+        capabilities: ServerCapabilities {
+            supports_tools: true,
+            supports_resources: false,
+            supports_prompts: false,
+        },
+    };
+    let code = ProgressiveGenerator::new()
+        .unwrap()
+        .generate(&server_info, &test_config())
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for file in &code.files {
+        let path = dir.path().join(&file.path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, &file.content).unwrap();
+    }
+    std::fs::write(
+        dir.path().join("usage.ts"),
+        "import type { tagItemParams } from './tagItem.ts';\n\
+         export const params: tagItemParams = { name: 'x', label: 'y', score: 3 };\n",
+    )
+    .unwrap();
+    if !install_declared_dev_dependencies(dir.path(), test_name) {
+        return;
+    }
+
+    let output = Command::new(tsc_program())
+        .arg("--noEmit")
+        .arg("-p")
+        .arg(dir.path().join("tsconfig.json"))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "tsc failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A narrowing keyword at the root of a declared output schema must not throw the converted
+/// type away in favor of the generic union.
+#[test]
+fn test_root_narrowing_keyword_keeps_the_declared_result_type() {
+    let server_info = ServerInfo {
+        id: ServerId::new("narrow").unwrap(),
+        name: "Narrow".to_string(),
+        version: "1.0.0".to_string(),
+        tools: vec![ToolInfo {
+            name: ToolName::new("list_ids").unwrap(),
+            description: String::new(),
+            input_schema: json!({"type": "object"}),
+            output_schema: Some(
+                json!({"type": "array", "items": {"type": "string"}, "uniqueItems": true}),
+            ),
+            annotations: None,
+        }],
+        capabilities: ServerCapabilities {
+            supports_tools: true,
+            supports_resources: false,
+            supports_prompts: false,
+        },
+    };
+    let code = ProgressiveGenerator::new()
+        .unwrap()
+        .generate(&server_info, &test_config())
+        .unwrap();
+    let tool_file = code.files.iter().find(|f| f.path == "listIds.ts").unwrap();
+
+    assert!(
+        tool_file
+            .content
+            .contains("export type listIdsResult = string[] | undefined;"),
+        "{}",
+        tool_file.content
     );
 }
 
