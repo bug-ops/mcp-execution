@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Updated `url` to 2.5.9 to resolve RUSTSEC-2026-0592 (stack overflow in `Url::origin()` on nested `blob:` URLs) (#596).
+
 ## [0.11.0] - 2026-11-19
 
 ### Changed
