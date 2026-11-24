@@ -742,9 +742,12 @@ async fn discover_within(name: &str, config: &ServerConfig, timeout: Duration) -
 }
 
 #[cfg(test)]
-#[expect(
-    unsafe_code,
-    reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+#[cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+    )
 )]
 mod tests {
     use super::*;

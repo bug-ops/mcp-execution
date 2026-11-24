@@ -1036,9 +1036,12 @@ pub(crate) fn derive_server_id_from_path_or_name(raw: &str) -> ServerId {
 }
 
 #[cfg(test)]
-#[expect(
-    unsafe_code,
-    reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+#[cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
+    )
 )]
 mod tests {
     use super::*;
