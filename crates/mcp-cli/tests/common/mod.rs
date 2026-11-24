@@ -239,6 +239,8 @@ impl Sandbox {
             .env_remove(mcp_execution_core::helper_protocol::HELPER_ENV)
             .env_remove(mcp_execution_core::helper_protocol::HELPER_TOKEN_ENV)
             .env_remove("RUST_LOG")
+            .env_remove("RUST_BACKTRACE")
+            .env_remove("RUST_LIB_BACKTRACE")
             .stdin(Stdio::null());
         cmd
     }

@@ -23,6 +23,10 @@ use common::{KillOnDrop, Sandbox};
 use serde_json::{Value, json};
 
 struct Client {
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "read only by the Unix-only exit-status test")
+    )]
     child: KillOnDrop,
     stdin: Option<ChildStdin>,
     lines: Receiver<Value>,
@@ -76,6 +80,7 @@ impl Client {
         }));
     }
 
+    #[cfg(unix)]
     fn close_input(&mut self) {
         drop(self.stdin.take());
     }
