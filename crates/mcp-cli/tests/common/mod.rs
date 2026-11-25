@@ -107,37 +107,36 @@ pub fn run_with_watchdog(cmd: &mut Command, stdin: Option<&str>, limit: Duration
     }
 }
 
-/// Whether Node.js can run the scripts of this suite; hard-fails under CI, skips locally.
-pub fn require_node(test_name: &str) -> bool {
-    let available = Command::new("node")
+/// Whether `program` answers `--version`; hard-fails under CI, skips locally.
+fn require_tool(program: &str, test_name: &str) -> bool {
+    let available = Command::new(program)
         .arg("--version")
         .output()
         .is_ok_and(|o| o.status.success());
     if !available {
         assert!(
             std::env::var_os("CI").is_none(),
-            "{test_name}: node not found on PATH in CI"
+            "{test_name}: {program} not found on PATH in CI"
         );
-        eprintln!("{test_name}: skipped, node not found");
+        eprintln!("{test_name}: skipped, {program} not found");
     }
     available
 }
 
+/// Whether Node.js can run the scripts of this suite; hard-fails under CI, skips locally.
+pub fn require_node(test_name: &str) -> bool {
+    require_tool("node", test_name)
+}
+
 /// Whether `tsc` is on PATH; hard-fails under CI, skips locally.
 pub fn require_tsc(test_name: &str) -> bool {
-    let tsc = if cfg!(windows) { "tsc.cmd" } else { "tsc" };
-    let available = Command::new(tsc)
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if !available {
-        assert!(
-            std::env::var_os("CI").is_none(),
-            "{test_name}: tsc not found on PATH in CI"
-        );
-        eprintln!("{test_name}: skipped, tsc not found");
-    }
-    available
+    require_tool(if cfg!(windows) { "tsc.cmd" } else { "tsc" }, test_name)
+}
+
+/// Whether `python3` (the pty driver of the terminal tests) is on PATH; hard-fails under CI,
+/// skips locally.
+pub fn require_python(test_name: &str) -> bool {
+    require_tool("python3", test_name)
 }
 
 /// `path` as a `file://` URL, the only absolute-path form Node accepts as an ESM specifier on
@@ -564,4 +563,71 @@ pub fn node_only_dir(root: &Path) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     std::os::unix::fs::symlink(&node, dir.join("node")).unwrap();
     dir
+}
+
+/// Sends `signal` (for example `INT`) to `target` (a pid, or `-pgid` for a group) through the
+/// shell builtin; a target that is already gone is ignored.
+#[cfg(unix)]
+pub fn send_signal(signal: &str, target: &str) {
+    let _ = Command::new("sh")
+        .args([
+            "-c",
+            "kill -s \"$1\" -- \"$2\" 2>/dev/null",
+            "sh",
+            signal,
+            target,
+        ])
+        .status();
+}
+
+/// Whether a process with `pid` exists.
+#[cfg(unix)]
+pub fn is_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Polls `pid_file` until it holds a pid, failing with `what` after `within`.
+#[cfg(unix)]
+pub fn wait_for_pid(pid_file: &Path, within: Duration, what: &str) -> u32 {
+    let deadline = Instant::now() + within;
+    loop {
+        if let Some(pid) = std::fs::read_to_string(pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "{what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Waits until no process with `pid` exists, failing with `what` after `within`.
+#[cfg(unix)]
+pub fn assert_gone(pid: u32, within: Duration, what: &str) {
+    let deadline = Instant::now() + within;
+    while is_alive(pid) {
+        assert!(
+            Instant::now() < deadline,
+            "{what} {pid} is still alive {within:?} after the runner exited"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Waits for `child` to exit and returns its exit code, failing with `what` after `within`.
+#[cfg(unix)]
+pub fn wait_for_exit(child: &mut Child, within: Duration, what: &str) -> Option<i32> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status.code();
+        }
+        assert!(started.elapsed() < within, "{what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

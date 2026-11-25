@@ -742,14 +742,8 @@ async fn discover_within(name: &str, config: &ServerConfig, timeout: Duration) -
 }
 
 #[cfg(test)]
-#[cfg_attr(
-    unix,
-    expect(
-        unsafe_code,
-        reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
-    )
-)]
 mod tests {
+    use super::super::common::home_env::HomeEnv;
     use super::*;
     use std::collections::HashMap;
 
@@ -1127,18 +1121,6 @@ mod tests {
         assert!(json.contains("Sends a message"));
     }
 
-    /// Serializes tests that mutate the `HOME` env var so they cannot race
-    /// each other when run in the same process (e.g. under plain `cargo
-    /// test`, unlike `cargo nextest`, which isolates each test in its own
-    /// process). An async-aware mutex, since the guard must stay held across
-    /// the `.await` of the code under test.
-    #[cfg(unix)]
-    static HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    // Unix-only: redirects `HomeDir::from_env()` by mutating `HOME`; the in-process env
-    // mutation uses `unsafe` and is not set up for `USERPROFILE` (Windows is covered by the
-    // spawned-binary acceptance tests).
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_show_server_info_not_found_error_not_duplicated() {
         // Regression test for #164: the "not found" message from
@@ -1152,8 +1134,6 @@ mod tests {
         // clean CI runner with no `~/.claude/mcp.json` at all would instead
         // fail earlier at the "read config file" step, and the regression
         // this test exists to catch would never actually be exercised.
-        let _guard = HOME_ENV_LOCK.lock().await;
-
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -1163,12 +1143,7 @@ mod tests {
         )
         .unwrap();
 
-        let original_home = std::env::var_os("HOME");
-        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
-        // reads or writes `HOME` while the guard is held.
-        unsafe {
-            std::env::set_var("HOME", temp.path());
-        }
+        let home_env = HomeEnv::set_async(temp.path()).await;
 
         let result = run(
             ServerAction::Info {
@@ -1178,13 +1153,7 @@ mod tests {
         )
         .await;
 
-        // SAFETY: see above.
-        unsafe {
-            match &original_home {
-                Some(home) => std::env::set_var("HOME", home),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        drop(home_env);
 
         assert!(result.is_err());
         let message = format!("{:#}", result.unwrap_err());
@@ -1197,40 +1166,20 @@ mod tests {
 
     /// Points `HomeDir::from_env()` at `home_dir` for the duration of the
     /// closure, serialized against other `HOME`-mutating tests via
-    /// `HOME_ENV_LOCK`, and restores the original value afterwards even if
+    /// the shared home-env lock, and restores the original value afterwards even if
     /// the closure's future returns an error.
-    #[cfg(unix)]
     async fn with_home_pointed_at<F, Fut, T>(home_dir: &std::path::Path, f: F) -> T
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = T>,
     {
-        let _guard = HOME_ENV_LOCK.lock().await;
-
-        let original_home = std::env::var_os("HOME");
-        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
-        // reads or writes `HOME` while the guard is held.
-        unsafe {
-            std::env::set_var("HOME", home_dir);
-        }
-
-        let result = f().await;
-
-        // SAFETY: see above.
-        unsafe {
-            match &original_home {
-                Some(home) => std::env::set_var("HOME", home),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-
-        result
+        let _home_env = HomeEnv::set_async(home_dir).await;
+        f().await
     }
 
     /// Writes `mcp.json` with the given raw content under a fresh temp dir's
     /// `.claude/` subdirectory, returning the temp dir (kept alive by the
     /// caller for the test's duration).
-    #[cfg(unix)]
     fn write_test_mcp_config(content: &str) -> tempfile::TempDir {
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
@@ -1247,7 +1196,6 @@ mod tests {
     // `ExitCode` since the human-readable message is only ever printed to
     // stdout, which this crate has no harness to capture (see handoff notes).
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_malformed_http_url_early_exit() {
         let temp = write_test_mcp_config(
@@ -1267,7 +1215,6 @@ mod tests {
         assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_malformed_sse_url_early_exit() {
         let temp = write_test_mcp_config(
@@ -1287,7 +1234,6 @@ mod tests {
         assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_stdio_missing_command_early_exit() {
         let temp = write_test_mcp_config(
@@ -1307,7 +1253,6 @@ mod tests {
         assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_well_formed_but_unreachable_http_url_fails_post_introspection() {
         // Well-formed per `url_well_formed` (http scheme, present host), so
@@ -1332,7 +1277,6 @@ mod tests {
         assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_scheme_failure_does_not_reach_precheck_bypass() {
         // Regression test for #304: an entry that passes the `url_well_formed` precheck (a
@@ -1357,7 +1301,6 @@ mod tests {
         assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_show_server_info_invalid_url_scheme_reports_structured_unavailable_not_raw_error()
     {
@@ -1437,7 +1380,6 @@ mod tests {
     // JSON, genuinely absent server name) are reachable through `validate_command` and still
     // resolve to a structured `ExitCode::ERROR` result rather than an unhandled `Err`.
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_missing_config_file_reports_error() {
         // HOME points at a fresh temp dir with no `.claude/mcp.json` at all.
@@ -1456,7 +1398,6 @@ mod tests {
         assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_malformed_config_reports_error() {
         let temp = write_test_mcp_config("not valid json");
@@ -1474,7 +1415,6 @@ mod tests {
         assert_eq!(result.unwrap(), ExitCode::ERROR);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn test_validate_command_unknown_server_name_reports_error() {
         let temp = write_test_mcp_config(r#"{"mcpServers": {"unrelated": {"command": "node"}}}"#);

@@ -12,35 +12,14 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Stdio;
+use std::time::Duration;
 
-use common::{Sandbox, require_node};
+use common::{Sandbox, assert_gone, require_node, send_signal, wait_for_exit, wait_for_pid};
 
 const START_WITHIN: Duration = Duration::from_secs(60);
 const EXIT_WITHIN: Duration = Duration::from_secs(10);
 const GONE_WITHIN: Duration = Duration::from_secs(5);
-
-fn kill(signal: &str, target: &str) {
-    let _ = Command::new("sh")
-        .args([
-            "-c",
-            "kill -s \"$1\" -- \"$2\" 2>/dev/null",
-            "sh",
-            signal,
-            target,
-        ])
-        .status();
-}
-
-fn is_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
 
 /// Kills the runner group and the grandchild when the test ends, whatever the outcome.
 struct Cleanup {
@@ -50,27 +29,10 @@ struct Cleanup {
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        kill("KILL", &format!("-{}", self.runner));
+        send_signal("KILL", &format!("-{}", self.runner));
         if let Some(pid) = self.grandchild {
-            kill("KILL", &pid.to_string());
+            send_signal("KILL", &pid.to_string());
         }
-    }
-}
-
-fn wait_for_pid(pid_file: &Path) -> u32 {
-    let deadline = Instant::now() + START_WITHIN;
-    loop {
-        if let Some(pid) = std::fs::read_to_string(pid_file)
-            .ok()
-            .and_then(|text| text.trim().parse().ok())
-        {
-            return pid;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "tsc never reported its grandchild"
-        );
-        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -111,31 +73,18 @@ fn run_stops_a_tsc_descendant_when_interrupted_during_the_type_check() {
         runner: runner.id(),
         grandchild: None,
     };
-    let grandchild = wait_for_pid(&grandchild_file);
+    let grandchild = wait_for_pid(
+        &grandchild_file,
+        START_WITHIN,
+        "tsc never reported its grandchild",
+    );
     cleanup.grandchild = Some(grandchild);
 
     // Only the runner is signalled: the grandchild can disappear only because the runner kills
     // the whole tsc tree.
-    kill("INT", &runner.id().to_string());
-    let started = Instant::now();
-    let code = loop {
-        if let Some(status) = runner.try_wait().unwrap() {
-            break status.code();
-        }
-        assert!(
-            started.elapsed() < EXIT_WITHIN,
-            "runner still alive after SIGINT"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    send_signal("INT", &runner.id().to_string());
+    let code = wait_for_exit(&mut runner, EXIT_WITHIN, "runner still alive after SIGINT");
 
     assert_eq!(code, Some(130));
-    let deadline = Instant::now() + GONE_WITHIN;
-    while is_alive(grandchild) {
-        assert!(
-            Instant::now() < deadline,
-            "the tsc grandchild {grandchild} is still alive {GONE_WITHIN:?} after the runner exited"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    assert_gone(grandchild, GONE_WITHIN, "the tsc grandchild");
 }

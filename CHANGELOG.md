@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`mcp-execution-core`, `mcp-execution-files`, `mcp-execution-cli`, `mcp-execution-server`**: a `~name` path in a directory option is refused with an invalid-argument error (`HomeDirError::UnsupportedUserHome`) instead of creating a literal `~name` directory; write `./~name` for a directory with that name; issue #647 (#PR)
+- **`mcp-execution-cli`**: on Unix `run` handles SIGHUP and SIGQUIT as cancel (exit 129 and 131) and now stops under `nohup`; use `setsid` or tmux for a run that must outlive the terminal; issue #646 (#PR)
+- **`mcp-execution-cli`**: on a terminal the script's process group is the foreground group, so Ctrl-C reaches only the script: a script that handles SIGINT is no longer force-stopped and keeps its own exit code (Ctrl-\ or `kill` still stop the run); issue #646 (#PR)
 - **`mcp-execution-cli`**: a symlinked `_meta.json` is refused everywhere, a schema-version mismatch in `drift` and `scripts check` exits 2, every directory option expands a leading `~/`, and a `run` stopped by SIGINT or SIGTERM exits 130 or 143; issues #618, #627 (#640)
 - **`mcp-execution-cli`**: `ScriptStatus` gains `Cancelled`, `SetupResult` gains `failed_entries`, and the shared `ServersDir`/`SkillsDir` replace `resolve_base_dir`; issues #610, #618, #627 (#640)
 - `_meta.json` schema version is 3 and the file is written as compact JSON; regenerate existing output (#603)
@@ -83,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-core`, `mcp-execution-cli`, `mcp-execution-server`**: the home directory is read from `USERPROFILE` on Windows, so tests can redirect it and the 34 tests ignored for that reason run on Windows CI; issue #604 (#654)
 - **Tests**: the docs check runs TypeScript imports through `run` and parses every `mcp-execution-cli` command of the user-facing docs against a generated fixture package; issue #609 (#654)
 - **Tests**: signal tests wait for a readiness file instead of a fixed sleep, and a test shows `run` ends within the wrap-up bound against hanging servers; issues #636, #638 (#654)
+- **Tests**: `mcp-execution-cli` integration tests share one generated-package writer and one set of Unix process helpers; issue #651 (#PR)
+- **Tests**: the home-redirecting unit tests of `mcp-execution-cli` set `HOME` and `USERPROFILE` and run on Windows too; issue #648 (#PR)
 
 ### Fixed
 
@@ -99,6 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-core`**: on Windows the `_meta.json` reader opens the file without following reparse points and checks the opened handle; issue #639 (#654)
 - **`mcp-execution-server`**: a missing home directory is an MCP error instead of writes under `./.claude`; issue #634 (#654)
 - **`mcp-execution-cli`**: a bare `~` in a directory option expands to the home directory instead of creating a literal `~` directory; issue #637 (#654)
+- **`mcp-execution-cli`**: on Unix `run` stops the script's process group on timeout and cancel and hands the terminal to that group while it runs, so a descendant can still read `/dev/tty`; issue #646 (#PR)
+- **`mcp-execution-cli`**: the runtime state and config directories refuse a relative `HOME`; issue #652 (#PR)
+- **`mcp-execution-server`**: `generate_skill` and default-directory errors no longer echo home paths or a relative `HOME` value; issue #653 (#PR)
 
 ### Security
 

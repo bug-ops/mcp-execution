@@ -1,8 +1,8 @@
 //! Runner termination signals.
 //!
-//! `run` must stop its script when the runner itself is interrupted or terminated, also when the
-//! signal reaches the whole process group. `Termination` is the one handle the run phases
-//! race against: reading the script, the type check and the script process.
+//! `run` must stop its script when the runner itself is interrupted, terminated, hung up or quit,
+//! also when the signal reaches the whole process group. `Termination` is the one handle the run
+//! phases race against: reading the script, the type check and the script process.
 
 use std::fmt;
 use std::future::pending;
@@ -10,6 +10,9 @@ use std::future::pending;
 use mcp_execution_core::cli::ExitCode;
 
 /// A signal that asked the runner to stop.
+///
+/// SIGHUP stops the run even under `nohup`, because registering the handler overrides an
+/// inherited `SIG_IGN`; use `setsid` or tmux for a run that must survive the terminal closing.
 ///
 /// On Windows, Ctrl-C and Ctrl-Break both report as [`RunnerSignal::Interrupt`].
 ///
@@ -20,6 +23,8 @@ use mcp_execution_core::cli::ExitCode;
 ///
 /// assert_eq!(RunnerSignal::Interrupt.to_string(), "SIGINT");
 /// assert_eq!(RunnerSignal::Terminate.exit_code().as_i32(), 143);
+/// assert_eq!(RunnerSignal::Hangup.exit_code().as_i32(), 129);
+/// assert_eq!(RunnerSignal::Quit.exit_code().as_i32(), 131);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunnerSignal {
@@ -27,6 +32,10 @@ pub enum RunnerSignal {
     Interrupt,
     /// SIGTERM.
     Terminate,
+    /// SIGHUP (terminal closed). Raised on Unix only.
+    Hangup,
+    /// SIGQUIT (Ctrl-\). Raised on Unix only.
+    Quit,
 }
 
 impl RunnerSignal {
@@ -44,6 +53,8 @@ impl RunnerSignal {
         match self {
             Self::Interrupt => ExitCode::INTERRUPTED,
             Self::Terminate => ExitCode::TERMINATED,
+            Self::Hangup => ExitCode::HANGUP,
+            Self::Quit => ExitCode::QUIT,
         }
     }
 }
@@ -53,6 +64,8 @@ impl fmt::Display for RunnerSignal {
         f.write_str(match self {
             Self::Interrupt => "SIGINT",
             Self::Terminate => "SIGTERM",
+            Self::Hangup => "SIGHUP",
+            Self::Quit => "SIGQUIT",
         })
     }
 }
@@ -72,6 +85,8 @@ mod platform {
     pub(super) struct Sources {
         interrupt: Option<Signal>,
         terminate: Option<Signal>,
+        hangup: Option<Signal>,
+        quit: Option<Signal>,
     }
 
     fn register(kind: SignalKind, name: &str) -> Option<Signal> {
@@ -94,6 +109,8 @@ mod platform {
             Self {
                 interrupt: register(SignalKind::interrupt(), "SIGINT"),
                 terminate: register(SignalKind::terminate(), "SIGTERM"),
+                hangup: register(SignalKind::hangup(), "SIGHUP"),
+                quit: register(SignalKind::quit(), "SIGQUIT"),
             }
         }
 
@@ -101,6 +118,8 @@ mod platform {
             tokio::select! {
                 signal = next(&mut self.interrupt, RunnerSignal::Interrupt) => signal,
                 signal = next(&mut self.terminate, RunnerSignal::Terminate) => signal,
+                signal = next(&mut self.hangup, RunnerSignal::Hangup) => signal,
+                signal = next(&mut self.quit, RunnerSignal::Quit) => signal,
             }
         }
     }
@@ -153,7 +172,8 @@ mod platform {
     }
 }
 
-/// The runner's interrupt and terminate signal subscription.
+/// The runner's stop-signal subscription (SIGINT, SIGTERM, SIGHUP and SIGQUIT on Unix; Ctrl-C and
+/// Ctrl-Break on Windows).
 ///
 /// A signal that cannot be registered is logged and never fires; it is not a run failure.
 #[derive(Debug)]
@@ -174,15 +194,22 @@ impl Termination {
     }
 }
 
-/// Sends SIGTERM to this process, which an installed [`Termination`] turns into a signal.
+/// Sends `signal` (for example `TERM`) to this process, which an installed [`Termination`] turns
+/// into a [`RunnerSignal`].
 #[cfg(all(test, unix))]
 #[expect(clippy::unwrap_used, reason = "test helper")]
-pub(crate) fn raise_sigterm() {
+pub(crate) fn raise_signal(signal: &str) {
     let status = std::process::Command::new("kill")
-        .args(["-s", "TERM", &std::process::id().to_string()])
+        .args(["-s", signal, &std::process::id().to_string()])
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+/// Sends SIGTERM to this process.
+#[cfg(all(test, unix))]
+pub(crate) fn raise_sigterm() {
+    raise_signal("TERM");
 }
 
 #[cfg(test)]
@@ -195,17 +222,25 @@ mod tests {
         assert_eq!(RunnerSignal::Terminate.exit_code(), ExitCode::TERMINATED);
         assert_eq!(ExitCode::INTERRUPTED.as_i32(), 130);
         assert_eq!(ExitCode::TERMINATED.as_i32(), 143);
+        assert_eq!(RunnerSignal::Hangup.exit_code().as_i32(), 129);
+        assert_eq!(RunnerSignal::Quit.exit_code().as_i32(), 131);
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn recv_reports_a_delivered_sigterm_and_stays_usable() {
+    async fn recv_reports_each_delivered_stop_signal_and_stays_usable() {
         use futures_util::FutureExt as _;
 
         let mut termination = Termination::install();
         assert!(termination.recv().now_or_never().is_none());
-        super::raise_sigterm();
-        assert_eq!(termination.recv().await, RunnerSignal::Terminate);
-        assert!(termination.recv().now_or_never().is_none());
+        for (name, expected) in [
+            ("TERM", RunnerSignal::Terminate),
+            ("HUP", RunnerSignal::Hangup),
+            ("QUIT", RunnerSignal::Quit),
+        ] {
+            super::raise_signal(name);
+            assert_eq!(termination.recv().await, expected);
+            assert!(termination.recv().now_or_never().is_none());
+        }
     }
 }

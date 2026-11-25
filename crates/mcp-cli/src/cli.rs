@@ -622,12 +622,27 @@ pub enum Commands {
     /// Output: the default text output wraps the script's output in runner lines and is not
     /// meant for pipelines; use `--format json` for one machine-readable document.
     ///
-    /// Signals: SIGINT and SIGTERM stop the script and any running type check and exit 130 or
-    /// 143 (Ctrl-C and Ctrl-Break report as SIGINT on Windows). SIGKILL cannot be handled: if the
-    /// runner is killed that way, the script process it started can keep running. Once a
-    /// signal arrived, closing the MCP sessions is bounded to about 4 seconds, and a further
-    /// signal cuts it short; the run then exits 130 or 143 without the call summary. A run that
-    /// was not signalled always waits for the sessions to close.
+    /// Signals: SIGINT and SIGTERM, and on Unix also SIGHUP and SIGQUIT, stop the script and any
+    /// running type check and exit 130, 143, 129 or 131 (Ctrl-C and Ctrl-Break report as SIGINT
+    /// on Windows). SIGHUP stops the run even under `nohup` (an inherited ignore of the signal
+    /// is overridden); to keep a run alive after the terminal closes, use `setsid` or tmux. On
+    /// Unix the processes that stay in the script's process group are stopped with it, also on
+    /// the run timeout; a process that starts its own session or group is not, and elsewhere
+    /// only the script itself is stopped. SIGKILL cannot be handled: if the runner is killed
+    /// that way, including a `kill -9` of its whole process group, the script process it
+    /// started can keep running. Once a signal arrived, closing the MCP sessions is bounded to
+    /// about 4 seconds, and a further signal cuts it short; the run then exits with the
+    /// signal's code without the call summary. A run that was not signalled always waits for
+    /// the sessions to close. On a terminal the script's process group is the foreground group
+    /// while it runs, so a descendant can read `/dev/tty`, and Ctrl-C, Ctrl-\ or a hang-up
+    /// reach the script and are reported as the runner's own cancellation (exit 130, 131 or
+    /// 129); on a terminal Ctrl-C reaches only the script, so a script that handles SIGINT is
+    /// not forced to stop and keeps its own exit code or keeps running (use Ctrl-\ or `kill` to
+    /// stop it). The terminal returns to the runner afterwards. Ctrl-Z does not suspend a run:
+    /// the stopped script is resumed. A runner that is not the foreground group itself (a
+    /// background job) never takes the terminal. If the runner is killed with SIGKILL the
+    /// terminal stays with the orphaned script group, and the shell may report an input/output
+    /// error when it reads the terminal.
     Run(RunArgs),
 
     /// Call one tool of one server and print its result within the output budget.

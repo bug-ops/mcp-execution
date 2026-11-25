@@ -23,7 +23,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use common::{Sandbox, require_node};
+use common::{Sandbox, require_node, wait_for_pid as wait_for_pid_within};
 
 /// How long a cancelled runner may take to exit (its wrap-up is bounded by a few seconds).
 const EXIT_WITHIN: Duration = Duration::from_secs(10);
@@ -152,39 +152,11 @@ impl Drop for Runner {
 
 /// Polls `pid_file` until it holds a pid.
 fn wait_for_pid(pid_file: &Path) -> u32 {
-    let deadline = Instant::now() + START_WITHIN;
-    loop {
-        if let Some(pid) = std::fs::read_to_string(pid_file)
-            .ok()
-            .and_then(|text| text.trim().parse().ok())
-        {
-            return pid;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the script never reported its pid"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn is_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    wait_for_pid_within(pid_file, START_WITHIN, "the script never reported its pid")
 }
 
 fn assert_gone(pid: u32) {
-    let deadline = Instant::now() + GONE_WITHIN;
-    while is_alive(pid) {
-        assert!(
-            Instant::now() < deadline,
-            "process {pid} still alive {GONE_WITHIN:?} after the runner exited"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    common::assert_gone(pid, GONE_WITHIN, "process");
 }
 
 fn run_command(sb: &Sandbox, script: &Path, pid_file: &Path, flags: &[&str]) -> Command {

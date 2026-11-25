@@ -4,6 +4,7 @@
 //! the script ends the readers get [`DRAIN_GRACE`]; a process the script left behind that still
 //! holds a pipe cannot keep the runner waiting, its reader is aborted and the loss is reported.
 
+use std::convert::Infallible;
 use std::ffi::OsString;
 use std::fmt;
 use std::future::Future;
@@ -23,6 +24,7 @@ use super::OutOfRange;
 use super::helper::HelperEndpoint;
 use super::signal::RunnerSignal;
 use super::spill::MAX_SPILL_FILE_BYTES;
+use super::tty::{ForegroundGroup, terminal_cancellation};
 
 /// Shortest accepted run timeout, in seconds.
 pub const MIN_RUN_TIMEOUT_SECS: u64 = 1;
@@ -429,20 +431,33 @@ pub(crate) async fn drain(mut out: PipeCapture, mut err: PipeCapture, grace: Dur
     }
 }
 
-async fn kill_script(child: &mut tokio::process::Child, why: &str) {
-    if let Err(error) = child.kill().await {
-        tracing::debug!("could not kill the {why} script: {error}");
+/// Resumes the script's group if a terminal Ctrl-Z stops it; pends forever without a terminal.
+async fn keep_script_running(foreground: Option<&ForegroundGroup>) -> Infallible {
+    match foreground {
+        Some(group) => group.keep_running().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn kill_script(tree: &mut ProcessTree, why: &str) {
+    tree.kill();
+    if let Err(error) = tree.child_mut().wait().await {
+        tracing::debug!("could not reap the {why} script: {error}");
     }
 }
 
 /// Starts node on the script and waits for it within the run timeout.
 ///
 /// Without a `helper` the script gets a null stdin and no helper environment; with one, the
-/// endpoint's environment variables and, on the Unix carrier, its stdin (the channel). On timeout
-/// the script is killed. `cancel` is polled before the wait, so when it resolves the script is
-/// killed and the status is [`ScriptStatus::Cancelled`] even if the script ended at the same
-/// moment (for example from the same group-wide SIGINT). Afterwards the output readers get
-/// [`DRAIN_GRACE`] before they are abandoned.
+/// endpoint's environment variables and, on the Unix carrier, its stdin (the channel). The script
+/// runs through a `ProcessTree`, so on timeout, cancel or drop it is killed together with the
+/// processes that stay in its process group (on Unix; a descendant that starts its own session or
+/// group is not stopped, and elsewhere only the direct child is). It leads its own process group,
+/// which becomes the terminal's foreground group while it runs (see `ForegroundGroup`), and a
+/// terminal-generated SIGINT, SIGQUIT or SIGHUP that kills it is reported as a cancellation.
+/// `cancel` is polled before the wait, so when it resolves the script is killed and the status is
+/// [`ScriptStatus::Cancelled`] even if the script ended at the same moment. Afterwards the output
+/// readers get [`DRAIN_GRACE`] before they are abandoned.
 ///
 /// # Errors
 ///
@@ -486,8 +501,7 @@ pub async fn run_script_process(
         .stderr(Stdio::piped())
         .env_remove(HELPER_ENV)
         .env_remove(HELPER_TOKEN_ENV)
-        .env(RUN_MARKER_ENV, "1")
-        .kill_on_drop(true);
+        .env(RUN_MARKER_ENV, "1");
     if let Some(endpoint) = helper {
         command.envs(endpoint.env());
         if let Some(stdin) = endpoint.take_stdin() {
@@ -495,8 +509,10 @@ pub async fn run_script_process(
         }
     }
     // The command, and with it the parent's copy of the channel's child end, is dropped here.
-    let mut child = command.spawn().context("cannot start node")?;
+    let mut tree = ProcessTree::spawn(&mut command).context("cannot start node")?;
     drop(command);
+    let child = tree.child_mut();
+    let foreground = child.id().and_then(ForegroundGroup::hand_over);
     let stdout = child
         .stdout
         .take()
@@ -511,18 +527,23 @@ pub async fn run_script_process(
     let status = tokio::select! {
         biased;
         signal = cancel => {
-            kill_script(&mut child, "cancelled").await;
+            kill_script(&mut tree, "cancelled").await;
             ScriptStatus::Cancelled(signal)
         }
-        waited = tokio::time::timeout(spec.timeout.get(), child.wait()) => match waited {
-            Ok(waited) => ScriptStatus::from_exit(waited.context("cannot wait for node")?),
+        waited = tokio::time::timeout(spec.timeout.get(), tree.child_mut().wait()) => match waited {
+            Ok(waited) => {
+                let status = ScriptStatus::from_exit(waited.context("cannot wait for node")?);
+                if foreground.is_some() { terminal_cancellation(status) } else { status }
+            }
             Err(_elapsed) => {
-                kill_script(&mut child, "timed-out").await;
+                kill_script(&mut tree, "timed-out").await;
                 ScriptStatus::TimedOut
             }
         },
+        never = keep_script_running(foreground.as_ref()) => match never {},
     };
 
+    drop(foreground);
     let drained = drain(out, err, DRAIN_GRACE).await;
     Ok(ProcessOutcome {
         status,

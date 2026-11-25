@@ -85,7 +85,7 @@ case!(
 );
 
 case!(expand_home_keeps_every_other_path_unchanged, ABS_HOME, {
-    for path in ["/abs/x", "rel/x", "x/~", "~user/x", "~~", ".~"] {
+    for path in ["/abs/x", "rel/x", "x/~", ".~"] {
         assert_eq!(
             expand_home(Path::new(path)).expect("no home needed"),
             PathBuf::from(path),
@@ -93,6 +93,18 @@ case!(expand_home_keeps_every_other_path_unchanged, ABS_HOME, {
         );
     }
 });
+
+case!(
+    expand_home_rejects_a_tilde_name_instead_of_a_literal_directory,
+    ABS_HOME,
+    {
+        for path in ["~user", "~user/x", "~~"] {
+            let error =
+                expand_home(Path::new(path)).expect_err("another user's home is unsupported");
+            assert_matches!(error, HomeDirError::UnsupportedUserHome { .. }, "{path}");
+        }
+    }
+);
 
 case!(
     expand_home_never_reads_home_for_a_path_without_tilde,

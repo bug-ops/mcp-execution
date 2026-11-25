@@ -30,6 +30,7 @@ mcp-execution-core = { path = "crates/mcp-core", version = "0.11.0" }
 mcp-execution-files = { path = "crates/mcp-files", version = "0.11.0" }
 mcp-execution-introspector = { path = "crates/mcp-introspector", version = "0.11.0" }
 mcp-execution-skill = { path = "crates/mcp-skill", version = "0.11.0" }
+nix = { version = "0.32", default-features = false }
 rayon = "1.12"
 regex = "1.13"
 rmcp = "3.1"
