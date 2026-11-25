@@ -225,6 +225,8 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          # The gate's CI run uploads artifacts too (coverage); only binaries are release assets.
+          pattern: mcp-execution-*
           path: artifacts
 
       - name: Extract release notes
