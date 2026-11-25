@@ -390,7 +390,8 @@ classifies as `SERVER_ERROR`, not the generic fallback:
 | `ConnectionFailed`, `ResourceLimitExceeded` (core or files) | `SERVER_ERROR` (3) — "the remote MCP server is at fault," not the CLI caller |
 | `ValidationError`, `SecurityViolation`, `InvalidArgument` | `INVALID_INPUT` (2) |
 | `SerializationError`, everything else | `ERROR` (1) |
-| any `FilesError` other than `ResourceLimitExceeded` | `ERROR` (1) |
+| `FilesError::HomeDirectory` (a `HomeDirError` source, #657) | `INVALID_INPUT` (2) for `UnsupportedUserHome`; `ERROR` (1) for `Unknown` and `NotAbsolute`, as for a bare `HomeDirError` (shared `classify_home_error`) |
+| any other `FilesError` other than `ResourceLimitExceeded` | `ERROR` (1) |
 
 ## 6. `introspect` Command (`commands/introspect.rs`)
 
@@ -850,26 +851,45 @@ itself.
   on its group, the script process it started can keep running, and, after a terminal hand-over, the terminal stays with the orphaned script group, so the shell may report an input/output error when it reads the terminal. On Unix the tsc process group is killed on timeout or cancel
   (`ProcessTree`, #633, see `--typecheck`). Since #646 the script is spawned through `ProcessTree` as well: it leads its own
   process group, and the processes that remain in that group get SIGKILL on timeout, cancel and drop. A descendant that created
-  its own session or process group (`setsid`, detached spawn) is not stopped, and neither is a background descendant of a script
-  that exited by itself (the group is signalled only while the leader is unreaped). Because the script is in its own group, the
-  runner handles SIGHUP and SIGQUIT itself as cancellation (exit 129 and 131) instead of relying on group delivery. Tokio's
-  registration overrides an inherited `SIG_IGN`, so SIGHUP stops a run even under `nohup`; a background run needs `setsid` or
-  `tmux`. On Windows only the direct child is stopped (`kill_on_drop`; the job object is tracked by #649).
+  its own session or process group (`setsid`, detached spawn) is not stopped. After a normal exit of the script (#656)
+  `ProcessTree::wait` waits for the exit without reaping (`waitid(EXITED | NOWAIT)` on a blocking thread), then sends SIGKILL to
+  the group and reaps the leader, so background descendants that remain in the group are killed (the script only; after a normal
+  `tsc` exit nothing is signalled). The group is signalled only while the leader is unreaped, so a recycled pgid is never hit.
+  Residuals: on darwin `waitid(EXITED | NOWAIT)` also reports a stopped or continued leader, so the exit wait polls every 20 ms
+  while the leader stays stopped (Linux reports only exits), and the group is killed and reaped only after a real exit; killing
+  the group safely assumes nothing else reaps the script (an `ECHILD` result sends no signal); `kill_leftovers` ignores `EPERM`,
+  so a leftover owned by another uid survives. Because the script is in its own group, the
+  runner handles SIGHUP and SIGQUIT itself as cancellation (exit 129 and 131) instead of relying on group delivery, except when
+  the runner inherited either signal as ignored (#655): `signal.rs` reads the startup dispositions (`sigaction` query, before
+  any registration) and registers no cancel handler for a signal that was `SIG_IGN` at startup, so it stays ignored by the
+  runner (a debug log only) and a foreground `nohup` on a terminal still ends the run on hang-up. Node resets an inherited
+  ignore of SIGHUP, so the script itself still ends on SIGHUP. SIGINT and SIGTERM are unchanged (tokio overrides an inherited
+  `SIG_IGN`; follow-up #664). Residual: SIGQUIT is ignored by a non-interactive shell for a background `&` job, so the runner
+  then ignores SIGQUIT too; a background run needs `setsid` or `tmux`.
+  On Windows (#649) the script and `tsc` are assigned to a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, no breakaway) in
+  `ProcessTree` (`runtime/exec.rs`, private `job` module): the job is terminated on timeout, cancel and drop, and after a normal
+  exit of the script or `tsc`, which kills leftovers on Windows (Unix does not signal after a normal `tsc` exit). When the job
+  cannot be created or the child cannot be assigned, only the direct child is stopped (`kill_on_drop`). Residuals: a process
+  started before the assignment can escape the job; whether libuv's own job object nests with this one for a grandchild of a
+  non-detached script child has no Windows test (#665).
 - Terminal foreground (#646, `runtime/tty.rs`, Unix): the script's group would be a background group on a terminal, and a
   descendant reading `/dev/tty` (an `ssh`, `sudo` or git credential prompt) would be stopped by SIGTTIN. Right after the spawn
   `ForegroundGroup::hand_over` opens `/dev/tty` and, only when `tcgetpgrp` equals the runner's own group, makes the script's
   group the terminal's foreground group (`tcsetpgrp` with SIGTTOU blocked on the calling thread through `pthread_sigmask`, since
   the runner is a background group at restore time), then sends the group SIGCONT in case SIGTTIN had already stopped it. The terminal goes back to the runner's group on a normal end, timeout,
-  cancel and drop, but only while the script's group is still the foreground group. Nothing changes when the runner has no
+  cancel and drop, but only when the foreground group is the script's own or a dead group (#659): the check is `tcgetpgrp`, and a group counts as dead only when `kill(-pgid, 0)` answers exactly `ESRCH` (`EPERM` counts as alive), so a terminal that a shell job-control step or another process took over is left alone. Nothing changes when the runner has no
   controlling terminal, is itself a background job, or the hand-over fails (a debug log only); non-Unix has no hand-over. As the
   script's group then receives the terminal-generated SIGINT, SIGQUIT and SIGHUP instead of the runner, `terminal_cancellation`
   maps a script that died of signal 2, 3 or 1 to `Cancelled(Interrupt | Quit | Hangup)` (exit 130, 131, 129), applied only
   after a hand-over; so a script killed by one of those signals on its own account is reported as cancelled too, and a script
   that traps SIGINT and survives keeps running, as a foreground job does in a shell. In short, on a terminal Ctrl-C reaches only the script's group: a script that handles SIGINT is not force-stopped and keeps its own exit code or keeps running, while Ctrl-\ (SIGQUIT), a terminal hang-up and a `kill` aimed at the runner still stop the run when the script does not handle them. Ctrl-Z would stop the script's group and leave the runner, now a background group, waiting
   with no shell prompt, so the run never suspends: `ForegroundGroup::keep_running`, a third arm of the `select!` in
-  `run_script_process` (it never completes; without a terminal it stays pending; no thread), polls every 100 ms with
-  `waitid(STOPPED | NOHANG | NOWAIT)` on the script leader and sends the group SIGCONT when it is stopped, so Ctrl-Z is a no-op for a
-  running script while Ctrl-C and the timeout keep working. Polling is used instead of SIGCHLD; `waitid` is unavailable on
+  `run_script_process` (it never completes; without a terminal it stays pending; no thread), sends the script's group SIGCONT on
+  every 100 ms tick unconditionally (#659, #660; the former stopped-leader probe is gone, because `waitid` sees only the caller's
+  children and cannot see a stopped descendant), so Ctrl-Z is a no-op for a running script while Ctrl-C and the timeout keep
+  working. Residuals: a node SIGCONT handler, if any, fires about ten times a second, and a group member stopped on purpose or by a
+  user's `kill -STOP` is resumed. On darwin a group whose only member is an unreaped zombie answers `EPERM`, so the terminal is
+  not taken back. Polling is used instead of SIGCHLD; `waitid` is unavailable on
   OpenBSD and similar targets, which the crate does not support. The `runtime::tty` module is `pub(crate)`. Dependencies (`mcp-cli`, `cfg(unix)`
   only): `nix` 0.32 (`default-features = false`, feature `signal`) for the safe `pthread_sigmask`, because the workspace denies
   `unsafe`; `rustix` gains the `termios` feature.
@@ -1003,9 +1023,11 @@ it.
   (`distinct_files`, a `HashMap`), not once per diagnostic group. A signal during the type check kills `tsc` (section 16).
   On Unix `tsc` (and, since #646, the `run` script process) runs in its own process group (`ProcessTree`, `runtime/exec.rs`, #633): on timeout or cancel the whole group
   gets SIGKILL through `rustix::process::kill_process_group` while the leader is unreaped, so a recycled pgid is never hit,
-  and nothing is signalled after a normal exit (a descendant that outlives tsc survives). The capture tasks are aborted when
-  the `PipeCapture` is dropped, on every platform. Residual: on Windows only the direct child is killed (`kill_on_drop`; a
-  job object is a follow-up), and the unhandled-signal cases listed in section 16 leave tsc running.
+  and nothing is signalled after a normal exit (a descendant that outlives tsc survives on Unix; unlike the `run` script, which
+  is killed after a normal exit, section 16). On Windows (#649) `tsc` runs in a job object (kill-on-close, no breakaway) that is
+  terminated on timeout, cancel, drop and after a normal exit, with the fallback to the direct child described in section 16.
+  The capture tasks are aborted when the `PipeCapture` is dropped, on every platform. Residual: the unhandled-signal cases
+  listed in section 16 leave tsc running.
 - Skipped with a `typecheck skipped: <reason>` notice after the anchor when `tsc` is not on PATH ("tsc was not found on
   PATH"), when it does not finish within 60 s, or when the environment is unresolved (below). A real problem in the
   script fails: at most `MAX_DIAGNOSTIC_LINES` 20 and `MAX_DIAGNOSTIC_BYTES` 4096, escaped, to stderr before node
@@ -1039,7 +1061,7 @@ it.
 ### `--restrict` (#576, `runtime/restrict.rs`)
 
 - `permission_args` (final, architect ruling): `--permission` plus exactly one `--allow-fs-read=<path>` per path
-  (script, servers dir, run dir). Windows is refused with exit 2 before node starts; a path containing a comma is also
+  (script, servers dir, run dir). Windows is refused with exit 2 before node starts (support stays open, #616); a path containing a comma is also
   refused (exit 2), kept as a precaution for older Node lines that split on commas. Node 26 does not split a comma
   list, which is why one flag per path is used. `--preserve-symlinks` was tried in wave 2 and rejected: it is not needed
   once the per-path flags are used (`restrict_still_lets_the_script_call_tools_through_the_helper` passes without it
@@ -1087,7 +1109,10 @@ Architect-approved rulings, relayed by the lead, 2026-11-24; all are built and w
   token in `MCP_EXECUTION_HELPER_TOKEN` (Unix: `fd:0`); the preload accepts `fd:0` and `pipe:<name>` only. The accept is
   raced against stop, the 5 s hello timeout is measured from the accept, and `HelperHandle::finish()` is bounded by
   `FINISH_GRACE` 2 s.
-- **Residual (documented, follow-up).** The Windows pipe uses the default DACL.
+- **Pipe access (#617).** The Windows pipe is created with the protected owner-only DACL `D:P(A;;GA;;;OW)` (one allow ACE for
+  OWNER RIGHTS, no inherited entries) through `runtime/helper.rs` (`pipe_security`); creation fails closed with an error when the
+  descriptor cannot be built. Residual: under an elevated token the owner is BUILTIN\Administrators, so any elevated admin
+  process can open the pipe (administrators are outside the threat model).
 
 ## 18. Journal, Dry Run, Policy and Harness (as built)
 
@@ -1165,6 +1190,9 @@ tests. A missing config base is an error, never a silent temp-dir fallback.
 
 - Integration tests run the CLI in a sandbox (`tests/common/mod.rs`) that redirects `HOME`, `USERPROFILE`, the `XDG_*`
   variables, `APPDATA` and `LOCALAPPDATA`; the last two redirect the Windows policy path and state root (see Runner state directories).
+- Unit tests that raise signals, redirect `HOME` or install a scoped log subscriber run only under `cargo nextest`, which gives
+  each test its own process (#658; `commands::common::test_isolation`, `process_per_test`; the former `HOME_ENV_LOCK` is gone).
+  Under plain `cargo test` they skip with a stderr line; under nextest without `NEXTEST_EXECUTION_MODE=process-per-test` they panic.
 - Tests that need `~/.claude/mcp.json` are `#[ignore]`d on Windows: `dirs::home_dir()` ignores `HOME` and `USERPROFILE`
   there, so the file cannot be redirected (#604).
 
@@ -1454,11 +1482,11 @@ a second one.
 | FR-036.20 | WHEN the run command is invoked THE SYSTEM SHALL take the script from a file or from standard input, take the time limit and output budget as options bounded by a hard maximum, and pass script arguments to the script as data, never interpolated into a command line | must |
 | FR-036.21 | WHEN the runner itself fails (unreadable script, invalid option, missing runtime, unusable spill location, timeout) THE SYSTEM SHALL exit with the classification of §5 (invalid input 2, timeout 4, other 1) and a one-line message that does not echo script text; WHEN the script exits non-zero by itself THE SYSTEM SHALL propagate its status without remapping it onto the classified codes | must |
 | FR-036.22 | THE SYSTEM SHALL give every new type that carries script text, script arguments or environment values a hand-written redacting `Debug`, and the `Commands` value SHALL never print them (§4) | must |
-| FR-036.23 | WHEN the runner receives SIGINT, SIGTERM, SIGHUP or SIGQUIT (the last two on Unix) during `run` (also when the signal reaches the whole process group; on a terminal after the foreground hand-over a terminal-generated signal reaches only the script's group, and the run counts as cancelled only when the script is killed by it, while a script that handles the signal and exits keeps its own exit status) THE SYSTEM SHALL stop the script, the processes that remain in its process group (Unix) and any running type check, take cancellation before the script's own exit status, and exit 130, 143, 129 or 131 through a normal return, including while a stdin script is still being read | must |
+| FR-036.23 | WHEN the runner receives SIGINT, SIGTERM, SIGHUP or SIGQUIT (the last two on Unix, and only when it did not inherit that signal as ignored, #655) during `run` (also when the signal reaches the whole process group; on a terminal after the foreground hand-over a terminal-generated signal reaches only the script's group, and the run counts as cancelled only when the script is killed by it, while a script that handles the signal and exits keeps its own exit status) THE SYSTEM SHALL stop the script, the processes that remain in its process group (Unix) and any running type check, take cancellation before the script's own exit status, and exit 130, 143, 129 or 131 through a normal return, including while a stdin script is still being read | must |
 | FR-036.24 | WHEN the output capture limit cut a spilled stream THE SYSTEM SHALL say that only the first bytes were saved, not that the full output was | must |
-| FR-036.25 | On Unix, WHEN the run times out or is cancelled THE SYSTEM SHALL stop the script and the processes that remain in its process group; a descendant that created its own session or process group (`setsid`, detached spawn) is not stopped; on non-Unix only the direct child is stopped | must |
-| FR-036.26 | On Unix, WHEN the runner is the foreground process group of its controlling terminal THE SYSTEM SHALL make the script's process group the terminal's foreground group right after the spawn and restore the runner's group on completion, timeout, cancel and drop; otherwise (no terminal, a background runner, a failed hand-over) it SHALL leave the terminal untouched | must |
-| FR-036.27 | On Unix, WHEN the script's group is the terminal's foreground group AND the script leader is stopped THE SYSTEM SHALL resume the group with SIGCONT within about 100 ms, so the run is not suspended | must |
+| FR-036.25 | On Unix, WHEN the run times out, is cancelled or the script exits normally THE SYSTEM SHALL stop the processes that remain in the script's process group (and, on timeout or cancel, the script); a descendant that created its own session or process group (`setsid`, detached spawn) is not stopped; after a normal exit of `tsc` nothing is signalled. On Windows THE SYSTEM SHALL assign the script and `tsc` to a kill-on-close job object without breakaway and terminate it on timeout, cancel, drop and after a normal exit, and, when the job cannot be set up, stop only the direct child; a process started before the assignment can escape | must |
+| FR-036.26 | On Unix, WHEN the runner is the foreground process group of its controlling terminal THE SYSTEM SHALL make the script's process group the terminal's foreground group right after the spawn and restore the runner's group on completion, timeout, cancel and drop, but only when the foreground group is then the script's own or a dead group (a group counts as dead only on `ESRCH`; `EPERM` counts as alive); otherwise (no terminal, a background runner, a failed hand-over) it SHALL leave the terminal untouched | must |
+| FR-036.27 | On Unix, WHEN the script's group is the terminal's foreground group THE SYSTEM SHALL send the group SIGCONT about every 100 ms, so a stop of the group does not suspend the run; a member stopped on purpose is resumed too | must |
 | FR-039.20 | WHEN the call command is invoked THE SYSTEM SHALL select the server with the same selectors as `introspect` (`ServerFlags`, `ServerSource`, §2, §3), take the arguments as a single JSON object, and validate the server as a `ServerId` and the tool as a `ToolName` before connecting | must |
 | FR-039.21 | WHEN the JSON argument is malformed or is not a single object THE SYSTEM SHALL exit with invalid input and report the failure without repeating any part of the argument | must |
 | FR-039.22 | THE SYSTEM SHALL map call failures onto §5 (connection failure and resource limit 3, timeout 4, invalid input 2) and state the class of a tool-reported error | must |

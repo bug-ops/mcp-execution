@@ -11,8 +11,10 @@ use mcp_execution_core::cli::ExitCode;
 
 /// A signal that asked the runner to stop.
 ///
-/// SIGHUP stops the run even under `nohup`, because registering the handler overrides an
-/// inherited `SIG_IGN`; use `setsid` or tmux for a run that must survive the terminal closing.
+/// A SIGHUP or SIGQUIT that was already ignored when the runner started (`nohup` ignores SIGHUP)
+/// stays ignored and never produces a [`RunnerSignal`]. The script is another matter: node resets
+/// an inherited SIGHUP disposition, so a foreground run on a terminal still ends when the terminal
+/// hangs up; use `setsid` or tmux for a run that must survive it.
 ///
 /// On Windows, Ctrl-C and Ctrl-Break both report as [`RunnerSignal::Interrupt`].
 ///
@@ -75,11 +77,75 @@ async fn never() -> RunnerSignal {
     pending().await
 }
 
+/// The disposition a signal had when the process started.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Inherited {
+    /// `SIG_IGN`, for example set by `nohup`.
+    Ignored,
+    /// Default or a handler.
+    Other,
+}
+
+#[cfg(unix)]
+#[expect(
+    unsafe_code,
+    reason = "inherited signal disposition query (#655); no safe API in std, nix or rustix"
+)]
+mod inherited {
+    use std::ptr;
+
+    use super::Inherited;
+
+    /// Reads the current disposition of `signal` without changing it.
+    pub(super) fn query(signal: libc::c_int) -> Inherited {
+        // SAFETY: `sigaction` is a plain C struct for which all-zero bytes are a valid value.
+        let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+        // SAFETY: a null `act` makes the call a pure query, and `old` is valid writable memory.
+        let status = unsafe { libc::sigaction(signal, ptr::null(), &raw mut old) };
+        if status == 0 && old.sa_sigaction == libc::SIG_IGN {
+            Inherited::Ignored
+        } else {
+            Inherited::Other
+        }
+    }
+}
+
 #[cfg(unix)]
 mod platform {
+    use std::sync::OnceLock;
+
     use tokio::signal::unix::{Signal, SignalKind, signal};
 
-    use super::{RunnerSignal, never};
+    use super::{Inherited, RunnerSignal, inherited, never};
+
+    /// SIGHUP and SIGQUIT dispositions as of the first install in this process, taken before any
+    /// handler of ours exists.
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct StartupDispositions {
+        pub(super) hangup: Inherited,
+        pub(super) quit: Inherited,
+    }
+
+    pub(super) fn startup_dispositions() -> StartupDispositions {
+        static STARTUP: OnceLock<StartupDispositions> = OnceLock::new();
+        *STARTUP.get_or_init(|| StartupDispositions {
+            hangup: inherited::query(libc::SIGHUP),
+            quit: inherited::query(libc::SIGQUIT),
+        })
+    }
+
+    fn register_unless_ignored(
+        kind: SignalKind,
+        name: &str,
+        disposition: Inherited,
+    ) -> Option<Signal> {
+        if disposition == Inherited::Ignored {
+            tracing::debug!("{name} was ignored at startup, leaving it ignored");
+            return None;
+        }
+        register(kind, name)
+    }
 
     #[derive(Debug)]
     pub(super) struct Sources {
@@ -106,11 +172,12 @@ mod platform {
 
     impl Sources {
         pub(super) fn install() -> Self {
+            let startup = startup_dispositions();
             Self {
                 interrupt: register(SignalKind::interrupt(), "SIGINT"),
                 terminate: register(SignalKind::terminate(), "SIGTERM"),
-                hangup: register(SignalKind::hangup(), "SIGHUP"),
-                quit: register(SignalKind::quit(), "SIGQUIT"),
+                hangup: register_unless_ignored(SignalKind::hangup(), "SIGHUP", startup.hangup),
+                quit: register_unless_ignored(SignalKind::quit(), "SIGQUIT", startup.quit),
             }
         }
 
@@ -199,6 +266,10 @@ impl Termination {
 #[cfg(all(test, unix))]
 #[expect(clippy::unwrap_used, reason = "test helper")]
 pub(crate) fn raise_signal(signal: &str) {
+    assert!(
+        crate::commands::common::test_isolation::is_process_per_test(),
+        "raising a signal needs one process per test; gate the test with process_per_test"
+    );
     let status = std::process::Command::new("kill")
         .args(["-s", signal, &std::process::id().to_string()])
         .status()
@@ -215,6 +286,8 @@ pub(crate) fn raise_sigterm() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::commands::common::test_isolation::process_per_test;
 
     #[test]
     fn signals_map_to_shell_exit_codes() {
@@ -231,13 +304,22 @@ mod tests {
     async fn recv_reports_each_delivered_stop_signal_and_stays_usable() {
         use futures_util::FutureExt as _;
 
+        use super::platform::startup_dispositions;
+
+        if !process_per_test("recv_reports_each_delivered_stop_signal_and_stays_usable") {
+            return;
+        }
         let mut termination = Termination::install();
+        let startup = startup_dispositions();
         assert!(termination.recv().now_or_never().is_none());
-        for (name, expected) in [
-            ("TERM", RunnerSignal::Terminate),
-            ("HUP", RunnerSignal::Hangup),
-            ("QUIT", RunnerSignal::Quit),
+        for (name, expected, inherited) in [
+            ("TERM", RunnerSignal::Terminate, Inherited::Other),
+            ("HUP", RunnerSignal::Hangup, startup.hangup),
+            ("QUIT", RunnerSignal::Quit, startup.quit),
         ] {
+            if inherited == Inherited::Ignored {
+                continue;
+            }
             super::raise_signal(name);
             assert_eq!(termination.recv().await, expected);
             assert!(termination.recv().now_or_never().is_none());

@@ -1117,6 +1117,39 @@ fn metadata_error(error: MetadataReadError, server: &ServerId) -> anyhow::Error 
     }
 }
 
+/// Gate for unit tests that change process-global state (environment variables, signals).
+///
+/// Such tests are safe only when every test runs in its own process, which `cargo nextest` does.
+#[cfg(test)]
+pub mod test_isolation {
+    /// Whether this process runs one test only (`cargo nextest`'s process-per-test mode).
+    #[must_use]
+    pub fn is_process_per_test() -> bool {
+        std::env::var("NEXTEST_EXECUTION_MODE").is_ok_and(|mode| mode == "process-per-test")
+    }
+
+    /// Whether the calling test may change process-global state. Under plain `cargo test`, where
+    /// tests share one process, prints a skip line and returns `false`.
+    ///
+    /// # Panics
+    ///
+    /// Panics under `cargo nextest` without `NEXTEST_EXECUTION_MODE=process-per-test`, so a
+    /// runner setup that does not isolate tests cannot silently skip them.
+    #[must_use]
+    pub fn process_per_test(test: &str) -> bool {
+        if is_process_per_test() {
+            return true;
+        }
+        assert!(
+            std::env::var_os("NEXTEST").is_none(),
+            "{test} runs under cargo nextest without NEXTEST_EXECUTION_MODE=process-per-test; \
+             refusing to skip it silently"
+        );
+        eprintln!("skipping {test}: it changes process-global state, run it with cargo nextest");
+        false
+    }
+}
+
 /// In-process home redirection for unit tests, shared by every command's tests.
 #[cfg(test)]
 #[expect(
@@ -1127,44 +1160,42 @@ pub mod home_env {
     use std::ffi::OsString;
     use std::path::Path;
 
+    use super::test_isolation::is_process_per_test;
+
     /// Variables that name the home directory; set to the redirect target.
     const HOME_VARS: [&str; 2] = ["HOME", "USERPROFILE"];
 
     /// XDG base-directory overrides; removed so state and config paths follow the redirected home.
     const XDG_VARS: [&str; 2] = ["XDG_STATE_HOME", "XDG_CONFIG_HOME"];
 
-    /// One lock for every home-mutating test; async-aware because async tests keep the guard
-    /// across `.await`. Under `cargo nextest` each test has its own process, so it only guards
-    /// plain `cargo test`.
-    static HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     /// Points the home directory (`HOME`, and `USERPROFILE` on Windows) at a directory and clears
     /// the XDG state/config overrides until dropped, then restores every variable, even on panic.
     #[derive(Debug)]
     pub struct HomeEnv {
         saved: Vec<(&'static str, Option<OsString>)>,
-        _guard: tokio::sync::MutexGuard<'static, ()>,
     }
 
     impl HomeEnv {
-        /// Redirects the home from a synchronous test.
+        /// Redirects the home for the rest of the test.
+        ///
+        /// # Panics
+        ///
+        /// Panics outside `cargo nextest`'s process-per-test mode: the caller must first pass
+        /// `test_isolation::process_per_test`.
+        #[must_use]
         pub fn set(home: &Path) -> Self {
-            Self::redirect(home, HOME_ENV_LOCK.blocking_lock())
-        }
-
-        /// Redirects the home from an async test.
-        pub async fn set_async(home: &Path) -> Self {
-            Self::redirect(home, HOME_ENV_LOCK.lock().await)
-        }
-
-        fn redirect(home: &Path, guard: tokio::sync::MutexGuard<'static, ()>) -> Self {
+            assert!(
+                is_process_per_test(),
+                "HomeEnv needs one process per test; gate the test with process_per_test"
+            );
             let saved = HOME_VARS
                 .into_iter()
                 .chain(XDG_VARS)
                 .map(|name| (name, std::env::var_os(name)))
                 .collect();
-            // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process reads or writes
-            // these variables while the guard is held.
+            // SAFETY: the assert above guarantees this process runs one test only, and the test
+            // owns its thread and any tasks it spawns, so nothing reads or writes these
+            // variables concurrently.
             unsafe {
                 for name in HOME_VARS {
                     std::env::set_var(name, home);
@@ -1173,16 +1204,13 @@ pub mod home_env {
                     std::env::remove_var(name);
                 }
             }
-            Self {
-                saved,
-                _guard: guard,
-            }
+            Self { saved }
         }
     }
 
     impl Drop for HomeEnv {
         fn drop(&mut self) {
-            // SAFETY: see `redirect`; the guard field is dropped after this body runs.
+            // SAFETY: see `set`.
             unsafe {
                 for (name, value) in &self.saved {
                     match value {
@@ -1198,6 +1226,7 @@ pub mod home_env {
 #[cfg(test)]
 mod tests {
     use super::home_env::HomeEnv;
+    use super::test_isolation::process_per_test;
     use super::*;
     use std::assert_matches;
     use std::io::Write;
@@ -2542,6 +2571,9 @@ mod tests {
     /// looked-up entry — which no other test in this crate covered.
     #[test]
     fn test_list_and_get_mcp_server_success_via_default_path() {
+        if !process_per_test("test_list_and_get_mcp_server_success_via_default_path") {
+            return;
+        }
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2578,6 +2610,9 @@ mod tests {
     /// constraint, since only `generate` turns the id into a directory name.
     #[test]
     fn test_get_mcp_server_accepts_non_slug_shaped_config_key() {
+        if !process_per_test("test_get_mcp_server_accepts_non_slug_shaped_config_key") {
+            return;
+        }
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2604,6 +2639,9 @@ mod tests {
     /// this case indistinguishable from a genuinely absent entry to its callers.
     #[test]
     fn test_get_mcp_server_entry_finds_entry_that_fails_config_validation() {
+        if !process_per_test("test_get_mcp_server_entry_finds_entry_that_fails_config_validation") {
+            return;
+        }
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();

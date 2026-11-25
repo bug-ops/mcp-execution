@@ -410,9 +410,12 @@ fn run_ends_within_timeout_and_grace_when_a_grandchild_holds_stdout() {
     let run = anchored(&out.stdout);
     assert!(out.stdout.contains("parent done"));
     let with_token = run.lines.iter().filter(|l| l.contains(run.token)).count();
+    // On Windows the job object kills the detached grandchild after the script exits, so the drain
+    // sees EOF and no abandon-drain notice is printed; on Unix the grandchild leaves the group.
+    let expected = if cfg!(windows) { 2 } else { 3 };
     assert!(
-        with_token >= 3,
-        "anchor, an abandon-drain notice and the trailer must carry the token: {:?}",
+        with_token >= expected,
+        "anchor, the trailer and (Unix) an abandon-drain notice must carry the token: {:?}",
         run.lines
     );
 }

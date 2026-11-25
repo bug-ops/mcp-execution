@@ -341,12 +341,15 @@ impl Drop for PipeCapture {
 /// dropped.
 ///
 /// On Unix the child leads its own process group and the whole group gets `SIGKILL`; a signal is
-/// only sent while the leader has not been reaped, so a recycled group id is never hit. Elsewhere
-/// the guard stops the direct child only.
+/// only sent while the leader has not been reaped, so a recycled group id is never hit. On Windows
+/// the child is assigned to a kill-on-close job object, so dropping the guard ends every process
+/// of the job; if the job cannot be set up only the direct child is stopped.
 #[derive(Debug)]
 pub(crate) struct ProcessTree {
     child: Child,
     killed: bool,
+    #[cfg(windows)]
+    job: Option<job::Job>,
 }
 
 impl ProcessTree {
@@ -355,9 +358,14 @@ impl ProcessTree {
         #[cfg(unix)]
         command.process_group(0);
         command.kill_on_drop(true);
+        let child = command.spawn()?;
+        #[cfg(windows)]
+        let job = job::Job::containing(&child);
         Ok(Self {
-            child: command.spawn()?,
+            child,
             killed: false,
+            #[cfg(windows)]
+            job,
         })
     }
 
@@ -366,12 +374,54 @@ impl ProcessTree {
         &mut self.child
     }
 
-    /// Stops the child and, on Unix, every process left in its group. Idempotent.
+    /// Waits for the leader to exit and then stops every process it left in its group (Unix).
+    ///
+    /// The zombie leader keeps the group id reserved until it is reaped, so the group kill
+    /// cannot hit a recycled id. Dropping the future reaps nothing: a caller that stops waiting
+    /// must call [`Self::kill`].
+    #[cfg(unix)]
+    pub(crate) async fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        use rustix::io::Errno;
+
+        let Some(leader) = self.child.id() else {
+            return self.child.wait().await;
+        };
+        match tokio::task::spawn_blocking(move || wait_exited(leader))
+            .await
+            .map_err(std::io::Error::other)?
+        {
+            Ok(()) => {
+                kill_leftovers(leader);
+                self.killed = true;
+            }
+            Err(Errno::CHILD) => self.killed = true,
+            Err(errno) => return Err(errno.into()),
+        }
+        self.child.wait().await
+    }
+
+    /// Waits for the leader to exit and, on Windows, closes the job so leftovers end with it.
+    #[cfg(not(unix))]
+    pub(crate) async fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        let status = self.child.wait().await?;
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
+        self.killed = true;
+        Ok(status)
+    }
+
+    /// Stops the child and every process of its group (Unix) or job (Windows). Idempotent.
     pub(crate) fn kill(&mut self) {
         if self.killed {
             return;
         }
         self.killed = true;
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
         let Some(pid) = self.child.id() else {
             return;
         };
@@ -392,14 +442,153 @@ impl Drop for ProcessTree {
 }
 
 #[cfg(unix)]
-fn kill_group(leader: u32) {
-    use rustix::process::{Pid, Signal, kill_process_group};
+fn group_of(leader: u32) -> Option<rustix::process::Pid> {
+    i32::try_from(leader)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+}
 
-    let Some(group) = i32::try_from(leader).ok().and_then(Pid::from_raw) else {
+#[cfg(unix)]
+fn kill_group(leader: u32) {
+    use rustix::process::{Signal, kill_process_group};
+
+    let Some(group) = group_of(leader) else {
         return;
     };
     if let Err(error) = kill_process_group(group, Signal::KILL) {
         tracing::debug!("could not kill the process group {leader}: {error}");
+    }
+}
+
+/// Kills what is left in the group of an exited, not yet reaped leader. An empty group answers
+/// `ESRCH`, and Darwin answers `EPERM` for a group of only the zombie leader: neither is logged.
+#[cfg(unix)]
+fn kill_leftovers(leader: u32) {
+    use rustix::io::Errno;
+    use rustix::process::{Signal, kill_process_group};
+
+    let Some(group) = group_of(leader) else {
+        return;
+    };
+    match kill_process_group(group, Signal::KILL) {
+        Ok(()) => {}
+        Err(Errno::SRCH | Errno::PERM) => {
+            tracing::trace!("no process left in the group of {leader}");
+        }
+        Err(errno) => tracing::debug!("could not stop the processes left by {leader}: {errno}"),
+    }
+}
+
+/// Blocks until `leader` has exited, without reaping it, so an exit that happened earlier is
+/// seen too. `ECHILD` means the leader was reaped elsewhere.
+///
+/// Darwin reports a stopped or continued child although only `EXITED` is requested, and with
+/// `NOWAIT` the report repeats at once, so any report that is not an exit is retried after a short
+/// pause.
+#[cfg(unix)]
+fn wait_exited(leader: u32) -> Result<(), rustix::io::Errno> {
+    use rustix::io::Errno;
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+
+    const STOPPED_RETRY: Duration = Duration::from_millis(20);
+
+    let pid = group_of(leader).ok_or(Errno::CHILD)?;
+    loop {
+        match waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        ) {
+            Ok(Some(status)) if status.exited() || status.killed() || status.dumped() => {
+                return Ok(());
+            }
+            Ok(_) => std::thread::sleep(STOPPED_RETRY),
+            Err(Errno::INTR) => {}
+            Err(errno) => return Err(errno),
+        }
+    }
+}
+
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "Win32 job object calls (#649); std has no safe API for process trees"
+)]
+mod job {
+    use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
+    use std::{mem, ptr};
+
+    use tokio::process::Child;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject,
+    };
+
+    /// A job object that ends all its processes when terminated or when its handle is closed.
+    #[derive(Debug)]
+    pub(super) struct Job(OwnedHandle);
+
+    impl Job {
+        /// Puts `child` into a new kill-on-close job. A failure is logged and yields `None`: the
+        /// caller then stops the direct child only. Breakaway is never allowed.
+        pub(super) fn containing(child: &Child) -> Option<Self> {
+            Self::create_with(child)
+                .inspect_err(|error| tracing::debug!("could not create a job object: {error}"))
+                .ok()
+        }
+
+        fn create_with(child: &Child) -> std::io::Result<Self> {
+            let process = child
+                .raw_handle()
+                .ok_or_else(std::io::Error::last_os_error)?;
+            // SAFETY: null attributes and name are valid arguments; the returned handle, when
+            // non-null, is owned by nothing else.
+            let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+            if raw.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: `raw` is a valid handle that nothing else owns or closes.
+            let job = Self(unsafe { OwnedHandle::from_raw_handle(raw) });
+
+            // SAFETY: the all-zero bit pattern is valid for this plain C struct.
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { mem::zeroed() };
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: the job handle is valid and `limits` is a live struct of exactly the
+            // size passed for this information class.
+            let set = unsafe {
+                SetInformationJobObject(
+                    job.raw(),
+                    JobObjectExtendedLimitInformation,
+                    ptr::from_ref(&limits).cast(),
+                    u32::try_from(mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                        .unwrap_or(u32::MAX),
+                )
+            };
+            if set == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: both handles are valid; `process` stays open while `child` is alive.
+            if unsafe { AssignProcessToJobObject(job.raw(), process) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(job)
+        }
+
+        fn raw(&self) -> HANDLE {
+            self.0.as_raw_handle()
+        }
+
+        /// Ends every process of the job.
+        pub(super) fn terminate(&self) {
+            // SAFETY: the job handle is valid for the lifetime of `self`.
+            if unsafe { TerminateJobObject(self.raw(), 1) } == 0 {
+                tracing::debug!(
+                    "could not terminate the job object: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
     }
 }
 
@@ -452,7 +641,8 @@ async fn kill_script(tree: &mut ProcessTree, why: &str) {
 /// endpoint's environment variables and, on the Unix carrier, its stdin (the channel). The script
 /// runs through a `ProcessTree`, so on timeout, cancel or drop it is killed together with the
 /// processes that stay in its process group (on Unix; a descendant that starts its own session or
-/// group is not stopped, and elsewhere only the direct child is). It leads its own process group,
+/// group is not stopped) or job object (on Windows). A process left behind after a normal exit is
+/// stopped the same way before the output is drained. It leads its own process group,
 /// which becomes the terminal's foreground group while it runs (see `ForegroundGroup`), and a
 /// terminal-generated SIGINT, SIGQUIT or SIGHUP that kills it is reported as a cancellation.
 /// `cancel` is polled before the wait, so when it resolves the script is killed and the status is
@@ -530,7 +720,7 @@ pub async fn run_script_process(
             kill_script(&mut tree, "cancelled").await;
             ScriptStatus::Cancelled(signal)
         }
-        waited = tokio::time::timeout(spec.timeout.get(), tree.child_mut().wait()) => match waited {
+        waited = tokio::time::timeout(spec.timeout.get(), tree.wait()) => match waited {
             Ok(waited) => {
                 let status = ScriptStatus::from_exit(waited.context("cannot wait for node")?);
                 if foreground.is_some() { terminal_cancellation(status) } else { status }
@@ -543,6 +733,7 @@ pub async fn run_script_process(
         never = keep_script_running(foreground.as_ref()) => match never {},
     };
 
+    #[cfg(unix)]
     drop(foreground);
     let drained = drain(out, err, DRAIN_GRACE).await;
     Ok(ProcessOutcome {
@@ -553,16 +744,15 @@ pub async fn run_script_process(
     })
 }
 
-/// Unix process helpers shared by the tree-kill tests of this module and `typecheck`.
-#[cfg(all(test, unix))]
+/// Process helpers shared by the tree-kill tests of this module and `typecheck`.
+#[cfg(test)]
 pub(crate) mod tree_test_support {
     use std::path::Path;
     use std::time::{Duration, Instant};
 
-    use rustix::process::{Pid, test_kill_process};
-
     /// Command running `sh` that starts a background `sleep`, records its pid in `pid_file`,
     /// and waits.
+    #[cfg(unix)]
     pub fn sleeping_grandchild(pid_file: &Path) -> tokio::process::Command {
         let mut command = tokio::process::Command::new("sh");
         command
@@ -571,6 +761,22 @@ pub(crate) mod tree_test_support {
             .arg("sh")
             .arg(pid_file);
         command
+    }
+
+    /// Command running a `tsc.cmd`-style shim in `dir` that starts an idle `node` grandchild
+    /// and records its pid in `pid_file`.
+    #[cfg(windows)]
+    pub fn node_grandchild_shim(dir: &Path, pid_file: &Path) -> tokio::process::Command {
+        let shim = dir.join("tsc.cmd");
+        std::fs::write(
+            &shim,
+            format!(
+                "@echo off\r\nnode -e \"require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {{}}, 1000)\" \"{}\"\r\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        tokio::process::Command::new(shim)
     }
 
     /// Waits until `pid_file` holds a pid and returns it.
@@ -588,8 +794,22 @@ pub(crate) mod tree_test_support {
         }
     }
 
+    #[cfg(unix)]
     fn is_alive(pid: i32) -> bool {
+        use rustix::process::{Pid, test_kill_process};
+
         Pid::from_raw(pid).is_some_and(|pid| test_kill_process(pid).is_ok())
+    }
+
+    #[cfg(windows)]
+    fn is_alive(pid: i32) -> bool {
+        let listing = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&listing.stdout)
+            .split_whitespace()
+            .any(|word| word == pid.to_string())
     }
 
     /// Asserts that `pid` is gone within five seconds.
@@ -725,5 +945,60 @@ mod tests {
         tree.child_mut().wait().await.unwrap();
         assert!(tree.child_mut().id().is_none());
         tree.kill();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn waiting_for_a_process_tree_stops_what_the_leader_left() {
+        use tree_test_support::{assert_gone_soon, recorded_pid};
+
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("leftover.pid");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 300 & echo $! > \"$1\"")
+            .arg("sh")
+            .arg(&pid_file);
+        let mut tree = ProcessTree::spawn(&mut command).unwrap();
+        let status = tree.wait().await.unwrap();
+        assert!(status.success());
+        assert_gone_soon(recorded_pid(&pid_file).await).await;
+        assert!(tree.child_mut().id().is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn waiting_for_a_process_tree_ignores_a_stopped_leader() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "kill -STOP $$"]);
+        let mut tree = ProcessTree::spawn(&mut command).unwrap();
+        let waited = tokio::time::timeout(Duration::from_millis(500), tree.wait()).await;
+        assert!(waited.is_err(), "a stopped leader ended the wait");
+        tree.kill();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn waiting_for_a_reaped_process_tree_returns_the_status() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]);
+        let mut tree = ProcessTree::spawn(&mut command).unwrap();
+        assert_eq!(tree.child_mut().wait().await.unwrap().code(), Some(3));
+        assert_eq!(tree.wait().await.unwrap().code(), Some(3));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_leader_reaped_elsewhere_gets_no_signal_after_the_wait() {
+        use rustix::process::{WaitOptions, waitpid};
+
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        let mut tree = ProcessTree::spawn(&mut command).unwrap();
+        let leader = group_of(tree.child_mut().id().unwrap());
+        waitpid(leader, WaitOptions::empty()).unwrap();
+        let _ = tree.wait().await;
+        assert!(tree.killed);
     }
 }

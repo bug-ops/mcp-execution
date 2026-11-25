@@ -20,7 +20,7 @@
 use crate::filesystem::FileSystem;
 use crate::types::{FilesError, Result};
 use mcp_execution_codegen::GeneratedCode;
-use mcp_execution_core::{HomeDirError, expand_home};
+use mcp_execution_core::expand_home;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -378,23 +378,9 @@ impl FilesBuilder {
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory is needed and unusable.
+/// Returns [`FilesError::HomeDirectory`] if the home directory is needed and unusable.
 fn expand_base_path(path: &Path) -> Result<PathBuf> {
-    expand_home(path).map_err(|source| FilesError::IoError {
-        path: path.display().to_string(),
-        source: std::io::Error::new(home_error_kind(&source), source),
-    })
-}
-
-/// I/O kind that describes a home-directory failure: a relative home is invalid input, an
-/// unknown one has no better kind than `Other`.
-const fn home_error_kind(error: &HomeDirError) -> std::io::ErrorKind {
-    match error {
-        HomeDirError::NotAbsolute { .. } | HomeDirError::UnsupportedUserHome { .. } => {
-            std::io::ErrorKind::InvalidInput
-        }
-        HomeDirError::Unknown => std::io::ErrorKind::Other,
-    }
+    expand_home(path).map_err(|source| FilesError::HomeDirectory { source })
 }
 
 /// Writes file content to disk atomically, creating parent directories
@@ -875,18 +861,6 @@ mod tests {
         // (which build_and_export would otherwise create unconditionally)
         // must never have been created.
         assert!(!target.exists());
-    }
-
-    #[test]
-    fn test_home_error_kind_describes_each_failure() {
-        let relative = HomeDirError::NotAbsolute {
-            path: PathBuf::from("relative"),
-        };
-        assert_eq!(home_error_kind(&relative), std::io::ErrorKind::InvalidInput);
-        assert_eq!(
-            home_error_kind(&HomeDirError::Unknown),
-            std::io::ErrorKind::Other
-        );
     }
 
     #[test]

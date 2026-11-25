@@ -624,11 +624,16 @@ pub enum Commands {
     ///
     /// Signals: SIGINT and SIGTERM, and on Unix also SIGHUP and SIGQUIT, stop the script and any
     /// running type check and exit 130, 143, 129 or 131 (Ctrl-C and Ctrl-Break report as SIGINT
-    /// on Windows). SIGHUP stops the run even under `nohup` (an inherited ignore of the signal
-    /// is overridden); to keep a run alive after the terminal closes, use `setsid` or tmux. On
-    /// Unix the processes that stay in the script's process group are stopped with it, also on
-    /// the run timeout; a process that starts its own session or group is not, and elsewhere
-    /// only the script itself is stopped. SIGKILL cannot be handled: if the runner is killed
+    /// on Windows). A SIGHUP or SIGQUIT that was already ignored when the runner started (as
+    /// under `nohup`) stays ignored; the script is not covered by that, because node resets an
+    /// inherited SIGHUP ignore, so on a terminal the hang-up still ends the script and the run.
+    /// To keep a run alive after the terminal closes, use `setsid` or tmux. On Unix the
+    /// processes that stay in the script's process group are stopped with it, also on the run
+    /// timeout and after the script exited by itself, so a background process the script left
+    /// behind does not outlive the run; a process that starts its own session or group is not
+    /// stopped. On Windows the script runs in a job object that ends all its processes
+    /// with it, also after a normal exit; if the job cannot be set up only the script process
+    /// itself is stopped, and a process it started before the job took effect can escape. SIGKILL cannot be handled: if the runner is killed
     /// that way, including a `kill -9` of its whole process group, the script process it
     /// started can keep running. Once a signal arrived, closing the MCP sessions is bounded to
     /// about 4 seconds, and a further signal cuts it short; the run then exits with the

@@ -770,4 +770,23 @@ mod tests {
         assert!(!success);
         assert_eq!(drained.stdout.bytes, b"diagnostics\n");
     }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_timed_out_tsc_cmd_shim_takes_its_node_descendant_with_it() {
+        use crate::runtime::exec::tree_test_support::{
+            assert_gone_soon, node_grandchild_shim, recorded_pid,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("grandchild.pid");
+        let run = run_tsc(
+            node_grandchild_shim(dir.path(), &pid_file),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_matches!(run, TscRun::TimedOut);
+        assert_gone_soon(recorded_pid(&pid_file).await).await;
+    }
 }

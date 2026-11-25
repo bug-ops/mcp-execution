@@ -51,6 +51,7 @@ unicode-security = "0.1.2"
 url = "2"
 uuid = "1.24"
 which = "8.0"
+windows-sys = "0.61"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"

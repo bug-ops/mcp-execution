@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`mcp-execution-files`**: `FilesError` gains `HomeDirectory`, which `build_and_export` returns for a home directory error instead of an I/O error, so the CLI exits 2; issue #657 (#668)
 - **`mcp-execution-core`, `mcp-execution-files`, `mcp-execution-cli`, `mcp-execution-server`**: a `~name` path in a directory option is refused with an invalid-argument error (`HomeDirError::UnsupportedUserHome`) instead of creating a literal `~name` directory; write `./~name` for a directory with that name; issue #647 (#661)
 - **`mcp-execution-cli`**: on Unix `run` handles SIGHUP and SIGQUIT as cancel (exit 129 and 131) and now stops under `nohup`; use `setsid` or tmux for a run that must outlive the terminal; issue #646 (#661)
 - **`mcp-execution-cli`**: on a terminal the script's process group is the foreground group, so Ctrl-C reaches only the script: a script that handles SIGINT is no longer force-stopped and keeps its own exit code (Ctrl-\ or `kill` still stop the run); issue #646 (#661)
@@ -107,6 +108,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: on Unix `run` stops the script's process group on timeout and cancel and hands the terminal to that group while it runs, so a descendant can still read `/dev/tty`; issue #646 (#661)
 - **`mcp-execution-cli`**: the runtime state and config directories refuse a relative `HOME`; issue #652 (#661)
 - **`mcp-execution-server`**: `generate_skill` and default-directory errors no longer echo home paths or a relative `HOME` value; issue #653 (#661)
+- **`mcp-execution-cli`**: on Unix `run` stops processes a script left in its group after a normal exit; issue #656 (#668)
+- **`mcp-execution-cli`**: on Unix the terminal hand-over resumes a stopped group member and takes the terminal back from a dead group; issue #659 (#668)
+- **`mcp-execution-cli`**: the `run` runner keeps ignoring SIGHUP and SIGQUIT when they were ignored at startup; the script itself still ends on SIGHUP because Node resets the inherited ignore; issue #655 (#668)
+- **`mcp-execution-cli`**: on Windows `run` and `run --typecheck` stop the whole process tree through a job object; issue #649 (#668)
+- **`mcp-execution-cli`**: the Windows helper pipe is limited to its owner; issue #617 (#668)
+- **`mcp-execution-cli`**: the terminal Ctrl-Z test also fails on Linux when the resume logic is missing; issue #660 (#668)
+- **`mcp-execution-cli`**: unit tests that raise signals, redirect `HOME` or install a scoped log subscriber run only under nextest (one process per test) and skip under plain `cargo test`, which no longer fails; issue #658 (#668)
 
 ### Security
 

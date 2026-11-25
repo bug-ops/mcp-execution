@@ -827,6 +827,8 @@ async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::commands::common::test_isolation::process_per_test;
 
     fn stream(head: &str, notice: Option<&str>) -> StreamReport {
         StreamReport {
@@ -886,6 +888,11 @@ mod tests {
     #[tokio::test]
     async fn a_signal_during_the_wrap_up_cancels_the_run_and_a_second_one_cuts_it() {
         use crate::runtime::signal::raise_sigterm;
+
+        if !process_per_test("a_signal_during_the_wrap_up_cancels_the_run_and_a_second_one_cuts_it")
+        {
+            return;
+        }
 
         let mut termination = Termination::install();
         let mut outcome = Ok(finished_outcome(ScriptStatus::Exit(0)));
