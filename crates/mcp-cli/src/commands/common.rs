@@ -1117,15 +1117,87 @@ fn metadata_error(error: MetadataReadError, server: &ServerId) -> anyhow::Error 
     }
 }
 
+/// In-process home redirection for unit tests, shared by every command's tests.
 #[cfg(test)]
-#[cfg_attr(
-    unix,
-    expect(
-        unsafe_code,
-        reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
-    )
+#[expect(
+    unsafe_code,
+    reason = "edition 2024 env::set_var in tests, each block documents its SAFETY"
 )]
+pub mod home_env {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    /// Variables that name the home directory; set to the redirect target.
+    const HOME_VARS: [&str; 2] = ["HOME", "USERPROFILE"];
+
+    /// XDG base-directory overrides; removed so state and config paths follow the redirected home.
+    const XDG_VARS: [&str; 2] = ["XDG_STATE_HOME", "XDG_CONFIG_HOME"];
+
+    /// One lock for every home-mutating test; async-aware because async tests keep the guard
+    /// across `.await`. Under `cargo nextest` each test has its own process, so it only guards
+    /// plain `cargo test`.
+    static HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Points the home directory (`HOME`, and `USERPROFILE` on Windows) at a directory and clears
+    /// the XDG state/config overrides until dropped, then restores every variable, even on panic.
+    #[derive(Debug)]
+    pub struct HomeEnv {
+        saved: Vec<(&'static str, Option<OsString>)>,
+        _guard: tokio::sync::MutexGuard<'static, ()>,
+    }
+
+    impl HomeEnv {
+        /// Redirects the home from a synchronous test.
+        pub fn set(home: &Path) -> Self {
+            Self::redirect(home, HOME_ENV_LOCK.blocking_lock())
+        }
+
+        /// Redirects the home from an async test.
+        pub async fn set_async(home: &Path) -> Self {
+            Self::redirect(home, HOME_ENV_LOCK.lock().await)
+        }
+
+        fn redirect(home: &Path, guard: tokio::sync::MutexGuard<'static, ()>) -> Self {
+            let saved = HOME_VARS
+                .into_iter()
+                .chain(XDG_VARS)
+                .map(|name| (name, std::env::var_os(name)))
+                .collect();
+            // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process reads or writes
+            // these variables while the guard is held.
+            unsafe {
+                for name in HOME_VARS {
+                    std::env::set_var(name, home);
+                }
+                for name in XDG_VARS {
+                    std::env::remove_var(name);
+                }
+            }
+            Self {
+                saved,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for HomeEnv {
+        fn drop(&mut self) {
+            // SAFETY: see `redirect`; the guard field is dropped after this body runs.
+            unsafe {
+                for (name, value) in &self.saved {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::home_env::HomeEnv;
     use super::*;
     use std::assert_matches;
     use std::io::Write;
@@ -2462,32 +2534,14 @@ mod tests {
         }
     }
 
-    /// Serializes tests in this module that mutate the `HOME` env var so
-    /// they cannot race each other when run in the same process (relevant
-    /// under plain `cargo test`, which runs a crate's tests in one process;
-    /// the mandated `cargo nextest run` isolates every test in its own
-    /// process, so this lock is a safety net for the unmandated runner, not
-    /// a requirement of the mandated one). A separate static from
-    /// `server.rs`'s own `HOME_ENV_LOCK` — the two don't cross-serialize —
-    /// which is fine precisely because `cargo nextest run` never runs them
-    /// concurrently in a shared process to begin with.
-    #[cfg(unix)]
-    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Regression test for #276: `list_mcp_servers` and `get_mcp_server`
     /// (both downgraded to `pub(crate)`, losing their `# Examples` doctest)
     /// were previously only exercised via their `_from`/error-path siblings.
     /// This exercises the 0-arg wrappers' actual success path — resolving
     /// `~/.claude/mcp.json` via `HomeDir::from_env()` and returning a populated,
     /// looked-up entry — which no other test in this crate covered.
-    ///
-    /// Unix-only, mirroring `server.rs`'s own `HOME`-override tests: the in-process env
-    /// mutation uses `unsafe` and is not set up for `USERPROFILE`.
-    #[cfg(unix)]
     #[test]
     fn test_list_and_get_mcp_server_success_via_default_path() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
-
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2497,23 +2551,12 @@ mod tests {
         )
         .unwrap();
 
-        let original_home = std::env::var_os("HOME");
-        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
-        // reads or writes `HOME` while the guard is held.
-        unsafe {
-            std::env::set_var("HOME", temp.path());
-        }
+        let home_env = HomeEnv::set(temp.path());
 
         let list_result = list_mcp_servers();
         let get_result = get_mcp_server("github");
 
-        // SAFETY: see above.
-        unsafe {
-            match &original_home {
-                Some(home) => std::env::set_var("HOME", home),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        drop(home_env);
 
         let servers = list_result.expect("list_mcp_servers must resolve the default path");
         assert_eq!(servers.len(), 1);
@@ -2533,11 +2576,8 @@ mod tests {
     /// need for the id to be a filesystem-safe slug. Only `generate`'s own
     /// sink (`resolve_server_dir_name` in `generate.rs`) enforces that
     /// constraint, since only `generate` turns the id into a directory name.
-    #[cfg(unix)]
     #[test]
     fn test_get_mcp_server_accepts_non_slug_shaped_config_key() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
-
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2547,22 +2587,11 @@ mod tests {
         )
         .unwrap();
 
-        let original_home = std::env::var_os("HOME");
-        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
-        // reads or writes `HOME` while the guard is held.
-        unsafe {
-            std::env::set_var("HOME", temp.path());
-        }
+        let home_env = HomeEnv::set(temp.path());
 
         let get_result = get_mcp_server("claude_ai_Gmail");
 
-        // SAFETY: see above.
-        unsafe {
-            match &original_home {
-                Some(home) => std::env::set_var("HOME", home),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        drop(home_env);
 
         let (id, _config, _entry) =
             get_result.expect("get_mcp_server must not reject a non-slug-shaped mcp.json key");
@@ -2573,11 +2602,8 @@ mod tests {
     /// `build_core_config`'s scheme validation must still be found by `get_mcp_server_entry` —
     /// distinct from `get_mcp_server`, which eagerly runs that validation and previously made
     /// this case indistinguishable from a genuinely absent entry to its callers.
-    #[cfg(unix)]
     #[test]
     fn test_get_mcp_server_entry_finds_entry_that_fails_config_validation() {
-        let _guard = HOME_ENV_LOCK.lock().unwrap();
-
         let temp = tempfile::TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
@@ -2587,22 +2613,11 @@ mod tests {
         )
         .unwrap();
 
-        let original_home = std::env::var_os("HOME");
-        // SAFETY: guarded by `HOME_ENV_LOCK`; no other test in this process
-        // reads or writes `HOME` while the guard is held.
-        unsafe {
-            std::env::set_var("HOME", temp.path());
-        }
+        let home_env = HomeEnv::set(temp.path());
 
         let entry_result = get_mcp_server_entry("badscheme");
 
-        // SAFETY: see above.
-        unsafe {
-            match &original_home {
-                Some(home) => std::env::set_var("HOME", home),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        drop(home_env);
 
         let (id, entry) = entry_result.expect(
             "get_mcp_server_entry must find the entry even though its url fails validation",

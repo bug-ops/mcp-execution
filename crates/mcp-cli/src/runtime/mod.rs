@@ -9,7 +9,7 @@
 //! - [`node`]: Node.js detection shared with `setup`.
 //! - [`exec`], [`notice`], [`import_hook`], [`typecheck`], [`restrict`]: running the script
 //!   process.
-//! - [`signal`]: the runner's own interrupt and terminate signals.
+//! - [`signal`], `tty`: the runner's own stop signals and the terminal's foreground group.
 //! - [`protocol`], [`helper`], [`pool`], [`journal`], [`policy`]: the helper side of the
 //!   protocol described in [`mcp_execution_core::helper_protocol`].
 
@@ -30,6 +30,7 @@ pub mod protocol;
 pub mod restrict;
 pub mod signal;
 pub mod spill;
+pub(crate) mod tty;
 pub mod typecheck;
 
 /// A value rejected by a bounded runtime newtype.

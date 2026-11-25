@@ -41,7 +41,8 @@ test-fixtures = [
 ]
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process"] }
+nix = { workspace = true, features = ["signal"] }
+rustix = { workspace = true, features = ["process", "termios"] }
 
 [dependencies]
 anyhow = { workspace = true }

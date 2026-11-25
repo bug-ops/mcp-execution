@@ -142,8 +142,11 @@ impl RuntimeDirs {
     /// assert!(dirs.root().ends_with("mcp-execution"));
     /// ```
     pub fn resolve() -> Result<Self> {
-        let base = platform_state_base()
-            .context("cannot determine the state directory for this platform")?;
+        let base = absolute_base(
+            platform_state_base()
+                .context("cannot determine the state directory for this platform")?,
+            "state",
+        )?;
         Ok(Self::from_root(base.join(STATE_DIR_NAME)))
     }
 
@@ -252,8 +255,11 @@ impl RuntimeDirs {
     /// assert!(path.ends_with("policy.json"));
     /// ```
     pub fn policy_path() -> Result<PathBuf> {
-        let base = platform_config_base()
-            .context("cannot determine the config directory for this platform")?;
+        let base = absolute_base(
+            platform_config_base()
+                .context("cannot determine the config directory for this platform")?,
+            "config",
+        )?;
         Ok(base.join(STATE_DIR_NAME).join(POLICY_FILE_NAME))
     }
 
@@ -286,6 +292,17 @@ const RUN_DIRS_POLICY: PrunePolicy = PrunePolicy {
     max_total_bytes: None,
     count_prune_min_age: RUN_DIR_COUNT_PRUNE_MIN_AGE,
 };
+
+/// Refuses a relative platform base, which a relative `HOME` or XDG variable would make depend on
+/// the working directory.
+fn absolute_base(base: PathBuf, kind: &str) -> Result<PathBuf> {
+    anyhow::ensure!(
+        base.is_absolute(),
+        "the {kind} directory '{}' is not an absolute path; check HOME and the XDG base directory variables",
+        base.display()
+    );
+    Ok(base)
+}
 
 #[cfg(target_os = "linux")]
 fn platform_state_base() -> Option<PathBuf> {
@@ -501,6 +518,41 @@ fn prune_dir_blocking(dir: &Path, policy: PrunePolicy, now: SystemTime) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_base_refuses_a_relative_directory_and_names_it() {
+        let error = absolute_base(PathBuf::from("relative/home/.local/state"), "state")
+            .expect_err("a relative base must be refused");
+        let message = error.to_string();
+        assert!(message.contains("relative/home/.local/state"), "{message}");
+        assert!(message.contains("not an absolute path"), "{message}");
+    }
+
+    // Unix only: on Windows the base comes from LOCALAPPDATA/APPDATA or the known-folder API, not
+    // from HOME, so a relative HOME cannot reach it.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_home_is_refused_by_resolve_and_policy_path() {
+        let _home = crate::commands::common::home_env::HomeEnv::set(Path::new("relative/home"));
+
+        for (name, error) in [
+            ("resolve", RuntimeDirs::resolve().map(|_| ()).unwrap_err()),
+            ("policy_path", RuntimeDirs::policy_path().unwrap_err()),
+        ] {
+            let message = error.to_string();
+            assert!(
+                message.contains("not an absolute path"),
+                "{name}: {message}"
+            );
+            assert!(message.contains("relative/home"), "{name}: {message}");
+        }
+    }
+
+    #[test]
+    fn absolute_base_keeps_an_absolute_directory() {
+        let base = std::env::current_dir().unwrap();
+        assert_eq!(absolute_base(base.clone(), "config").unwrap(), base);
+    }
 
     fn touch(path: &Path, bytes: usize, age: Duration) {
         std::fs::write(path, vec![b'x'; bytes]).unwrap();

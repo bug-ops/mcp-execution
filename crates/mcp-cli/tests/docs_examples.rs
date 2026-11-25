@@ -11,6 +11,7 @@
 
 #[cfg(feature = "test-fixtures")]
 mod common;
+mod package;
 
 use std::assert_matches;
 use std::fs;
@@ -19,10 +20,7 @@ use std::path::{Path, PathBuf};
 use std::str::Chars;
 
 use clap::Parser as _;
-use mcp_execution_codegen::ProgressiveGenerator;
-use mcp_execution_core::{ServerConfig, ServerId, ToolName};
-use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 /// Tools of the generated `github` fixture: the names the documents call or import.
 const GITHUB_TOOLS: &[&str] = &[
@@ -277,39 +275,7 @@ fn documented_commands_are_real_subcommands() {
 /// Writes the generated package of a `github` server with [`GITHUB_TOOLS`] below `servers`,
 /// without contacting any server.
 fn write_github_package(servers: &Path) {
-    let info = ServerInfo {
-        id: ServerId::new("github").expect("valid id"),
-        name: "GitHub".to_string(),
-        version: "1.0.0".to_string(),
-        tools: GITHUB_TOOLS
-            .iter()
-            .map(|name| ToolInfo {
-                name: ToolName::new(*name).expect("valid tool name"),
-                description: format!("The {name} tool"),
-                input_schema: json!({"type": "object"}),
-                output_schema: None,
-                annotations: None,
-            })
-            .collect(),
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
-        },
-    };
-    let config = ServerConfig::builder()
-        .command("unused".to_string())
-        .build()
-        .expect("valid config");
-    let code = ProgressiveGenerator::new()
-        .expect("generator")
-        .generate(&info, &config)
-        .expect("generate");
-    for file in &code.files {
-        let path = servers.join("github").join(&file.path);
-        fs::create_dir_all(path.parent().expect("file has a parent")).expect("create dir");
-        fs::write(path, &file.content).expect("write generated file");
-    }
+    package::write_package(servers, "github", "GitHub", GITHUB_TOOLS);
 }
 
 /// A fenced code block of a document.

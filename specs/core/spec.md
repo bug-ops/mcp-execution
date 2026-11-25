@@ -439,7 +439,7 @@ pub const LOG_FORMAT_ENV_VAR: &str = "MCP_EXECUTION_LOG_FORMAT";
 // carrying a second, production-dead return value -- an earlier `(LogFormat, Option<String>)`
 // shape was reworked away for exactly that reason.
 pub struct ExitCode(i32); // SUCCESS=0, ERROR=1, INVALID_INPUT=2, SERVER_ERROR=3, TIMEOUT=4, CHECK_FAILED=5, SCRIPT_FAILED=6,
-                          // INTERRUPTED=130 (SIGINT), TERMINATED=143 (SIGTERM); the last two are 128 + the signal number (#627)
+                          // HANGUP=129 (SIGHUP), INTERRUPTED=130 (SIGINT), QUIT=131 (SIGQUIT), TERMINATED=143 (SIGTERM); each is 128 + the signal number (#627, #646)
 // ExitCode::from_i32(code: i32) -> Option<ExitCode>: None outside 0..=255 (std::process::exit's
 // actual valid range), instead of accepting any i32 unchecked.
 pub struct ServerConnectionString(String); // charset [A-Za-z0-9-_./:], <=256 chars, no control chars
@@ -680,7 +680,7 @@ digest can never drift from the emitted files — see [[../codegen/spec]].
 
 ```rust
 pub struct HomeDir(PathBuf);                       // always absolute
-pub enum HomeDirError { Unknown, NotAbsolute { path: PathBuf } }   // thiserror
+pub enum HomeDirError { Unknown, NotAbsolute { path: PathBuf }, UnsupportedUserHome { path: PathBuf } }   // thiserror
 pub fn expand_home(path: &Path) -> Result<PathBuf, HomeDirError>;
 pub struct ServersDir(PathBuf);                    // default ~/.claude/servers
 pub struct SkillsDir(PathBuf);                     // default ~/.claude/skills
@@ -699,8 +699,10 @@ through it.
 - **Ban.** The workspace `clippy.toml` lists `dirs::home_dir` and `std::env::home_dir` under `disallowed-methods`; the only
   `#[expect]` is in `HomeDir::from_env`. `dirs` is no longer a dependency of `mcp-core`, `mcp-files` or `mcp-server`;
   `mcp-cli` keeps it for its runtime directories (`runtime/dirs.rs`), which are not covered by the ban.
-- **`expand_home`.** Only a first component that is exactly `~` is replaced (`~`, `~/x`, and `~\x` on Windows). `~user/x`,
-  `~~`, `x/~` and `.~` are returned unchanged. A path without a leading `~` never reads the home, so an absolute path works
+- **`expand_home`.** Only a first component that is exactly `~` is replaced (`~`, `~/x`, and `~\x` on Windows). A first component that starts with `~` and is not exactly `~` (`~user/x`, `~~`)
+  is rejected with `UnsupportedUserHome { path }` (#647): the user database is never consulted, and its text ("a '~name' path (another user's home directory) is not supported; use '~/...' or an absolute path, or './~name' for a directory with that literal name") never echoes the path. `./~name` is returned unchanged. The CLI runner maps it to `INVALID_INPUT` for the options the CLI expands itself;
+  `mcp-files` wraps it in `FilesError::IoError` with I/O kind `InvalidInput`, and a direct call of the library API is classified by the
+  general error code (known limitation, #657). `x/~` and `.~` are returned unchanged. A path without a leading `~` never reads the home, so an absolute path works
   when the home is unusable.
 - **`ServersDir` / `SkillsDir`.** `resolve(None)` is the default location under the home; `resolve(Some(p))` is
   `expand_home(p)`. `server()` / `skill()` join a `ServerId`, which rejects separators and `..`, so the result cannot leave
@@ -1246,7 +1248,7 @@ and byte-preserving of each variant's existing `Display` message.
 - **`ExitCode`** gains `CHECK_FAILED` (5: drift found or `scripts check` problems) and `SCRIPT_FAILED` (6: a script
   exited non-zero or was killed by a signal); success 0, error 1, invalid input 2, server error 3, timeout 4. #627 adds
   `INTERRUPTED` (130, the runner stopped by SIGINT) and `TERMINATED` (143, SIGTERM), `128 + signal number` as shells
-  report them; `run` is the only command that returns them ([[../cli/spec#`run` (#571, `commands/run.rs`, `runtime/{exec,notice,import_hook}.rs`)]]).
+  report them; #646 adds `HANGUP` (129, SIGHUP) and `QUIT` (131, SIGQUIT) the same way; `run` is the only command that returns them ([[../cli/spec#`run` (#571, `commands/run.rs`, `runtime/{exec,notice,import_hook}.rs`)]]).
 
 ## 7. Planned Changes (script-first direction, adopted 2026-11-24)
 

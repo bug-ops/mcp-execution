@@ -243,7 +243,7 @@ Unlike `FileSystem::export_to_filesystem` (which treats `base_path` as
 exclusively owned, replacing it wholesale), `build_and_export` treats
 `base_path` as a **shared** directory (e.g. `~/.claude/servers/`) that other
 independent batches (other servers) already occupy. `base_path` is first expanded through the core `expand_home` (a leading
-`~` component, a bare `~` included; an unusable home maps to `FilesError::IoError`):
+`~` component, a bare `~` included; an unusable home maps to `FilesError::IoError`, whose I/O kind is `InvalidInput` for `NotAbsolute` and for `UnsupportedUserHome`, a `~name` path (#647), and `Other` for `Unknown`; a direct `build_and_export` caller therefore gets an `IoError`, which the CLI classifier maps to the general error code, a known limitation tracked by #657):
 
 1. Whole-batch bound check (`vfs.check_export_bounds()`) up front — a
    payload crafted as many small per-group files could otherwise bypass the

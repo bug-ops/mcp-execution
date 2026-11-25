@@ -6,20 +6,11 @@
 //! the Windows named pipe is covered in CI.
 
 #![cfg(feature = "test-fixtures")]
-#![expect(
-    clippy::unwrap_used,
-    reason = "test, bench and example code may panic on failure"
-)]
 
 mod common;
-
-use std::path::Path;
+mod package;
 
 use common::{Out, Sandbox, require_node};
-use mcp_execution_codegen::ProgressiveGenerator;
-use mcp_execution_core::{ServerConfig, ServerId, ToolName};
-use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
-use serde_json::json;
 
 /// Server id no `mcp.json` is expected to define, so the helper must answer with a failure.
 const ABSENT_SERVER: &str = "e2e-absent-server";
@@ -29,41 +20,6 @@ const NEAR_LIMIT: usize = 4_100_000;
 
 fn sandbox(test: &str) -> Option<Sandbox> {
     require_node(test).then(Sandbox::new)
-}
-
-/// Writes the generated package of a one-tool server named `server_id` below `servers`, without
-/// contacting any server, so the test needs no `mcp.json`.
-fn write_offline_package(servers: &Path, server_id: &str) {
-    let info = ServerInfo {
-        id: ServerId::new(server_id).unwrap(),
-        name: "Offline".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![ToolInfo {
-            name: ToolName::new("ping").unwrap(),
-            description: "Pings".to_string(),
-            input_schema: json!({"type": "object"}),
-            output_schema: None,
-            annotations: None,
-        }],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
-        },
-    };
-    let config = ServerConfig::builder()
-        .command("unused".to_string())
-        .build()
-        .unwrap();
-    let code = ProgressiveGenerator::new()
-        .unwrap()
-        .generate(&info, &config)
-        .unwrap();
-    for file in &code.files {
-        let path = servers.join(server_id).join(&file.path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, &file.content).unwrap();
-    }
 }
 
 fn run_script_text(sb: &Sandbox, name: &str, body: &str) -> Out {
@@ -76,7 +32,7 @@ fn helper_failure_reaches_the_script_as_a_typed_error_and_the_channel_survives()
     let Some(sb) = sandbox("helper_failure_reaches_the_script_as_a_typed_error") else {
         return;
     };
-    write_offline_package(&sb.servers, ABSENT_SERVER);
+    package::write_package(&sb.servers, ABSENT_SERVER, "Offline", &["ping"]);
 
     let out = run_script_text(
         &sb,

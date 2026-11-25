@@ -230,6 +230,28 @@ impl ExitCode {
     /// ```
     pub const TERMINATED: Self = Self(143);
 
+    /// The runner was stopped by SIGHUP (exit code 129, `128 + 1`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::HANGUP.as_i32(), 129);
+    /// ```
+    pub const HANGUP: Self = Self(129);
+
+    /// The runner was stopped by SIGQUIT (exit code 131, `128 + 3`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::QUIT.as_i32(), 131);
+    /// ```
+    pub const QUIT: Self = Self(131);
+
     /// Creates an exit code from an integer value.
     ///
     /// Returns `None` if `code` falls outside `0..=255`. This is not a universal OS-level
@@ -625,6 +647,19 @@ mod tests {
         for (i, code) in codes.iter().enumerate() {
             assert_eq!(usize::try_from(code.as_i32()).unwrap(), i);
             assert_eq!(ExitCode::from_i32(code.as_i32()), Some(*code));
+        }
+    }
+
+    #[test]
+    fn test_signal_exit_codes_are_128_plus_the_signal_number() {
+        for (code, signal) in [
+            (ExitCode::HANGUP, 1),
+            (ExitCode::INTERRUPTED, 2),
+            (ExitCode::QUIT, 3),
+            (ExitCode::TERMINATED, 15),
+        ] {
+            assert_eq!(code.as_i32(), 128 + signal);
+            assert_eq!(ExitCode::from_i32(code.as_i32()), Some(code));
         }
     }
 

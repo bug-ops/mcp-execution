@@ -61,6 +61,14 @@ pub enum HomeDirError {
         /// The relative value the environment supplied.
         path: PathBuf,
     },
+    /// The path starts with `~name`, another user's home, which is never looked up.
+    #[error(
+        "a '~name' path (another user's home directory) is not supported; use '~/...' or an absolute path, or './~name' for a directory with that literal name"
+    )]
+    UnsupportedUserHome {
+        /// The rejected path as the caller wrote it.
+        path: PathBuf,
+    },
 }
 
 impl HomeDir {
@@ -101,35 +109,47 @@ impl HomeDir {
 /// Replaces a leading `~` component with the home directory.
 ///
 /// Only a first component that is exactly `~` is expanded: `~`, `~/x` and, on Windows, `~\x`.
-/// Every other path, including `~user/x`, is returned unchanged without reading the home, so an
-/// absolute path works even when the home is unusable.
+/// A first component that starts with `~` followed by more characters (`~user/x`) is rejected:
+/// the user database is never consulted, and passing it on would create a literal relative
+/// directory named `~user`. Every other path is returned unchanged without reading the home, so
+/// an absolute path works even when the home is unusable.
 ///
 /// # Errors
 ///
-/// Returns a [`HomeDirError`] when `path` starts with `~` and the home directory is unknown or
-/// relative.
+/// Returns [`HomeDirError::UnsupportedUserHome`] for a `~name` path, and another
+/// [`HomeDirError`] when `path` starts with `~` and the home directory is unknown or relative.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::path::Path;
-/// use mcp_execution_core::expand_home;
+/// use mcp_execution_core::{HomeDirError, expand_home};
 ///
 /// assert_eq!(expand_home(Path::new("/srv/x")).unwrap(), Path::new("/srv/x"));
-/// assert_eq!(expand_home(Path::new("~user/x")).unwrap(), Path::new("~user/x"));
+/// assert!(matches!(
+///     expand_home(Path::new("~user/x")),
+///     Err(HomeDirError::UnsupportedUserHome { .. })
+/// ));
 /// ```
 pub fn expand_home(path: &Path) -> Result<PathBuf, HomeDirError> {
     let mut components = path.components();
-    if components.next() != Some(Component::Normal(OsStr::new("~"))) {
-        return Ok(path.to_path_buf());
+    match components.next() {
+        Some(Component::Normal(first)) if first == OsStr::new("~") => {
+            let home = HomeDir::from_env()?;
+            let rest = components.as_path();
+            Ok(if rest.is_empty() {
+                home.0
+            } else {
+                home.0.join(rest)
+            })
+        }
+        Some(Component::Normal(first)) if first.as_encoded_bytes().starts_with(b"~") => {
+            Err(HomeDirError::UnsupportedUserHome {
+                path: path.to_path_buf(),
+            })
+        }
+        _ => Ok(path.to_path_buf()),
     }
-    let home = HomeDir::from_env()?;
-    let rest = components.as_path();
-    Ok(if rest.is_empty() {
-        home.0
-    } else {
-        home.0.join(rest)
-    })
 }
 
 /// Resolves `custom` through [`expand_home`], or `relative` under the home directory.
@@ -249,13 +269,45 @@ mod tests {
 
     #[test]
     fn expand_home_leaves_a_path_without_a_leading_tilde_alone() {
-        for path in ["/abs/x", "rel/x", "x/~", "~user/x", "~~", ".~"] {
+        for path in ["/abs/x", "rel/x", "x/~", ".~", "./~user"] {
             assert_eq!(
                 expand_home(Path::new(path)).unwrap(),
                 PathBuf::from(path),
                 "{path}"
             );
         }
+    }
+
+    #[test]
+    fn expand_home_rejects_a_tilde_name_first_component() {
+        for path in ["~user", "~user/x", "~~", "~."] {
+            assert_matches!(
+                expand_home(Path::new(path)),
+                Err(HomeDirError::UnsupportedUserHome { .. }),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_user_home_error_does_not_echo_the_path() {
+        let error = HomeDirError::UnsupportedUserHome {
+            path: PathBuf::from("~zzq/x"),
+        };
+        assert!(!error.to_string().contains("zzq"));
+    }
+
+    #[test]
+    fn unsupported_user_home_hint_names_a_form_that_expand_home_accepts() {
+        let message = HomeDirError::UnsupportedUserHome {
+            path: PathBuf::from("~zzq"),
+        }
+        .to_string();
+        assert!(message.contains("./~name"));
+        assert_eq!(
+            expand_home(Path::new("./~name")).unwrap(),
+            PathBuf::from("./~name")
+        );
     }
 
     #[test]

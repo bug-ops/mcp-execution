@@ -21,7 +21,7 @@ use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{Sandbox, require_node};
+use common::{Sandbox, is_alive, require_node};
 
 /// How long a signalled runner may take to exit.
 const EXIT_WITHIN: Duration = Duration::from_secs(5);
@@ -88,14 +88,6 @@ fn start(sb: &Sandbox, stderr: Stderr) -> (Runner, common::ReadyFile) {
         },
         ready,
     )
-}
-
-fn is_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 /// Starts `run -` with stdin held open, signals the runner, and asserts the exit code and that

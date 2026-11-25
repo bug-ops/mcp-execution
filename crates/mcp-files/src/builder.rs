@@ -390,7 +390,9 @@ fn expand_base_path(path: &Path) -> Result<PathBuf> {
 /// unknown one has no better kind than `Other`.
 const fn home_error_kind(error: &HomeDirError) -> std::io::ErrorKind {
     match error {
-        HomeDirError::NotAbsolute { .. } => std::io::ErrorKind::InvalidInput,
+        HomeDirError::NotAbsolute { .. } | HomeDirError::UnsupportedUserHome { .. } => {
+            std::io::ErrorKind::InvalidInput
+        }
         HomeDirError::Unknown => std::io::ErrorKind::Other,
     }
 }

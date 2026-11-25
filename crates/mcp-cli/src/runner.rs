@@ -6,6 +6,7 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 use mcp_execution_core::Error as CoreError;
+use mcp_execution_core::HomeDirError;
 use mcp_execution_core::cli::{ExitCode, LOG_FORMAT_ENV_VAR, LogFormat, OutputFormat};
 use mcp_execution_core::log_filter::cap_rmcp_log_level;
 use mcp_execution_files::FilesError;
@@ -394,8 +395,9 @@ fn sanitized_error_report(err: &anyhow::Error) -> String {
 /// [`FilesError`] (the `generate` command's `export_to_filesystem` errors are wrapped via
 /// `anyhow::Context` rather than converted to `CoreError`, so they would otherwise never match
 /// the first check and always fall through to the generic [`ExitCode::ERROR`] — issue #198 M6).
-/// Errors that match neither (e.g. CLI argument parsing, serialization) fall back to
-/// [`ExitCode::ERROR`].
+/// A [`HomeDirError`] maps by variant: `UnsupportedUserHome` gives [`ExitCode::INVALID_INPUT`],
+/// the others [`ExitCode::ERROR`]. Errors that match none of these (e.g. CLI argument parsing,
+/// serialization) fall back to [`ExitCode::ERROR`].
 fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
     if let Some(core_error) = error
         .chain()
@@ -420,6 +422,16 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
             | FilesError::InvalidPathComponent { .. }
             | FilesError::PathEscapesBase { .. }
             | FilesError::IoError { .. } => ExitCode::ERROR,
+        };
+    }
+
+    if let Some(home_error) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<HomeDirError>())
+    {
+        return match home_error {
+            HomeDirError::UnsupportedUserHome { .. } => ExitCode::INVALID_INPUT,
+            HomeDirError::Unknown | HomeDirError::NotAbsolute { .. } => ExitCode::ERROR,
         };
     }
 
@@ -551,6 +563,18 @@ mod tests {
     fn test_classify_exit_code_invalid_argument() {
         let err = wrap(CoreError::InvalidArgument("bad flag".to_string()));
         assert_eq!(classify_exit_code(&err), ExitCode::INVALID_INPUT);
+    }
+
+    #[test]
+    fn test_classify_exit_code_unsupported_user_home_is_invalid_input() {
+        let err = anyhow::Error::new(HomeDirError::UnsupportedUserHome {
+            path: "~other/x".into(),
+        });
+        assert_eq!(classify_exit_code(&err), ExitCode::INVALID_INPUT);
+        assert_eq!(
+            classify_exit_code(&anyhow::Error::new(HomeDirError::Unknown)),
+            ExitCode::ERROR
+        );
     }
 
     #[test]

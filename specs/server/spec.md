@@ -338,8 +338,11 @@ so they never reach this filter (issue #598).
 The production defaults come from the core `ServersDir`/`SkillsDir` resolvers (core spec, `home` module), through
 `servers_base_dir()` / `skills_base_dir()`, which return `Result<PathBuf, McpError>`. When the home directory is unknown or
 relative the tool fails with an MCP internal error `cannot resolve the default directory: <HomeDirError text>` and writes
-nothing; there is no `./.claude` fallback. Known gaps (follow-up hardening): the `NotAbsolute` text echoes the relative
-`HOME` value, and "Server directory not found" prints the expanded home path unsanitized.
+nothing; there is no `./.claude` fallback. Client-facing error text never contains a raw home path (#653): paths go through
+`sanitize_path_for_error` (`~/.claude/servers/<id>`), including "Server directory not found" and "No tool files found"; the
+`HomeDirError` reason is a fixed text. An unresolvable home (`Unknown`, its own text) and a relative one (`NotAbsolute`, "the
+home directory is not an absolute path") are MCP internal errors (-32603) `cannot resolve the default directory: <reason>`;
+a `~name` `servers_dir` is invalid input, MCP `invalid_params` (-32602), with the fixed text "invalid servers_dir: a '~name' path (another user's home) is not supported".
 
 ### `generate_skill`
 

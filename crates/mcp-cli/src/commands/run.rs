@@ -577,8 +577,8 @@ async fn remove_scratch(dir: &Path) {
 /// # Errors
 ///
 /// Returns an error for runner failures (input, node missing or too old, I/O); a failing script,
-/// a timeout or a cancellation by SIGINT or SIGTERM (exit 130 or 143) is reported through the
-/// exit code instead.
+/// a timeout or a cancellation by SIGINT, SIGTERM, SIGHUP or SIGQUIT (exit 130, 143, 129 or 131)
+/// is reported through the exit code instead.
 ///
 /// # Examples
 ///

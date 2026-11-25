@@ -870,13 +870,7 @@ impl GeneratorService {
 
         // Check if server directory exists
         if !server_dir.exists() {
-            return Err(McpError::invalid_params(
-                format!(
-                    "Server directory not found: {}. Run generate first.",
-                    server_dir.display()
-                ),
-                None,
-            ));
+            return Err(server_dir_not_found_error(&server_dir));
         }
 
         // Scan and parse tool files. A missing or version-mismatched sidecar reflects the
@@ -914,13 +908,7 @@ impl GeneratorService {
             })?;
 
         if scan_result.tools.is_empty() {
-            return Err(McpError::invalid_params(
-                format!(
-                    "No tool files found in {}. Run generate first.",
-                    server_dir.display()
-                ),
-                None,
-            ));
+            return Err(no_tool_files_error(&server_dir));
         }
 
         // Validate a custom skill name up front, before `build_skill_context` renders
@@ -1211,10 +1199,46 @@ fn build_stdio_server_config(
     config_builder.build()
 }
 
-/// Maps an unusable home directory to the MCP error returned instead of writing under `./.claude`.
+/// Maps a home-directory failure to the MCP error returned instead of writing under `./.claude`.
+///
+/// An unusable environment (`Unknown`, `NotAbsolute`) is an internal error; a `~name` path the
+/// caller supplied is invalid input. Neither message carries the offending path value.
 fn home_dir_error(error: &HomeDirError) -> McpError {
-    McpError::internal_error(
-        format!("cannot resolve the default directory: {error}"),
+    match error {
+        HomeDirError::Unknown => McpError::internal_error(
+            format!("cannot resolve the default directory: {error}"),
+            None,
+        ),
+        HomeDirError::NotAbsolute { .. } => McpError::internal_error(
+            "cannot resolve the default directory: the home directory is not an absolute path",
+            None,
+        ),
+        HomeDirError::UnsupportedUserHome { .. } => McpError::invalid_params(
+            "invalid servers_dir: a '~name' path (another user's home) is not supported",
+            None,
+        ),
+    }
+}
+
+/// Builds the `generate_skill` error for a missing server directory, redacting the home path.
+fn server_dir_not_found_error(server_dir: &Path) -> McpError {
+    McpError::invalid_params(
+        format!(
+            "Server directory not found: {}. Run generate first.",
+            sanitize_path_for_error(server_dir)
+        ),
+        None,
+    )
+}
+
+/// Builds the `generate_skill` error for a server directory without tool files, redacting the
+/// home path.
+fn no_tool_files_error(server_dir: &Path) -> McpError {
+    McpError::invalid_params(
+        format!(
+            "No tool files found in {}. Run generate first.",
+            sanitize_path_for_error(server_dir)
+        ),
         None,
     )
 }
@@ -1706,6 +1730,51 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
         assert!(error.message.contains("home directory"));
+    }
+
+    #[test]
+    fn home_dir_error_hides_the_relative_home_value() {
+        let error = home_dir_error(&HomeDirError::NotAbsolute {
+            path: PathBuf::from("relative/home-secret"),
+        });
+
+        assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+        assert!(!error.message.contains("home-secret"));
+        assert!(error.message.contains("not an absolute path"));
+    }
+
+    #[test]
+    fn home_dir_error_hides_the_unsupported_user_home_value() {
+        let error = home_dir_error(&HomeDirError::UnsupportedUserHome {
+            path: PathBuf::from("~victim-secret/servers"),
+        });
+
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert!(!error.message.contains("victim-secret"));
+        assert!(error.message.contains("not supported"));
+    }
+
+    #[test]
+    fn server_dir_not_found_error_redacts_the_home_path() {
+        let home = mcp_execution_core::HomeDir::from_env().expect("home dir in test environment");
+        let dir = home.as_path().join(".claude/servers/missing");
+
+        let message = server_dir_not_found_error(&dir).message;
+
+        assert!(!message.contains(&home.as_path().display().to_string()));
+        assert!(message.contains("servers"));
+        assert!(message.contains('~'));
+    }
+
+    #[test]
+    fn no_tool_files_error_redacts_the_home_path() {
+        let home = mcp_execution_core::HomeDir::from_env().expect("home dir in test environment");
+        let dir = home.as_path().join(".claude/servers/empty");
+
+        let message = no_tool_files_error(&dir).message;
+
+        assert!(!message.contains(&home.as_path().display().to_string()));
+        assert!(message.contains('~'));
     }
 
     // ========================================================================
