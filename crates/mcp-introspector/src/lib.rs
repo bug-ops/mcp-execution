@@ -45,7 +45,7 @@
 
 mod session;
 
-pub use session::{CallTimeout, ResultSource, ServerText, Session, ToolCall, ToolCallOutcome};
+pub use session::{CallTimeout, ServerText, Session, ToolCall, ToolCallOutcome};
 
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
@@ -697,7 +697,7 @@ pub(crate) fn spawn_introspection_child(
     command.kill_on_drop(true);
 
     command.spawn().map_err(|e| Error::ConnectionFailed {
-        server: server_id.to_string(),
+        server: server_id.clone(),
         source: Box::new(e),
     })
 }
@@ -712,11 +712,11 @@ pub(crate) fn take_child_stdio(
     child: &mut Child,
 ) -> Result<(tokio::process::ChildStdout, tokio::process::ChildStdin)> {
     let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
-        server: server_id.to_string(),
+        server: server_id.clone(),
         source: Box::new(std::io::Error::other("child stdout was not captured")),
     })?;
     let stdin = child.stdin.take().ok_or_else(|| Error::ConnectionFailed {
-        server: server_id.to_string(),
+        server: server_id.clone(),
         source: Box::new(std::io::Error::other("child stdin was not captured")),
     })?;
     Ok((stdout, stdin))
@@ -810,7 +810,7 @@ async fn list_tools_bounded(
 fn map_list_tools_bounded_error(server_id: &ServerId, error: ListToolsBoundedError) -> Error {
     match error {
         ListToolsBoundedError::Service(e) => Error::ConnectionFailed {
-            server: server_id.to_string(),
+            server: server_id.clone(),
             source: Box::new(e),
         },
         ListToolsBoundedError::TooMany(actual) => Error::ResourceLimitExceeded {
@@ -1093,7 +1093,7 @@ where
             duration_secs: config.connect_timeout().as_secs(),
         })?
         .map_err(|e| Error::ConnectionFailed {
-            server: server_id.to_string(),
+            server: server_id.clone(),
             source: Box::new(e),
         })
 }
@@ -1231,12 +1231,12 @@ pub(crate) async fn connect_http_client(
     for (name, value) in config.headers() {
         let header_name =
             HeaderName::try_from(name.as_str()).map_err(|e| Error::ConnectionFailed {
-                server: server_id.to_string(),
+                server: server_id.clone(),
                 source: Box::new(e),
             })?;
         let header_value =
             HeaderValue::try_from(value.as_str()).map_err(|e| Error::ConnectionFailed {
-                server: server_id.to_string(),
+                server: server_id.clone(),
                 source: Box::new(e),
             })?;
         custom_headers.insert(header_name, header_value);

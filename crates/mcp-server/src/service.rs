@@ -21,7 +21,7 @@ use mcp_execution_core::untrusted::{
 };
 use mcp_execution_core::{
     HomeDirError, ServerConfig, ServerId, ServersDir, SkillsDir, resolve_confined_existing,
-    sanitize_path_for_error, validate_server_id_slug, write_confined_file,
+    sanitize_path_for_error, write_confined_file,
 };
 use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::{Introspector, ToolInfo};
@@ -341,18 +341,10 @@ impl GeneratorService {
         Parameters(params): Parameters<IntrospectServerParams>,
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
-        // Validate server_id format. Deliberate: the `server_id` span field stays `Empty`
-        // on this early return rather than recording the raw, unvalidated input — logging
-        // an attacker-controlled string into a structured field before it's validated risks
-        // log injection, so an empty field on this path is accepted as a trade-off, not an
-        // oversight.
-        validate_server_id_slug(&params.server_id)
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-
-        // Extract server_id before consuming params
-        let server_id_str = params.server_id;
-        let server_id = ServerId::new(&server_id_str)
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+        // `params.server_id` is a `ServerSlug`, so an invalid id was already rejected as invalid
+        // params when the request was deserialized.
+        let server_slug = params.server_id;
+        let server_id = ServerId::from(server_slug.clone());
         tracing::Span::current().record("server_id", tracing::field::display(&server_id));
 
         // Reject an obviously malformed output_dir (absolute, or containing `..`) with fast
@@ -400,7 +392,7 @@ impl GeneratorService {
 
         // Build result
         let result = IntrospectServerResult {
-            server_id: server_id_str,
+            server_id: server_slug,
             server_name: server_info.name,
             tools_found: tools.len(),
             tools,
@@ -858,15 +850,11 @@ impl GeneratorService {
         Parameters(params): Parameters<GenerateSkillParams>,
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
-        // Validate server_id format and length. As in `introspect_server`, the span
-        // field is only recorded once validation succeeds (see the comment there).
-        validate_server_id_slug(&params.server_id)
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         tracing::Span::current().record("server_id", tracing::field::display(&params.server_id));
 
         let servers_dir =
             ServersDir::resolve(params.servers_dir).map_err(|error| home_dir_error(&error))?;
-        let server_dir = servers_dir.as_path().join(&params.server_id);
+        let server_dir = servers_dir.as_path().join(params.server_id.as_str());
 
         // Check if server directory exists
         if !server_dir.exists() {
@@ -923,7 +911,7 @@ impl GeneratorService {
             .map(|name| {
                 SkillName::new(name)
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))?
-                    .in_directory(&params.server_id)
+                    .in_directory(params.server_id.as_str())
                     .map_err(|e| McpError::invalid_params(e.to_string(), None))
             })
             .transpose()?;
@@ -1017,10 +1005,6 @@ impl GeneratorService {
             ));
         }
 
-        // Validate server_id format and length. As in `introspect_server`, the span
-        // field is only recorded once validation succeeds (see the comment there).
-        validate_server_id_slug(&params.server_id)
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         tracing::Span::current().record("server_id", tracing::field::display(&params.server_id));
 
         // Validate content size (DoS protection)
@@ -1056,12 +1040,9 @@ impl GeneratorService {
         )
         .await
         .map_err(|e| match e {
-            // `server_id` was already validated above via `validate_server_id_slug`, and
-            // `resolve_skill_output_path` itself gates `server_id` with the same
-            // `validate_server_id_slug` check at its own entry, so this arm is unreachable from
-            // this call site — kept distinct (rather than folded into the `output_path` arm
-            // below) because `resolve_skill_output_path` is public API other callers may reach
-            // without that upstream validation.
+            // `server_id` is a `ServerSlug`, so this arm is unreachable from this call site —
+            // kept distinct (rather than folded into the `output_path` arm below) so a segment
+            // rejection is still reported as `server_id`, not `output_path`.
             OutputPathError::InvalidServerId { .. } => {
                 McpError::invalid_params(format!("Invalid server_id: {e}"), None)
             }
@@ -1718,7 +1699,7 @@ fn parse_keywords(raw: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use mcp_execution_core::ToolName;
+    use mcp_execution_core::{ServerSlug, ToolName};
     use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
     use rmcp::model::ErrorCode;
     use std::assert_matches;
@@ -2187,71 +2168,15 @@ mod tests {
     // Input Validation Tests
     // ========================================================================
 
-    #[tokio::test]
-    async fn test_introspect_server_invalid_server_id_uppercase() {
-        let service = GeneratorService::new();
-
-        let params = IntrospectServerParams {
-            server_id: "GitHub".to_string(), // Invalid: contains uppercase
-            command: "echo".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            output_dir: None,
-            connect_timeout_secs: None,
-            discover_timeout_secs: None,
-        };
-
-        let result = service
-            .introspect_server(Parameters(params), CancellationToken::new())
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.code, ErrorCode::INVALID_PARAMS); // Invalid params error code
-    }
-
-    #[tokio::test]
-    async fn test_introspect_server_invalid_server_id_underscore() {
-        let service = GeneratorService::new();
-
-        let params = IntrospectServerParams {
-            server_id: "git_hub".to_string(), // Invalid: contains underscore
-            command: "echo".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            output_dir: None,
-            connect_timeout_secs: None,
-            discover_timeout_secs: None,
-        };
-
-        let result = service
-            .introspect_server(Parameters(params), CancellationToken::new())
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
-    }
-
-    #[tokio::test]
-    async fn test_introspect_server_invalid_server_id_special_chars() {
-        let service = GeneratorService::new();
-
-        let params = IntrospectServerParams {
-            server_id: "git@hub".to_string(), // Invalid: contains @
-            command: "echo".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            output_dir: None,
-            connect_timeout_secs: None,
-            discover_timeout_secs: None,
-        };
-
-        let result = service
-            .introspect_server(Parameters(params), CancellationToken::new())
-            .await;
-
-        assert!(result.is_err());
+    #[test]
+    fn test_introspect_server_params_reject_an_invalid_server_id_at_deserialization() {
+        for bad in ["GitHub", "git_hub", "git@hub", "", "a.b"] {
+            let params = serde_json::json!({ "server_id": bad, "command": "echo" });
+            assert!(
+                serde_json::from_value::<IntrospectServerParams>(params).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2263,7 +2188,7 @@ mod tests {
             GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = IntrospectServerParams {
-            server_id: "git-hub-server".to_string(), // Valid
+            server_id: ServerSlug::new("git-hub-server").unwrap(), // Valid
             command: "echo".to_string(),
             args: vec!["test".to_string()],
             env: HashMap::new(),
@@ -2310,7 +2235,7 @@ mod tests {
             GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = IntrospectServerParams {
-            server_id: "server123".to_string(), // Valid: lowercase + digits
+            server_id: ServerSlug::new("server123").unwrap(), // Valid: lowercase + digits
             command: "echo".to_string(),
             args: vec![],
             env: HashMap::new(),
@@ -2331,7 +2256,7 @@ mod tests {
 
     /// A zero timeout is a client input error, not a server-side connection
     /// failure — it must surface as `INVALID_PARAMS`, matching the sibling
-    /// `validate_server_id_slug` behavior, not `internal_error`.
+    /// `ServerSlug` rejection, not `internal_error`.
     #[tokio::test]
     async fn test_introspect_server_zero_connect_timeout_is_invalid_params() {
         use tempfile::TempDir;
@@ -2341,7 +2266,7 @@ mod tests {
             GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = IntrospectServerParams {
-            server_id: "zero-timeout-test".to_string(),
+            server_id: ServerSlug::new("zero-timeout-test").unwrap(),
             command: "echo".to_string(),
             args: vec![],
             env: HashMap::new(),
@@ -2371,7 +2296,7 @@ mod tests {
         let service = GeneratorService::new();
 
         let params = IntrospectServerParams {
-            server_id: "metachar-test".to_string(),
+            server_id: ServerSlug::new("metachar-test").unwrap(),
             command: "echo".to_string(),
             args: vec!["run; rm -rf /".to_string()],
             env: HashMap::new(),
@@ -2414,7 +2339,7 @@ mod tests {
             "/etc"
         };
         let params = IntrospectServerParams {
-            server_id: "abs-output-dir-test".to_string(),
+            server_id: ServerSlug::new("abs-output-dir-test").unwrap(),
             command: "echo".to_string(),
             args: vec![],
             env: HashMap::new(),
@@ -2441,7 +2366,7 @@ mod tests {
             GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = IntrospectServerParams {
-            server_id: "traversal-output-dir-test".to_string(),
+            server_id: ServerSlug::new("traversal-output-dir-test").unwrap(),
             command: "echo".to_string(),
             args: vec![],
             env: HashMap::new(),
@@ -2478,7 +2403,7 @@ mod tests {
         ct.cancel();
 
         let params = IntrospectServerParams {
-            server_id: "cancel-test".to_string(),
+            server_id: ServerSlug::new("cancel-test").unwrap(),
             command: "echo".to_string(),
             args: vec![],
             env: HashMap::new(),
@@ -2636,7 +2561,7 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
 
         let make_params = |server_id: &str| IntrospectServerParams {
-            server_id: server_id.to_string(),
+            server_id: ServerSlug::new(server_id).unwrap(),
             command: "definitely-not-a-real-mcp-server-command-xyz".to_string(),
             args: vec![],
             env: HashMap::new(),
@@ -4656,45 +4581,15 @@ mod tests {
     // generate_skill Error Tests
     // ========================================================================
 
-    #[tokio::test]
-    async fn test_generate_skill_invalid_server_id_uppercase() {
-        let service = GeneratorService::new();
-
-        let params = GenerateSkillParams {
-            server_id: "GitHub".to_string(), // Invalid: uppercase
-            skill_name: None,
-            use_case_hints: None,
-            servers_dir: None,
-        };
-
-        let result = service
-            .generate_skill(Parameters(params), CancellationToken::new())
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
-        assert!(err.message.contains("lowercase"));
-    }
-
-    #[tokio::test]
-    async fn test_generate_skill_invalid_server_id_special_chars() {
-        let service = GeneratorService::new();
-
-        let params = GenerateSkillParams {
-            server_id: "git@hub".to_string(), // Invalid: special chars
-            skill_name: None,
-            use_case_hints: None,
-            servers_dir: None,
-        };
-
-        let result = service
-            .generate_skill(Parameters(params), CancellationToken::new())
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    #[test]
+    fn test_generate_skill_params_reject_an_invalid_server_id_at_deserialization() {
+        for bad in ["GitHub", "git@hub", "", "a/b"] {
+            let params = serde_json::json!({ "server_id": bad });
+            assert!(
+                serde_json::from_value::<GenerateSkillParams>(params).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4702,7 +4597,7 @@ mod tests {
         let service = GeneratorService::new();
 
         let params = GenerateSkillParams {
-            server_id: "nonexistent-server".to_string(),
+            server_id: ServerSlug::new("nonexistent-server").unwrap(),
             skill_name: None,
             use_case_hints: None,
             servers_dir: Some(PathBuf::from("/nonexistent/path")),
@@ -4738,7 +4633,7 @@ mod tests {
         ct.cancel();
 
         let params = GenerateSkillParams {
-            server_id: "test-server".to_string(),
+            server_id: ServerSlug::new("test-server").unwrap(),
             skill_name: None,
             use_case_hints: None,
             servers_dir: Some(base_dir),
@@ -4764,7 +4659,7 @@ mod tests {
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
 
         let params = GenerateSkillParams {
-            server_id: "test-server".to_string(),
+            server_id: ServerSlug::new("test-server").unwrap(),
             skill_name: None,
             use_case_hints: None,
             servers_dir: Some(base_dir),
@@ -4833,7 +4728,7 @@ mod tests {
         // Deliberately do not write `createIssue.ts`.
 
         let params = GenerateSkillParams {
-            server_id: "test-server".to_string(),
+            server_id: ServerSlug::new("test-server").unwrap(),
             skill_name: None,
             use_case_hints: None,
             servers_dir: Some(base_dir),
@@ -4910,7 +4805,7 @@ mod tests {
             .unwrap();
 
         let params = GenerateSkillParams {
-            server_id: "test-server".to_string(),
+            server_id: ServerSlug::new("test-server").unwrap(),
             skill_name: None,
             use_case_hints: None,
             servers_dir: Some(base_dir),
@@ -4991,7 +4886,7 @@ mod tests {
             .unwrap();
 
         let params = GenerateSkillParams {
-            server_id: "test-server".to_string(),
+            server_id: ServerSlug::new("test-server").unwrap(),
             skill_name: Some("a".repeat(mcp_execution_skill::MAX_SKILL_NAME_LENGTH + 1)),
             use_case_hints: None,
             servers_dir: Some(base_dir),
@@ -5070,7 +4965,7 @@ mod tests {
             .unwrap();
 
         let params = |skill_name: &str| GenerateSkillParams {
-            server_id: "test-server".to_string(),
+            server_id: ServerSlug::new("test-server").unwrap(),
             skill_name: Some(skill_name.to_string()),
             use_case_hints: None,
             servers_dir: Some(base_dir.clone()),
@@ -5123,7 +5018,7 @@ mod tests {
         ct.cancel();
 
         let params = SaveSkillParams {
-            server_id: "cancel-test".to_string(),
+            server_id: ServerSlug::new("cancel-test").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: None,
             overwrite: false,
@@ -5139,25 +5034,15 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_save_skill_invalid_server_id() {
-        let service = GeneratorService::new();
-
-        let params = SaveSkillParams {
-            server_id: "Invalid_Server".to_string(), // Invalid: uppercase and underscore
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: None,
-            overwrite: false,
-        };
-
-        let result = service
-            .save_skill(Parameters(params), CancellationToken::new())
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
-        assert!(err.message.contains("lowercase"));
+    #[test]
+    fn test_save_skill_params_reject_an_invalid_server_id_at_deserialization() {
+        for bad in ["Invalid_Server", "", "a/b"] {
+            let params = serde_json::json!({ "server_id": bad, "content": "---\n---" });
+            assert!(
+                serde_json::from_value::<SaveSkillParams>(params).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     /// Issue #434: a caller echoing `generate_skill`'s informational, display-only
@@ -5173,7 +5058,7 @@ mod tests {
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = SaveSkillParams {
-            server_id: "my-server".to_string(),
+            server_id: ServerSlug::new("my-server").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: Some(PathBuf::from("~/.claude/skills/my-server/SKILL.md")),
             overwrite: false,
@@ -5198,7 +5083,7 @@ mod tests {
         let service = GeneratorService::new();
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "# Test Skill\n\nNo YAML frontmatter here.".to_string(),
             output_path: None,
             overwrite: false,
@@ -5219,7 +5104,7 @@ mod tests {
         let service = GeneratorService::new();
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\ndescription: test\n---\n# Test".to_string(),
             output_path: None,
             overwrite: false,
@@ -5240,7 +5125,7 @@ mod tests {
         let service = GeneratorService::new();
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test-skill\n---\n# Test".to_string(),
             output_path: None,
             overwrite: false,
@@ -5273,7 +5158,7 @@ mod tests {
             .unwrap();
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: Some(PathBuf::from("SKILL.md")),
             overwrite: false,
@@ -5307,7 +5192,7 @@ mod tests {
             .unwrap();
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: test skill\n---\n# Test".to_string(),
             output_path: Some(PathBuf::from("SKILL.md")),
             overwrite: true,
@@ -5338,7 +5223,7 @@ mod tests {
         let output_path = temp_dir.path().join("test").join("nested").join("SKILL.md");
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: nested\ndescription: A test skill\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
             output_path: Some(PathBuf::from("nested/SKILL.md")),
             overwrite: false,
@@ -5378,7 +5263,7 @@ mod tests {
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: \"GitHub: issues and CI\"\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
             output_path: None,
             overwrite: false,
@@ -5408,7 +5293,7 @@ mod tests {
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: None,
             overwrite: false,
@@ -5449,7 +5334,7 @@ mod tests {
             "/etc/passwd"
         };
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: Some(PathBuf::from(absolute)),
             overwrite: true,
@@ -5476,7 +5361,7 @@ mod tests {
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: Some(PathBuf::from("../../../etc/passwd")),
             overwrite: true,
@@ -5511,7 +5396,7 @@ mod tests {
         std::os::unix::fs::symlink(outside_dir.path(), server_dir.join("escape")).unwrap();
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: Some(PathBuf::from("escape/SKILL.md")),
             overwrite: true,
@@ -5543,7 +5428,7 @@ mod tests {
         std::os::unix::fs::symlink(&dangling_target, server_dir.join("SKILL.md")).unwrap();
 
         let params = SaveSkillParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
             output_path: Some(PathBuf::from("SKILL.md")),
             overwrite: true,
@@ -5569,7 +5454,7 @@ mod tests {
 
         for server_id in ["server-a", "server-b"] {
             let params = SaveSkillParams {
-                server_id: server_id.to_string(),
+                server_id: ServerSlug::new(server_id).unwrap(),
                 content: format!("---\nname: {server_id}\ndescription: test\n---\n# Test"),
                 output_path: None,
                 overwrite: false,
@@ -5587,7 +5472,7 @@ mod tests {
         // server-a's directory via output_path, and server-a's file must
         // come out of the attempt untouched.
         let cross_server_params = SaveSkillParams {
-            server_id: "server-b".to_string(),
+            server_id: ServerSlug::new("server-b").unwrap(),
             content: "---\nname: hijack\ndescription: hijack\n---\n# Hijack".to_string(),
             output_path: Some(PathBuf::from("../server-a/SKILL.md")),
             overwrite: true,
@@ -5641,7 +5526,7 @@ mod tests {
         .unwrap();
 
         let params = SaveSkillParams {
-            server_id: "server-b".to_string(),
+            server_id: ServerSlug::new("server-b").unwrap(),
             content: "---\nname: hijack\ndescription: hijack\n---\n# Hijack".to_string(),
             output_path: None,
             overwrite: true,
@@ -5677,9 +5562,10 @@ mod tests {
         let outside_dir = TempDir::new().unwrap();
         let outside_file = outside_dir.path().join("real.md");
 
-        let output_path = resolve_skill_output_path(skills_dir.path(), "test", None)
-            .await
-            .unwrap();
+        let output_path =
+            resolve_skill_output_path(skills_dir.path(), &ServerSlug::new("test").unwrap(), None)
+                .await
+                .unwrap();
         assert!(!output_path.exists());
 
         // A racing process plants a symlink at the exact resolved path, after the confinement

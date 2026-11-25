@@ -19,9 +19,10 @@ use std::assert_matches;
 use std::time::Duration;
 
 use common::FIXTURE_BIN;
+use mcp_execution_core::helper_protocol::ResultSource;
 use mcp_execution_core::{Error, ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{
-    CallTimeout, Introspector, ResultSource, ServerText, Session, ToolCall, ToolCallOutcome,
+    CallTimeout, Introspector, ServerText, Session, ToolCall, ToolCallOutcome,
 };
 use serde_json::{Value, json};
 

@@ -8,7 +8,7 @@ use mcp_execution_core::metadata::{
     METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::provenance::GenerationProvenance;
-use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+use mcp_execution_core::{ServerConfig, ServerId, ServerSlug, ToolName};
 use mcp_execution_skill::{ParsedToolFile, ScanError, build_skill_context, scan_tools_directory};
 use std::assert_matches;
 use tempfile::TempDir;
@@ -113,7 +113,7 @@ async fn test_scan_tools_directory_integration() {
     assert!(tools.iter().any(|t| t.name == "get_user"));
 
     let create_issue = tools.iter().find(|t| t.name == "create_issue").unwrap();
-    assert_eq!(create_issue.server_id, "test");
+    assert_eq!(create_issue.server_id.as_str(), "test");
     assert_eq!(create_issue.category, Some("test-category".to_string()));
     assert_eq!(create_issue.parameters.len(), 2);
 
@@ -148,7 +148,7 @@ async fn test_build_skill_context_integration() {
         ParsedToolFile {
             name: "create_issue".to_string(),
             typescript_name: "createIssue".to_string(),
-            server_id: "github".to_string(),
+            server_id: ServerId::new("github").unwrap(),
             category: Some("issues".to_string()),
             keywords: vec!["create".to_string(), "issue".to_string()],
             description: Some("Create a new issue".to_string()),
@@ -157,7 +157,7 @@ async fn test_build_skill_context_integration() {
         ParsedToolFile {
             name: "list_repos".to_string(),
             typescript_name: "listRepos".to_string(),
-            server_id: "github".to_string(),
+            server_id: ServerId::new("github").unwrap(),
             category: Some("repos".to_string()),
             keywords: vec!["list".to_string(), "repos".to_string()],
             description: Some("List repositories".to_string()),
@@ -166,9 +166,14 @@ async fn test_build_skill_context_integration() {
     ];
 
     let use_case_hints = vec!["CI/CD".to_string()];
-    let context = build_skill_context("github", &tools, Some(&use_case_hints), None);
+    let context = build_skill_context(
+        &ServerSlug::new("github").unwrap(),
+        &tools,
+        Some(&use_case_hints),
+        None,
+    );
 
-    assert_eq!(context.server_id, "github");
+    assert_eq!(context.server_id.as_str(), "github");
     assert_eq!(context.skill_name, "github");
     assert_eq!(context.tool_count, 2);
     assert_eq!(context.categories.len(), 2);
@@ -288,7 +293,7 @@ async fn test_build_skill_context_many_categories() {
         .map(|i| ParsedToolFile {
             name: format!("tool_{i}"),
             typescript_name: format!("tool{i}"),
-            server_id: "test".to_string(),
+            server_id: ServerId::new("test").unwrap(),
             category: Some(format!("category-{}", i % 5)), // 5 different categories
             keywords: vec![format!("keyword{i}")],
             description: Some(format!("Tool {i}")),
@@ -296,7 +301,7 @@ async fn test_build_skill_context_many_categories() {
         })
         .collect();
 
-    let context = build_skill_context("test", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("test").unwrap(), &tools, None, None);
 
     assert_eq!(context.tool_count, 20);
     assert_eq!(context.categories.len(), 5);
@@ -311,7 +316,7 @@ async fn test_build_skill_context_many_categories() {
 async fn test_build_skill_context_empty_tools() {
     let tools: Vec<ParsedToolFile> = vec![];
 
-    let context = build_skill_context("test", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("test").unwrap(), &tools, None, None);
 
     assert_eq!(context.tool_count, 0);
     assert_eq!(context.categories.len(), 0);

@@ -14,10 +14,9 @@ use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
 use mcp_execution_codegen::progressive::ProgressiveGenerator;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
-use mcp_execution_core::{ServerConfig, ServerId};
+use mcp_execution_core::{ServerConfig, ServerId, ServerSlug};
 use mcp_execution_files::{ExportOptions, FilesBuilder};
 use mcp_execution_introspector::{Introspector, ServerInfo};
-use mcp_execution_skill::validate_server_id;
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -116,54 +115,6 @@ fn format_size(bytes: usize) -> String {
 /// - Tool introspection fails
 /// - Code generation fails
 /// - File export fails (skipped in dry-run mode)
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
-/// use mcp_execution_cli::commands::generate;
-/// use mcp_execution_core::cli::OutputFormat;
-/// use std::path::PathBuf;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// // Generate from a stdio transport
-/// let exit_code = generate::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Stdio {
-///             command: "github-mcp-server".to_string(),
-///             args: vec![],
-///             env: vec![],
-///             cwd: None,
-///         },
-///         connect_timeout_secs: None,
-///         discover_timeout_secs: None,
-///     },
-///     None,
-///     None,
-///     None,
-///     false,
-///     OutputFormat::Pretty
-/// ).await?;
-///
-/// // Generate with custom output directory and name override
-/// let exit_code = generate::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Http {
-///             url: "https://api.example.com/mcp/".to_string(),
-///             headers: vec!["Authorization=Bearer token".to_string()],
-///         },
-///         connect_timeout_secs: Some(10),
-///         discover_timeout_secs: Some(30),
-///     },
-///     Some("my-custom-name".to_string()),
-///     Some(PathBuf::from("/tmp/generated")),
-///     Some(PathBuf::from("/tmp/observed-shapes.jsonl")),
-///     false,
-///     OutputFormat::Json
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(
     source: ServerSource,
     name: Option<String>,
@@ -210,7 +161,7 @@ pub async fn run(
 ///
 /// # Errors
 ///
-/// Returns an error if `name` fails [`validate_server_id`](mcp_execution_skill::validate_server_id),
+/// Returns an error if `name` fails [`ServerSlug::new`](mcp_execution_core::ServerSlug::new),
 /// or if the connection or tool discovery fails.
 async fn discover_server_info(
     server_id: ServerId,
@@ -315,7 +266,7 @@ fn generate_code(
 /// constraint (#311).
 ///
 /// For the stdio arm (`derive_server_id_from_path_or_name`), the http/sse arm
-/// (`derive_server_id_from_url`), and `--name` (its own `validate_server_id`
+/// (`derive_server_id_from_url`), and `--name` (its own `ServerSlug`
 /// check in `discover_server_info`), this check is a redundant backstop:
 /// each of those already guarantees the id is valid before it ever reaches
 /// here, so failing here for one of them would indicate a bug in that arm's
@@ -331,7 +282,7 @@ fn generate_code(
 /// # Errors
 ///
 /// Returns an error if `server_info.id` fails
-/// [`validate_server_id`](mcp_execution_skill::validate_server_id). When
+/// [`ServerSlug::new`](mcp_execution_core::ServerSlug::new). When
 /// `is_from_unvalidated_config_key` is `true`, the error names
 /// `~/.claude/mcp.json` and suggests the `--name` override (with a
 /// filesystem-safe slug derived from the offending id) as a fix, since the
@@ -343,7 +294,7 @@ fn resolve_server_dir_name(
     is_from_unvalidated_config_key: bool,
 ) -> Result<String> {
     let server_dir_name = server_id.to_string();
-    validate_server_id(&server_dir_name).map_err(|source| {
+    ServerSlug::new(&server_dir_name).map_err(|source| {
         if is_from_unvalidated_config_key {
             let suggested_name = derive_server_id_from_path_or_name(&server_dir_name);
             anyhow::anyhow!(
@@ -370,11 +321,11 @@ fn resolve_server_dir_name(
 /// # Errors
 ///
 /// Returns an error if `name` is not a valid server id.
-pub(crate) fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
+pub fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
     name.map(|custom_name| {
-        validate_server_id(custom_name)
-            .with_context(|| format!("invalid --name '{custom_name}'"))?;
-        ServerId::new(custom_name).with_context(|| format!("invalid --name '{custom_name}'"))
+        ServerSlug::new(custom_name)
+            .map(ServerId::from)
+            .with_context(|| format!("invalid --name '{custom_name}'"))
     })
     .transpose()
 }
@@ -386,7 +337,7 @@ pub(crate) fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
 ///
 /// Returns an error if the id is not a valid directory name (see `resolve_server_dir_name`) or the
 /// base directory cannot be resolved.
-pub(crate) fn generated_location(
+pub fn generated_location(
     server_id: &ServerId,
     is_from_unvalidated_config_key: bool,
     output_dir: Option<PathBuf>,

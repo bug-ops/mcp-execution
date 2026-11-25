@@ -13,15 +13,18 @@ use thiserror::Error;
 use crate::types::GenerateSkillResult;
 
 /// Errors that can occur during template rendering.
+///
+/// The underlying template-engine error is boxed behind `dyn Error`, so the engine's own types
+/// are not part of this crate's public API.
 #[derive(Debug, Error)]
 pub enum TemplateError {
     /// Template rendering failed.
     #[error("template rendering failed: {0}")]
-    RenderFailed(#[from] handlebars::RenderError),
+    RenderFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// Template registration failed.
     #[error("template registration failed: {0}")]
-    RegistrationFailed(#[from] handlebars::TemplateError),
+    RegistrationFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Embedded Handlebars template that renders SKILL.md directly (no LLM required).
@@ -221,9 +224,11 @@ impl<'a> Listing<'a> {
 /// # Examples
 ///
 /// ```no_run
+/// use mcp_execution_core::ServerSlug;
 /// use mcp_execution_skill::{build_skill_context, render_skill_md};
 ///
-/// let context = build_skill_context("github", &[], None, None);
+/// let server_id = ServerSlug::new("github").unwrap();
+/// let context = build_skill_context(&server_id, &[], None, None);
 /// let md = render_skill_md(&context).unwrap();
 /// assert!(md.starts_with("---\n"));
 /// ```
@@ -266,7 +271,9 @@ pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, Template
         MAX_UNTRUSTED_FIELD_LEN,
     ));
 
-    let rendered = HANDLEBARS.render("skill-md", &value)?;
+    let rendered = HANDLEBARS
+        .render("skill-md", &value)
+        .map_err(|error| TemplateError::RenderFailed(Box::new(error)))?;
     // Normalize CRLF → LF so output is consistent across platforms (Windows CI).
     Ok(rendered.replace("\r\n", "\n"))
 }
@@ -275,10 +282,11 @@ pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, Template
 mod tests {
     use super::*;
     use crate::types::{SkillCategory, SkillTool, ToolExample};
+    use mcp_execution_core::{ServerId, ServerSlug};
 
     fn create_test_context() -> GenerateSkillResult {
         GenerateSkillResult {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             skill_name: "test-progressive".to_string(),
             server_description: Some("Test server".to_string()),
             categories: vec![SkillCategory {
@@ -311,7 +319,8 @@ mod tests {
     /// the deterministic render.
     #[test]
     fn test_built_generation_prompt_names_the_commands_of_the_render() {
-        let context = crate::build_skill_context("test", &[], None, None);
+        let context =
+            crate::build_skill_context(&ServerSlug::new("test").unwrap(), &[], None, None);
         let md = render_skill_md(&context).unwrap();
 
         for command in [
@@ -380,7 +389,12 @@ mod tests {
 
         let hostile_hint =
             "safe hint\n### Injected Heading\n```\ninjected fenced block\n```".to_string();
-        let context = build_skill_context("test", &[], Some(&[hostile_hint]), None);
+        let context = build_skill_context(
+            &ServerSlug::new("test").unwrap(),
+            &[],
+            Some(&[hostile_hint]),
+            None,
+        );
 
         let md = render_skill_md(&context).unwrap();
 
@@ -415,8 +429,12 @@ mod tests {
     fn test_render_skill_md_end_to_end_blank_hints_omit_use_cases_section() {
         use crate::build_skill_context;
 
-        let context =
-            build_skill_context("test", &[], Some(&[String::new(), "   ".to_string()]), None);
+        let context = build_skill_context(
+            &ServerSlug::new("test").unwrap(),
+            &[],
+            Some(&[String::new(), "   ".to_string()]),
+            None,
+        );
 
         let md = render_skill_md(&context).unwrap();
 
@@ -582,7 +600,7 @@ mod tests {
         let hostile = ParsedToolFile {
             name: "evil_tool".to_string(),
             typescript_name: "evilTool".to_string(),
-            server_id: "test".to_string(),
+            server_id: ServerId::new("test").unwrap(),
             category: Some("test".to_string()),
             keywords: vec![],
             description: Some(
@@ -593,7 +611,12 @@ mod tests {
             parameters: vec![],
         };
 
-        let context = build_skill_context("test", std::slice::from_ref(&hostile), None, None);
+        let context = build_skill_context(
+            &ServerSlug::new("test").unwrap(),
+            std::slice::from_ref(&hostile),
+            None,
+            None,
+        );
         let md = render_skill_md(&context).unwrap();
 
         // The hostile description must be flattened to a single line before reaching
@@ -633,14 +656,19 @@ mod tests {
         let hostile = ParsedToolFile {
             name: "evil_tool".to_string(),
             typescript_name: "evilTool".to_string(),
-            server_id: "test".to_string(),
+            server_id: ServerId::new("test").unwrap(),
             category: Some("issues\n### Injected Heading".to_string()),
             keywords: vec![],
             description: Some("safe description".to_string()),
             parameters: vec![],
         };
 
-        let context = build_skill_context("test", std::slice::from_ref(&hostile), None, None);
+        let context = build_skill_context(
+            &ServerSlug::new("test").unwrap(),
+            std::slice::from_ref(&hostile),
+            None,
+            None,
+        );
         let md = render_skill_md(&context).unwrap();
 
         // Only the one legitimate category heading may start a line; the injected

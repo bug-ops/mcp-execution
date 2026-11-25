@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use mcp_execution_core::helper_protocol::MAX_RESPONSE_LINE_BYTES;
+use mcp_execution_core::helper_protocol::{MAX_RESPONSE_LINE_BYTES, ResultSource};
 use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
 use mcp_execution_core::{
     Error, ResourceKind, Result, ServerConfig, ServerId, ToolName, Transport,
@@ -96,30 +96,14 @@ impl CallTimeout {
     }
 }
 
-/// Where a tool call's result value is read from.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_introspector::ResultSource;
-///
-/// assert_ne!(ResultSource::Structured, ResultSource::Content);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResultSource {
-    /// Prefer `structuredContent`; the tool declares an output schema.
-    Structured,
-    /// Take `content[0]`, parsing its text as JSON and falling back to the raw string.
-    Content,
-}
-
 /// One tool invocation.
 ///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_core::ToolName;
-/// use mcp_execution_introspector::{ResultSource, ToolCall};
+/// use mcp_execution_core::helper_protocol::ResultSource;
+/// use mcp_execution_introspector::ToolCall;
 ///
 /// let tool = ToolName::new("echo").unwrap();
 /// let call = ToolCall {
@@ -264,7 +248,8 @@ impl Session {
     ///
     /// ```no_run
     /// use mcp_execution_core::ToolName;
-    /// use mcp_execution_introspector::{CallTimeout, ResultSource, Session, ToolCall};
+    /// use mcp_execution_core::helper_protocol::ResultSource;
+    /// use mcp_execution_introspector::{CallTimeout, Session, ToolCall};
     /// use std::time::Duration;
     ///
     /// # async fn example(session: &Session) -> Result<(), Box<dyn std::error::Error>> {
@@ -371,7 +356,7 @@ impl Session {
 
     fn connection_failed(&self, source: impl std::error::Error + Send + Sync + 'static) -> Error {
         Error::ConnectionFailed {
-            server: self.server_id.to_string(),
+            server: self.server_id.clone(),
             source: Box::new(source),
         }
     }

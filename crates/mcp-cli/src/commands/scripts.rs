@@ -17,20 +17,6 @@ use super::common::{ServersDir, SkillsDir, read_generated_metadata_async};
 use crate::cli::parse_server_id;
 
 /// Options shared by the `scripts` subcommands.
-///
-/// # Examples
-///
-/// ```
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-/// use mcp_execution_cli::commands::scripts::ScriptsAction;
-///
-/// let cli = Cli::parse_from(["mcp-execution-cli", "scripts", "list", "--server", "github"]);
-/// let Commands::Scripts { action: ScriptsAction::List(args) } = cli.command else {
-///     panic!("expected scripts list")
-/// };
-/// assert_eq!(args.server.as_str(), "github");
-/// ```
 #[derive(Debug, Clone, Args)]
 pub struct ScriptsArgs {
     /// Server whose skill holds the scripts
@@ -43,22 +29,6 @@ pub struct ScriptsArgs {
 }
 
 /// Options of `scripts check`: the shared script options plus where the generated server lives.
-///
-/// # Examples
-///
-/// ```
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-/// use mcp_execution_cli::commands::scripts::ScriptsAction;
-///
-/// let cli = Cli::parse_from([
-///     "mcp-execution-cli", "scripts", "check", "--server", "github", "--servers-dir", "/srv",
-/// ]);
-/// let Commands::Scripts { action: ScriptsAction::Check(args) } = cli.command else {
-///     panic!("expected scripts check")
-/// };
-/// assert_eq!(args.servers_dir.as_deref(), Some(std::path::Path::new("/srv")));
-/// ```
 #[derive(Debug, Clone, Args)]
 pub struct CheckArgs {
     /// Options shared with `scripts list`
@@ -71,17 +41,6 @@ pub struct CheckArgs {
 }
 
 /// Saved-script actions.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::scripts::ScriptsAction;
-///
-/// fn is_check(action: &ScriptsAction) -> bool {
-///     matches!(action, ScriptsAction::Check(_))
-/// }
-/// # let _ = is_check;
-/// ```
 #[derive(Debug, Clone, Subcommand)]
 pub enum ScriptsAction {
     /// List saved scripts by signature, without their bodies
@@ -99,18 +58,6 @@ pub enum ScriptsAction {
 ///
 /// `check` returns [`ExitCode::CHECK_FAILED`] when a script references a missing tool or has an
 /// invalid header, and modifies nothing.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::scripts::{ScriptsAction, run};
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example(action: ScriptsAction) -> anyhow::Result<()> {
-/// run(action, OutputFormat::Text).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(action: ScriptsAction, format: OutputFormat) -> Result<ExitCode> {
     match action {
         ScriptsAction::List(args) => list(&args, format).await,

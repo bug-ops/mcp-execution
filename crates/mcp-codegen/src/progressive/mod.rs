@@ -95,6 +95,5 @@ pub mod types;
 // Re-export main types
 pub use generator::{ProgressiveGenerator, TSCONFIG_JSON};
 pub use types::{
-    BridgeContext, CategoryInfo, IndexContext, ResultSource, ToolCategorization, ToolContext,
-    ToolSummary,
+    BridgeContext, CategoryInfo, IndexContext, ToolCategorization, ToolContext, ToolSummary,
 };

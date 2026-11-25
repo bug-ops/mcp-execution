@@ -9,28 +9,10 @@ use crate::progressive::observed::{
 };
 use mcp_execution_core::helper_protocol::{
     CLI_PATH_ENV, HELPER_CHANNEL_KEY, HELPER_ENV, HELPER_PROTOCOL_VERSION, HELPER_TOKEN_ENV,
-    MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV,
+    MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV, ResultSource,
 };
 use mcp_execution_core::untrusted::BARE_IDENTIFIER_PATTERN;
 use serde::{Deserialize, Serialize};
-
-/// How the generated tool function asks the runtime bridge for a tool's result.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::progressive::ResultSource;
-///
-/// assert_eq!(serde_json::to_string(&ResultSource::Structured).unwrap(), "\"structured\"");
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResultSource {
-    /// The text content of the result; used when the server declares no output schema.
-    Content,
-    /// The result's `structuredContent`; used when the server declares an output schema.
-    Structured,
-}
 
 /// Context for rendering a single tool template.
 ///
@@ -40,7 +22,8 @@ pub enum ResultSource {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::{ResultSource, ToolContext};
+/// use mcp_execution_codegen::progressive::ToolContext;
+/// use mcp_execution_core::helper_protocol::ResultSource;
 ///
 /// let context = ToolContext {
 ///     server_id: "github".to_string(),

@@ -10,7 +10,7 @@ use mcp_execution_core::metadata::{
     ResultTypeOrigin, ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::provenance::GenerationProvenance;
-use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+use mcp_execution_core::{ServerConfig, ServerId, ServerSlug, ToolName};
 use mcp_execution_skill::{
     ParsedParameter, ParsedToolFile, ScanError, build_skill_context, scan_tools_directory,
 };
@@ -117,7 +117,7 @@ fn tool_with_params(params: Vec<ParsedParameter>) -> ParsedToolFile {
     ParsedToolFile {
         name: "search".to_string(),
         typescript_name: "search".to_string(),
-        server_id: "acme".to_string(),
+        server_id: ServerId::new("acme").unwrap(),
         category: None,
         keywords: vec![],
         description: Some("Searches".to_string()),
@@ -133,7 +133,7 @@ fn build_skill_context_displays_non_identifier_keys_as_json_literals() {
         param("filter.name", false),
     ])];
 
-    let context = build_skill_context("acme", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("acme").unwrap(), &tools, None, None);
     let skill_tool = &context.categories[0].tools[0];
 
     assert_eq!(skill_tool.required_params, vec!["title", "\"per-page\""]);
@@ -149,7 +149,7 @@ fn build_skill_context_example_omits_non_identifier_keys() {
         param("per-page", true),
     ])];
 
-    let context = build_skill_context("acme", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("acme").unwrap(), &tools, None, None);
     let example = &context.example_tools[0];
 
     assert!(example.cli_command.contains("title"));
@@ -169,7 +169,7 @@ fn build_skill_context_example_omits_non_identifier_keys() {
 fn build_skill_context_cannot_close_a_code_span_with_a_key_backtick() {
     let tools = vec![tool_with_params(vec![param("a`b", true)])];
 
-    let context = build_skill_context("acme", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("acme").unwrap(), &tools, None, None);
     let displayed = &context.categories[0].tools[0].required_params[0];
 
     assert!(!displayed.contains('`'), "{displayed}");

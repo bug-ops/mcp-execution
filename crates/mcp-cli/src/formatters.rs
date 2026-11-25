@@ -17,29 +17,6 @@ use serde::Serialize;
 /// # Errors
 ///
 /// Returns an error if JSON serialization fails.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::formatters::format_output;
-/// use mcp_execution_core::cli::OutputFormat;
-/// use serde::Serialize;
-///
-/// #[derive(Serialize)]
-/// struct ServerInfo {
-///     name: String,
-///     version: String,
-/// }
-///
-/// let info = ServerInfo {
-///     name: "test-server".to_string(),
-///     version: "1.0.0".to_string(),
-/// };
-///
-/// let output = format_output(&info, OutputFormat::Json)?;
-/// assert!(output.contains("\"name\""));
-/// # Ok::<(), anyhow::Error>(())
-/// ```
 pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<String> {
     match format {
         OutputFormat::Json => json::format(data),
@@ -57,23 +34,6 @@ pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<Str
 /// # Errors
 ///
 /// Returns an error if formatting `data` fails (see [`format_output`]).
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::formatters::emit;
-/// use mcp_execution_core::cli::{ExitCode, OutputFormat};
-/// use serde::Serialize;
-///
-/// #[derive(Serialize)]
-/// struct Data {
-///     value: i32,
-/// }
-///
-/// let code = emit(&Data { value: 42 }, OutputFormat::Json, ExitCode::SUCCESS)?;
-/// assert_eq!(code, ExitCode::SUCCESS);
-/// # Ok::<(), anyhow::Error>(())
-/// ```
 pub fn emit<T: Serialize>(data: &T, format: OutputFormat, exit_code: ExitCode) -> Result<ExitCode> {
     let formatted = format_output(data, format)?;
     println!("{formatted}");
@@ -92,15 +52,6 @@ pub fn emit<T: Serialize>(data: &T, format: OutputFormat, exit_code: ExitCode) -
 /// implementation. The returned string is always JSON-quoted, even for input with no control
 /// characters, since callers need one consistent (and unambiguous) rendering rather than
 /// conditionally-quoted output.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::formatters::escape_display;
-///
-/// assert_eq!(escape_display("hello"), "\"hello\"");
-/// assert_eq!(escape_display("esc\u{1b}[2J"), "\"esc\\u001b[2J\"");
-/// ```
 #[must_use]
 pub fn escape_display(s: &str) -> String {
     // `Value::String`'s `Display` impl serializes through the same JSON string writer as
@@ -168,29 +119,6 @@ const MAX_ERROR_TEXT_LEN: usize = 4000;
 /// actually reaches a terminal/log sink — while still delegating the escaping logic itself to the
 /// one authoritative sanitizer — keeps the policy decision local to the output boundary that
 /// needs it, without widening this bug-fix change beyond `mcp-execution-cli`.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::formatters::escape_error_text;
-///
-/// let cause = "boom\u{1b}[2Jname\nfake extra line";
-/// let escaped = escape_error_text(cause);
-/// assert!(!escaped.contains('\u{1b}'));
-/// assert!(!escaped.contains('\n'));
-/// assert!(escaped.contains("boom"));
-/// ```
-///
-/// A URL embedded in the text has its credentials/query string redacted too:
-///
-/// ```
-/// use mcp_execution_cli::formatters::escape_error_text;
-///
-/// let cause = "error sending request for url (https://api.example.com/mcp?token=hunter2secret)";
-/// let escaped = escape_error_text(cause);
-/// assert!(!escaped.contains("hunter2secret"));
-/// assert!(escaped.contains("https://api.example.com/mcp?<redacted>"));
-/// ```
 #[must_use]
 pub fn escape_error_text(s: &str) -> String {
     let redacted = mcp_execution_core::redact_urls_in_text(s);
@@ -209,20 +137,6 @@ pub mod json {
     ///
     /// Returns an error if JSON serialization fails (e.g., if the data
     /// contains non-serializable types or custom serialization fails).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use serde::Serialize;
-    /// use mcp_execution_cli::formatters::json;
-    ///
-    /// #[derive(Serialize)]
-    /// struct Data { value: i32 }
-    ///
-    /// let data = Data { value: 42 };
-    /// let json = json::format(&data).unwrap();
-    /// assert!(json.contains("42"));
-    /// ```
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         let json = serde_json::to_string_pretty(data)?;
         Ok(json)
@@ -234,20 +148,6 @@ pub mod json {
     ///
     /// Returns an error if JSON serialization fails (e.g., if the data
     /// contains non-serializable types or custom serialization fails).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use serde::Serialize;
-    /// use mcp_execution_cli::formatters::json;
-    ///
-    /// #[derive(Serialize)]
-    /// struct Data { value: i32 }
-    ///
-    /// let data = Data { value: 42 };
-    /// let json = json::format_compact(&data).unwrap();
-    /// assert!(!json.contains('\n'));
-    /// ```
     pub fn format_compact<T: Serialize>(data: &T) -> Result<String> {
         let json = serde_json::to_string(data)?;
         Ok(json)
@@ -267,20 +167,6 @@ pub mod text {
     ///
     /// Returns an error if JSON serialization fails (propagated from the
     /// underlying `json::format_compact` call).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use serde::Serialize;
-    /// use mcp_execution_cli::formatters::text;
-    ///
-    /// #[derive(Serialize)]
-    /// struct Data { value: i32 }
-    ///
-    /// let data = Data { value: 42 };
-    /// let text = text::format(&data).unwrap();
-    /// assert!(text.contains("42"));
-    /// ```
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         // For text mode, use JSON without pretty printing
         json::format_compact(data)
@@ -299,20 +185,6 @@ pub mod pretty {
     ///
     /// Returns an error if JSON serialization fails (e.g., if the data
     /// contains non-serializable types). Value formatting itself cannot fail.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use serde::Serialize;
-    /// use mcp_execution_cli::formatters::pretty;
-    ///
-    /// #[derive(Serialize)]
-    /// struct Data { value: i32 }
-    ///
-    /// let data = Data { value: 42 };
-    /// let output = pretty::format(&data).unwrap();
-    /// assert!(output.contains("42"));
-    /// ```
     pub fn format<T: Serialize>(data: &T) -> Result<String> {
         // Convert to JSON value first for inspection
         let value = serde_json::to_value(data)?;

@@ -50,15 +50,20 @@
 //! - **Discoverable**: grep-friendly headers for tool discovery
 #![warn(missing_docs, missing_debug_implementations)]
 
+#[doc(hidden)]
 pub mod clock;
 mod output_dir;
 pub mod service;
+#[doc(hidden)]
 pub mod state;
 pub mod types;
 
+#[doc(hidden)]
 pub use clock::{Clock, SystemClock};
+#[doc(hidden)]
 pub use output_dir::{OutputDirError, relative_subpath, resolve_output_dir};
 pub use service::GeneratorService;
+#[doc(hidden)]
 pub use state::StateManager;
 pub use types::{
     CategorizedTool, GeneratedServerInfo, IntrospectServerParams, IntrospectServerResult,

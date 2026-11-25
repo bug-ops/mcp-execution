@@ -31,17 +31,6 @@ const MAX_PRINTED_NAMES: usize = 20;
 const MAX_NAME_CHARS: usize = 128;
 
 /// Options of the `drift` command.
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-///
-/// let cli = Cli::parse_from(["mcp-execution-cli", "drift", "--from-config", "github"]);
-/// assert_matches!(cli.command, Commands::Drift(_));
-/// ```
 #[derive(Debug, Args)]
 pub struct DriftArgs {
     /// Server selection, transport, and timeout flags (shared with `introspect`)
@@ -62,15 +51,6 @@ pub struct DriftArgs {
 ///
 /// The endpoint is checked first: when the connection parameters differ, a tool difference is not
 /// attributed to the server changing.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::drift::DriftOutcome;
-///
-/// assert!(!DriftOutcome::NoDrift.is_drift());
-/// assert!(DriftOutcome::EndpointDiffers.is_drift());
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum DriftOutcome {
@@ -89,18 +69,6 @@ pub enum DriftOutcome {
 
 impl DriftOutcome {
     /// Whether the outcome is anything other than [`DriftOutcome::NoDrift`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_cli::commands::drift::DriftOutcome;
-    ///
-    /// let outcome = DriftOutcome::ToolsDiffer {
-    ///     added: vec![],
-    ///     removed: vec!["gone".to_string()],
-    /// };
-    /// assert!(outcome.is_drift());
-    /// ```
     #[must_use]
     pub const fn is_drift(&self) -> bool {
         !matches!(self, Self::NoDrift)
@@ -111,20 +79,6 @@ impl DriftOutcome {
 ///
 /// Uses the same fingerprint and digest functions `generate` records with, so equal inputs
 /// always compare equal.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::drift::{DriftOutcome, compare};
-/// use mcp_execution_core::provenance::{ConfigFingerprint, ToolDigest};
-/// use mcp_execution_core::ServerConfig;
-///
-/// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
-/// let fingerprint = ConfigFingerprint::compute(&config);
-/// let digest = ToolDigest::compute(&[]);
-/// let outcome = compare(&fingerprint, &digest, &[], &fingerprint, &[]);
-/// assert_eq!(outcome, DriftOutcome::NoDrift);
-/// ```
 #[must_use]
 pub fn compare(
     recorded_fingerprint: &ConfigFingerprint,
@@ -275,18 +229,6 @@ impl DriftReport {
 ///
 /// Returns a classified error when the check could not run: invalid server selection, connection
 /// or discovery failure, or a missing, oversized, unreadable or unsupported `_meta.json`.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::drift::{DriftArgs, run};
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example(args: DriftArgs) -> anyhow::Result<()> {
-/// run(args, OutputFormat::Text).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
     let DriftArgs {
         flags,

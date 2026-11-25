@@ -15,10 +15,9 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::FIXTURE_BIN;
+use mcp_execution_core::helper_protocol::ResultSource;
 use mcp_execution_core::{Error, ResourceKind, ServerConfig, ServerId, ToolName};
-use mcp_execution_introspector::{
-    CallTimeout, Introspector, ResultSource, Session, ToolCall, ToolCallOutcome,
-};
+use mcp_execution_introspector::{CallTimeout, Introspector, Session, ToolCall, ToolCallOutcome};
 use serde_json::{Map, Value, json};
 
 async fn call(

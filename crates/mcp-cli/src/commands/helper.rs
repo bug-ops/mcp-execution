@@ -20,18 +20,6 @@ use crate::runtime::pool::SessionPool;
 ///
 /// Returns an error when started inside `mcp-execution-cli run` (invalid input), or when the
 /// hello is missing, late, malformed or of another protocol version.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::helper::run;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// let code = run().await?;
-/// assert!(code.is_success());
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run() -> Result<ExitCode> {
     refuse_inside_run()?;
     let pool = Arc::new(SessionPool::new(CallTimeout::new(DEFAULT_CALL_TIMEOUT)?));

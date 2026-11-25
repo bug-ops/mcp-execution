@@ -7,9 +7,10 @@
 //! matched by `id`. The line codec lives here; the server loop is in
 //! [`crate::runtime::helper`].
 
-use mcp_execution_core::helper_protocol::{HELPER_PROTOCOL_VERSION, MAX_HELPER_LINE_BYTES};
+use mcp_execution_core::helper_protocol::{
+    HELPER_PROTOCOL_VERSION, MAX_HELPER_LINE_BYTES, ResultSource,
+};
 use mcp_execution_core::{ServerId, ToolName};
-use mcp_execution_introspector::ResultSource;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _};
 
@@ -65,35 +66,6 @@ impl HelloReply {
     }
 }
 
-/// Where a call's result value is read from; the wire form of
-/// [`ResultSource`].
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::runtime::protocol::ResultKind;
-///
-/// let kind: ResultKind = serde_json::from_str(r#""structured""#).unwrap();
-/// assert_eq!(kind, ResultKind::Structured);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResultKind {
-    /// Prefer `structuredContent`.
-    Structured,
-    /// Take `content[0]`.
-    Content,
-}
-
-impl From<ResultKind> for ResultSource {
-    fn from(kind: ResultKind) -> Self {
-        match kind {
-            ResultKind::Structured => Self::Structured,
-            ResultKind::Content => Self::Content,
-        }
-    }
-}
-
 /// One tool call from the script.
 ///
 /// # Examples
@@ -116,7 +88,7 @@ pub struct Request {
     /// Arguments; an object by type.
     pub arguments: serde_json::Map<String, serde_json::Value>,
     /// Where the result value is read from.
-    pub result: ResultKind,
+    pub result: ResultSource,
 }
 
 /// Why a call failed.

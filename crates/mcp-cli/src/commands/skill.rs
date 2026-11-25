@@ -10,10 +10,11 @@
 use super::common::{ServersDir, SkillsDir};
 use anyhow::{Context, Result, bail};
 use mcp_execution_core::Error as CoreError;
+use mcp_execution_core::ServerSlug;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_skill::{
     GenerateSkillResult, ParsedToolFile, ScanResult, SkillName, build_skill_context,
-    render_skill_md, scan_tools_directory, skill_directory_name, validate_server_id,
+    render_skill_md, scan_tools_directory, skill_directory_name,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -74,27 +75,6 @@ struct SkillWriteResult {
 /// side effect `save_skill`'s own default-path resolution has. A custom `--output` path has no
 /// such side effect: its parent directory is created only after the `--overwrite` gate and
 /// rendering succeed, matching this command's behavior before issue #501.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::skill;
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// // Generate skill for GitHub server
-/// let exit_code = skill::run(
-///     "github".to_string(),
-///     None,
-///     None,
-///     None,
-///     vec![],
-///     false,
-///     OutputFormat::Json
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
 // One argument per CLI flag; clap already destructures flags for us, and grouping them into a
 // struct would only benefit this function, not caller ergonomics.
 pub async fn run(
@@ -118,13 +98,13 @@ pub async fn run(
     // A malformed `server` id is a CLI-argument mistake, so this is wrapped
     // as `CoreError::InvalidArgument` (rather than a bare anyhow string) to
     // classify as `ExitCode::INVALID_INPUT` in `runner::classify_exit_code`.
-    validate_server_id(&server)
+    let server = ServerSlug::new(&server)
         .map_err(|e| CoreError::InvalidArgument(format!("Invalid server ID: {e}")))?;
     info!("Server ID validated: {}", server);
 
-    let tool_dir = resolve_tool_dir(&server, servers_dir)?;
+    let tool_dir = resolve_tool_dir(server.as_str(), servers_dir)?;
 
-    let scan_result = scan_server_tools(&tool_dir, &server).await?;
+    let scan_result = scan_server_tools(&tool_dir, server.as_str()).await?;
 
     let (context, custom_output_path) = prepare_skill_context(
         &server,
@@ -154,7 +134,7 @@ pub async fn run(
         // comment for why this leaves the terminal `SKILL.md` component's pre-existing-symlink
         // case untouched.
         let skills_dir = SkillsDir::resolve(None)?;
-        resolve_default_output_path(skills_dir.as_path(), &server).await?
+        resolve_default_output_path(skills_dir.as_path(), server.as_str()).await?
     };
 
     // Check if output file exists and overwrite flag
@@ -290,14 +270,14 @@ async fn scan_server_tools(tool_dir: &Path, server: &str) -> Result<ScanResult> 
 ///
 /// Returns an error if a custom `output_path` fails traversal validation.
 fn prepare_skill_context(
-    server: &str,
+    server: &ServerSlug,
     tools: &[ParsedToolFile],
     hints: Vec<String>,
     skill_name: Option<&str>,
     output_path: Option<PathBuf>,
 ) -> Result<(GenerateSkillResult, Option<PathBuf>)> {
     // Step 6: Build skill context. Custom skill name is validated up front (same pattern as
-    // `validate_server_id` above) and passed into `build_skill_context` itself — not applied as
+    // the `ServerSlug` check above) and passed into `build_skill_context` itself — not applied as
     // a post-hoc override — so an oversized name fails fast here instead of being rendered and
     // written to disk only for `extract_skill_metadata` to reject it later (issue #413), and so
     // the name is consistently reflected in `generation_prompt` as well as `skill_name` (issue
@@ -376,11 +356,10 @@ async fn write_skill_md(rendered: &str, output_path: &Path) -> Result<()> {
 /// Returns an error if the resolved path escapes `skills_dir` - including via a pre-existing
 /// symlink at the server's own segment directory.
 async fn resolve_default_output_path(skills_dir: &Path, server: &str) -> Result<PathBuf> {
-    // `server` is already validated by `validate_server_id` (a `validate_server_id_slug`
-    // passthrough) at `run`'s entry, before this is ever reached, so `resolve_confined_path`'s
-    // own structural `validate_path_segment` check below is the only validation this call gets -
-    // intentionally: re-running `validate_server_id_slug` here would just re-check what already
-    // passed.
+    // `server` was already validated as a `ServerSlug` at `run`'s entry, before this is ever
+    // reached, so `resolve_confined_path`'s own structural `validate_path_segment` check below is
+    // the only validation this call gets - intentionally: re-checking the slug here would just
+    // repeat what already passed.
     let segment_dir =
         mcp_execution_core::resolve_confined_path(skills_dir, server, Path::new(""), None)
             .await
@@ -899,7 +878,7 @@ mod tests {
         let tools = vec![];
 
         let (context, _output_path) = prepare_skill_context(
-            "github",
+            &ServerSlug::new("github").unwrap(),
             &tools,
             vec![],
             Some("github-advanced"),
@@ -926,9 +905,14 @@ mod tests {
         let tools = vec![];
         let custom_output = PathBuf::from("/tmp/custom/SKILL.md");
 
-        let (context, resolved_output_path) =
-            prepare_skill_context("github", &tools, vec![], None, Some(custom_output.clone()))
-                .unwrap();
+        let (context, resolved_output_path) = prepare_skill_context(
+            &ServerSlug::new("github").unwrap(),
+            &tools,
+            vec![],
+            None,
+            Some(custom_output.clone()),
+        )
+        .unwrap();
 
         assert_eq!(resolved_output_path, Some(custom_output));
         assert_eq!(
@@ -952,8 +936,14 @@ mod tests {
             .map(|i| format!("hint-{i}"))
             .collect();
 
-        let (context, _output_path) =
-            prepare_skill_context("github", &tools, hints, None, None).unwrap();
+        let (context, _output_path) = prepare_skill_context(
+            &ServerSlug::new("github").unwrap(),
+            &tools,
+            hints,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(context.warnings.len(), 1, "{:?}", context.warnings);
         assert!(

@@ -7,7 +7,7 @@
 
 use crate::clock::Clock;
 use chrono::{DateTime, Utc};
-use mcp_execution_core::{ServerConfig, ServerId};
+use mcp_execution_core::{ServerConfig, ServerId, ServerSlug};
 use mcp_execution_introspector::ServerInfo;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -36,27 +36,21 @@ use uuid::Uuid;
 ///
 /// ```
 /// use mcp_execution_server::types::IntrospectServerParams;
-/// use std::collections::HashMap;
 ///
-/// let params = IntrospectServerParams {
-///     server_id: "github".to_string(),
-///     command: "npx".to_string(),
-///     args: vec!["-y".to_string(), "@anthropic/mcp-server-github".to_string()],
-///     env: HashMap::new(),
-///     output_dir: None,
-///     connect_timeout_secs: None,
-///     discover_timeout_secs: None,
-/// };
+/// let params: IntrospectServerParams = serde_json::from_value(serde_json::json!({
+///     "server_id": "github",
+///     "command": "npx",
+///     "args": ["-y", "@anthropic/mcp-server-github"],
+/// }))
+/// .unwrap();
+/// assert_eq!(params.server_id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct IntrospectServerParams {
     /// Unique identifier for the server (e.g., "github", "filesystem").
     ///
-    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id_slug`'s
-    /// `MAX_SERVER_ID_LENGTH`, mirrored here as a literal since schemars attributes cannot
-    /// reference a `const`).
-    #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
-    pub server_id: String,
+    /// Must be 1-64 lowercase letters, digits, or hyphens.
+    pub server_id: ServerSlug,
 
     /// Command to start the server (e.g., "npx", "docker").
     ///
@@ -109,12 +103,13 @@ pub struct IntrospectServerParams {
 /// # Examples
 ///
 /// ```
+/// use mcp_execution_core::ServerSlug;
 /// use mcp_execution_server::types::{IntrospectServerResult, IntrospectedToolSummary};
 /// use chrono::Utc;
 /// use uuid::Uuid;
 ///
 /// let result = IntrospectServerResult {
-///     server_id: "github".to_string(),
+///     server_id: ServerSlug::new("github").unwrap(),
 ///     server_name: "GitHub MCP Server".to_string(),
 ///     tools_found: 1,
 ///     tools: vec![IntrospectedToolSummary {
@@ -131,7 +126,7 @@ pub struct IntrospectServerParams {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct IntrospectServerResult {
     /// Server identifier
-    pub server_id: String,
+    pub server_id: ServerSlug,
 
     /// Human-readable server name
     pub server_name: String,
@@ -616,7 +611,7 @@ mod tests {
     #[test]
     fn introspect_server_params_shape_is_pinned() {
         let params = IntrospectServerParams {
-            server_id: "test".to_string(),
+            server_id: ServerSlug::new("test").unwrap(),
             command: "echo".to_string(),
             args: vec![],
             env: HashMap::new(),

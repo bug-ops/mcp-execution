@@ -118,7 +118,7 @@ pub enum Error {
     #[error("MCP server connection failed: {server}")]
     ConnectionFailed {
         /// Name or identifier of the server that failed to connect
-        server: String,
+        server: ServerId,
         /// Underlying error cause
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,

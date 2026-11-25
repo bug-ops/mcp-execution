@@ -1314,7 +1314,7 @@ mod acceptance_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::progressive::types::ResultSource;
+    use mcp_execution_core::helper_protocol::ResultSource;
     use mcp_execution_core::{ServerId, ToolName};
     use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
     use serde_json::json;

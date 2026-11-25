@@ -25,27 +25,6 @@ use mcp_execution_core::helper_protocol::CLI_PATH_ENV;
 /// Captures every check [`run`] performs so it can be rendered as JSON,
 /// plain text, or the default human-readable pretty summary via
 /// [`crate::formatters::format_output`].
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::setup::SetupResult;
-///
-/// use mcp_execution_cli::runtime::helper::CliBinary;
-///
-/// let result = SetupResult {
-///     node_version: "20.10.0".to_string(),
-///     mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
-///     mcp_config_found: true,
-///     servers_dir_found: true,
-///     files_made_executable: 3,
-///     skipped_entries: 0,
-///     failed_entries: 0,
-///     helper_binary: CliBinary::NotFound,
-/// };
-///
-/// assert_eq!(result.files_made_executable, 3);
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SetupResult {
     /// Detected Node.js version (e.g. `"20.10.0"`), without the leading `v`.

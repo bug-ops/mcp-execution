@@ -6,6 +6,7 @@
 //! - `SaveSkillParams`: Parameters for saving a skill
 //! - `SaveSkillResult`: Result from saving a skill
 
+use mcp_execution_core::ServerSlug;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 /// Maximum `server_id` length (denial-of-service protection).
 ///
 /// Re-exported from `mcp_execution_core`, the authoritative owner of the server id slug
-/// invariant (see [`validate_server_id`]). `pub` (rather than private) so downstream crates'
+/// invariant (see [`ServerSlug`]). `pub` (rather than private) so downstream crates'
 /// schemars drift-guard tests — e.g. `mcp-execution-server`'s, for
 /// `IntrospectServerParams::server_id` — can assert the declared schema length against this
 /// real constant instead of a hardcoded literal (issue #198 S3).
@@ -66,22 +67,16 @@ pub const MAX_USE_CASE_HINTS: usize = 20;
 /// ```
 /// use mcp_execution_skill::types::GenerateSkillParams;
 ///
-/// let params = GenerateSkillParams {
-///     server_id: "github".to_string(),
-///     servers_dir: None,
-///     skill_name: None,
-///     use_case_hints: None,
-/// };
+/// let params: GenerateSkillParams =
+///     serde_json::from_value(serde_json::json!({ "server_id": "github" })).unwrap();
+/// assert_eq!(params.server_id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct GenerateSkillParams {
     /// Server identifier (e.g., "github").
     ///
-    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id`'s
-    /// `MAX_SERVER_ID_LENGTH`, mirrored here as a literal since schemars attributes cannot
-    /// reference a `const`).
-    #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
-    pub server_id: String,
+    /// Must be 1-64 lowercase letters, digits, or hyphens.
+    pub server_id: ServerSlug,
 
     /// Base directory for generated servers.
     ///
@@ -117,10 +112,11 @@ pub struct GenerateSkillParams {
 /// # Examples
 ///
 /// ```
+/// use mcp_execution_core::ServerSlug;
 /// use mcp_execution_skill::types::GenerateSkillResult;
 ///
 /// let result = GenerateSkillResult {
-///     server_id: "github".to_string(),
+///     server_id: ServerSlug::new("github").unwrap(),
 ///     skill_name: "github-progressive".to_string(),
 ///     server_description: Some("MCP server for issue operations".to_string()),
 ///     categories: vec![],
@@ -132,12 +128,12 @@ pub struct GenerateSkillParams {
 ///     use_case_hints: vec![],
 /// };
 ///
-/// assert_eq!(result.server_id, "github");
+/// assert_eq!(result.server_id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GenerateSkillResult {
     /// Server identifier.
-    pub server_id: String,
+    pub server_id: ServerSlug,
 
     /// Suggested skill name.
     pub skill_name: String,
@@ -302,22 +298,19 @@ pub struct ToolExample {
 /// ```
 /// use mcp_execution_skill::types::SaveSkillParams;
 ///
-/// let params = SaveSkillParams {
-///     server_id: "github".to_string(),
-///     content: "---\nname: github\n---\n# GitHub".to_string(),
-///     output_path: None,
-///     overwrite: false,
-/// };
+/// let params: SaveSkillParams = serde_json::from_value(serde_json::json!({
+///     "server_id": "github",
+///     "content": "---\nname: github\n---\n# GitHub",
+/// }))
+/// .unwrap();
+/// assert_eq!(params.server_id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SaveSkillParams {
     /// Server identifier.
     ///
-    /// Must be 1-64 lowercase letters, digits, or hyphens (see `validate_server_id`'s
-    /// `MAX_SERVER_ID_LENGTH`, mirrored here as a literal since schemars attributes cannot
-    /// reference a `const`).
-    #[schemars(length(max = 64), regex(pattern = r"^[a-z0-9-]+$"))]
-    pub server_id: String,
+    /// Must be 1-64 lowercase letters, digits, or hyphens.
+    pub server_id: ServerSlug,
 
     /// SKILL.md content (markdown with YAML frontmatter).
     ///
@@ -417,59 +410,6 @@ pub struct SkillMetadata {
 // ============================================================================
 // Validation functions
 // ============================================================================
-
-/// Errors returned by [`validate_server_id`].
-///
-/// A re-export of [`mcp_execution_core::ServerIdSlugError`] — the authoritative error type for
-/// this invariant — under this crate's own name, so existing callers of
-/// `mcp_execution_skill::SkillServerIdError` are unaffected. This crate previously hand-rolled a
-/// structurally identical enum plus a manual `From` conversion; that let this crate's error
-/// wording drift from `mcp_execution_core`'s (the MCP tool handlers in `mcp-execution-server`
-/// surface the core wording directly, so the two had visibly disagreed on identical input). A
-/// re-export makes that drift structurally impossible: there is only one type, and therefore
-/// only one `Display` wording, to keep in sync.
-pub use mcp_execution_core::ServerIdSlugError as SkillServerIdError;
-
-/// Validate `server_id` format and length.
-///
-/// Delegates to [`mcp_execution_core::validate_server_id_slug`], the authoritative owner of
-/// this invariant.
-///
-/// # Arguments
-///
-/// * `server_id` - Server identifier to validate
-///
-/// # Returns
-///
-/// `Ok(())` if valid.
-///
-/// # Errors
-///
-/// Returns [`SkillServerIdError`] if:
-/// - Empty
-/// - Length exceeds 64 characters
-/// - Contains characters other than lowercase letters, digits, and hyphens
-///
-/// # Validation Rules
-///
-/// - Must not be empty
-/// - Length must not exceed 64 characters
-/// - Must contain only lowercase letters, digits, and hyphens
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_skill::validate_server_id;
-///
-/// assert!(validate_server_id("github").is_ok());
-/// assert!(validate_server_id("my-server-123").is_ok());
-/// assert!(validate_server_id("").is_err()); // empty
-/// assert!(validate_server_id("GitHub").is_err()); // uppercase
-/// assert!(validate_server_id("my_server").is_err()); // underscore
-/// ```
-pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError> {
-    mcp_execution_core::validate_server_id_slug(server_id)
-}
 
 /// Errors returned by [`SkillName::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -718,54 +658,19 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_server_id_valid() {
-        assert!(validate_server_id("github").is_ok());
-        assert!(validate_server_id("my-server").is_ok());
-        assert!(validate_server_id("server123").is_ok());
-        assert!(validate_server_id("my-server-123").is_ok());
-    }
-
-    #[test]
-    fn test_validate_server_id_empty() {
-        let result = validate_server_id("");
-        assert_eq!(result, Err(SkillServerIdError::Empty));
-    }
-
-    #[test]
-    fn test_validate_server_id_uppercase() {
-        let result = validate_server_id("GitHub");
-        assert_eq!(result, Err(SkillServerIdError::InvalidCharacters));
-    }
-
-    #[test]
-    fn test_validate_server_id_underscore() {
-        let result = validate_server_id("my_server");
-        assert_eq!(result, Err(SkillServerIdError::InvalidCharacters));
-    }
-
-    #[test]
-    fn test_validate_server_id_special_chars() {
-        let result = validate_server_id("my@server");
-        assert_eq!(result, Err(SkillServerIdError::InvalidCharacters));
-    }
-
-    #[test]
-    fn test_validate_server_id_too_long() {
-        let long_id = "a".repeat(65);
-        let result = validate_server_id(&long_id);
-        assert_eq!(
-            result,
-            Err(SkillServerIdError::TooLong {
-                len: 65,
-                limit: MAX_SERVER_ID_LENGTH
-            })
-        );
-    }
-
-    #[test]
-    fn test_validate_server_id_max_length() {
-        let max_id = "a".repeat(64);
-        assert!(validate_server_id(&max_id).is_ok());
+    fn test_params_reject_a_bad_server_id_at_deserialization() {
+        for bad in ["", "GitHub", "my_server", "a.b", "../x"] {
+            let value = serde_json::json!({ "server_id": bad });
+            assert!(
+                serde_json::from_value::<GenerateSkillParams>(value).is_err(),
+                "{bad:?}"
+            );
+            let value = serde_json::json!({ "server_id": bad, "content": "x" });
+            assert!(
+                serde_json::from_value::<SaveSkillParams>(value).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     // ── skill_name length bound (issue #413) ──────────────────────────────

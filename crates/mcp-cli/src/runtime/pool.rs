@@ -86,7 +86,7 @@ impl SessionPool {
             server,
             tool,
             arguments,
-            result: result_kind,
+            result: result_source,
             ..
         } = request;
         let result = async {
@@ -97,7 +97,7 @@ impl SessionPool {
                     ToolCall {
                         tool: &tool,
                         arguments,
-                        result_source: result_kind.into(),
+                        result_source,
                     },
                     self.call_timeout,
                 )
@@ -280,7 +280,7 @@ fn reply_of(server: &ServerId, tool: &ToolName, outcome: ToolCallOutcome) -> Cal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::protocol::ResultKind;
+    use mcp_execution_core::helper_protocol::ResultSource;
     use std::assert_matches;
     use std::time::Duration;
 
@@ -294,7 +294,7 @@ mod tests {
             server: ServerId::new(server).unwrap(),
             tool: mcp_execution_core::ToolName::new("echo").unwrap(),
             arguments: serde_json::Map::new(),
-            result: ResultKind::Content,
+            result: ResultSource::Content,
         }
     }
 

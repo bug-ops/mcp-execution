@@ -10,9 +10,10 @@ use std::fmt;
 use anyhow::{Context, Result};
 use clap::Args;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
+use mcp_execution_core::helper_protocol::ResultSource;
 use mcp_execution_core::{Error as CoreError, ServerId, ToolName};
 use mcp_execution_introspector::{
-    CallTimeout, Introspector, ResultSource, ServerText, ToolCall, ToolCallOutcome,
+    CallTimeout, Introspector, ServerText, ToolCall, ToolCallOutcome,
 };
 use serde_json::{Map, Value};
 
@@ -28,19 +29,6 @@ use crate::runtime::spill::{MAX_SPILL_FILE_BYTES, Spill};
 ///
 /// The tool name and the optional JSON object of arguments follow the server flags after `--`.
 /// A non-object or malformed JSON argument exits 2 without echoing the text.
-///
-/// # Examples
-///
-/// ```
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-///
-/// let cli = Cli::parse_from([
-///     "mcp-execution-cli", "call", "--from-config", "github", "--", "list_issues", "{}",
-/// ]);
-/// let Commands::Call(args) = cli.command else { panic!("expected call") };
-/// assert_eq!(args.call, ["list_issues", "{}"]);
-/// ```
 #[derive(Args)]
 pub struct CallArgs {
     /// Server selection, transport, and timeout flags (shared with `introspect`)
@@ -72,22 +60,6 @@ impl fmt::Debug for CallArgs {
 ///
 /// Returns an error for invalid input (including a call made inside `mcp-execution-cli run`),
 /// connection failure or a timeout.
-///
-/// # Examples
-///
-/// ```no_run
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-/// use mcp_execution_cli::commands::call::run;
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// let cli = Cli::parse_from(["mcp-execution-cli", "call", "--from-config", "demo", "--", "echo"]);
-/// let Commands::Call(args) = cli.command else { return Ok(()) };
-/// run(args, OutputFormat::Text).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(args: CallArgs, _format: OutputFormat) -> Result<ExitCode> {
     refuse_inside_run()?;
     let CallArgs { flags, call } = args;

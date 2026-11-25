@@ -8,10 +8,8 @@
 //! confinement already used by [`crate::scan_tools_directory`], adapted for
 //! a target that may not exist yet.
 
-use mcp_execution_core::untrusted::sanitize_untrusted_inline;
 use mcp_execution_core::{
-    ConfinementError, ConfinementTarget, resolve_confined_path, sanitize_path_for_error,
-    validate_server_id_slug,
+    ConfinementError, ConfinementTarget, ServerSlug, resolve_confined_path, sanitize_path_for_error,
 };
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
@@ -20,7 +18,7 @@ use thiserror::Error;
 /// Errors from resolving and confining a skill output path to its base directory.
 #[derive(Debug, Error)]
 pub enum OutputPathError {
-    /// `server_id` failed [`mcp_execution_core::validate_server_id_slug`]'s slug-format check
+    /// `server_id` failed [`mcp_execution_core::ServerSlug::new`]'s slug-format check
     /// (e.g. it is empty, too long, or contains a character other than a lowercase ASCII
     /// letter, digit, or hyphen). `source` carries the precise reason; the message is derived
     /// from it rather than hardcoded, so it can't independently drift from the actual rule
@@ -136,17 +134,16 @@ pub enum OutputPathError {
 ///
 /// [`ConfinementError::InvalidSegment`] doesn't carry a [`mcp_execution_core::ServerIdSlugError`]
 /// (the underlying walk only knows the looser [`mcp_execution_core::validate_path_segment`]
-/// rule), so this re-derives one by re-running [`validate_server_id_slug`] on the rejected
-/// segment. `resolve_skill_output_path` already validates with `validate_server_id_slug` before
-/// this path can be reached, so in practice that second call always fails the same way the first
-/// one did — `unwrap_or` never actually falls back — but doing it this way keeps this `From` impl
-/// itself panic-free instead of `expect`-ing an invariant that only holds because of a check made
-/// somewhere else.
+/// rule), so this re-derives one by re-running [`ServerSlug::new`] on the rejected segment.
+/// `resolve_skill_output_path` takes a [`ServerSlug`], so a rejected segment cannot be the id in
+/// practice and `unwrap_or` never actually falls back — but doing it this way keeps this `From`
+/// impl itself panic-free instead of `expect`-ing an invariant that only holds because of a
+/// check made somewhere else.
 impl From<ConfinementError> for OutputPathError {
     fn from(err: ConfinementError) -> Self {
         match err {
             ConfinementError::InvalidSegment { segment } => {
-                let source = validate_server_id_slug(&segment)
+                let source = ServerSlug::new(&segment)
                     .err()
                     .unwrap_or(mcp_execution_core::ServerIdSlugError::InvalidCharacters);
                 Self::InvalidServerId {
@@ -200,14 +197,7 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 
 /// Resolves a `save_skill` output path, confining it to `base_dir/server_id`.
 ///
-/// `server_id` is validated against the same slug rule entry validation gates with
-/// ([`validate_server_id_slug`]) **before** `output_path` is checked at all, matching this
-/// crate's pre-#395 error precedence: a caller supplying both an invalid `server_id` and an
-/// invalid `output_path` sees [`OutputPathError::InvalidServerId`], not a relative-path error -
-/// `mcp_execution_server`'s `save_skill` handler keeps `InvalidServerId` in its own
-/// error-classification arm specifically for external callers of this public function that skip
-/// its own upstream `validate_server_id_slug` check, so masking it behind a relative-path error
-/// would defeat that.
+/// `server_id` is a [`ServerSlug`], so the slug rule is enforced by the type rather than here.
 ///
 /// `server_id` and `output_path` are both attacker-influenced, so both are walked and
 /// confinement-checked by the shared [`resolve_confined_path`], rooted at `base_dir`: `server_id`
@@ -239,8 +229,7 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 ///
 /// # Errors
 ///
-/// Returns [`OutputPathError`] if `server_id` fails [`validate_server_id_slug`], if `output_path`
-/// is absolute, contains a `..` component, contains a literal `~` component, or has no file name,
+/// Returns [`OutputPathError`] if `output_path` is absolute, contains a `..` component, contains a literal `~` component, or has no file name,
 /// if the resolved path escapes `base_dir` (including via a symlink at `server_id` itself or any
 /// deeper component), if a required directory could not be created, or if a path component that
 /// must be a directory (or must hold the output file) already exists as the wrong kind of entry.
@@ -248,30 +237,23 @@ fn relative_target(output_path: Option<&Path>) -> Result<PathBuf, OutputPathErro
 /// # Examples
 ///
 /// ```no_run
+/// use mcp_execution_core::ServerSlug;
 /// use mcp_execution_skill::resolve_skill_output_path;
 /// use std::path::Path;
 ///
 /// # async fn example() -> Result<(), mcp_execution_skill::OutputPathError> {
+/// let server_id = ServerSlug::new("github").unwrap();
 /// let path =
-///     resolve_skill_output_path(Path::new("/home/user/.claude/skills"), "github", None).await?;
+///     resolve_skill_output_path(Path::new("/home/user/.claude/skills"), &server_id, None).await?;
 /// println!("Resolved to {}", path.display());
 /// # Ok(())
 /// # }
 /// ```
 pub async fn resolve_skill_output_path(
     base_dir: &Path,
-    server_id: &str,
+    server_id: &ServerSlug,
     output_path: Option<&Path>,
 ) -> Result<PathBuf, OutputPathError> {
-    // Validated again, I/O-free, before `relative_target` so an invalid `server_id` is reported
-    // even when `output_path` is also invalid - matching this crate's pre-#395 error precedence
-    // (`resolve_confined_path` re-validates it a second time, against the looser structural rule,
-    // as part of its own walk).
-    validate_server_id_slug(server_id).map_err(|source| OutputPathError::InvalidServerId {
-        server_id: sanitize_untrusted_inline(server_id),
-        source,
-    })?;
-
     let relative = relative_target(output_path)?;
 
     // `relative_target` already guarantees a file name is present; re-checked
@@ -285,7 +267,7 @@ pub async fn resolve_skill_output_path(
 
     resolve_confined_path(
         base_dir,
-        server_id,
+        server_id.as_str(),
         relative_dirs,
         Some(ConfinementTarget::File(file_name)),
     )
@@ -301,20 +283,25 @@ pub async fn resolve_skill_output_path(
 /// # Examples
 ///
 /// ```
+/// use mcp_execution_core::ServerSlug;
 /// use mcp_execution_skill::skill_directory_name;
 /// use std::path::Path;
 ///
-/// assert_eq!(skill_directory_name("github", None), "github");
-/// assert_eq!(skill_directory_name("github", Some(Path::new("SKILL.md"))), "github");
-/// assert_eq!(skill_directory_name("github", Some(Path::new("alt/SKILL.md"))), "alt");
+/// let server_id = ServerSlug::new("github").unwrap();
+/// assert_eq!(skill_directory_name(&server_id, None), "github");
+/// assert_eq!(skill_directory_name(&server_id, Some(Path::new("SKILL.md"))), "github");
+/// assert_eq!(skill_directory_name(&server_id, Some(Path::new("alt/SKILL.md"))), "alt");
 /// ```
 #[must_use]
-pub fn skill_directory_name<'a>(server_id: &'a str, output_path: Option<&'a Path>) -> &'a str {
+pub fn skill_directory_name<'a>(
+    server_id: &'a ServerSlug,
+    output_path: Option<&'a Path>,
+) -> &'a str {
     output_path
         .and_then(Path::parent)
         .and_then(Path::file_name)
         .and_then(OsStr::to_str)
-        .unwrap_or(server_id)
+        .unwrap_or(server_id.as_str())
 }
 
 #[cfg(test)]
@@ -323,10 +310,14 @@ mod tests {
     use std::assert_matches;
     use tempfile::TempDir;
 
+    fn slug(id: &str) -> ServerSlug {
+        ServerSlug::new(id).unwrap()
+    }
+
     #[tokio::test]
     async fn default_path_stays_within_base() {
         let base = TempDir::new().unwrap();
-        let resolved = resolve_skill_output_path(base.path(), "my-server", None)
+        let resolved = resolve_skill_output_path(base.path(), &slug("my-server"), None)
             .await
             .unwrap();
         let canonical_base = base.path().canonicalize().unwrap();
@@ -337,10 +328,13 @@ mod tests {
     #[tokio::test]
     async fn legitimate_relative_path_is_accepted() {
         let base = TempDir::new().unwrap();
-        let resolved =
-            resolve_skill_output_path(base.path(), "my-server", Some(Path::new("custom/SKILL.md")))
-                .await
-                .unwrap();
+        let resolved = resolve_skill_output_path(
+            base.path(),
+            &slug("my-server"),
+            Some(Path::new("custom/SKILL.md")),
+        )
+        .await
+        .unwrap();
         let canonical_base = base.path().canonicalize().unwrap();
         assert!(resolved.starts_with(&canonical_base));
         assert_eq!(
@@ -352,78 +346,13 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn empty_server_id_is_rejected() {
-        let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "", None)
-            .await
-            .unwrap_err();
-        assert_matches!(err, OutputPathError::InvalidServerId { .. });
-        // Rejected before any filesystem work, so nothing was created inside
-        // the (already-existing, since `TempDir::new` creates it) base dir.
-        assert!(
-            tokio::fs::read_dir(base.path())
-                .await
-                .unwrap()
-                .next_entry()
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    /// When both `server_id` and `output_path` are invalid, `InvalidServerId` must win - matching
-    /// the error precedence this function had before the #395 confinement-walk extraction, and
-    /// the precedence `service.rs`'s `save_skill` handler relies on for external callers that
-    /// skip its own upstream `validate_server_id` check.
-    #[tokio::test]
-    async fn invalid_server_id_takes_precedence_over_invalid_output_path() {
-        let base = TempDir::new().unwrap();
-        let absolute = if cfg!(windows) {
-            r"C:\Windows\System32\config"
-        } else {
-            "/etc/passwd"
-        };
-        let err = resolve_skill_output_path(base.path(), "", Some(Path::new(absolute)))
-            .await
-            .unwrap_err();
-        assert_matches!(err, OutputPathError::InvalidServerId { .. });
-    }
-
-    #[tokio::test]
-    async fn server_id_with_parent_traversal_is_rejected() {
-        let base = TempDir::new().unwrap();
-        tokio::fs::create_dir_all(base.path().join("other-server"))
-            .await
-            .unwrap();
-
-        let err = resolve_skill_output_path(base.path(), "../other-server", None)
-            .await
-            .unwrap_err();
-        assert_matches!(err, OutputPathError::InvalidServerId { .. });
-    }
-
-    #[tokio::test]
-    async fn server_id_with_path_separator_is_rejected() {
-        let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "a/b", None)
-            .await
-            .unwrap_err();
-        assert_matches!(err, OutputPathError::InvalidServerId { .. });
-    }
-
-    /// #401 regression: a `server_id` that is a valid, path-segment-safe `ServerId` but not
-    /// slug-shaped (uppercase letters) must be rejected here too, not just at
-    /// `service::save_skill`'s entry gate — entry validation and confinement must agree on the
-    /// exact same rule.
-    #[tokio::test]
-    async fn server_id_with_uppercase_is_rejected() {
-        let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "My-Server", None)
-            .await
-            .unwrap_err();
-        // Asserts on the specific reason, not just the outer variant, so a regression that
-        // rejects "My-Server" for the wrong cause (or with stale wording) is still caught.
+    /// `InvalidSegment` is the only way a rejected id can still reach `OutputPathError`; the
+    /// slug rule itself is enforced by `ServerSlug::new` (tested in `mcp-execution-core`).
+    #[test]
+    fn rejected_segment_maps_to_invalid_server_id_with_the_slug_reason() {
+        let err = OutputPathError::from(ConfinementError::InvalidSegment {
+            segment: "My_Server".to_string(),
+        });
         assert_matches!(
             err,
             OutputPathError::InvalidServerId {
@@ -431,85 +360,6 @@ mod tests {
                 ..
             }
         );
-    }
-
-    /// #401 regression: same as above, for an underscore (also a valid `ServerId` character but
-    /// not a valid slug character).
-    #[tokio::test]
-    async fn server_id_with_underscore_is_rejected() {
-        let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "my_server", None)
-            .await
-            .unwrap_err();
-        assert_matches!(
-            err,
-            OutputPathError::InvalidServerId {
-                source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
-                ..
-            }
-        );
-    }
-
-    /// Issue #451: printable-but-disallowed characters (`&`, `<`, `>`) in a rejected `server_id`
-    /// must not reach the error message unescaped — `validate_server_id_slug` rejects every
-    /// character outside `[a-z0-9-]`, so any of these reaches `InvalidServerId` directly.
-    #[tokio::test]
-    async fn server_id_with_hostile_characters_is_escaped_in_error() {
-        let base = TempDir::new().unwrap();
-        for (candidate, escaped) in [
-            ("server&name", "server&amp;name"),
-            ("server<name", "server&lt;name"),
-            ("server>name", "server&gt;name"),
-        ] {
-            let err = resolve_skill_output_path(base.path(), candidate, None)
-                .await
-                .unwrap_err();
-            let message = err.to_string();
-            assert!(!message.contains(candidate), "{message:?}");
-            assert!(message.contains(escaped), "{message:?}");
-        }
-    }
-
-    /// S2: an emoji carries no structural or injection risk on its own, so it must appear in the
-    /// error message unchanged rather than being mangled — unlike `&`/`<`/`>` above.
-    #[tokio::test]
-    async fn server_id_with_emoji_is_left_unchanged_in_error() {
-        let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "server\u{1F600}name", None)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("server\u{1F600}name"));
-    }
-
-    /// A legitimate non-ASCII script character carries no structural or injection risk either,
-    /// so — like the emoji above — it must survive `sanitize_untrusted_inline` unchanged, even
-    /// though `validate_server_id_slug`'s `[a-z0-9-]` charset still rejects it.
-    #[tokio::test]
-    async fn server_id_with_non_ascii_script_is_left_unchanged_in_error() {
-        let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "café_日本語", None)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("café_日本語"));
-    }
-
-    /// `sanitize_untrusted_inline` deliberately leaves U+200D (ZERO WIDTH JOINER) untouched (see
-    /// its own doc comment), so `InvalidServerId`'s stored `server_id` field still carries a raw
-    /// ZWJ. This is only safe because `{server_id:?}` (`Debug`) formatting escapes it to
-    /// `\u{200d}` rather than emitting it verbatim — this test pins that second layer of
-    /// defense, mirroring `ServerIdError`'s equivalent regression test.
-    #[tokio::test]
-    async fn server_id_with_zwj_is_debug_escaped_in_error() {
-        let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "server\u{200D}name", None)
-            .await
-            .unwrap_err();
-        let message = err.to_string();
-        assert!(
-            !message.contains('\u{200D}'),
-            "raw ZWJ leaked into: {message}"
-        );
-        assert!(message.contains("\\u{200d}"), "message was: {message}");
     }
 
     #[tokio::test]
@@ -526,9 +376,10 @@ mod tests {
         } else {
             "/etc/passwd"
         };
-        let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new(absolute)))
-            .await
-            .unwrap_err();
+        let err =
+            resolve_skill_output_path(base.path(), &slug("my-server"), Some(Path::new(absolute)))
+                .await
+                .unwrap_err();
         assert_matches!(err, OutputPathError::AbsolutePath { .. });
         assert!(!base.path().join("my-server").exists());
     }
@@ -542,7 +393,7 @@ mod tests {
         let base = TempDir::new().unwrap();
         let err = resolve_skill_output_path(
             base.path(),
-            "my-server",
+            &slug("my-server"),
             Some(Path::new("~/.claude/skills/my-server/SKILL.md")),
         )
         .await
@@ -556,10 +407,13 @@ mod tests {
     #[tokio::test]
     async fn bare_tilde_leading_segment_is_rejected() {
         let base = TempDir::new().unwrap();
-        let err =
-            resolve_skill_output_path(base.path(), "my-server", Some(Path::new("~/SKILL.md")))
-                .await
-                .unwrap_err();
+        let err = resolve_skill_output_path(
+            base.path(),
+            &slug("my-server"),
+            Some(Path::new("~/SKILL.md")),
+        )
+        .await
+        .unwrap_err();
         assert_matches!(err, OutputPathError::TildeComponent { .. });
     }
 
@@ -569,7 +423,7 @@ mod tests {
         let base = TempDir::new().unwrap();
         let err = resolve_skill_output_path(
             base.path(),
-            "my-server",
+            &slug("my-server"),
             Some(Path::new("notes/~/SKILL.md")),
         )
         .await
@@ -584,7 +438,7 @@ mod tests {
         let base = TempDir::new().unwrap();
         let resolved = resolve_skill_output_path(
             base.path(),
-            "my-server",
+            &slug("my-server"),
             Some(Path::new("my~file/SKILL.md")),
         )
         .await
@@ -598,7 +452,7 @@ mod tests {
         let base = TempDir::new().unwrap();
         let err = resolve_skill_output_path(
             base.path(),
-            "my-server",
+            &slug("my-server"),
             Some(Path::new("../../etc/passwd")),
         )
         .await
@@ -610,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn path_with_no_file_name_is_rejected() {
         let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new(".")))
+        let err = resolve_skill_output_path(base.path(), &slug("my-server"), Some(Path::new(".")))
             .await
             .unwrap_err();
         assert_matches!(err, OutputPathError::InvalidPath { .. });
@@ -619,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn empty_output_path_is_rejected() {
         let base = TempDir::new().unwrap();
-        let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("")))
+        let err = resolve_skill_output_path(base.path(), &slug("my-server"), Some(Path::new("")))
             .await
             .unwrap_err();
         assert_matches!(err, OutputPathError::InvalidPath { .. });
@@ -635,10 +489,13 @@ mod tests {
         // `is_absolute()` is false for a root-without-prefix path like this
         // on Windows, so it passes `relative_target`'s absolute-path check;
         // confinement must catch it via `starts_with` instead.
-        let err =
-            resolve_skill_output_path(base.path(), "my-server", Some(Path::new(r"\pwn\evil.md")))
-                .await
-                .unwrap_err();
+        let err = resolve_skill_output_path(
+            base.path(),
+            &slug("my-server"),
+            Some(Path::new(r"\pwn\evil.md")),
+        )
+        .await
+        .unwrap_err();
         assert_matches!(err, OutputPathError::Escape { .. });
     }
 
@@ -656,7 +513,7 @@ mod tests {
 
         std::os::unix::fs::symlink(outside.path(), base.path().join("my-server")).unwrap();
 
-        let err = resolve_skill_output_path(base.path(), "my-server", None)
+        let err = resolve_skill_output_path(base.path(), &slug("my-server"), None)
             .await
             .unwrap_err();
         assert_matches!(err, OutputPathError::ServerIdIsSymlink { .. });
@@ -677,7 +534,7 @@ mod tests {
         std::os::unix::fs::symlink(base.path().join("server-a"), base.path().join("server-b"))
             .unwrap();
 
-        let err = resolve_skill_output_path(base.path(), "server-b", None)
+        let err = resolve_skill_output_path(base.path(), &slug("server-b"), None)
             .await
             .unwrap_err();
         assert_matches!(err, OutputPathError::ServerIdIsSymlink { .. });
@@ -699,10 +556,13 @@ mod tests {
         tokio::fs::create_dir_all(&server_dir).await.unwrap();
         std::os::unix::fs::symlink(outside.path(), server_dir.join("escape")).unwrap();
 
-        let err =
-            resolve_skill_output_path(base.path(), "my-server", Some(Path::new("escape/SKILL.md")))
-                .await
-                .unwrap_err();
+        let err = resolve_skill_output_path(
+            base.path(),
+            &slug("my-server"),
+            Some(Path::new("escape/SKILL.md")),
+        )
+        .await
+        .unwrap_err();
         assert_matches!(err, OutputPathError::Escape { .. });
 
         // Nothing should have been written outside the base directory.
@@ -721,9 +581,10 @@ mod tests {
         tokio::fs::create_dir_all(&server_dir).await.unwrap();
         std::os::unix::fs::symlink(&outside_file, server_dir.join("SKILL.md")).unwrap();
 
-        let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("SKILL.md")))
-            .await
-            .unwrap_err();
+        let err =
+            resolve_skill_output_path(base.path(), &slug("my-server"), Some(Path::new("SKILL.md")))
+                .await
+                .unwrap_err();
         assert_matches!(err, OutputPathError::Escape { .. });
     }
 
@@ -744,9 +605,10 @@ mod tests {
         tokio::fs::create_dir_all(&server_dir).await.unwrap();
         std::os::unix::fs::symlink(&dangling_target, server_dir.join("SKILL.md")).unwrap();
 
-        let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("SKILL.md")))
-            .await
-            .unwrap_err();
+        let err =
+            resolve_skill_output_path(base.path(), &slug("my-server"), Some(Path::new("SKILL.md")))
+                .await
+                .unwrap_err();
         assert_matches!(err, OutputPathError::Escape { .. });
         assert!(!dangling_target.exists());
     }
@@ -762,7 +624,7 @@ mod tests {
 
         let err = resolve_skill_output_path(
             base.path(),
-            "my-server",
+            &slug("my-server"),
             Some(Path::new("not-a-dir/SKILL.md")),
         )
         .await
@@ -778,9 +640,10 @@ mod tests {
             .await
             .unwrap();
 
-        let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("SKILL.md")))
-            .await
-            .unwrap_err();
+        let err =
+            resolve_skill_output_path(base.path(), &slug("my-server"), Some(Path::new("SKILL.md")))
+                .await
+                .unwrap_err();
         assert_matches!(err, OutputPathError::NotAFile { .. });
     }
 }

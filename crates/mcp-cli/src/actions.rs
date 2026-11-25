@@ -5,16 +5,6 @@
 use clap::Subcommand;
 
 /// Server management actions.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::actions::ServerAction;
-/// use clap::Subcommand;
-///
-/// let list_action = ServerAction::List;
-/// // Can be used with clap for CLI parsing
-/// ```
 #[derive(Subcommand, Debug)]
 pub enum ServerAction {
     /// List all configured servers

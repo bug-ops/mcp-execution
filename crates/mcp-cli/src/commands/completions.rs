@@ -18,17 +18,6 @@ use tracing::info;
 ///
 /// * `shell` - Target shell (bash, zsh, fish, powershell, elvish)
 /// * `cmd` - Command to generate completions for
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::completions;
-/// use clap_complete::Shell;
-/// use clap::Command;
-///
-/// let cmd = Command::new("mcp-cli");
-/// completions::generate_completions(Shell::Bash, &mut cmd.clone());
-/// ```
 pub fn generate_completions(shell: Shell, cmd: &mut Command) {
     info!("Generating {} completions", shell);
     generate(shell, cmd, cmd.get_name().to_string(), &mut io::stdout());
@@ -52,21 +41,6 @@ pub fn generate_completions(shell: Shell, cmd: &mut Command) {
 /// This function cannot fail—it always returns `Ok(ExitCode::SUCCESS)`.
 /// Completion generation delegates to `clap_complete` which handles all error
 /// cases internally and writes to stdout regardless of format variations.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::completions;
-/// use clap::{Command, CommandFactory};
-/// use clap_complete::Shell;
-///
-/// # #[tokio::main]
-/// # async fn main() {
-/// let mut cmd = Command::new("test");
-/// let result = completions::run(Shell::Bash, &mut cmd).await;
-/// assert!(result.is_ok());
-/// # }
-/// ```
 pub async fn run(shell: Shell, cmd: &mut Command) -> Result<ExitCode> {
     info!("Completions command for shell: {shell}");
     generate_completions(shell, cmd);

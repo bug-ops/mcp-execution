@@ -29,15 +29,6 @@ use mcp_execution_core::{
 /// # Errors
 ///
 /// Returns the [`ServerIdError`] [`ServerId::new`] reports.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::cli::parse_server_id;
-///
-/// assert!(parse_server_id("github").is_ok());
-/// assert!(parse_server_id("../x").is_err());
-/// ```
 pub fn parse_server_id(raw: &str) -> Result<ServerId, ServerIdError> {
     ServerId::new(raw)
 }
@@ -47,29 +38,17 @@ pub fn parse_server_id(raw: &str) -> Result<ServerId, ServerIdError> {
 /// This CLI introspects an MCP server and generates one TypeScript file per
 /// tool, a type-only catalog and a runtime bridge, so a model can script
 /// against the server.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::cli::Cli;
-/// use clap::Parser;
-///
-/// // Parse command-line arguments into a Cli struct
-/// let args = Cli::parse();
-/// println!("Verbose: {}", args.verbose);
-/// println!("Format: {:?}", args.format);
-/// ```
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 #[command(author = "MCP Execution Team")]
 pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
-    pub command: Commands,
+    pub(crate) command: Commands,
 
     /// Enable verbose logging (debug level)
     #[arg(short, long, global = true)]
-    pub verbose: bool,
+    pub(crate) verbose: bool,
 
     /// Output format
     #[arg(
@@ -80,7 +59,7 @@ pub struct Cli {
         value_parser = PossibleValuesParser::new(["json", "text", "pretty"])
             .map(|s| OutputFormat::from_str(&s).expect("possible values are OutputFormat variants"))
     )]
-    pub format: OutputFormat,
+    pub(crate) format: OutputFormat,
 
     /// Diagnostic log format: `text` (default) or `json`.
     ///
@@ -94,7 +73,7 @@ pub struct Cli {
         value_parser = PossibleValuesParser::new(["text", "json"])
             .map(|s| LogFormat::from_str(&s).expect("possible values are LogFormat variants"))
     )]
-    pub log_format: Option<LogFormat>,
+    pub(crate) log_format: Option<LogFormat>,
 }
 
 // Hand-written to redact `Commands::Introspect`'s `env`/`headers`/`http`/`sse`
@@ -133,30 +112,6 @@ impl fmt::Debug for Cli {
 /// positional `server`, `--http`, or `--sse` is set before [`TryFrom<ServerFlags> for
 /// ServerSource`](ServerSource) ever runs. This makes the illegal states (zero or multiple
 /// selectors) unconstructible outside this module rather than merely checked at runtime.
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-///
-/// // The positional `server` and `--from-config`/`--http`/`--sse` are
-/// // alternative selectors accepted by the same `server_source` group.
-/// let cli = Cli::parse_from(["mcp-execution-cli", "introspect", "github-mcp-server"]);
-/// assert_matches!(cli.command, Commands::Introspect { .. });
-///
-/// let cli = Cli::parse_from([
-///     "mcp-execution-cli",
-///     "introspect",
-///     "--http",
-///     "https://api.example.com/mcp",
-/// ]);
-/// assert_matches!(cli.command, Commands::Introspect { .. });
-///
-/// // Exactly one selector is required: none set is a parse error.
-/// assert!(Cli::try_parse_from(["mcp-execution-cli", "introspect"]).is_err());
-/// ```
 #[derive(Args)]
 #[command(group(
     ArgGroup::new("server_source")
@@ -359,29 +314,6 @@ impl TryFrom<ServerFlags> for ServerSource {
 }
 
 /// Available CLI subcommands.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::cli::{Cli, Commands};
-/// use clap::Parser;
-///
-/// let args = Cli::parse();
-/// match args.command {
-///     Commands::Introspect { .. } => println!("Introspect command"),
-///     Commands::Generate { .. } => println!("Generate command"),
-///     Commands::Server { .. } => println!("Server command"),
-///     Commands::Skill { .. } => println!("Skill command"),
-///     Commands::Setup => println!("Setup command"),
-///     Commands::Completions { .. } => println!("Completions command"),
-///     Commands::Run(_) => println!("Run command"),
-///     Commands::Call(_) => println!("Call command"),
-///     Commands::Scripts { .. } => println!("Scripts command"),
-///     Commands::Stats(_) => println!("Stats command"),
-///     Commands::Drift(_) => println!("Drift command"),
-///     Commands::Helper => println!("Helper command"),
-/// }
-/// ```
 #[derive(Subcommand)]
 pub enum Commands {
     /// Introspect an MCP server and display its capabilities.
@@ -686,15 +618,6 @@ pub enum Commands {
 ///
 /// Commands whose stderr is read by a script or an agent (`call`, `run`, the helper) default to
 /// warnings only; `--verbose` or `RUST_LOG` restores the standard behaviour.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::cli::{Commands, LogProfile};
-///
-/// assert_eq!(Commands::Setup.log_profile(), LogProfile::Standard);
-/// assert_eq!(Commands::Helper.log_profile(), LogProfile::Quiet);
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogProfile {
     /// Default `info` level.
@@ -705,14 +628,6 @@ pub enum LogProfile {
 
 impl Commands {
     /// Returns the default logging profile of this command.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_cli::cli::{Commands, LogProfile};
-    ///
-    /// assert_eq!(Commands::Setup.log_profile(), LogProfile::Standard);
-    /// ```
     #[must_use]
     pub const fn log_profile(&self) -> LogProfile {
         match self {

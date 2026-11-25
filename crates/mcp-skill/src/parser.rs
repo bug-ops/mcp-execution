@@ -60,6 +60,7 @@ static FRONTMATTER_REGEX: LazyLock<Regex> =
 
 // `sanitize_path_for_error` lives in `mcp-execution-core`, the workspace's
 // security-validation foundation crate.
+use mcp_execution_core::ServerId;
 use mcp_execution_core::sanitize_path_for_error;
 
 /// Errors that can occur while scanning a server directory for its `_meta.json` sidecar.
@@ -182,7 +183,7 @@ pub struct ParsedToolFile {
     pub typescript_name: String,
 
     /// Server identifier.
-    pub server_id: String,
+    pub server_id: ServerId,
 
     /// Category for grouping.
     pub category: Option<String>,
@@ -235,12 +236,12 @@ impl From<mcp_execution_core::metadata::ParameterMetadata> for ParsedParameter {
 /// fixtures) are unaffected and can still set an arbitrary `server_id` themselves.
 fn parsed_tool_file_from_metadata(
     meta: mcp_execution_core::metadata::ToolMetadata,
-    server_id: &str,
+    server_id: &ServerId,
 ) -> ParsedToolFile {
     ParsedToolFile {
         name: meta.name.into_inner(),
         typescript_name: meta.typescript_name,
-        server_id: server_id.to_string(),
+        server_id: server_id.clone(),
         category: meta.category,
         keywords: meta.keywords,
         description: meta.description,
@@ -320,7 +321,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
 
     let warnings = verify_tool_files_on_disk(&canonical_base, &meta.tools, &meta_path).await?;
 
-    let server_id = meta.server_id.into_inner();
+    let server_id = meta.server_id;
     let mut tools: Vec<ParsedToolFile> = meta
         .tools
         .into_iter()
@@ -905,7 +906,7 @@ mod tests {
 
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "tool_0");
-        assert_eq!(tools[0].server_id, "github");
+        assert_eq!(tools[0].server_id.as_str(), "github");
         assert_eq!(tools[0].parameters.len(), 1);
         assert_eq!(
             tools[0].parameters[0].description,

@@ -13,26 +13,6 @@ use tracing::info;
 ///
 /// Contains server information and list of available tools,
 /// formatted for display to the user.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::{IntrospectionResult, ServerMetadata};
-///
-/// let result = IntrospectionResult {
-///     server: ServerMetadata {
-///         id: "github".to_string(),
-///         name: "github".to_string(),
-///         version: "1.0.0".to_string(),
-///         supports_tools: true,
-///         supports_resources: false,
-///         supports_prompts: false,
-///     },
-///     tools: vec![],
-/// };
-///
-/// assert_eq!(result.server.name, "github");
-/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct IntrospectionResult {
     /// Server metadata
@@ -45,23 +25,6 @@ pub struct IntrospectionResult {
 ///
 /// Simplified representation of server information optimized
 /// for CLI output formatting.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::ServerMetadata;
-///
-/// let metadata = ServerMetadata {
-///     id: "github".to_string(),
-///     name: "GitHub MCP".to_string(),
-///     version: "1.0.0".to_string(),
-///     supports_tools: true,
-///     supports_resources: false,
-///     supports_prompts: false,
-/// };
-///
-/// assert_eq!(metadata.name, "GitHub MCP");
-/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerMetadata {
     /// Server identifier
@@ -82,21 +45,6 @@ pub struct ServerMetadata {
 ///
 /// Contains tool information with optional schema details
 /// when detailed output is requested.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::ToolDisplay;
-///
-/// let tool = ToolDisplay {
-///     name: "search".to_string(),
-///     description: "Search repositories".to_string(),
-///     input_schema: None,
-///     output_schema: None,
-/// };
-///
-/// assert_eq!(tool.name, "search");
-/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDisplay {
     /// Tool name
@@ -141,47 +89,6 @@ pub struct ToolDisplay {
 /// - Server connection fails
 /// - Server introspection fails
 /// - Output formatting fails
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
-/// use mcp_execution_cli::commands::introspect;
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// // Simple server
-/// let exit_code = introspect::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Stdio {
-///             command: "github-mcp-server".to_string(),
-///             args: vec!["stdio".to_string()],
-///             env: vec![],
-///             cwd: None,
-///         },
-///         connect_timeout_secs: None,
-///         discover_timeout_secs: None,
-///     },
-///     false,
-///     OutputFormat::Json
-/// ).await?;
-///
-/// // HTTP transport with a shorter connect timeout
-/// let exit_code = introspect::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Http {
-///             url: "https://api.githubcopilot.com/mcp/".to_string(),
-///             headers: vec!["Authorization=Bearer token".to_string()],
-///         },
-///         connect_timeout_secs: Some(5),
-///         discover_timeout_secs: None,
-///     },
-///     false,
-///     OutputFormat::Json
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(
     source: ServerSource,
     detailed: bool,
@@ -229,30 +136,6 @@ pub async fn run(
 ///
 /// * `server_info` - Server information from introspector
 /// * `detailed` - Whether to include detailed tool schemas
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::build_result;
-/// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
-/// use mcp_execution_core::ServerId;
-///
-/// let server_info = ServerInfo {
-///     id: ServerId::new("test").unwrap(),
-///     name: "Test Server".to_string(),
-///     version: "1.0.0".to_string(),
-///     tools: vec![],
-///     capabilities: ServerCapabilities {
-///         supports_tools: true,
-///         supports_resources: false,
-///         supports_prompts: false,
-///     },
-/// };
-///
-/// let result = build_result(&server_info, false);
-/// assert_eq!(result.server.name, "Test Server");
-/// assert_eq!(result.tools.len(), 0);
-/// ```
 #[must_use]
 pub fn build_result(server_info: &ServerInfo, detailed: bool) -> IntrospectionResult {
     let server = ServerMetadata {
