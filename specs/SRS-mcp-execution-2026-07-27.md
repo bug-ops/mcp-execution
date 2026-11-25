@@ -163,8 +163,8 @@ graph LR
   `setup`'s Unix-only executable-bit step degrades gracefully — always
   reports `files_made_executable: 0` — on non-Unix).
 - Rust: edition 2024, MSRV 1.98 (CI-enforced, rolling stable-minus-two policy).
-- Node.js: 18+ required to execute generated output (not to build/run
-  `mcp-execution` itself).
+- Node.js: 22.18.0 (23.6.0 on the 23 line) or later required to execute generated output (not to build/run
+  `mcp-execution` itself); generated tool files also run under Bun and Deno (#605), `run` needs Node.js.
 - Network: required only for HTTP/SSE-transport target servers and for
   installing the tool/its dependencies; stdio-transport introspection uses
   local process spawning only.
@@ -349,7 +349,7 @@ with N tools produces exactly N + 5 files.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-005
 - *Priority*: Must
 - *Acceptance criteria*:
-  1. `ProgressiveGenerator::generate`/`generate_with_categories` (each
+  1. `PackageGenerator::generate`/`generate_with_categories` (each
      taking a `&ServerConfig` in addition to the discovered tools, since
      #468/#497, so the generator can stamp generation provenance — see
      FR-006) produce exactly `tools.len() + 5` `GeneratedFile` entries for
@@ -601,7 +601,7 @@ traversal, and pre-existing symlinks at any point along the confined path.
 - *Priority*: Must
 - *Acceptance criteria*:
   1. `resolve_skill_output_path` rejects `server_id`/`output_path` failing
-     `validate_server_id`/`validate_path_segment`, an absolute
+     the `ServerSlug` rule/`validate_path_segment`, an absolute
      `output_path`, or `..` anywhere in it.
   2. The `server_id`'s own directory is rejected outright if it already
      exists as a symlink, regardless of where it points (including at a
@@ -1135,8 +1135,8 @@ with `cargo semver-checks`.
 - *Detail*: [[NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-056`,
   `NFR-COM-070` to `NFR-COM-072`) and the section "1.0 Public API Contract" of each block spec (`FR-047.1` to
   `FR-047.7`).
-- *Open decisions*: OD-1 (the `progressive` name), OD-2 (compatibility window), OD-3 (MSRV against semver),
-  OD-4 (foreign types), OD-5 (surface of `cli` and `server`); see the NFR section 12.7.
+- *Decisions*: OD-1, OD-2 (a), OD-4 (c) and OD-5 (a) are decided; OD-3 (MSRV against semver) is open; see the
+  NFR section 12.7.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-047
 
 **FR-048** (#670): The system shall keep the documented commands, flags, exit-code values and `--format json`

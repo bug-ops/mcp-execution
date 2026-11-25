@@ -130,8 +130,8 @@ sections 16 to 19.
   (text search over compact catalogs).
 - Proposed: `specs/decisions/ADR-581-code-mode-interoperability.md` (#581), on how the
   project relates to the host's code mode; its investigation is deferred.
-- Proposed: `specs/decisions/ADR-670-1-0-api-wire-release-contract.md` (#670), the 1.0 API, wire-format, CLI,
-  MSRV and release contract; the stable crate set is decided, five points are open.
+- Accepted: `specs/decisions/ADR-670-1-0-api-wire-release-contract.md` (#670), the 1.0 API, wire-format, CLI,
+  MSRV and release contract; the stable crate set and OD-1, OD-2, OD-4 and OD-5 are decided, OD-3 is open.
 
 `mcp-server` and `mcp-cli` are **parallel front doors** onto the same lower
 four crates (`introspector`/`codegen`/`files`/`skill`) — they do not depend
@@ -168,8 +168,8 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
                               │
               ┌───────────────┴───────────────┐
               ▼ (mcp-cli: uncategorized)       ▼ (mcp-server: Claude-categorized via
-     ProgressiveGenerator::generate()             save_categorized_tools)
-              │                          ProgressiveGenerator::generate_with_categories()
+     PackageGenerator::generate()                 save_categorized_tools)
+              │                          PackageGenerator::generate_with_categories()
               └───────────────┬───────────────┘
                               ▼
                     GeneratedCode { files: Vec<GeneratedFile> }
@@ -302,7 +302,7 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
 
 ## 1.0 Contract
 
-> [!warning] Target contract of release 1.0.0, not yet in force
+> [!warning] Contract of release 1.0.0: the semver promise is not yet in force
 > Tracking issue #669, spec issue #670, API freeze #673 (sub-issues #674 to #680). The numbered requirements live
 > in [[NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]]; the decision record is
 > [[decisions/ADR-670-1-0-api-wire-release-contract]]. Until the tag, breaking changes need no shim
@@ -332,10 +332,14 @@ else is internal (`NFR-COM-031`, `NFR-COM-032`).
 | MSRV against semver | `NFR-COM-070` to `NFR-COM-072` | NFR section 12.5 |
 | Release pipeline and `cargo semver-checks` | `NFR-MNT-040` to `NFR-MNT-049` | NFR section 12.6 |
 
-**Open decisions (Ask First), not decided:** OD-1 rename of the `progressive` names (#680); OD-2 wire-format
-compatibility window; OD-3 MSRV against semver for libraries; OD-4 foreign types in public signatures (#678);
-OD-5 intended public surface of the `cli` and `server` libraries (#675). Options and recommendations are in
-[[NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+**Decided (2026-11-25):** OD-1 rename of the "progressive" names (#680); OD-2 (a) exact-match wire versions for the
+whole 1.x line; OD-4 (c) foreign types (#678); OD-5 (a) minimal `cli` and `server` surface (#675). **Open (Ask First):**
+OD-3, MSRV against semver for libraries. See [[NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+The API freeze items (#674 to #680) and the release pipeline (#672, `NFR-MNT-040` to `NFR-MNT-044`) are implemented;
+the pipeline is proven only by the rehearsal release (`NFR-MNT-049`). Still open before the tag include #686
+(blocking semver check), #687 (remaining public surface), #691 (unconstructed error variant) and #696 (Windows
+device names as server ids).
 
 ## See Also
 

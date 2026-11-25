@@ -37,22 +37,22 @@ server, generate progressive-loading TypeScript, render SKILL.md, and
 manage/validate server configuration and the local runtime environment.
 
 The crate is a library (`src/lib.rs`) with a thin binary entry point
-(`src/main.rs`: parse `Cli`, call `runner::init_logging`, call
-`runner::execute_command`, then `std::process::exit` on the returned
-`ExitCode`). `lib.rs` exposes `pub mod cli`, `pub mod runner`, `pub mod
-actions`, `pub mod commands`, and `pub mod formatters` (plus a re-exported
-`ServerAction`) — `cli::{Cli, Commands}` and `runner`'s
-command-execution/exit-code-classification entry points are genuine public
-library API, not merely an implementation detail of the compiled binary, so
-an external crate or integration test can drive command parsing/execution
-in-process (issue #188).
+(`src/main.rs`: `run(Cli::parse()).await?`, then `std::process::exit` with the
+returned `ExitCode`). The library surface is only `Cli` and
+`pub async fn run(cli: Cli) -> anyhow::Result<ExitCode>` (#675, OD-5 (a)): `run`
+initializes logging, then executes the command; a command failure is reported on
+stderr and mapped to an `ExitCode`, and `Err` means logging could not be
+initialized (for example a second call in one process; no panic). `cli`,
+`actions`, `commands`, `formatters` and `runner` are private modules, and
+`runtime` is `#[doc(hidden)] pub`, workspace-internal. Function and type names
+of those modules in this spec describe internal code.
 
 ## 2. Subcommands (`Commands` enum, `src/cli.rs`)
 
 | Subcommand | Purpose | Key flags |
 |---|---|---|
 | `introspect` | Connect + display server capabilities/tools | `--from-config`, `server` (positional), `--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header`, `--detailed`/`-d`, `--connect-timeout-secs`, `--discover-timeout-secs` |
-| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | identical transport flags as `introspect` (`--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header` — both commands flatten the same `ServerFlags`, so the `-a`/`-e` short aliases apply here too), plus `--name`, `--progressive-output`, `--observed-shapes <FILE>`, `--dry-run` |
+| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | identical transport flags as `introspect` (`--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header` — both commands flatten the same `ServerFlags`, so the `-a`/`-e` short aliases apply here too), plus `--name`, `--servers-dir`, `--observed-shapes <FILE>`, `--dry-run` |
 | `skill` | Render SKILL.md directly from a generated server's tools (no LLM) | `-s/--server`, `--servers-dir`, `-o/--output`, `--skill-name`, `--hint` (repeatable), `--overwrite` |
 | `server` | Manage `~/.claude/mcp.json` entries | subcommand: `list`, `info <server>`, `validate <command>` |
 | `setup` | Validate the local runtime (Node.js version, executable bits, config presence) | none |
@@ -152,7 +152,7 @@ directory name; lowercased, runs of non-`[a-z0-9-]` collapsed to a single
 no host) or the URL fails to parse. This matters beyond cosmetics: the id
 becomes a directory name under `~/.claude/servers/{id}/` and is embedded in
 generated `.ts` literals, so a raw URL there would break
-`mcp-skill::validate_server_id`'s charset, could smuggle a `..` path
+the `ServerSlug` charset, could smuggle a `..` path
 segment, and (if not credential-excluded) would leak a token into a
 directory name and generated source.
 
@@ -180,7 +180,7 @@ pub async fn read_generated_metadata_async(dir: PathBuf, server: &ServerId) -> R
   with the `HomeDirError` text ("cannot determine the home directory" or "the home directory '<p>' is not an absolute
   path"). `resolve_base_dir` and `read_recorded` no longer exist. The `mcp.json` path is built by one `mcp_config_path()`
   helper in `commands::common` (also used by `setup`).
-- Users: `generate` (`--output-dir`, `--progressive-output`), `skill` (`--servers-dir`, the default skills directory),
+- Users: `generate` and `drift` (`--servers-dir`), `skill` (`--servers-dir`, the default skills directory),
   `stats` (`--servers-dir`), `scripts list` and `scripts check` (`--skills-dir`; `check` also `--servers-dir`), `drift`
   (the skills directory of `scripts_using`), `run` (`--servers-dir` and the `--save` skill directory), and `setup`. `ServerId` rejects separators and `..`, so `server()` and
   `skill()` cannot leave the base directory.
@@ -250,7 +250,8 @@ future.
 ## 5. `runner.rs` — Dispatch and Exit-Code Classification
 
 ```rust
-pub fn init_logging(verbose: bool, log_format: Option<LogFormat>) -> Result<()>;
+// crate-private module; only `run` (section 1) is public
+pub fn init_logging(verbose: bool, log_format: Option<LogFormat>, profile: LogProfile) -> Result<()>; // `try_init`: Err if a subscriber exists
 pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode>;
 pub fn report_and_classify(err: &anyhow::Error) -> ExitCode;
 ```
@@ -301,9 +302,9 @@ each arm to a common `Box<dyn Layer<_> + Send + Sync>`:
 let fmt_layer = tracing_subscriber::fmt::layer().with_writer(|| RedactingWriter(io::stderr()));
 let layer = match format {
     LogFormat::Json => fmt_layer.json().boxed(),
-    LogFormat::Text => fmt_layer.boxed(),
+    _ => fmt_layer.boxed(), // LogFormat is #[non_exhaustive]
 };
-tracing_subscriber::registry().with(filter).with(layer).init();
+tracing_subscriber::registry().with(filter).with(layer).try_init()?; // second call: Err, no panic
 ```
 
 This proves `RedactingWriter` is present in both arms by construction — the
@@ -323,23 +324,15 @@ Issue #421: this crate is a *client* of third-party MCP servers
 unsanitized peer input at `debug` level. `RedactingWriter` only rewrites embedded URLs — it does
 not neutralize this, so without a cap, `--verbose` alone (`filter = EnvFilter::new("debug")`, no
 `RUST_LOG` involved at all) streams an untrusted server's raw stdout lines into stderr. `init_logging`
-closes this specific path — *debug-level, raw-line* logging — via the shared pure function
-`mcp_execution_core::log_filter::cap_rmcp_log_level(EnvFilter, LevelFilter) -> EnvFilter` (#608; one copy for `mcp-cli` and
-`mcp-server`, see [[../core/spec#`log_filter` module (`src/log_filter.rs`, feature `tracing-filter`, #608)]]), applied to *both* branches of the `verbose` `if`/`else`
-— not just the non-verbose branch's `try_from_default_env().unwrap_or_else(...)` fallback, since a
-directive folded only into that fallback string would never apply to the verbose branch (which
-never calls `try_from_default_env` at all) and is dead code in the non-verbose branch whenever
-`RUST_LOG` parses successfully:
+closes this specific path — *debug-level, raw-line* logging — by adding the directive of
+`mcp_execution_core::cli::RmcpLogCap` (the one statement of the cap policy, also used by `mcp-server`, see
+[[../core/spec]]; #608, #678) in the private `runner::log_filter`, applied to *every* base filter — not just the
+`try_from_default_env()` fallback, since a directive folded only into that fallback string would never apply to the
+verbose branch (which never calls `try_from_default_env` at all) and is dead code whenever `RUST_LOG` parses
+successfully:
 
 ```rust
-let filter = cap_rmcp_log_level(
-    if verbose {
-        EnvFilter::new("debug")
-    } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
-    },
-    LevelFilter::INFO,
-);
+Ok(base.add_directive(cap.directive().parse()?)) // cap: RmcpLogCap::Info, or Warn for the quiet profile
 ```
 
 The cap is level-based, not a content filter: `rmcp` also logs a `Debug`-formatted peer
@@ -349,7 +342,7 @@ control characters, unlike the raw-`Display` `message`-field sites this cap targ
 eliminated — the full notification content still reaches stderr. Closing it would require
 content-level sanitization of `rmcp`'s own event, not a level directive, and is out of scope here.
 
-`cap_rmcp_log_level` adds an `rmcp=<cap>` directive (`info` here; `warn` for the quiet profile) via `EnvFilter::add_directive`.
+`log_filter` adds an `rmcp=<cap>` directive (`info` here; `warn` for the quiet profile) via `EnvFilter::add_directive`.
 `tracing_subscriber` orders directives by target specificity, so this directive (more specific
 than a bare global `debug`) wins over it. An operator who explicitly sets a *more specific*
 directive, e.g. `RUST_LOG=rmcp::transport=debug`, still wins over this one — intentional, since
@@ -361,7 +354,7 @@ cap's `rmcp=info` — `tracing_subscriber`'s `Directive` ordering does not compa
 `EnvFilter::add_directive` on a same-target directive *replaces* the existing entry, silently
 downgrading an operator's explicit `rmcp=debug` to `info`. Both the escape hatch and the
 replace-not-merge behavior are pinned by dedicated tests rather than assumed. Being a pure
-function (no `std::env` access), `cap_rmcp_log_level` is unit-tested directly with a scoped
+function (no `std::env` access), `log_filter` is unit-tested directly with a scoped
 subscriber rather than by mutating `RUST_LOG` in-process (parallel test threads share one
 process) — mirroring the `SharedBuf`-based scoped-subscriber pattern `runner.rs`'s
 `RedactingWriter` tests already establish.
@@ -407,17 +400,17 @@ command.
 `run(source: ServerSource, name: Option<String>, output_dir: Option<PathBuf>, observed_shapes: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
 
 1. `resolve_server_config` → `discover_server_info`: if `--name` is given,
-   it is validated via `mcp_execution_skill::validate_server_id` **before**
+   it is validated with `ServerSlug::new` **before**
    the connection attempt and only overrides `ServerInfo.id` once valid —
    an invalid `--name` (traversal shape, absolute path, or simply outside
-   `validate_server_id`'s `[a-z0-9-]` charset, e.g. `My Server!`) is now a
+   the `[a-z0-9-]` slug charset, e.g. `My Server!`) is now a
    hard `INVALID_INPUT` error instead of being silently slugified into a
    different id. **Breaking behavior change** from the pre-#311 CLI, which
    constructed `ServerId::new(custom_name)` directly with no validation.
 2. If the server has zero tools: logs a warning and returns
    `ExitCode::SUCCESS` (not an error) without generating anything.
 3. `resolve_server_dir_name` turns `server_info.id` into the directory
-   name, re-validating it via `validate_server_id` regardless of which arm
+   name, re-validating it with `ServerSlug::new` regardless of which arm
    produced the id: `derive_server_id_from_path_or_name` (stdio command),
    `derive_server_id_from_url` (http/sse — see [[#3. common.rs]]), or the
    already-validated `--name` override. This check is a redundant backstop
@@ -428,10 +421,10 @@ command.
    ready-to-use `--name` slug vs. framing the failure as an internal error
    for the other arms, since reaching it there would mean one of their own
    checks has a bug) (issue #311).
-4. `ProgressiveGenerator::generate` (uncategorized — no LLM step in this
+4. `PackageGenerator::generate` (uncategorized — no LLM step in this
    path, unlike `mcp-server`'s `save_categorized_tools`). When `--observed-shapes <FILE>` is given
    (#587), the file is read **before** the connection attempt by `read_observed_tail` and its text
-   is passed to `ProgressiveGenerator::with_observed_shapes`
+   is passed to `PackageGenerator::with_observed_shapes`
    ([[../codegen/spec#13.8 Observed result shapes (#587)]]). `read_observed_tail` reads **only the last
    4 MiB** (`OBSERVED_TAIL_BYTES`) of the file: when the read starts past offset 0 it drops the first,
    possibly partial, line; bytes that are not valid UTF-8 are replaced (the line parser then rejects
@@ -476,7 +469,7 @@ string values.
 ## 8. `skill` Command (`commands/skill.rs`)
 
 `run(server, servers_dir, output_path, skill_name, hints, overwrite, output_format) -> Result<ExitCode>`:
-validates `server` via `mcp_execution_skill::validate_server_id`
+validates `server` with `ServerSlug::new`
 (mapped to `CoreError::InvalidArgument` for correct exit-code
 classification), resolves the tool directory (default
 `~/.claude/servers/{server}`), scans via `scan_tools_directory`, then calls
@@ -617,7 +610,15 @@ itself was already safe (issue #346, S1).
 
 ## 10. `setup` Command (`commands/setup.rs`)
 
-Validates the local runtime is ready to execute generated tools:
+Runtime support (#605, #626): Node.js 22.18.0 or later (23.6.0 on the 23 line) is the supported runtime for
+generated tool files, `run`, `--typecheck` and `--restrict`; CI pins 22.18.0 on the test legs and also runs the CLI
+tests on the latest Node.js. Generated tool files also run directly under Bun (`bun <tool>.ts '<json>'`) and Deno
+(`deno run -A <tool>.ts '<json>'`), tested by `acceptance_runtime_compat`, which skips a missing runtime unless
+`MCP_EXECUTION_REQUIRE_ALT_RUNTIMES=1`; `run` does not use them. An older Node.js can run a tool file through a
+TypeScript loader (`npx tsx`). `setup` checks Node.js only (probing other runtimes is the follow-up #685). A `.ts`
+script with a top-level `for await` fails under `run` on Node.js 22.18 (#690).
+
+`setup` validates that the local runtime is ready to execute generated tools:
 1. Checks `node --version` is a version that runs `.ts` files without a flag (hard error if missing or
    older): 22.18.0 or later on the 22 line, 23.6.0 or later on the 23 line, and any later major. Node.js 18 and
    20, 22.6 to 22.17 (which need `--experimental-strip-types`) and 23.0 to 23.5 are rejected, and the error names
@@ -761,9 +762,9 @@ itself.
 
 - **Consumes**: `mcp-core` (`ServerConfig`, `cli::{OutputFormat,ExitCode}`,
   redaction helpers, `Error`), `mcp-introspector::Introspector`,
-  `mcp-codegen::progressive::ProgressiveGenerator`,
+  `mcp-codegen::PackageGenerator`,
   `mcp-files::FilesBuilder`, `mcp-skill::{scan_tools_directory,
-  build_skill_context, render_skill_md, validate_server_id,
+  build_skill_context, render_skill_md,
   MAX_SERVER_ID_LENGTH}`.
 - Shares the exact `ServerFlags`/`ServerSource`/`resolve_server_config` code
   path between `introspect` and `generate` — any transport-resolution fix
@@ -793,7 +794,7 @@ itself.
 - Output: result within the 16 KiB budget, over-budget output spilled with a notice naming path and byte count. A
   tool-reported or JSON-RPC error is one stderr line and exit 3; an empty success prints nothing and exits 0. Exit
   codes otherwise come from the classifier (invalid input 2, connection failure 3, timeout 4).
-- `call` uses `ResultSource::Structured` (structured content if present, else content); it does not use the helper
+- `call` uses `helper_protocol::ResultSource::Structured` (structured content if present, else content); it does not use the helper
   protocol. `CallArgs` has a redacting `Debug`.
 - Print form (fixed in wave 2, architect ruling): every value, strings included, is printed as compact JSON through
   `serde_json::to_string` (a string is quoted); `--format` is ignored. This matches the generated wrapper's
@@ -862,16 +863,25 @@ itself.
   runner handles SIGHUP and SIGQUIT itself as cancellation (exit 129 and 131) instead of relying on group delivery, except when
   the runner inherited either signal as ignored (#655): `signal.rs` reads the startup dispositions (`sigaction` query, before
   any registration) and registers no cancel handler for a signal that was `SIG_IGN` at startup, so it stays ignored by the
-  runner (a debug log only) and a foreground `nohup` on a terminal still ends the run on hang-up. Node resets an inherited
-  ignore of SIGHUP, so the script itself still ends on SIGHUP. SIGINT and SIGTERM are unchanged (tokio overrides an inherited
-  `SIG_IGN`; follow-up #664). Residual: SIGQUIT is ignored by a non-interactive shell for a background `&` job, so the runner
-  then ignores SIGQUIT too; a background run needs `setsid` or `tmux`.
+  runner (a debug log only) and a foreground `nohup` on a terminal still ends the run on hang-up. SIGINT follows the same
+  rule since #664; SIGTERM is always handled. Node resets an inherited
+  ignore of SIGHUP, so the script itself still ends on SIGHUP. Terminal limit: the script is not covered by the
+  runner's inherited ignores, because node resets them, so on a terminal, where the script is the foreground group,
+  Ctrl-C, Ctrl-\ or a hang-up still end it and the run is reported as cancelled (exit 130, 131 or 129) even when the
+  runner inherited that signal as ignored (`run --help` says so; changing it is the open follow-up #693).
+  Residual: a non-interactive shell ignores SIGINT and SIGQUIT for a background `&` job, so the runner then ignores
+  both too; a background run that must survive its terminal needs `setsid` or `tmux`.
+- Inherited SIGCHLD ignore (#663): at the start of every command (`runner::execute_command`,
+  `signal::reset_inherited_child_disposition`) a SIGCHLD handler is registered for the life of the process on Unix,
+  replacing an inherited `SIG_IGN`, so spawned processes (`node`, `tsc`, servers) stay waitable. No-op elsewhere. The
+  `mcp-execution` server binary does not do this (open follow-up #689).
   On Windows (#649) the script and `tsc` are assigned to a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, no breakaway) in
   `ProcessTree` (`runtime/exec.rs`, private `job` module): the job is terminated on timeout, cancel and drop, and after a normal
   exit of the script or `tsc`, which kills leftovers on Windows (Unix does not signal after a normal `tsc` exit). When the job
   cannot be created or the child cannot be assigned, only the direct child is stopped (`kill_on_drop`). Residuals: a process
-  started before the assignment can escape the job; whether libuv's own job object nests with this one for a grandchild of a
-  non-detached script child has no Windows test (#665).
+  started before the assignment can escape the job; a grandchild left by a
+  non-detached `node` child of the script is covered by the Windows test
+  `run_stops_a_grandchild_that_a_non_detached_node_child_left_behind` (#665), which runs only on the Windows CI leg.
 - Terminal foreground (#646, `runtime/tty.rs`, Unix): the script's group would be a background group on a terminal, and a
   descendant reading `/dev/tty` (an `ssh`, `sudo` or git credential prompt) would be stopped by SIGTTIN. Right after the spawn
   `ForegroundGroup::hand_over` opens `/dev/tty` and, only when `tcgetpgrp` equals the runner's own group, makes the script's
@@ -935,9 +945,9 @@ itself.
   names with a different digest print "which tool changed cannot be determined". Summaries say "server changed" or
   "tool list differs", never "out of date".
 - Location (fixed in wave 2, architect ruling; the user is to be informed): `DriftArgs` gained `--name` and
-  `--progressive-output` with the names and meaning of `generate`. The location derivation is shared with `generate`
+  `--servers-dir` with the names and meaning of `generate`. The location derivation is shared with `generate`
   (`name_override()` and `generated_location()` in `commands/generate.rs`; `resolve_server_dir_name` takes
-  `&ServerId`), so a package generated with `--name` or `--progressive-output` is found. The skills directory for
+  `&ServerId`), so a package generated with `--name` or `--servers-dir` is found. The skills directory for
   FR-045.18 is `SkillsDir::resolve(None).skill(<id>)` (`~/.claude/skills/<id>`), id being the `--name` override or the server id.
 - FR-045.18 (wave 2): after a `ToolsDiffer` with removed tools, `scripts_using()` lists the saved scripts
   (`scripts::list`) that name a removed tool of this server, through the same bounded and sanitised `NameList` (report
@@ -951,7 +961,7 @@ itself.
 `Commands::log_profile()` returns `LogProfile::{Standard, Quiet}`. `call`, `run` and the hidden `helper` use `Quiet`:
 the default level is `warn` and rmcp is capped at `warn`. `--verbose` or `RUST_LOG` restores the standard behaviour
 (rmcp capped at `info`). `runner.rs`: `init_logging(verbose, log_format, profile)`,
-`log_filter(verbose, profile, env)`, `cap_rmcp_log_level(filter, LevelFilter)`; `main.rs` passes
+`log_filter(verbose, profile, env)` (adds the `RmcpLogCap` directive); `run` passes
 `cli.command.log_profile()`. Reason: a script or a model reads the process output, so tracing lines must not mix into
 it.
 
@@ -1555,7 +1565,7 @@ Ask first: adding an `ExitCode` constant; the recipe header format (decision rec
 ### drift check against recorded provenance (#580)
 
 **Why.** Every `generate` run records provenance in `_meta.json` and nothing reads it back: `tool_digest` and
-`config_fingerprint` are written by `crates/mcp-codegen/src/progressive/generator.rs:866-876` and referenced
+`config_fingerprint` are written by `crates/mcp-codegen/src/package/generator.rs` and referenced
 otherwise only by tests. The question provenance exists to answer, whether the server's exposed surface or the
 endpoint changed since generation, is unmet, so a server that adds, removes or rewords a tool is invisible
 until a script misbehaves. The record is one aggregate digest, not one per tool (`GenerationProvenance`,
@@ -1590,8 +1600,8 @@ recorded at generation. The locked `rmcp` 3.10.0 carries `ttl_ms` and `cache_sco
 
 **Resolved and open decisions.**
 
-- Resolved: the command is `drift <ServerFlags> [--name] [--progressive-output]`; it exits 5 (`CHECK_FAILED`) on drift or an endpoint that differs. `ttlMs` is reported, not honoured (section 16).
-- [NEEDS CLARIFICATION: record per-tool digests in the `_meta.json` v3 registry (makes "changed" exact) or accept name-level reporting only.]
+- Resolved: the command is `drift <ServerFlags> [--name] [--servers-dir]`; it exits 5 (`CHECK_FAILED`) on drift or an endpoint that differs. `ttlMs` is reported, not honoured (section 16).
+- Resolved for 1.0 (#683): name-level reporting only; per-tool digests are deferred past 1.0 (#688, [[../core/spec#7. Planned Changes (script-first direction, adopted 2026-11-24)]]).
 
 Ask first: changing `ServerInfo` public fields to carry `ttl_ms` and `cache_scope`; recording per-tool digests;
 the exit code values.
@@ -1613,40 +1623,42 @@ Deferred or excluded:
 
 ## 20. 1.0 Public API Contract
 
-> [!warning] Target requirement (1.0.0)
-> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
-> `NFR-COM-046`). The listing below was derived from `crates/mcp-cli/src` at 9473243. Items marked **proposal** are
-> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+> [!info] As built; the semver promise binds from the 1.0.0 tag
+> Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
+> decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
+> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
+> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-047.7 | THE SYSTEM SHALL expose from `mcp-execution-cli` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
 
-### Public surface (proposal, OD-5)
+### Public surface (OD-5 (a), #675)
 
-Today `lib.rs` exports `actions`, `cli`, `commands`, `formatters`, `runner` and `runtime` plus `ServerAction`:
-about 25 public enums and about 109 public fields (#675). **Proposed** stable surface (option (a) of OD-5): the
-parse types `cli::{Cli, Commands}` with `ServerAction`, so a crate or test can drive command parsing in-process
-(#188), and `runner::{init_logging, execute_command, report_and_classify}`. **Proposed** `pub(crate)` or
-`#[doc(hidden)]` workspace-internal: `commands`, `formatters`, `runtime` (including the helper protocol types such
-as `ResultKind`) and the remaining `actions` types; tests that need them move into unit-test modules or use the
-hidden items. The `test-fixtures` feature is not a public feature (`NFR-COM-033`).
+`mcp_execution_cli::Cli` (fields `pub(crate)`; usable through `clap::Parser` and `clap::CommandFactory`) and
+`mcp_execution_cli::run` (section 1). Nothing else is part of the API.
+
+### Workspace-internal (`NFR-COM-032`)
+
+`#[doc(hidden)] pub mod runtime`, used by integration tests. The `test-fixtures` feature is not a public feature
+(`NFR-COM-033`).
 
 ### Binary contract
 
 The command, flag, exit-code, JSON and environment contract is `NFR-COM-060` to `NFR-COM-065`, specified in
-sections 2, 5 and 12 and in sections 16 to 19. `--progressive-output` is subject to OD-1.
+sections 2, 5 and 12 and in sections 16 to 19. The `generate` and `drift` output-directory flag is `--servers-dir`
+(renamed before 1.0.0, OD-1 (a), #680).
 
 ### Foreign types (`NFR-COM-044`)
 
-`clap::Parser` on `Cli` and `clap::Subcommand` on `Commands`; the `clap` major version is therefore coupled to this
-crate's major version (OD-4).
+`clap::Parser` on `Cli` and `anyhow::Error` in `run`; their major versions are therefore coupled to this crate's
+major version (OD-4 (c)).
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-If the proposal holds, only `Cli`, `Commands` and `ServerAction` are public, and `Commands` and `ServerAction` are
-`#[non_exhaustive]` (a new subcommand is a compatible change, `NFR-COM-041`). Enums that stay internal are not
-subject to the rule. The three-times-defined result concept is reduced to one (`NFR-COM-034`).
+`Cli` has no public field, and no public enum is part of the surface. The result-source concept has one definition,
+in `mcp-execution-core` (`NFR-COM-034`, #676). Matches on `#[non_exhaustive]` sibling enums fail closed: an unknown
+`ToolCallOutcome` exits `SERVER_ERROR`, an unknown core or files error variant exits `ERROR`.
 
 ## 21. See Also
 

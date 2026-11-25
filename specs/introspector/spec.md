@@ -241,7 +241,7 @@ open until `rmcp` exposes a JSON-body size knob.
 - **Consumes** `mcp-core`: `ServerConfig`, `ServerId`, `ToolName`,
   `Transport`, `validate_server_config`, `Error`/`Result`.
 - **Produced for** `mcp-codegen`: `ServerInfo`/`ToolInfo` are the direct
-  input to `ProgressiveGenerator::generate`/`generate_with_categories` — see
+  input to `PackageGenerator::generate`/`generate_with_categories` — see
   [[../codegen/spec#Input contract]]. `MAX_TOOL_COUNT`,
   `MAX_TOOL_NAME_LEN`, `MAX_TOOL_DESCRIPTION_LEN`, `MAX_SCHEMA_SIZE_BYTES`
   are referenced **by value** (not independently re-chosen) in
@@ -383,10 +383,11 @@ protocol-version decision record.
 
 ## 12. 1.0 Public API Contract
 
-> [!warning] Target requirement (1.0.0)
-> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
-> `NFR-COM-046`). The listing below was derived from `crates/mcp-introspector/src` at 9473243. Items marked **proposal** are
-> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+> [!info] As built; the semver promise binds from the 1.0.0 tag
+> Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
+> decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
+> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
+> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -397,8 +398,8 @@ protocol-version decision record.
 | Item | Kind | Notes |
 |------|------|-------|
 | `Introspector` | entry point | `connect`, `discover`, `discover_server` |
-| `ServerInfo`, `ToolInfo`, `ServerCapabilities`, `Discovery`, `ListingHints`, `CacheScope` | result types | Public fields today; need constructors once `#[non_exhaustive]` |
-| `Session`, `CallTimeout`, `ToolCall`, `ToolCallOutcome`, `ServerText`, `ResultSource` | call API | The one MCP client of the workspace ([[#10. `Session` and `discover` (as built)]]) |
+| `ServerInfo`, `ToolInfo`, `ServerCapabilities`, `Discovery`, `ListingHints`, `CacheScope` | result types | Public fields, `#[non_exhaustive]`; built with `new` or `Default` |
+| `Session`, `CallTimeout`, `ToolCall`, `ToolCallOutcome`, `ServerText` | call API | The one MCP client of the workspace ([[#10. `Session` and `discover` (as built)]]) |
 | `MAX_TOOL_COUNT` (re-export), `MAX_TOOL_NAME_LEN`, `MAX_TOOL_DESCRIPTION_LEN`, `MAX_SERVER_NAME_LEN`, `MAX_SERVER_VERSION_LEN`, `MAX_SCHEMA_SIZE_BYTES` | bounds | Root of the CWE-400 bound cascade |
 
 ### Workspace-internal
@@ -414,10 +415,14 @@ from a public signature.
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-Required: `CacheScope`, `ToolCallOutcome`, `ServerInfo`, `ToolInfo`, `ServerCapabilities`, `Discovery`,
-`ListingHints`, `ToolCall`. `ResultSource` has one definition (`NFR-COM-034`): the lowest crate that needs it is
-this one, so `mcp-execution-codegen` and `mcp-execution-cli` reuse it (**proposal**; the `ResultKind` of the helper
-protocol in `mcp-execution-cli` is reduced to a re-export or a mapping).
+`#[non_exhaustive]`: `CacheScope`, `ToolCallOutcome`, `ServerInfo`, `ToolInfo`, `ServerCapabilities`, `Discovery`,
+`ListingHints`, `ToolCall`, `ServerText`. `ServerInfo`, `ToolInfo`, `Discovery`, `ToolCall` and `ServerText` have a
+`new` constructor with the required fields (optional fields are `pub` and set afterwards); `ServerCapabilities`
+implements `Default`.
+
+`ResultSource` is **not** defined here: the one definition is `mcp_execution_core::helper_protocol::ResultSource`
+(`NFR-COM-034`, #676), used by `ToolCall::result_source`; this crate does not re-export it. A `Transport` variant
+this crate does not know (the enum is `#[non_exhaustive]`) is rejected with `Error::InvalidArgument`.
 
 ## 13. See Also
 
