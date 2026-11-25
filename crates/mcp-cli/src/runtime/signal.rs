@@ -258,11 +258,15 @@ mod platform {
 ///
 /// With `SIG_IGN` the kernel reaps every child at exit, `waitid` then fails with `ECHILD` and the
 /// process group of a reaped script leader could be signalled. Registering a tokio handler
-/// installs a real disposition. Idempotent; must run inside the tokio runtime. No-op on Windows.
+/// installs a real disposition. Idempotent; must run inside the tokio runtime.
+#[cfg(unix)]
 pub(crate) fn reset_inherited_child_disposition() {
-    #[cfg(unix)]
     platform::reset_inherited_child_disposition();
 }
+
+/// No-op: Windows has no SIGCHLD disposition.
+#[cfg(not(unix))]
+pub(crate) const fn reset_inherited_child_disposition() {}
 
 /// The runner's stop-signal subscription (SIGINT, SIGTERM, SIGHUP and SIGQUIT on Unix; Ctrl-C and
 /// Ctrl-Break on Windows).

@@ -128,6 +128,34 @@ pub fn require_node(test_name: &str) -> bool {
     require_tool("node", test_name)
 }
 
+/// The variable that makes a missing alternative runtime (Bun, Deno) a failure; CI sets it to `1`
+/// and the README cites it.
+pub const REQUIRE_ALT_RUNTIMES_ENV: &str = "MCP_EXECUTION_REQUIRE_ALT_RUNTIMES";
+
+/// Marker a skipped alternative-runtime test prints; the `node-latest` CI job fails when its
+/// output contains it.
+pub const ALT_RUNTIME_SKIP_MARKER: &str = "alt-runtime skipped";
+
+/// Whether the alternative runtime `program` is installed. A missing one fails the test only when
+/// [`REQUIRE_ALT_RUNTIMES_ENV`] is `1` (also under `CI`, where most legs have no such runtime);
+/// otherwise the test prints [`ALT_RUNTIME_SKIP_MARKER`] and skips.
+pub fn require_alt_runtime(program: &str, test_name: &str) -> bool {
+    let available = Command::new(program)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !available {
+        assert!(
+            std::env::var(REQUIRE_ALT_RUNTIMES_ENV).as_deref() != Ok("1"),
+            "{test_name}: {program} not found on PATH and {REQUIRE_ALT_RUNTIMES_ENV}=1"
+        );
+        eprintln!(
+            "{test_name}: {ALT_RUNTIME_SKIP_MARKER} ({program} missing or {REQUIRE_ALT_RUNTIMES_ENV} unset)"
+        );
+    }
+    available
+}
+
 /// Whether `tsc` is on PATH; hard-fails under CI, skips locally.
 pub fn require_tsc(test_name: &str) -> bool {
     require_tool(if cfg!(windows) { "tsc.cmd" } else { "tsc" }, test_name)
