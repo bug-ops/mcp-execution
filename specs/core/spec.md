@@ -505,11 +505,11 @@ policy suggestions) and `mcp-skill`'s scan all call it, so the rules below canno
   sidecar is refused even when its target lies inside `dir`.
 - **Open.** On Unix the file is opened with `O_NOFOLLOW | O_NONBLOCK` and the regular-file check is an `fstat` on the
   opened handle, so there is no window between check and open and a FIFO never blocks. `ELOOP` maps to `Link`; any other
-  type maps to `NotRegularFile`. On Windows (#639) the open carries `FILE_FLAG_OPEN_REPARSE_POINT` (a link is opened as
-  itself) plus `FILE_FLAG_BACKUP_SEMANTICS` (so a directory named like the sidecar opens and is reported, not refused with an
-  access error), and the opened handle is judged by its own metadata: a symlink maps to `Link`, any other reparse point (for
-  example a cloud placeholder) or a non-file maps to `NotRegularFile`. There is no check-then-open window. The Windows
-  runtime behaviour is covered by a `cfg(windows)` test and Windows CI only.
+  type maps to `NotRegularFile`. On Windows (#639) the sidecar is opened with `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS` and judged only by the
+  opened handle: a symlink reparse point is `Link`, any other reparse point or a directory (which opens because of backup
+  semantics) is `NotRegularFile`. There is no check-then-open window. Backup semantics bypass the DACL only for a token with
+  SeBackupPrivilege enabled (approved deviation, architect, 2026-11-25). The Windows runtime behaviour is covered by a
+  `cfg(windows)` test and Windows CI only.
 - **Size.** The size is checked from the handle, and the read is bounded by `take(MAX_METADATA_FILE_BYTES + 1)`, so a file
   that grows after the check still yields `TooLarge`.
 - **Order.** Valid JSON is parsed to a `serde_json::Value`, `schema_version` is compared first (`SchemaMismatch`, so an
