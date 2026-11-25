@@ -475,7 +475,7 @@ impl FileSystem {
     /// lost at once. Callers that need stronger-than-last-write-wins
     /// semantics for the same target should serialize writes themselves
     /// (e.g. a per-target lock) — see `mcp-execution-server`'s
-    /// `introspector_for` for the pattern this project already uses for a
+    /// `export_lock_for` for the pattern this project already uses for a
     /// similar problem. Concurrent exports of different targets sharing a
     /// parent directory are safe.
     ///

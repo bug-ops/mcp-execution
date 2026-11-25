@@ -24,7 +24,7 @@ clap = { workspace = true, features = ["derive"] }
 dirs = { workspace = true }
 futures-util = { workspace = true }
 mcp-execution-codegen = { workspace = true }
-mcp-execution-core = { workspace = true }
+mcp-execution-core = { workspace = true, features = ["tracing-filter"] }
 mcp-execution-files = { workspace = true }
 mcp-execution-introspector = { workspace = true }
 mcp-execution-skill = { workspace = true }

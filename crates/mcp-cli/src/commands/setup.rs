@@ -14,6 +14,8 @@ use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use crate::commands::common::ServersDir;
 use crate::runtime::helper::{CliBinary, discover_cli_binary};
 use crate::runtime::node::check_node_version;
 use mcp_execution_core::helper_protocol::CLI_PATH_ENV;
@@ -38,6 +40,7 @@ use mcp_execution_core::helper_protocol::CLI_PATH_ENV;
 ///     servers_dir_found: true,
 ///     files_made_executable: 3,
 ///     skipped_entries: 0,
+///     failed_entries: 0,
 ///     helper_binary: CliBinary::NotFound,
 /// };
 ///
@@ -62,6 +65,10 @@ pub struct SetupResult {
     /// intermediate subdirectory, or a file) encountered at any depth.
     /// Always `0` on non-Unix platforms.
     pub skipped_entries: usize,
+    /// Number of non-symlink entries under `~/.claude/servers/` whose file type or
+    /// permissions could not be read or changed, so a `.ts` file may not be executable.
+    /// Always `0` on non-Unix platforms.
+    pub failed_entries: usize,
     /// The `mcp-execution-cli` binary a generated tool run outside `run` would start as its
     /// helper (`MCP_EXECUTION_CLI`, else `PATH`), or why none is usable.
     pub helper_binary: CliBinary,
@@ -114,16 +121,16 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
     let mcp_config_path = get_mcp_config_path()?;
     let mcp_config_found = mcp_config_path.exists();
 
-    let (servers_dir_found, files_made_executable, skipped_entries) =
-        check_files_executable().await?;
+    let scan = check_files_executable().await?;
 
     let result = SetupResult {
         node_version,
         mcp_config_path: mcp_config_path.display().to_string(),
         mcp_config_found,
-        servers_dir_found,
-        files_made_executable,
-        skipped_entries,
+        servers_dir_found: scan.is_some(),
+        files_made_executable: scan.map_or(0, |report| report.made_executable),
+        skipped_entries: scan.map_or(0, |report| report.skipped_entries),
+        failed_entries: scan.map_or(0, |report| report.failed_entries),
         helper_binary: discover_cli_binary(),
     };
 
@@ -178,6 +185,18 @@ fn print_pretty_summary(result: &SetupResult) {
                     }
                 );
             }
+            if result.failed_entries > 0 {
+                println!(
+                    "⚠ Could not make {} entr{} executable (see warnings above); \
+                     generated tools there may not run directly",
+                    result.failed_entries,
+                    if result.failed_entries == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                );
+            }
         } else {
             println!("⚠ No servers directory found");
             println!("  Run 'mcp-execution-cli generate <server>' to create tools");
@@ -198,7 +217,11 @@ fn print_pretty_summary(result: &SetupResult) {
         }
     }
 
-    println!("\n✓ Runtime setup complete");
+    if result.failed_entries > 0 {
+        println!("\n⚠ Runtime setup finished with warnings");
+    } else {
+        println!("\n✓ Runtime setup complete");
+    }
     println!("  Claude Code can now execute MCP tools via:");
     println!("  node ~/.claude/servers/<server>/<tool>.ts '{{\"param\":\"value\"}}'");
     println!("\nNext steps:");
@@ -207,34 +230,45 @@ fn print_pretty_summary(result: &SetupResult) {
     println!("  3. Execute tools autonomously via Node.js");
 }
 
+/// Tally of one walk over the servers directory.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct WalkReport {
+    /// `.ts` files made executable.
+    made_executable: usize,
+    /// Symlinked entries left untouched.
+    skipped_entries: usize,
+    /// Entries whose file type or permissions could not be read or changed.
+    failed_entries: usize,
+}
+
 /// Checks for and makes TypeScript files executable (Unix only).
 ///
-/// Sets executable permissions (0755) on all .ts files in ~/.claude/servers/
+/// Sets executable permissions (0755) on all .ts files in the servers directory
 /// This allows files to be executed with shebang: `./tool.ts`
 ///
 /// # Platform Support
 ///
-/// - Unix/Linux/macOS: Sets permissions, returns
-///   `(servers_dir_found, files_made_executable, skipped_entries)`
-/// - Windows: No-op, always returns `(false, 0, 0)`
+/// - Unix/Linux/macOS: Sets permissions, returns the walk tally, or `None` when the
+///   servers directory does not exist
+/// - Windows: No-op, always returns `None`
 ///
 /// # Errors
 ///
 /// Returns error if:
 /// - Home directory cannot be determined
-/// - Permission changes fail
+/// - The servers directory root cannot be read
 #[cfg(unix)]
-async fn check_files_executable() -> Result<(bool, usize, usize)> {
-    let servers_dir = get_servers_dir()?;
-    check_files_executable_in(&servers_dir).await
+async fn check_files_executable() -> Result<Option<WalkReport>> {
+    let servers_dir = ServersDir::resolve(None)?;
+    check_files_executable_in(servers_dir.as_path()).await
 }
 
 /// Checks for and makes TypeScript files executable (Unix only).
 ///
 /// No-op on non-Unix platforms, since file permissions are not checked there.
 #[cfg(not(unix))]
-async fn check_files_executable() -> Result<(bool, usize, usize)> {
-    Ok((false, 0, 0))
+async fn check_files_executable() -> Result<Option<WalkReport>> {
+    Ok(None)
 }
 
 /// Recursively walks `servers_dir` and makes every `.ts` file executable
@@ -243,7 +277,7 @@ async fn check_files_executable() -> Result<(bool, usize, usize)> {
 ///
 /// A symlinked entry — a server-id directory, an intermediate subdirectory,
 /// or a `.ts` file, at any depth — is skipped and counted in
-/// `skipped_entries` rather than chmod'd or descended into, since following
+/// [`WalkReport::skipped_entries`] rather than chmod'd or descended into, since following
 /// one would let a planted symlink redirect a permission change, or a
 /// directory descent, to anywhere the process can reach outside
 /// `servers_dir`. Entry kind is checked with
@@ -262,6 +296,8 @@ async fn check_files_executable() -> Result<(bool, usize, usize)> {
 /// from a regular file by `file_type` and is not defended against; both are
 /// accepted as out of scope.
 ///
+/// Returns `None` when `servers_dir` does not exist.
+///
 /// # Errors
 ///
 /// Returns an error if `servers_dir` cannot be canonicalized or the root
@@ -271,16 +307,16 @@ async fn check_files_executable() -> Result<(bool, usize, usize)> {
 /// propagated but logged as a warning, and the walk moves on rather than
 /// aborting the whole `setup` run: a directory below the root that fails to
 /// open, a read error mid-iteration over any directory's entries (root
-/// included; the affected directory's remaining entries are skipped), an
-/// entry whose file type cannot be determined, and a `.ts` file whose
-/// permissions cannot be read or changed (such a file is not counted).
+/// included; the affected directory's remaining entries are skipped), an entry
+/// whose file type cannot be determined, and a `.ts` file whose permissions
+/// cannot be read or changed are each logged and counted once in
+/// [`WalkReport::failed_entries`] (such a file is not counted as executable).
 #[cfg(unix)]
-async fn check_files_executable_in(servers_dir: &Path) -> Result<(bool, usize, usize)> {
+async fn check_files_executable_in(servers_dir: &Path) -> Result<Option<WalkReport>> {
     use tokio::fs;
 
-    // Check if servers directory exists
     if !servers_dir.exists() {
-        return Ok((false, 0, 0));
+        return Ok(None);
     }
 
     let root = fs::canonicalize(servers_dir).await?;
@@ -289,11 +325,10 @@ async fn check_files_executable_in(servers_dir: &Path) -> Result<(bool, usize, u
     // it, so propagating is the only way the caller learns setup didn't run.
     let entries = fs::read_dir(&root).await?;
 
-    let mut count = 0;
-    let mut skipped = 0;
-    walk_entries(&root, entries, &mut count, &mut skipped).await?;
+    let mut report = WalkReport::default();
+    walk_entries(&root, entries, &mut report).await?;
 
-    Ok((true, count, skipped))
+    Ok(Some(report))
 }
 
 /// Recursion step for [`check_files_executable_in`]: opens `dir` — skipping
@@ -302,7 +337,7 @@ async fn check_files_executable_in(servers_dir: &Path) -> Result<(bool, usize, u
 /// continue — then delegates to [`walk_entries`] for the shared per-entry
 /// logic.
 #[cfg(unix)]
-async fn walk_and_chmod(dir: &Path, count: &mut usize, skipped: &mut usize) -> Result<()> {
+async fn walk_and_chmod(dir: &Path, report: &mut WalkReport) -> Result<()> {
     use tokio::fs;
 
     let entries = match fs::read_dir(dir).await {
@@ -313,11 +348,12 @@ async fn walk_and_chmod(dir: &Path, count: &mut usize, skipped: &mut usize) -> R
                 %error,
                 "skipping unreadable directory under the servers directory"
             );
+            report.failed_entries += 1;
             return Ok(());
         }
     };
 
-    walk_entries(dir, entries, count, skipped).await
+    walk_entries(dir, entries, report).await
 }
 
 /// Shared entry-processing loop for [`check_files_executable_in`]'s root
@@ -332,8 +368,7 @@ async fn walk_and_chmod(dir: &Path, count: &mut usize, skipped: &mut usize) -> R
 async fn walk_entries(
     dir: &Path,
     mut entries: tokio::fs::ReadDir,
-    count: &mut usize,
-    skipped: &mut usize,
+    report: &mut WalkReport,
 ) -> Result<()> {
     loop {
         let entry = match entries.next_entry().await {
@@ -345,6 +380,7 @@ async fn walk_entries(
                     %error,
                     "stopping directory read after error; skipping any remaining entries"
                 );
+                report.failed_entries += 1;
                 break;
             }
         };
@@ -358,6 +394,7 @@ async fn walk_entries(
                     %error,
                     "skipping entry whose file type cannot be determined"
                 );
+                report.failed_entries += 1;
                 continue;
             }
         };
@@ -366,12 +403,12 @@ async fn walk_entries(
                 path = %sanitize_path_for_error(&path),
                 "skipping symlinked entry under the servers directory"
             );
-            *skipped += 1;
+            report.skipped_entries += 1;
             continue;
         }
 
         if file_type.is_dir() {
-            Box::pin(walk_and_chmod(&path, count, skipped)).await?;
+            Box::pin(walk_and_chmod(&path, report)).await?;
             continue;
         }
 
@@ -380,12 +417,15 @@ async fn walk_entries(
         }
 
         match make_executable(&path).await {
-            Ok(()) => *count += 1,
-            Err(error) => tracing::warn!(
-                path = %sanitize_path_for_error(&path),
-                %error,
-                "skipping file whose permissions cannot be changed"
-            ),
+            Ok(()) => report.made_executable += 1,
+            Err(error) => {
+                tracing::warn!(
+                    path = %sanitize_path_for_error(&path),
+                    %error,
+                    "skipping file whose permissions cannot be changed"
+                );
+                report.failed_entries += 1;
+            }
         }
     }
 
@@ -407,13 +447,6 @@ async fn make_executable(path: &Path) -> std::io::Result<()> {
 fn get_mcp_config_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Failed to get home directory")?;
     Ok(home.join(".claude").join("mcp.json"))
-}
-
-/// Gets the path to ~/.claude/servers/
-#[cfg(unix)]
-fn get_servers_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Failed to get home directory")?;
-    Ok(home.join(".claude").join("servers"))
 }
 
 #[cfg(test)]
@@ -445,17 +478,6 @@ mod tests {
         assert!(path.to_string_lossy().contains("mcp.json"));
     }
 
-    #[test]
-    #[cfg(unix)]
-    fn test_get_servers_dir() {
-        let path = get_servers_dir();
-        assert!(path.is_ok());
-
-        let path = path.unwrap();
-        assert!(path.to_string_lossy().contains(".claude"));
-        assert!(path.to_string_lossy().contains("servers"));
-    }
-
     #[tokio::test]
     async fn test_check_files_executable_no_panic() {
         // Should not panic regardless of whether ~/.claude/servers exists.
@@ -474,12 +496,19 @@ mod tests {
         let tool_path = my_server_dir.join("tool.ts");
         tokio::fs::write(&tool_path, "// tool").await.unwrap();
 
-        let (servers_dir_found, files_made_executable, skipped_entries) =
-            check_files_executable_in(servers_dir.path()).await.unwrap();
+        let report = check_files_executable_in(servers_dir.path())
+            .await
+            .unwrap()
+            .expect("servers dir exists");
 
-        assert!(servers_dir_found);
-        assert_eq!(files_made_executable, 1);
-        assert_eq!(skipped_entries, 0);
+        assert_eq!(
+            report,
+            WalkReport {
+                made_executable: 1,
+                skipped_entries: 0,
+                failed_entries: 0,
+            }
+        );
         let mode = tokio::fs::metadata(&tool_path)
             .await
             .unwrap()
@@ -499,12 +528,19 @@ mod tests {
         let bridge_path = runtime_dir.join("mcp-bridge.ts");
         tokio::fs::write(&bridge_path, "// bridge").await.unwrap();
 
-        let (servers_dir_found, files_made_executable, skipped_entries) =
-            check_files_executable_in(servers_dir.path()).await.unwrap();
+        let report = check_files_executable_in(servers_dir.path())
+            .await
+            .unwrap()
+            .expect("servers dir exists");
 
-        assert!(servers_dir_found);
-        assert_eq!(files_made_executable, 1);
-        assert_eq!(skipped_entries, 0);
+        assert_eq!(
+            report,
+            WalkReport {
+                made_executable: 1,
+                skipped_entries: 0,
+                failed_entries: 0,
+            }
+        );
         let mode = tokio::fs::metadata(&bridge_path)
             .await
             .unwrap()
@@ -513,11 +549,9 @@ mod tests {
         assert_eq!(mode & 0o777, 0o755);
     }
 
-    // Note: this and the sibling `read_dir`-open-failure tests below do not exercise
-    // `walk_entries`'s mid-iteration `next_entry()` `Err` branch (setup.rs's skip-and-warn
-    // path for a read error *after* a directory has already opened successfully) — that
-    // requires deterministic fault injection with no seam this test suite has today, and is
-    // left untested (see #490's handoff notes).
+    // Note: the `read_dir`-open-failure tests do not exercise `walk_entries`'s mid-iteration
+    // `next_entry()` `Err` branch — that requires deterministic fault injection with no seam
+    // this test suite has today, and is left untested (see #490's handoff notes).
     #[cfg(unix)]
     #[tokio::test]
     async fn check_files_executable_in_skips_unreadable_nested_dir_processes_siblings() {
@@ -552,20 +586,59 @@ mod tests {
             .await
             .unwrap();
 
-        let (servers_dir_found, files_made_executable, skipped_entries) = result.unwrap();
+        let report = result.unwrap().expect("servers dir exists");
 
-        assert!(servers_dir_found);
         assert_eq!(
-            files_made_executable, 1,
-            "the healthy sibling directory must still be processed"
+            report,
+            WalkReport {
+                made_executable: 1,
+                skipped_entries: 0,
+                failed_entries: 1,
+            },
+            "the healthy sibling is processed and the unlistable directory is a failed entry"
         );
-        assert_eq!(skipped_entries, 0);
         let mode = tokio::fs::metadata(&good_tool_path)
             .await
             .unwrap()
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_files_executable_in_counts_a_directory_without_read_bit_as_failed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let servers_dir = tempfile::TempDir::new().unwrap();
+        let write_only_dir = servers_dir.path().join("x");
+        tokio::fs::create_dir_all(&write_only_dir).await.unwrap();
+        tokio::fs::write(write_only_dir.join("tool.ts"), "// tool")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&write_only_dir, std::fs::Permissions::from_mode(0o300))
+            .await
+            .unwrap();
+
+        let result = if std::fs::read_dir(&write_only_dir).is_ok() {
+            None
+        } else {
+            Some(check_files_executable_in(servers_dir.path()).await)
+        };
+
+        tokio::fs::set_permissions(&write_only_dir, std::fs::Permissions::from_mode(0o755))
+            .await
+            .unwrap();
+
+        let Some(result) = result else { return };
+        assert_eq!(
+            result.unwrap().expect("servers dir exists"),
+            WalkReport {
+                made_executable: 0,
+                skipped_entries: 0,
+                failed_entries: 1,
+            }
+        );
     }
 
     /// Collects formatted log output in memory for assertions.
@@ -632,13 +705,16 @@ mod tests {
             .await
             .unwrap();
 
-        let (servers_dir_found, files_made_executable, skipped_entries) = result.unwrap();
-        assert!(servers_dir_found);
+        let report = result.unwrap().expect("servers dir exists");
         assert_eq!(
-            files_made_executable, 1,
-            "only the healthy file counts; the failing one is not counted"
+            report,
+            WalkReport {
+                made_executable: 1,
+                skipped_entries: 0,
+                failed_entries: 1,
+            },
+            "only the healthy file counts as executable; the failing one is a failed entry"
         );
-        assert_eq!(skipped_entries, 0);
 
         let mode = tokio::fs::metadata(&good_tool_path)
             .await
@@ -698,12 +774,19 @@ mod tests {
         tokio::fs::create_dir_all(&my_server_dir).await.unwrap();
         std::os::unix::fs::symlink(outside.path(), my_server_dir.join("_runtime")).unwrap();
 
-        let (servers_dir_found, files_made_executable, skipped_entries) =
-            check_files_executable_in(servers_dir.path()).await.unwrap();
+        let report = check_files_executable_in(servers_dir.path())
+            .await
+            .unwrap()
+            .expect("servers dir exists");
 
-        assert!(servers_dir_found);
-        assert_eq!(files_made_executable, 0);
-        assert_eq!(skipped_entries, 1);
+        assert_eq!(
+            report,
+            WalkReport {
+                made_executable: 0,
+                skipped_entries: 1,
+                failed_entries: 0,
+            }
+        );
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &tokio::fs::metadata(&target_path)
                 .await
@@ -726,12 +809,19 @@ mod tests {
         tokio::fs::write(&target_path, "// outside").await.unwrap();
         std::os::unix::fs::symlink(outside.path(), servers_dir.path().join("evil-server")).unwrap();
 
-        let (servers_dir_found, files_made_executable, skipped_entries) =
-            check_files_executable_in(servers_dir.path()).await.unwrap();
+        let report = check_files_executable_in(servers_dir.path())
+            .await
+            .unwrap()
+            .expect("servers dir exists");
 
-        assert!(servers_dir_found);
-        assert_eq!(files_made_executable, 0);
-        assert_eq!(skipped_entries, 1);
+        assert_eq!(
+            report,
+            WalkReport {
+                made_executable: 0,
+                skipped_entries: 1,
+                failed_entries: 0,
+            }
+        );
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &tokio::fs::metadata(&target_path)
                 .await
@@ -757,12 +847,19 @@ mod tests {
         tokio::fs::create_dir_all(&legit_server_dir).await.unwrap();
         std::os::unix::fs::symlink(&target_path, legit_server_dir.join("link.ts")).unwrap();
 
-        let (servers_dir_found, files_made_executable, skipped_entries) =
-            check_files_executable_in(servers_dir.path()).await.unwrap();
+        let report = check_files_executable_in(servers_dir.path())
+            .await
+            .unwrap()
+            .expect("servers dir exists");
 
-        assert!(servers_dir_found);
-        assert_eq!(files_made_executable, 0);
-        assert_eq!(skipped_entries, 1);
+        assert_eq!(
+            report,
+            WalkReport {
+                made_executable: 0,
+                skipped_entries: 1,
+                failed_entries: 0,
+            }
+        );
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &tokio::fs::metadata(&target_path)
                 .await
@@ -785,6 +882,7 @@ mod tests {
             servers_dir_found: true,
             files_made_executable: 3,
             skipped_entries: 0,
+            failed_entries: 0,
             helper_binary: CliBinary::NotFound,
         };
 
@@ -803,6 +901,7 @@ mod tests {
             servers_dir_found: true,
             files_made_executable: 7,
             skipped_entries: 0,
+            failed_entries: 0,
             helper_binary: CliBinary::NotFound,
         };
 
@@ -825,6 +924,7 @@ mod tests {
             servers_dir_found: false,
             files_made_executable: 0,
             skipped_entries: 0,
+            failed_entries: 0,
             helper_binary: CliBinary::NotFound,
         };
 

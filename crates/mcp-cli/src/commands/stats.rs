@@ -9,21 +9,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use mcp_execution_core::ServerId;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
-use mcp_execution_core::metadata::{
-    CATALOG_FILE_NAME, MAX_METADATA_FILE_BYTES, MAX_TOOL_COUNT, METADATA_FILE_NAME,
-    METADATA_SCHEMA_VERSION, ResultTypeOrigin, ServerMetadata,
-};
-use mcp_execution_core::{Error as CoreError, ServerId};
-use serde::Deserialize;
+use mcp_execution_core::metadata::{CATALOG_FILE_NAME, MAX_TOOL_COUNT, ResultTypeOrigin};
 
+use super::common::{ServersDir, read_generated_metadata};
 use crate::cli::parse_server_id;
 
 /// Divisor of the token estimator: one token per four bytes (ADR-562, option A).
 const BYTES_PER_TOKEN_ESTIMATE: u64 = 4;
-
-/// Default base directory of generated servers, relative to the home directory.
-const DEFAULT_SERVERS_DIR: &str = ".claude/servers";
 
 /// Options of the `stats` command.
 ///
@@ -113,13 +107,6 @@ struct StatsReport {
     with_output_schema: usize,
 }
 
-/// Probe of the schema version, parsed before the typed sidecar so an older shape is reported
-/// as such rather than as a missing field.
-#[derive(Deserialize)]
-struct SchemaVersionProbe {
-    schema_version: u32,
-}
-
 impl StatsReport {
     /// Renders the report as fixed-width text: the same input gives the same bytes.
     fn render(&self) -> String {
@@ -164,65 +151,20 @@ impl StatsReport {
     }
 }
 
-/// Resolves the base directory of generated servers.
-fn resolve_servers_dir(servers_dir: Option<PathBuf>) -> Result<PathBuf> {
-    match servers_dir {
-        Some(dir) => Ok(dir),
-        None => Ok(dirs::home_dir()
-            .context("Could not determine home directory")?
-            .join(DEFAULT_SERVERS_DIR)),
-    }
-}
-
 /// Size of the regular file `path`, not following a symlink; not available when it is missing,
 /// is a link or is not a file.
-async fn file_size(path: &Path) -> Measure {
-    match tokio::fs::symlink_metadata(path).await {
+fn file_size(path: &Path) -> Measure {
+    match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.is_file() => Measure::Available(Bytes(meta.len())),
         _ => Measure::NotAvailable,
     }
 }
 
-/// Reads and validates `_meta.json` of `dir`.
-///
-/// A symlinked or oversize sidecar is rejected; an older schema is `InvalidArgument` (exit 2).
-async fn read_metadata(dir: &Path, server: &ServerId) -> Result<ServerMetadata> {
-    let path = dir.join(METADATA_FILE_NAME);
-    let meta = tokio::fs::symlink_metadata(&path).await.with_context(|| {
-        format!(
-            "Metadata not found for '{server}'. Run 'mcp-execution-cli generate --from-config {server}' first."
-        )
-    })?;
-    if !meta.is_file() {
-        bail!("{METADATA_FILE_NAME} of '{server}' is not a regular file");
-    }
-    if meta.len() > MAX_METADATA_FILE_BYTES {
-        bail!(
-            "{METADATA_FILE_NAME} of '{server}' is {} bytes, over the {MAX_METADATA_FILE_BYTES} limit",
-            meta.len()
-        );
-    }
-    let content = tokio::fs::read_to_string(&path)
-        .await
-        .with_context(|| format!("Failed to read {METADATA_FILE_NAME} of '{server}'"))?;
-    let probe: SchemaVersionProbe = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {METADATA_FILE_NAME} of '{server}'"))?;
-    if probe.schema_version != METADATA_SCHEMA_VERSION {
-        return Err(CoreError::InvalidArgument(format!(
-            "{METADATA_FILE_NAME} of '{server}' has schema version {}, expected {METADATA_SCHEMA_VERSION}; \
-             regenerate it with 'mcp-execution-cli generate --from-config {server}'",
-            probe.schema_version
-        ))
-        .into());
-    }
-    serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {METADATA_FILE_NAME} of '{server}'"))
-}
-
-/// Measures the generated server `server` under `servers_dir`.
-async fn measure(servers_dir: &Path, server: ServerId) -> Result<StatsReport> {
-    let dir = servers_dir.join(server.as_str());
-    let metadata = read_metadata(&dir, &server).await?;
+/// Measures the generated server `server` under `servers_dir` with blocking I/O; the caller runs
+/// it on one blocking task so no file system call occupies an async worker.
+fn measure(servers_dir: &ServersDir, server: ServerId) -> Result<StatsReport> {
+    let dir = servers_dir.server(&server);
+    let metadata = read_generated_metadata(&dir, &server)?;
     if metadata.tools.len() > MAX_TOOL_COUNT {
         bail!(
             "'{server}' lists {} tools, over the {MAX_TOOL_COUNT} limit",
@@ -230,10 +172,11 @@ async fn measure(servers_dir: &Path, server: ServerId) -> Result<StatsReport> {
         );
     }
 
-    let mut sizes = Vec::with_capacity(metadata.tools.len());
-    for tool in &metadata.tools {
-        sizes.push(file_size(&dir.join(format!("{}.ts", tool.typescript_name))).await);
-    }
+    let sizes: Vec<Measure> = metadata
+        .tools
+        .iter()
+        .map(|tool| file_size(&dir.join(format!("{}.ts", tool.typescript_name))))
+        .collect();
     let recorded: Vec<Measure> = metadata
         .tools
         .iter()
@@ -251,7 +194,7 @@ async fn measure(servers_dir: &Path, server: ServerId) -> Result<StatsReport> {
         definitions: Measure::total(&recorded),
         tool_files: Measure::total(&sizes),
         one_tool_file: Measure::mean(&sizes),
-        catalog: file_size(&dir.join(CATALOG_FILE_NAME)).await,
+        catalog: file_size(&dir.join(CATALOG_FILE_NAME)),
         with_output_schema,
     })
 }
@@ -281,8 +224,10 @@ async fn measure(servers_dir: &Path, server: ServerId) -> Result<StatsReport> {
 /// # }
 /// ```
 pub async fn run(args: StatsArgs, _format: OutputFormat) -> Result<ExitCode> {
-    let servers_dir = resolve_servers_dir(args.servers_dir)?;
-    let report = measure(&servers_dir, args.server).await?;
+    let servers_dir = ServersDir::resolve(args.servers_dir)?;
+    let report = tokio::task::spawn_blocking(move || measure(&servers_dir, args.server))
+        .await
+        .context("stats task failed")??;
     print!("{}", report.render());
     Ok(ExitCode::SUCCESS)
 }

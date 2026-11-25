@@ -50,6 +50,9 @@ use crate::annotations::ToolAnnotations;
 use crate::provenance::GenerationProvenance;
 use crate::{ServerId, ToolName};
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 /// Current schema version of the `_meta.json` sidecar format.
 ///
@@ -331,6 +334,178 @@ pub struct ParameterMetadata {
 
     /// Parameter description, sourced from the tool's input JSON Schema.
     pub description: Option<String>,
+}
+
+/// Refusal reasons of [`read_server_metadata`], one variant per distinct failure.
+#[derive(Debug, thiserror::Error)]
+pub enum MetadataReadError {
+    /// The sidecar file does not exist.
+    #[error("metadata sidecar not found")]
+    NotFound,
+
+    /// The sidecar path is a symbolic link.
+    #[error("metadata sidecar is a symbolic link")]
+    Link,
+
+    /// The sidecar path is not a regular file.
+    #[error("metadata sidecar is not a regular file")]
+    NotRegularFile,
+
+    /// The sidecar exceeds the size limit.
+    #[error("metadata sidecar is {size} bytes, over the {limit} byte limit")]
+    TooLarge {
+        /// Observed size in bytes.
+        size: u64,
+        /// Maximum accepted size in bytes.
+        limit: u64,
+    },
+
+    /// The sidecar could not be read.
+    #[error("metadata sidecar is unreadable: {0}")]
+    Unreadable(#[source] io::Error),
+
+    /// The sidecar is not valid JSON of the expected shape.
+    #[error("metadata sidecar is malformed: {0}")]
+    Malformed(#[source] serde_json::Error),
+
+    /// The sidecar was written with a different schema version.
+    #[error("metadata schema version {found} does not match the expected {expected}")]
+    SchemaMismatch {
+        /// Version found in the file.
+        found: u32,
+        /// Version this build understands.
+        expected: u32,
+    },
+}
+
+/// Reads and validates the `_meta.json` sidecar inside `dir`.
+///
+/// The sidecar must be a regular, non-symlink file of at most [`MAX_METADATA_FILE_BYTES`] that
+/// carries [`METADATA_SCHEMA_VERSION`]; `dir` itself may be a symlink. The schema version is
+/// checked before the typed parse so an old sidecar reports a mismatch rather than a shape error.
+/// Error messages never contain the path.
+///
+/// # Errors
+///
+/// Returns a [`MetadataReadError`] naming the first refusal.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::metadata::{MetadataReadError, read_server_metadata};
+///
+/// let dir = std::env::temp_dir().join("mcp-execution-doc-absent-server");
+/// assert!(matches!(
+///     read_server_metadata(&dir),
+///     Err(MetadataReadError::NotFound)
+/// ));
+/// ```
+pub fn read_server_metadata(dir: &Path) -> Result<ServerMetadata, MetadataReadError> {
+    let file = open_regular_sidecar(&dir.join(METADATA_FILE_NAME))?;
+    let size = file.metadata().map_err(read_error)?.len();
+    if size > MAX_METADATA_FILE_BYTES {
+        return Err(MetadataReadError::TooLarge {
+            size,
+            limit: MAX_METADATA_FILE_BYTES,
+        });
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_METADATA_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(MetadataReadError::Unreadable)?;
+    if let Ok(len) = u64::try_from(bytes.len())
+        && len > MAX_METADATA_FILE_BYTES
+    {
+        return Err(MetadataReadError::TooLarge {
+            size: len,
+            limit: MAX_METADATA_FILE_BYTES,
+        });
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(MetadataReadError::Malformed)?;
+    let found = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64);
+    if let Some(found) = found
+        && found != u64::from(METADATA_SCHEMA_VERSION)
+    {
+        return Err(MetadataReadError::SchemaMismatch {
+            found: u32::try_from(found).unwrap_or(u32::MAX),
+            expected: METADATA_SCHEMA_VERSION,
+        });
+    }
+    serde_json::from_value(value).map_err(MetadataReadError::Malformed)
+}
+
+/// Async counterpart of [`read_server_metadata`] that keeps blocking I/O off the executor.
+///
+/// # Errors
+///
+/// Same as [`read_server_metadata`]; a failed blocking task is reported as
+/// [`MetadataReadError::Unreadable`].
+///
+/// # Panics
+///
+/// Resumes a panic raised inside the blocking task.
+pub async fn read_server_metadata_async(dir: PathBuf) -> Result<ServerMetadata, MetadataReadError> {
+    match tokio::task::spawn_blocking(move || read_server_metadata(&dir)).await {
+        Ok(outcome) => outcome,
+        Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
+        Err(join) => Err(MetadataReadError::Unreadable(io::Error::other(join))),
+    }
+}
+
+/// Opens `path` for reading and proves the opened file is a regular, non-symlink file.
+///
+/// On Unix the open carries `O_NOFOLLOW | O_NONBLOCK` and the type check is an `fstat` on the
+/// opened file, so there is no window between check and open and a FIFO never blocks.
+fn open_regular_sidecar(path: &Path) -> Result<File, MetadataReadError> {
+    let file = open_no_follow(path)?;
+    if file.metadata().map_err(read_error)?.is_file() {
+        Ok(file)
+    } else {
+        Err(MetadataReadError::NotRegularFile)
+    }
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> Result<File, MetadataReadError> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| {
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                MetadataReadError::Link
+            } else {
+                read_error(error)
+            }
+        })
+}
+
+// Windows has no equivalent open flag here, so the type is checked before the open; a swap
+// between the two calls is not prevented.
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> Result<File, MetadataReadError> {
+    let link_meta = std::fs::symlink_metadata(path).map_err(read_error)?;
+    if link_meta.file_type().is_symlink() {
+        return Err(MetadataReadError::Link);
+    }
+    if !link_meta.is_file() {
+        return Err(MetadataReadError::NotRegularFile);
+    }
+    File::open(path).map_err(read_error)
+}
+
+fn read_error(error: io::Error) -> MetadataReadError {
+    if error.kind() == io::ErrorKind::NotFound {
+        MetadataReadError::NotFound
+    } else {
+        MetadataReadError::Unreadable(error)
+    }
 }
 
 #[cfg(test)]

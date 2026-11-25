@@ -122,18 +122,9 @@ pub struct GeneratorService {
     /// State manager for pending generations
     state: Arc<StateManager>,
 
-    /// Per-server-id introspector locks.
-    ///
-    /// Keying the lock by [`ServerId`] means a slow or hung downstream MCP
-    /// server only blocks `introspect_server` calls for that same server id,
-    /// not for unrelated ids across all sessions. The outer map mutex is only
-    /// held long enough to fetch or insert the per-id handle - never across
-    /// the `discover_server` await point.
-    introspectors: Arc<Mutex<HashMap<ServerId, Arc<Mutex<Introspector>>>>>,
-
     /// Per-output-directory export locks, keyed by the path
     /// `save_categorized_tools` resolves fresh via `output_dir::resolve_output_dir`
-    /// immediately before exporting. Same rationale as `introspectors`: keying by the
+    /// immediately before exporting. Keying by the
     /// contended resource means an export for one `output_dir` never blocks
     /// an export for a different one.
     exports: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
@@ -181,7 +172,6 @@ impl GeneratorService {
     fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
             state: Arc::new(StateManager::with_clock(Arc::clone(&clock))),
-            introspectors: Arc::new(Mutex::new(HashMap::new())),
             exports: Arc::new(Mutex::new(HashMap::new())),
             clock,
             skills_base_dir: None,
@@ -230,47 +220,9 @@ impl GeneratorService {
         self
     }
 
-    /// Returns the per-server-id introspector handle, creating one if absent.
-    ///
-    /// The outer map lock is released before the returned handle is awaited
-    /// on, so discovery of unrelated server ids never contends on it.
-    #[tracing::instrument(skip_all, fields(server_id = %server_id))]
-    async fn introspector_for(&self, server_id: &ServerId) -> Arc<Mutex<Introspector>> {
-        let mut introspectors = self.introspectors.lock().await;
-        introspectors
-            .entry(server_id.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(Introspector::new())))
-            .clone()
-    }
-
-    /// Evicts the per-server-id introspector handle after use, but only if
-    /// the map still holds the exact handle the caller obtained.
-    ///
-    /// `server_id` values are caller-supplied, so without eviction the map
-    /// grows without bound as new ids are introspected. Called after
-    /// `discover_server` completes, regardless of outcome.
-    ///
-    /// A caller must pass the same `Arc<Mutex<Introspector>>` it received
-    /// from [`Self::introspector_for`]. Removing by `server_id` alone is a
-    /// TOCTOU bug: if another in-flight call for the same id already evicted
-    /// and a third call inserted a fresh handle, an unconditional `remove`
-    /// would prune that live handle out from under the third call. Comparing
-    /// with [`Arc::ptr_eq`] ensures a caller can only ever evict the entry it
-    /// created.
-    #[tracing::instrument(skip_all, fields(server_id = %server_id))]
-    async fn evict_introspector(&self, server_id: &ServerId, handle: &Arc<Mutex<Introspector>>) {
-        let mut introspectors = self.introspectors.lock().await;
-        if let std::collections::hash_map::Entry::Occupied(entry) =
-            introspectors.entry(server_id.clone())
-            && Arc::ptr_eq(entry.get(), handle)
-        {
-            entry.remove();
-        }
-    }
-
     /// Returns the per-output-directory export lock, creating one if absent.
     ///
-    /// Mirrors [`Self::introspector_for`]: the outer map lock is released
+    /// The outer map lock is released
     /// before the returned handle is awaited on, so exports to unrelated
     /// output directories never contend on it. Holding this lock across an
     /// [`mcp_execution_files::FileSystem::export_to_filesystem`] call
@@ -281,7 +233,7 @@ impl GeneratorService {
     /// more overlapping calls: a call that fetches a fresh handle only
     /// after an earlier holder has already evicted its own can still run
     /// concurrently with a still-in-flight call holding the stale handle
-    /// (same eviction-boundary gap as [`Self::evict_introspector`]). The
+    /// (eviction-boundary gap). The
     /// age-gated sweep in `mcp-execution-files` is what ultimately prevents
     /// data loss if that happens.
     #[tracing::instrument(skip_all, fields(output_dir = %output_dir.display()))]
@@ -296,8 +248,7 @@ impl GeneratorService {
     /// Evicts the per-output-directory export lock after use, but only if
     /// the map still holds the exact handle the caller obtained.
     ///
-    /// Same identity-checked eviction as [`Self::evict_introspector`] and
-    /// for the same reason: `output_dir` values are caller-supplied, so
+    /// Identity-checked eviction: `output_dir` values are caller-supplied, so
     /// without eviction the map grows without bound, and an unconditional
     /// `remove` keyed only by path would be a TOCTOU bug against a
     /// concurrently inserted fresh handle.
@@ -324,29 +275,14 @@ impl GeneratorService {
         config: &ServerConfig,
         ct: &CancellationToken,
     ) -> Result<mcp_execution_introspector::ServerInfo, McpError> {
-        // Connect and introspect, holding only the lock for this server_id. A
-        // tokio::select! against `ct.cancelled()` lets a client-issued
-        // `notifications/cancelled` interrupt the (potentially up-to-600s)
-        // discovery round trip instead of always running it to completion.
-        // `biased;` prefers noticing cancellation over starting/continuing
-        // discovery, making the cancelled path deterministic rather than
-        // depending on `tokio::select!`'s (default-randomised) poll order.
-        let introspector_handle = self.introspector_for(server_id).await;
-        let introspector = introspector_handle.lock().await;
+        // `biased;` prefers noticing cancellation over starting/continuing discovery,
+        // making the cancelled path deterministic.
+        let introspector = Introspector::new();
         let discover_outcome = tokio::select! {
             biased;
             () = ct.cancelled() => None,
             result = introspector.discover_server(server_id.clone(), config) => Some(result),
         };
-        drop(introspector);
-
-        // Evict the per-server-id handle regardless of outcome (including
-        // cancellation), so caller-supplied server_id values can't grow the
-        // introspectors map without bound. Only removes the entry if it is
-        // still this exact handle (see `evict_introspector` docs for why
-        // identity matters here).
-        self.evict_introspector(server_id, &introspector_handle)
-            .await;
 
         let discover_result = discover_outcome.ok_or_else(|| {
             McpError::internal_error("introspect_server cancelled by client", None)
@@ -2117,14 +2053,12 @@ mod tests {
     #[test]
     fn test_generator_service_new() {
         let service = GeneratorService::new();
-        assert!(service.introspectors.try_lock().is_ok());
         assert!(service.exports.try_lock().is_ok());
     }
 
     #[test]
     fn test_generator_service_default() {
         let service = GeneratorService::default();
-        assert!(service.introspectors.try_lock().is_ok());
         assert!(service.exports.try_lock().is_ok());
     }
 
@@ -2470,170 +2404,6 @@ mod tests {
 
         let err = result.expect_err("a cancelled request must return an error");
         assert!(err.message.contains("cancelled"));
-        assert!(
-            service.introspectors.lock().await.is_empty(),
-            "the introspector handle must still be evicted on the cancellation path"
-        );
-    }
-
-    // ========================================================================
-    // Per-server-id locking Tests (issue #120)
-    //
-    // These test the exact `Arc<Mutex<Introspector>>` handles and keyed-lock
-    // pattern that `introspect_server` relies on via `introspector_for`,
-    // rather than driving a real (or fake) subprocess through
-    // `discover_server`. This keeps the tests deterministic and
-    // platform-independent while still exercising the production locking
-    // primitive: `introspect_server` does nothing more than fetch a handle
-    // via `introspector_for` and `.lock().await` it around the
-    // `discover_server` call, so proving the handles behave correctly here
-    // proves the concurrency property end to end.
-    // ========================================================================
-
-    /// `introspect_server` must evict its per-server-id entry from the
-    /// `introspectors` map once `discover_server` completes, regardless of
-    /// outcome - otherwise caller-supplied `server_id`s would grow the map
-    /// without bound.
-    #[tokio::test]
-    async fn test_introspect_server_evicts_map_entry_after_completion() {
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let service =
-            GeneratorService::new().with_servers_base_dir_for_test(temp_dir.path().to_path_buf());
-
-        let params = IntrospectServerParams {
-            server_id: "evict-after-completion".to_string(),
-            command: "echo".to_string(), // not an MCP server, discover_server fails fast
-            args: vec![],
-            env: HashMap::new(),
-            output_dir: None,
-            connect_timeout_secs: None,
-            discover_timeout_secs: None,
-        };
-
-        let result = service
-            .introspect_server(Parameters(params), CancellationToken::new())
-            .await;
-        assert!(
-            result.is_err(),
-            "echo is not an MCP server, expected a connection failure"
-        );
-
-        assert!(
-            service.introspectors.lock().await.is_empty(),
-            "introspectors map should be empty after introspect_server completes, \
-             regardless of success or failure"
-        );
-    }
-
-    /// Same `server_id` must resolve to the same introspector lock, so a
-    /// second `introspect_server` call for that id cannot start
-    /// `discover_server` until the first releases it.
-    #[tokio::test]
-    async fn test_introspector_for_same_id_shares_one_lock() {
-        let service = GeneratorService::new();
-        let server_id = ServerId::new("same-id-lock-test").unwrap();
-
-        let handle_a = service.introspector_for(&server_id).await;
-        let handle_b = service.introspector_for(&server_id).await;
-
-        assert!(
-            Arc::ptr_eq(&handle_a, &handle_b),
-            "the same server_id must reuse one introspector lock"
-        );
-    }
-
-    /// Different `server_id`s must resolve to independent introspector
-    /// locks, so calls for unrelated ids never contend on the same mutex.
-    #[tokio::test]
-    async fn test_introspector_for_different_ids_get_independent_locks() {
-        let service = GeneratorService::new();
-
-        let handle_a = service
-            .introspector_for(&ServerId::new("diff-id-lock-a").unwrap())
-            .await;
-        let handle_b = service
-            .introspector_for(&ServerId::new("diff-id-lock-b").unwrap())
-            .await;
-
-        assert!(
-            !Arc::ptr_eq(&handle_a, &handle_b),
-            "different server_ids must get independent introspector locks"
-        );
-    }
-
-    /// Two holders of the *same* per-id lock (as returned by
-    /// `introspector_for` for one `server_id`) must serialize: the second
-    /// critical section cannot start until the first releases the lock, so
-    /// total wall time is roughly additive (~2x the hold time).
-    #[tokio::test]
-    async fn test_same_id_lock_serializes_concurrent_holders() {
-        let service = GeneratorService::new();
-        let server_id = ServerId::new("same-id-timing-test").unwrap();
-        let hold_time = std::time::Duration::from_millis(150);
-        let serialized_threshold = std::time::Duration::from_millis(250);
-
-        let handle_a = service.introspector_for(&server_id).await;
-        let handle_b = service.introspector_for(&server_id).await;
-
-        let started = std::time::Instant::now();
-        tokio::join!(
-            async {
-                let _guard = handle_a.lock().await;
-                tokio::time::sleep(hold_time).await;
-            },
-            async {
-                let _guard = handle_b.lock().await;
-                tokio::time::sleep(hold_time).await;
-            },
-        );
-        let elapsed = started.elapsed();
-
-        assert!(
-            elapsed >= serialized_threshold,
-            "holders of the same per-id lock should serialize \
-             (expected >= {serialized_threshold:?}, i.e. two back-to-back {hold_time:?} \
-             critical sections); took {elapsed:?}"
-        );
-    }
-
-    /// Two holders of *different* per-id locks (as returned by
-    /// `introspector_for` for different `server_id`s) must not serialize:
-    /// both critical sections run concurrently, so total wall time stays
-    /// close to a single hold, not double it.
-    #[tokio::test]
-    async fn test_different_id_locks_do_not_serialize() {
-        let service = GeneratorService::new();
-        let hold_time = std::time::Duration::from_millis(150);
-        let serialized_threshold = std::time::Duration::from_millis(250);
-
-        let handle_a = service
-            .introspector_for(&ServerId::new("diff-id-timing-a").unwrap())
-            .await;
-        let handle_b = service
-            .introspector_for(&ServerId::new("diff-id-timing-b").unwrap())
-            .await;
-
-        let started = std::time::Instant::now();
-        tokio::join!(
-            async {
-                let _guard = handle_a.lock().await;
-                tokio::time::sleep(hold_time).await;
-            },
-            async {
-                let _guard = handle_b.lock().await;
-                tokio::time::sleep(hold_time).await;
-            },
-        );
-        let elapsed = started.elapsed();
-
-        assert!(
-            elapsed < serialized_threshold,
-            "holders of different per-id locks should not serialize \
-             (expected < {serialized_threshold:?}, i.e. close to a single {hold_time:?} hold); \
-             took {elapsed:?}"
-        );
     }
 
     /// Regression test for spec 004-tracing-instrument-spans's SC-004: concurrent
@@ -2862,79 +2632,10 @@ mod tests {
         }
     }
 
-    /// Regression test for the TOCTOU eviction bug (issue #130): eviction
-    /// must be identity-checked, not just keyed by `server_id`.
-    ///
-    /// Simulates three overlapping callers for the same `server_id`:
-    /// - A and B both call `introspector_for` while an entry already exists,
-    ///   so (per `test_introspector_for_same_id_shares_one_lock`) they share
-    ///   the exact same `Arc<Mutex<Introspector>>`.
-    /// - A finishes first and evicts, removing the shared entry, while B is
-    ///   still "in flight" (still holding its clone of that same `Arc`).
-    /// - C then arrives, finds the map empty, and gets a brand-new `Arc` -
-    ///   distinct from A/B's.
-    /// - B finally finishes and attempts to evict using its (now stale)
-    ///   handle. Because eviction is identity-checked via `Arc::ptr_eq`, this
-    ///   must be a no-op: C's live entry must survive. Only C's own eviction
-    ///   should remove it.
-    #[tokio::test]
-    async fn test_stale_eviction_does_not_remove_unrelated_entry() {
-        let service = GeneratorService::new();
-        let server_id = ServerId::new("toctou-abc-test").unwrap();
-
-        // A and B both fetch the handle for the same id before either
-        // evicts, so they end up sharing one Arc (mirrors the "shares one
-        // lock" behavior already covered by
-        // `test_introspector_for_same_id_shares_one_lock`).
-        let handle_a = service.introspector_for(&server_id).await;
-        let handle_b = service.introspector_for(&server_id).await;
-        assert!(
-            Arc::ptr_eq(&handle_a, &handle_b),
-            "A and B must share one introspector handle for the same server_id"
-        );
-
-        // A finishes first and evicts. B is still "in flight", holding its
-        // clone of the now-removed shared Arc.
-        service.evict_introspector(&server_id, &handle_a).await;
-        assert!(
-            service.introspectors.lock().await.is_empty(),
-            "map should be empty right after A's eviction"
-        );
-
-        // C arrives after A's eviction, finds the map empty, and gets a
-        // fresh, distinct handle.
-        let handle_c = service.introspector_for(&server_id).await;
-        assert!(
-            !Arc::ptr_eq(&handle_b, &handle_c),
-            "C must get a handle distinct from A/B's stale one"
-        );
-
-        // B finally finishes and tries to evict using its stale (A/B
-        // shared) handle. This must be a no-op: C's live entry, keyed by
-        // the same server_id, must survive because it is a different Arc.
-        service.evict_introspector(&server_id, &handle_b).await;
-        let introspectors = service.introspectors.lock().await;
-        let current = introspectors
-            .get(&server_id)
-            .expect("C's entry must survive B's stale eviction attempt");
-        assert!(
-            Arc::ptr_eq(current, &handle_c),
-            "the surviving entry must be C's handle, unaffected by B's stale eviction"
-        );
-        drop(introspectors);
-
-        // Only C's own eviction removes its entry.
-        service.evict_introspector(&server_id, &handle_c).await;
-        assert!(
-            service.introspectors.lock().await.is_empty(),
-            "map should be empty after C's own eviction"
-        );
-    }
-
     // ========================================================================
     // Per-output-directory export locking Tests (issue #169)
     //
-    // Mirrors the `introspector_for` tests above: these exercise the exact
+    // These exercise the exact
     // `Arc<Mutex<()>>` handles and keyed-lock pattern that
     // `save_categorized_tools` relies on via `export_lock_for`, without
     // driving a real export through the filesystem.

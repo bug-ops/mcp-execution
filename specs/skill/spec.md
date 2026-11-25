@@ -121,26 +121,20 @@ never recover parameter descriptions). Now:
    `ScanError::DirectoryNotFound`; any other I/O error (e.g. a symlink loop,
    a permission failure) now propagates as `ScanError::Io` with the real
    underlying cause, instead of being collapsed into `DirectoryNotFound` as
-   before (issue #302's fix). Then canonicalizes `dir/_meta.json` under the
-   same split — `NotFound` → `ScanError::MissingMetadata`, any other kind →
-   `ScanError::Io` — and requires the resolved sidecar path to
-   `starts_with(canonical_base)` — defends against a symlinked
-   `_meta.json` escaping the directory (path-traversal via symlink); that
-   rejection is its own `ScanError::MetadataEscapesDirectory`, never
-   `MissingMetadata` (#483).
-2. Size-checks the sidecar (`MAX_FILE_SIZE`, which is `mcp_core::metadata::MAX_METADATA_FILE_BYTES`,
-   the same constant `mcp-codegen` warns against when it writes a larger sidecar; above it the scan
-   returns `ScanError::FileTooLarge` while generation itself succeeded), then reads `schema_version` from a minimal
-   `SchemaVersionProbe { schema_version: u32 }` (a bare `#[derive(Deserialize)]`, which ignores
-   unknown fields by default) and compares it against `METADATA_SCHEMA_VERSION` **before**
-   attempting a typed `mcp_core::metadata::ServerMetadata` parse (issue #468). This ordering is
-   load-bearing, not cosmetic: a genuine `schema_version: 1` sidecar has no `provenance` key at
-   all (that field was added in schema v2, and `ServerMetadata::provenance` is required, not
-   `Option`), so parsing it directly as the current typed shape would fail first with a generic
-   "missing field `provenance`" `ScanError::MetadataParse`, and `ScanError::UnsupportedSchema` —
-   the error this check exists to produce — could never fire. Only once the probe confirms a
-   matching `schema_version` does the typed `ServerMetadata` parse run. Also checks tool count ≤
-   `MAX_TOOL_FILES`.
+   before (issue #302's fix).
+2. Reads the sidecar through the shared `mcp_core::metadata::read_server_metadata_async` on the canonical directory
+   ([[../core/spec#Reader (`read_server_metadata`, #618)]]); `scan_error` maps each `MetadataReadError`:
+   `NotFound` to `ScanError::MissingMetadata`; `Link` and `NotRegularFile` to
+   `ScanError::MetadataEscapesDirectory` (#483, widened by #618: it now means "the sidecar is not a regular file", so a
+   symlink, FIFO or directory is refused, and a symlinked `_meta.json` is refused even when its target lies inside the
+   directory); `TooLarge` to `ScanError::FileTooLarge` (the cap is `MAX_FILE_SIZE`, which is
+   `mcp_core::metadata::MAX_METADATA_FILE_BYTES`, the same constant `mcp-codegen` warns against when it writes a larger
+   sidecar; generation itself succeeded); `Unreadable` to `ScanError::Io`; `Malformed` to `ScanError::MetadataParse`;
+   `SchemaMismatch` to `ScanError::UnsupportedSchema`. The reader compares `schema_version` **before** the typed parse
+   (issue #468): a genuine `schema_version: 1` sidecar has no `provenance` key, so a direct typed parse would fail first
+   with a generic "missing field `provenance`" and `UnsupportedSchema` could never fire. The scan no longer carries its own
+   `SchemaVersionProbe` or size check. On Unix the reader opens with `O_NOFOLLOW | O_NONBLOCK` and checks the opened file,
+   so a FIFO swapped in during the scan does not block it. The scan also checks tool count ≤ `MAX_TOOL_FILES`.
 3. `verify_tool_files_on_disk`: every sidecar entry's `{typescript_name}.ts`
    must exist on disk, or the whole scan fails with
    `ScanError::StaleMetadata` (naming the tool, the missing file, and
@@ -569,7 +563,7 @@ defends error text that can be LLM-facing (issue #461).
 
 ## 9. Error Conditions
 
-`ScanError`: `Io`, `DirectoryNotFound`, `MissingMetadata`, `MetadataEscapesDirectory` (#483),
+`ScanError`: `Io`, `DirectoryNotFound`, `MissingMetadata`, `MetadataEscapesDirectory` (#483, #618: a sidecar that is not a regular file),
 `MetadataParse`, `UnsupportedSchema { found, expected }`, `TooManyFiles`, `FileTooLarge`,
 `StaleMetadata`. `UnsupportedSchema`'s message carries "re-run 'generate' to regenerate this
 server" guidance, matching its sibling `StaleMetadata` (issue #468).

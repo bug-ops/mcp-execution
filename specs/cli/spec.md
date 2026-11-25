@@ -163,6 +163,34 @@ control chars — the last case specifically catches a `Name: Value`-style
 mistake where the real `=` matched inside a secret value) — because the
 whole string, or the "key" half, may itself be the secret.
 
+### Shared directories and the metadata reader (#618)
+
+```rust
+pub struct ServersDir(PathBuf);   // resolve(Option<PathBuf>) -> Result<Self>; server(&ServerId) -> PathBuf; as_path()
+pub struct SkillsDir(PathBuf);    // same shape; skill(&ServerId) -> PathBuf
+pub fn read_generated_metadata(dir: &Path, server: &ServerId) -> Result<ServerMetadata>;
+pub async fn read_generated_metadata_async(dir: PathBuf, server: &ServerId) -> Result<ServerMetadata>;
+```
+
+- `ServersDir::resolve` and `SkillsDir::resolve` are the only way a command resolves a directory option. `None` gives
+  `~/.claude/servers` or `~/.claude/skills`; `Some` gives the path unchanged, except that a leading `~/` is expanded
+  against the home directory (so `--servers-dir '~/custom'` works when the shell did not expand it). A bare `~` is not
+  expanded (it stays a relative path named `~`). Home is read through `dirs::home_dir()`; when it is needed and unknown
+  the command fails with "Could not determine home directory". `resolve_base_dir` and `read_recorded` no longer exist.
+- Users: `generate` (`--output-dir`, `--progressive-output`), `skill` (`--servers-dir`, the default skills directory),
+  `stats` (`--servers-dir`), `scripts list` and `scripts check` (`--skills-dir`; `check` also `--servers-dir`), `drift`
+  (the skills directory of `scripts_using`), `run` (`--servers-dir` and the `--save` skill directory), and `setup`. `ServerId` rejects separators and `..`, so `server()` and
+  `skill()` cannot leave the base directory.
+- `read_generated_metadata[_async]` wraps the single core reader ([[../core/spec#Reader (`read_server_metadata`, #618)]])
+  for `drift`, `scripts check`, `stats` and the dry-run policy suggestions. `skill` reaches the same reader through
+  `mcp-skill`'s scan ([[../skill/spec]]), so it refuses the same sidecars but keeps `ScanError`'s messages and exit 1 for a
+  schema mismatch. Mapping: `NotFound` is "Metadata not found for
+  '<server>'. Run 'mcp-execution-cli generate' for this server first." (exit 1); `SchemaMismatch` is
+  `CoreError::InvalidArgument` naming both versions and asking to regenerate (exit 2); every other refusal (a symlinked or
+  non-regular sidecar, over 1 MiB, malformed, unreadable) is the reader's message with the context "Cannot use
+  `_meta.json` of '<server>'" (exit 1). A symlinked `_meta.json` is refused everywhere, including when its target lies
+  inside the directory.
+
 ## 4. Debug-Redaction Discipline
 
 Every CLI-facing type that can carry a secret (`Cli`/`Commands` themselves,
@@ -292,19 +320,23 @@ Issue #421: this crate is a *client* of third-party MCP servers
 unsanitized peer input at `debug` level. `RedactingWriter` only rewrites embedded URLs — it does
 not neutralize this, so without a cap, `--verbose` alone (`filter = EnvFilter::new("debug")`, no
 `RUST_LOG` involved at all) streams an untrusted server's raw stdout lines into stderr. `init_logging`
-closes this specific path — *debug-level, raw-line* logging — via a private pure function,
-`cap_rmcp_log_level(EnvFilter) -> EnvFilter`, applied to *both* branches of the `verbose` `if`/`else`
+closes this specific path — *debug-level, raw-line* logging — via the shared pure function
+`mcp_execution_core::log_filter::cap_rmcp_log_level(EnvFilter, LevelFilter) -> EnvFilter` (#608; one copy for `mcp-cli` and
+`mcp-server`, see [[../core/spec#`log_filter` module (`src/log_filter.rs`, feature `tracing-filter`, #608)]]), applied to *both* branches of the `verbose` `if`/`else`
 — not just the non-verbose branch's `try_from_default_env().unwrap_or_else(...)` fallback, since a
 directive folded only into that fallback string would never apply to the verbose branch (which
 never calls `try_from_default_env` at all) and is dead code in the non-verbose branch whenever
 `RUST_LOG` parses successfully:
 
 ```rust
-let filter = cap_rmcp_log_level(if verbose {
-    EnvFilter::new("debug")
-} else {
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
-});
+let filter = cap_rmcp_log_level(
+    if verbose {
+        EnvFilter::new("debug")
+    } else {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+    },
+    LevelFilter::INFO,
+);
 ```
 
 The cap is level-based, not a content filter: `rmcp` also logs a `Debug`-formatted peer
@@ -314,7 +346,7 @@ control characters, unlike the raw-`Display` `message`-field sites this cap targ
 eliminated — the full notification content still reaches stderr. Closing it would require
 content-level sanitization of `rmcp`'s own event, not a level directive, and is out of scope here.
 
-`cap_rmcp_log_level` adds an `rmcp=info` directive via `EnvFilter::add_directive`.
+`cap_rmcp_log_level` adds an `rmcp=<cap>` directive (`info` here; `warn` for the quiet profile) via `EnvFilter::add_directive`.
 `tracing_subscriber` orders directives by target specificity, so this directive (more specific
 than a bare global `debug`) wins over it. An operator who explicitly sets a *more specific*
 directive, e.g. `RUST_LOG=rmcp::transport=debug`, still wins over this one — intentional, since
@@ -402,7 +434,7 @@ command.
    such a line like any malformed one). A file of any size therefore never fails the command; only an
    unreadable or missing file does (`anyhow` error "failed to read observed shapes from <path>"). The
    flag changes nothing but the result-type hint of tools without an output schema.
-5. `resolve_base_dir(output_dir)` — defaults to `~/.claude/servers`.
+5. `ServersDir::resolve(output_dir)` (section 3, replaces `resolve_base_dir`, #618) — defaults to `~/.claude/servers`; a leading `~/` is expanded.
 6. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
    size, human-readable `format_size`) **without writing anything to
    disk** — the only place in this workspace that previews generated
@@ -590,13 +622,15 @@ Validates the local runtime is ready to execute generated tools:
    count) anywhere under `~/.claude/servers/`, at any depth — the walk
    recurses into nested subdirectories (e.g. `{server-id}/_runtime/`) rather
    than stopping at the server-id level — skipping symlinked entries rather
-   than following them (`skipped_entries` count), and reports whether a
-   servers directory exists at all.
+   than following them (`skipped_entries` count), counting every entry it
+   could not process (`failed_entries`, below), and reports whether a
+   servers directory exists at all. The directory is resolved through the
+   shared `ServersDir::resolve(None)` (section 3).
 3. Reports whether `~/.claude/mcp.json` exists, printing a starter example
    if not.
 
 Non-Unix platforms always report `servers_dir_found: false`,
-`files_made_executable: 0`, `skipped_entries: 0` (permission bits aren't a
+`files_made_executable: 0`, `skipped_entries: 0`, `failed_entries: 0` (permission bits aren't a
 concept there).
 
 **Symlink rejection** (issue #476, extended to arbitrary depth by #489): the
@@ -647,6 +681,18 @@ single entry's failures (#503): an entry whose `file_type()` fails is skipped, a
 `metadata()` or `set_permissions()` call fails (`make_executable`) is skipped with a warning and not counted in
 `files_made_executable`, so one problematic file never aborts the walk.
 
+**No silent partial success** (#610): below the root, each failure above that leaves part of the tree untouched also
+increments `SetupResult::failed_entries` (JSON field; Unix only, 0 elsewhere), once per event, in addition to the warning:
+(a) an entry whose `file_type()` fails; (b) a `.ts` file whose `make_executable` fails (`metadata()` or
+`set_permissions()`); (c) a subdirectory whose `read_dir` fails (the whole subtree is unlisted, counted once); (d) a
+`next_entry()` error mid-directory (the rest of that directory is unread, counted once, the directory is then treated as
+exhausted). `skipped_entries` stays symlink-only. The pretty summary adds `Could not make N entr(y|ies) executable (see
+warnings above)` and closes with `Runtime setup finished with warnings` instead of `Runtime setup complete` when
+`failed_entries > 0`. The exit code stays 0 (`ExitCode::SUCCESS`): a skipped symlink is already a warning-class condition
+at exit 0 in this CLI, and a failed entry is reported in the output rather than by the exit code. Internally the walk
+returns a private `WalkReport { made_executable, skipped_entries, failed_entries }` (`None` when there is no servers
+directory), replacing the earlier tuple.
+
 The walk's root (`~/.claude/servers/` itself) is the one exception: failing
 to *open* the root is still fatal and propagates as an error. Unlike a
 nested directory, the root has no sibling directories whose processing needs
@@ -664,7 +710,7 @@ completion of the walk is preferred over failing the whole command over it.
 The core walk is exposed as `check_files_executable_in(servers_dir: &Path)`
 for testing without `HOME` mutation; the public, no-argument
 `check_files_executable()` resolves `~/.claude/servers/` and delegates to it.
-`check_files_executable_in` opens the root directory itself (propagating on
+`check_files_executable_in` (returns `Result<Option<WalkReport>>`) opens the root directory itself (propagating on
 failure) and hands the resulting iterator to `walk_entries`, the shared
 per-entry loop also used — via the `walk_and_chmod` wrapper, which supplies
 the skip-and-warn open — for every recursive (non-root) directory.
@@ -765,11 +811,40 @@ itself.
   (0600 in a 0700 dir) and removed after the run.
 - Constants: `DRAIN_GRACE` 2 s; timeout 1..=600 s, default 60 s; `kill_on_drop` plus kill on timeout.
 - Exit mapping: script exit 0 gives 0; non-zero exit or signal gives 6 (`SCRIPT_FAILED`); runner timeout 4; runner
-  input errors 2; other runner failures 1.
-- Trailer: `[mcp-execution <token>] script_status exit N | signal N | timed out`. Stdout notices (cut, drain
+  input errors 2; other runner failures 1; the runner stopped by SIGINT gives 130 (`INTERRUPTED`) and by SIGTERM 143
+  (`TERMINATED`) (#627).
+- Signals (#627, `runtime/signal.rs`, `commands/run.rs`, `runtime/exec.rs`): `Termination::install` registers SIGINT and
+  SIGTERM on Unix, and Ctrl-C and Ctrl-Break on Windows (both report as SIGINT); a failed registration logs a warning and
+  that source stays silent. The handle is installed right after `refuse_inside_run` and is raced against every phase:
+  reading a stdin script and writing its snapshot, the type check, a pre-spawn check, and the script process. The first
+  signal wins, and cancellation is checked **before** the script's own exit status (`biased` select), so a script that traps
+  SIGINT and exits 0 still gives 130, also when the signal reached the whole process group (a terminal Ctrl-C). The script
+  (node) and a running `tsc` are killed. Every cancel path returns `Ok(130 | 143)`, never `Err`: tokio's stdin read cannot
+  be cancelled, and only an `Ok` result reaches `process::exit`, so an `Err` would leave the runtime waiting for stdin EOF.
+  For the same reason a failed write of the cancel notice or of the report (a closed or broken stderr or stdout) is only
+  logged. A cancel before the script starts writes `run cancelled by SIGINT; the script was not read` (stdin script not yet
+  read) or `...; the script was not started` (type check or pre-spawn) to stderr, and the run directory (a stdin snapshot included) is
+  removed best-effort; the pre-spawn `now_or_never` check is best-effort, a signal that slips past it is caught by the cancel-first
+  select and kills the freshly spawned node (same exit code). A cancelled script reports the trailer status `cancelled by
+  SIGINT|SIGTERM` and JSON `script_status` the same text; the call journal summary is printed (the status is not `exit 0`).
+- Wrap-up (`wrap_up` in `commands/run.rs`): after the script ends, `run` waits for `helper.finish()` (closing the helper and
+  the MCP sessions) **without a bound** while no signal has arrived, so a normal run always reports its call summary, the
+  `--dry-run` report and the journal marker. The bound `WRAP_UP_BOUND` (4 s) applies only once a signal has arrived: the
+  script was already cancelled, or a signal arrives during the wrap-up (the status then becomes `Cancelled(signal)`, exit
+  130/143). Under the bound, a further signal cuts the wrap-up at once; when the bound expires or the wrap-up is cut, the
+  call summary is dropped and the notice `call summary dropped: closing the MCP sessions was cut short` is added.
+- Residual (documented in `run --help`): SIGKILL cannot be handled. If the runner is killed that way, the script process
+  it started can keep running. The tsc process tree is also not killed on timeout or cancel (`kill_on_drop` stops only the
+  direct child; #622 item 3 is deferred, follow-up).
+- Trailer: `[mcp-execution <token>] script_status exit N | signal N | timed out | cancelled by SIGINT|SIGTERM`. Stdout notices (cut, drain
   abandoned, timeout) go to stdout and the stderr cut notice to stderr, all carrying the token. JSON mode prints no
   anchor and no stderr; the envelope holds `token`, `script_status`, `exit_code`, `stdout`/`stderr` (`text`, `bytes`,
   `truncated`, `spill`) and `notices`. A spill failure degrades to a notice, never a runner failure.
+- Spill notice wording (#625): `<stream> cut at <shown> of <total> bytes; <kept> saved to <path>`, where `<kept>` is `full
+  output` when the capture held every byte and `first <N> bytes` when the 8 MiB capture limit cut the stream (the file then
+  holds only `N` bytes, `MAX_SPILL_FILE_BYTES` = 8388608), or the notice ends `could not be saved` when no spill file
+  could be written. `--format json` carries the same notice text in `notices`; its stream objects do not state that the
+  spill file holds only the first bytes.
 - Deviations (see the runtime plan): `ScriptStatus::TimedOut` for a runner kill; the wave-1 refusal of unwired flags
   (`reject_unwired_flags`) is gone: `--restrict`, `--typecheck` and `--save` landed in wave 2, `--dry-run` and
   `--policy` in wave 3 (section 18).
@@ -781,19 +856,22 @@ itself.
 - Reads `_meta.json` (schema v3) and file sizes only, never file contents. Types: `Bytes`, `TokenEstimate`,
   `Measure{Available,NotAvailable}`, `StatsReport`. Estimate is `bytes.div_ceil(4)` (`BYTES_PER_TOKEN_ESTIMATE`);
   bytes are always printed ([[../decisions/ADR-562-context-cost-estimator]]).
-- An older schema is invalid input (exit 2, "regenerate", nothing on stdout). A missing tool file or catalog is "not
+- The sidecar is read through `read_generated_metadata` (section 3): a schema mismatch is invalid input (exit 2,
+  "regenerate", nothing on stdout), a symlinked or non-regular sidecar is refused. A missing tool file or catalog is "not
   available", and the total over tool files is then also unavailable. Symlinked or non-regular files count as not
-  available. Bounds: `MAX_METADATA_FILE_BYTES`, `MAX_TOOL_COUNT`. One text form for every `--format`.
+  available. Bounds: `MAX_METADATA_FILE_BYTES`, `MAX_TOOL_COUNT`. One text form for every `--format`. `--servers-dir`
+  expands a leading `~/`. All file measurement for one run happens in a single `spawn_blocking` (#621), not one hop per
+  tool, bounded by `MAX_TOOL_COUNT`.
 - "All tool files" excludes `index.ts` and runtime files; "one tool file" is the mean, rounded down; the output-schema
   share counts `Declared` and `Degraded`.
 
 ### `drift` (#580, `commands/drift.rs`)
 
-- Flow: `ServerFlags`, `resolve_server_config`, `~/.claude/servers/<server id>/_meta.json` (bounded, in-directory,
-  schema v3), `Introspector::discover()`, fingerprint first, then `ToolDigest::compute` over
+- Flow: `ServerFlags`, `resolve_server_config`, `~/.claude/servers/<server id>/_meta.json` read through
+  `read_generated_metadata_async` (bounded, regular non-symlink file, schema v3; section 3), `Introspector::discover()`, fingerprint first, then `ToolDigest::compute` over
   `ToolInfo::digest_entry`, then a name diff. Types: `DriftOutcome{NoDrift,EndpointDiffers,ToolsDiffer{added,removed}}`.
 - Exit: 0 no drift; 5 (`CHECK_FAILED`) drift or endpoint differs; could-not-complete errors use the runner
-  classification (a missing directory gives 1). Writes nothing; prints no descriptions.
+  classification (a missing directory gives 1; a `_meta.json` schema-version mismatch gives 2, distinct from drift, #618). Writes nothing; prints no descriptions.
 - Output: names through `sanitize_untrusted_inline`, at most `MAX_PRINTED_NAMES` 20 per list plus "and N more"
   (`MAX_NAME_CHARS` 128); ttl and cache scope printed when present, with a credentials notice for `Private`; the same
   names with a different digest print "which tool changed cannot be determined". Summaries say "server changed" or
@@ -802,12 +880,13 @@ itself.
   `--progressive-output` with the names and meaning of `generate`. The location derivation is shared with `generate`
   (`name_override()` and `generated_location()` in `commands/generate.rs`; `resolve_server_dir_name` takes
   `&ServerId`), so a package generated with `--name` or `--progressive-output` is found. The skills directory for
-  FR-045.18 is `~/.claude/skills/<id>`, id being the `--name` override or the server id.
+  FR-045.18 is `SkillsDir::resolve(None).skill(<id>)` (`~/.claude/skills/<id>`), id being the `--name` override or the server id.
 - FR-045.18 (wave 2): after a `ToolsDiffer` with removed tools, `scripts_using()` lists the saved scripts
   (`scripts::list`) that name a removed tool of this server, through the same bounded and sanitised `NameList` (report
   field `scripts_using_removed_tools`, text heading "saved scripts using a removed tool"). Best effort: a missing
   skill directory or a `list` error gives no names. Only removed tools count: changed tools are not detectable, since
-  no per-tool digests are recorded. `read_recorded` is `pub(crate)` and reused by `scripts check`.
+  no per-tool digests are recorded. `read_recorded` is gone (#618): `drift` and `scripts check` both call
+  `read_generated_metadata_async`.
 
 ### Logging profile for `call`, `run` and `helper`
 
@@ -840,6 +919,9 @@ it.
   turns a line over `MAX_HELPER_LINE_BYTES` into `call_failed` "result exceeds N bytes". A request that cannot be
   parsed or exceeds the bound gets `call_failed` with its `id` echoed when parseable, else id `0`, and the channel
   closes; clients start ids at 1 and treat a close as rejecting every pending call.
+- Ownership (#620, #628): `CallHooks::execute` and `SessionPool::call` take the `Request` by value and move its arguments
+  into the `ToolCall`; `classify` takes the `CallToolResult` by value and moves the value out; the journal digest and
+  argument size are computed from the arguments map by reference, before the move, without cloning it.
 - Pool (`pool.rs`): `ServerId` to `Arc<OnceCell<Session>>`; the lock is released before the connect await; a failed
   init evicts only when `Arc::ptr_eq` matches; `MAX_POOLED_SERVERS` 16. Servers resolve through
   `resolve_server_config(ServerSource::Config)`, so the helper reads `mcp.json` (`HelperConfig::servers_dir` also
@@ -875,6 +957,14 @@ it.
   most `MAX_TYPECHECK_SERVER_DIRS` 256 listed), `paths` (`mcp:helpers` to a written `helpers.d.ts`, `mcp:*` to
   `<servers>/*/index.ts`) and `include` (script and helpers); no `extends`; the script is never read. `tsc -p ...
   --noEmit --pretty false`, `TYPECHECK_TIMEOUT` 60 s (skipped on timeout), found with `which`.
+- Output capture (#622): `tsc` runs with piped stdout and stderr read through the same `PipeCapture` and `drain(.., DRAIN_GRACE)`
+  as the script, each stream capped at `MAX_SPILL_FILE_BYTES` (8 MiB) and always drained so `tsc` never stalls. Exit 0 is
+  `Passed` whatever the capture holds (a cut stream is ignored). A failed run is classified from the captured text, and when
+  a stream was cut the line `tsc output exceeded 8388608 bytes; remaining diagnostics were not read` follows the bounded
+  diagnostics; a `Skipped` outcome is left as is. Each distinct file named by the diagnostics is canonicalized once
+  (`distinct_files`, a `HashMap`), not once per diagnostic group. A signal during the type check kills `tsc` (section 16).
+  Residual: the tsc process tree is not killed on timeout or cancel, and the capture tasks are detached rather than aborted
+  (deferred #622 item 3).
 - Skipped with a `typecheck skipped: <reason>` notice after the anchor when `tsc` is not on PATH ("tsc was not found on
   PATH"), when it does not finish within 60 s, or when the environment is unresolved (below). A real problem in the
   script fails: at most `MAX_DIAGNOSTIC_LINES` 20 and `MAX_DIAGNOSTIC_BYTES` 4096, escaped, to stderr before node
@@ -929,8 +1019,11 @@ it.
 ### `scripts list` and `scripts check` (#579, `commands/scripts.rs`)
 
 - `list` prints `name [writes]: description (tools)`; `check` prints `script: missing tool server/tool` and
-  `file.ts: invalid header` and exits 5 on any problem, 0 when clean; `--format json` is structured. `check` reads
-  `~/.claude/servers/<server>/_meta.json` (no `--servers-dir` in the frozen args).
+  `file.ts: invalid header` and exits 5 on any problem, 0 when clean; `--format json` is structured. `check` takes
+  `--servers-dir` (#619; `CheckArgs` wraps the shared `ScriptsArgs` and the option, `ScriptsAction::Check(CheckArgs)`) and
+  reads `<servers-dir>/<server>/_meta.json`, default `~/.claude/servers`, through `read_generated_metadata_async`: a missing
+  sidecar is exit 1, a schema-version mismatch exit 2, a symlinked sidecar refused. `--skills-dir` and `--servers-dir` expand
+  a leading `~/` (section 3).
 
 ### Run marker, pipe descriptor and Windows binary resolution (D25)
 
@@ -980,9 +1073,15 @@ known-folder API behind `dirs` ignores the environment, which would make the sta
   `runtime/dirs.rs`, which spill also uses. A journal creation error fails the run with exit 1 instead of silently
   disabling the journal (architect, D19).
 - Digest: SHA-256 over the domain tag `mcp-execution/journal/args/v1\0`, the key and the canonical arguments;
-  `canonical_args` sorts keys recursively, since `serde_json` keeps insertion order workspace-wide.
+  `canonical_args` sorts keys recursively, since `serde_json` keeps insertion order workspace-wide. `Journal::digest` takes
+  the arguments map by reference and returns the digest with the canonical size, serializing through private sorted
+  serializers, so the arguments are not deep-cloned (#620). The summary's `args=` prefix is the first 12 hex characters of
+  the digest (#628), and the writer queue takes line text by move.
 - Lines: `start {event,seq,server,tool,digest (64 hex),args_bytes}` recorded before the call is sent, `end
-  {event,seq,status,duration_ms,result_bytes}`, `truncated {event,dropped}`. The file holds server id, tool name, keyed
+  {event,seq,status,duration_ms,result_bytes}`, `truncated {event,dropped}`. `result_bytes` is the length of the whole
+  encoded response line, newline included (`{"id":N,"value":...}\n`, #620), for a value body and 0 for any other body; a
+  response replaced for exceeding `MAX_HELPER_LINE_BYTES` is journaled with status `failed` and the size of the original
+  response (`EncodedResponse::Replaced::original_bytes`), not the replacement's. The file holds server id, tool name, keyed
   digest, argument size, status, duration and result size only, never a value or server text. One writer task flushes
   each line. Caps: 2000 lines and 1 MiB per file, with a reserved `MARKER_RESERVE` 256 bytes for the truncation marker.
 - Summary (`finish`): printed only when the script status is not `exit 0` (timeout, signal, non-zero exit): `call
@@ -1092,6 +1191,7 @@ the script-first skill package (default name, name validation, body shape); that
 | FR-037.9 | THE SYSTEM SHALL remove expired journals under the same confinement as creation | must |
 | FR-037.10 | THE SYSTEM SHALL flush each entry as it is written, and record concurrent calls without interleaving corruption | must |
 | FR-037.11 | WHEN the run succeeds THE SYSTEM SHOULD NOT print the summary by default | should |
+| FR-037.12 | WHEN a response is replaced for exceeding the helper line bound THE SYSTEM SHALL journal the call as failed with the size of the original response, and for a delivered value SHALL record the length of the whole response line as the result size | must |
 
 No requirement in this section may rely on a server's read-only
 hint. Tool and server names in the summary come from an untrusted server and are
@@ -1203,6 +1303,7 @@ Mechanism: the Node.js permission model through `--restrict` (section 17), Unix 
 | FR-042.1 | WHERE a TypeScript compiler is available THE SYSTEM SHOULD typecheck a script against the generated SDK before executing it | should |
 | FR-042.2 | WHEN the compiler is absent THE SYSTEM SHALL run the script and say the check was skipped | must |
 | FR-042.3 | THE SYSTEM SHALL bound the diagnostics it shows and treat their text as untrusted | must |
+| FR-042.4 | THE SYSTEM SHALL cap the compiler's output at 8 MiB per stream while still draining it, treat exit 0 as a pass whatever the capture holds, and say when a failing check's output was cut | must |
 
 A type error blocks the run before node starts (exit 2); an absent compiler or a diagnostic set made only of missing Node types is skipped with a notice; the compiler is found with `which` (section 17). The cost against runner start-up is bounded by `TYPECHECK_TIMEOUT` 60 s.
 
@@ -1306,6 +1407,8 @@ a second one.
 | FR-036.20 | WHEN the run command is invoked THE SYSTEM SHALL take the script from a file or from standard input, take the time limit and output budget as options bounded by a hard maximum, and pass script arguments to the script as data, never interpolated into a command line | must |
 | FR-036.21 | WHEN the runner itself fails (unreadable script, invalid option, missing runtime, unusable spill location, timeout) THE SYSTEM SHALL exit with the classification of §5 (invalid input 2, timeout 4, other 1) and a one-line message that does not echo script text; WHEN the script exits non-zero by itself THE SYSTEM SHALL propagate its status without remapping it onto the classified codes | must |
 | FR-036.22 | THE SYSTEM SHALL give every new type that carries script text, script arguments or environment values a hand-written redacting `Debug`, and the `Commands` value SHALL never print them (§4) | must |
+| FR-036.23 | WHEN the runner receives SIGINT or SIGTERM during `run` (also when the signal reaches the whole process group) THE SYSTEM SHALL stop the script and any running type check, take cancellation before the script's own exit status, and exit 130 or 143 through a normal return, including while a stdin script is still being read | must |
+| FR-036.24 | WHEN the output capture limit cut a spilled stream THE SYSTEM SHALL say that only the first bytes were saved, not that the full output was | must |
 | FR-039.20 | WHEN the call command is invoked THE SYSTEM SHALL select the server with the same selectors as `introspect` (`ServerFlags`, `ServerSource`, §2, §3), take the arguments as a single JSON object, and validate the server as a `ServerId` and the tool as a `ToolName` before connecting | must |
 | FR-039.21 | WHEN the JSON argument is malformed or is not a single object THE SYSTEM SHALL exit with invalid input and report the failure without repeating any part of the argument | must |
 | FR-039.22 | THE SYSTEM SHALL map call failures onto §5 (connection failure and resource limit 3, timeout 4, invalid input 2) and state the class of a tool-reported error | must |
@@ -1316,7 +1419,7 @@ a second one.
 - The call command is a client of the shared connect step that the introspector owns; this crate owns no
   connection code ([[#One-shot tool call through the authoritative client (#574, FR-039)]]).
 - `execute_command` keeps resolving to a classified exit code and never propagates a handler failure as `Err`
-  (§5); `main.rs` still calls `std::process::exit` only after classification.
+  (§5; a signal-cancelled `run` returns `Ok(130 | 143)`, §16); `main.rs` still calls `std::process::exit` only after classification.
 - Help text of the run command states that scripts run with the user's privileges and without a sandbox.
 
 **Resolved and open decisions.**
@@ -1354,6 +1457,7 @@ saved scripts therefore belong beside `SKILL.md`, and the commands that touch th
 | FR-044.16 | WHEN the check finds a problem THE SYSTEM SHALL exit non-zero with a code distinct from usage and I/O errors | must |
 | FR-044.17 | WHEN the run command is given a save option THE SYSTEM SHALL save exactly the executed text under an explicit script name and header, refuse an existing name unless overwrite is requested, and write nothing when the header or name is invalid | should |
 | FR-044.18 | THE SYSTEM SHALL NOT execute a saved script as a side effect of saving, listing or checking | must |
+| FR-044.19 | WHEN the user checks saved scripts THE SYSTEM SHALL accept `--servers-dir` for the generated servers directory, expand a leading `~/` in every directory option, and exit 2 on a `_meta.json` schema-version mismatch | must |
 
 **Constraints.**
 
@@ -1363,7 +1467,7 @@ saved scripts therefore belong beside `SKILL.md`, and the commands that touch th
 
 **Resolved and open decisions.**
 
-- Resolved: `scripts list` and `scripts check` take `--server ID [--skills-dir]`, and `run --save NAME [--overwrite]` saves the script that ran (section 17). Problems found exit 5 (`CHECK_FAILED`). Saving happens only after the script exits 0.
+- Resolved: `scripts list` and `scripts check` take `--server ID [--skills-dir]` (`check` also `--servers-dir`, #619), and `run --save NAME [--overwrite]` saves the script that ran (section 17). Problems found exit 5 (`CHECK_FAILED`). Saving happens only after the script exits 0.
 - [NEEDS CLARIFICATION: a check of a skill whose server directory is missing or stale: reported as unreadable, distinct from a missing tool.]
 
 Ask first: adding an `ExitCode` constant; the recipe header format (decision record, see the skill block).
@@ -1415,6 +1519,20 @@ Ask first: changing `ServerInfo` public fields to carry `ttl_ms` and `cache_scop
 the exit code values.
 
 **Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
+
+### Runtime hardening batch (#627, #625, #620, #628, #623, #618, #621, #619, #622, #610, #608, #611, #607, #624)
+
+One change closes the issues above; their behaviour is recorded in sections 3, 10, 16, 17 and 18 and in the core, skill,
+server and codegen specs. Behaviour changes for users: a symlinked `_meta.json` is refused everywhere; a schema-version
+mismatch in `drift` and `scripts check` exits 2; a leading `~/` is expanded in every directory option; a `run` stopped by
+SIGINT or SIGTERM exits 130 or 143.
+
+Deferred or excluded:
+- #622 item 3 (kill the whole `tsc` process tree on timeout or cancel) is deferred to a follow-up; items 1, 2 and 4 are
+  built (item 4 needed no change, the code already used `tokio::fs::metadata`).
+- #615 and #475 are out of scope and stay open.
+- `mcp-server` still builds `~/.claude/{servers,skills}` inline (follow-up, P4); `ServersDir`/`SkillsDir` live in `mcp-cli`.
+- Not built: a bare `~` is not expanded (it is a relative path named `~`).
 
 ## 20. See Also
 
