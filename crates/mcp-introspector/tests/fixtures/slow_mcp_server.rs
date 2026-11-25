@@ -28,6 +28,13 @@
 //! directory on the second. This lets `tests/timeout_test.rs` assert
 //! that `ServerConfig::env`/`ServerConfig::cwd` actually reach the spawned
 //! child process, rather than only being covered at the config-object level.
+//!
+//! Startup latency (#606): the >150 ms start seen under nextest on macOS (#592) was not
+//! reproduced and its cause is unidentified. Spawn to pid-file write on macOS 27.2 arm64
+//! (12 cores) took p50 4-6 ms and p95 under 14 ms: direct spawn, the first exec of a freshly
+//! linked binary (11 ms), 12 to 36 busy loops, and 12 parallel nextest processes. The worst
+//! sample was 55 ms during a cold workspace build. The 3 s `FIXTURE_STARTUP_BUDGET` in
+//! `tests/timeout_test.rs` is therefore a wide margin rather than a measured bound.
 #![expect(
     clippy::expect_used,
     reason = "test, bench and example code may panic on failure"
