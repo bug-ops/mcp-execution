@@ -55,6 +55,7 @@ struct Runner {
 struct Finished {
     code: Option<i32>,
     stdout: String,
+    stderr: String,
     elapsed: Duration,
 }
 
@@ -127,6 +128,7 @@ impl Runner {
         Finished {
             code,
             stdout: self.out.take().unwrap().join().unwrap(),
+            stderr: self.err.take().unwrap().join().unwrap(),
             elapsed,
         }
     }
@@ -337,4 +339,96 @@ fn run_exits_130_and_stops_tsc_when_interrupted_during_the_type_check() {
     );
     assert_gone(tsc_pid);
     assert!(finished.elapsed < EXIT_WITHIN);
+}
+
+/// A `node` shim first on `PATH` that starts a long-running child without `exec` and waits for
+/// it. Dropping it kills the child, so a failing test leaves nothing behind.
+struct HangingNode {
+    pid_file: PathBuf,
+    path: std::ffi::OsString,
+}
+
+impl HangingNode {
+    fn install(sb: &Sandbox) -> Self {
+        let dir = sb.root.join("hanging");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = sb.root.join("node-child.pid");
+        let shim = dir.join("node");
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\n/bin/sleep 60 &\necho $! > '{}'\nwait\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        Self { pid_file, path }
+    }
+
+    /// A `run` of a script that must never start, with this shim as `node`.
+    fn runner(&self, sb: &Sandbox) -> Runner {
+        let script = sb.script("never.ts", "console.log('SHOULD-NOT-RUN');\nexport {};\n");
+        let mut cmd = run_command(sb, &script, &pid_file(sb), &[]);
+        cmd.env("PATH", &self.path);
+        Runner::start(cmd, false)
+    }
+}
+
+impl Drop for HangingNode {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.pid_file) {
+            common::send_signal("KILL", pid.trim());
+        }
+    }
+}
+
+#[test]
+fn run_exits_143_on_sigterm_during_the_node_check_and_leaves_no_process() {
+    let sb = Sandbox::new();
+    let node = HangingNode::install(&sb);
+    let runner = node.runner(&sb);
+    let child = wait_for_pid(&node.pid_file);
+
+    runner.signal_runner("TERM");
+    // Below the 10 s version timeout, so the signal and not the timeout ended the run.
+    let finished = runner.finish(Duration::from_secs(8));
+
+    assert_eq!(finished.code, Some(143), "{}", finished.stderr);
+    assert!(
+        finished.stderr.contains("the script was not started"),
+        "{}",
+        finished.stderr
+    );
+    assert_gone(child);
+    assert!(
+        sb.state_files("runs").is_empty(),
+        "{:?}",
+        sb.state_files("runs")
+    );
+}
+
+/// Takes the 10 s Node.js version timeout.
+#[test]
+fn run_gives_up_on_a_hanging_node_with_the_timeout_error_and_leaves_no_process() {
+    let sb = Sandbox::new();
+    let node = HangingNode::install(&sb);
+    let runner = node.runner(&sb);
+    let child = wait_for_pid(&node.pid_file);
+
+    let finished = runner.finish(Duration::from_secs(40));
+
+    assert_ne!(finished.code, Some(0), "{}", finished.stdout);
+    assert!(
+        finished
+            .stderr
+            .contains("Node.js did not answer `node --version` within 10 s"),
+        "{}",
+        finished.stderr
+    );
+    assert_gone(child);
 }

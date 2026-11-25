@@ -187,3 +187,77 @@ fn drift_keeps_the_undetermined_notice_for_metadata_without_tool_digests() {
         "{report}"
     );
 }
+
+const CHANGED_SCRIPTS_HEADING: &str = "saved scripts using a changed tool";
+
+fn save_script(sb: &Sandbox, name: &str, tools: &[&str]) {
+    sb.saved_script(
+        SERVER,
+        name,
+        &common::script_text(name, "calls tools", tools, "export {};"),
+    );
+}
+
+#[test]
+fn drift_json_lists_saved_scripts_that_use_a_changed_tool_apart_from_removed_ones() {
+    let Some(sb) = generated("drift_json_lists_saved_scripts_that_use_a_changed_tool") else {
+        return;
+    };
+    save_script(&sb, "uses-alpha", &["mutable/alpha"]);
+    save_script(&sb, "uses-beta", &["mutable/beta"]);
+    save_script(&sb, "uses-both", &["mutable/alpha", "mutable/beta"]);
+    save_script(&sb, "uses-other", &["elsewhere/alpha"]);
+    set_tools(&sb, &[tool("alpha", "number")]);
+
+    let (code, report) = drift_json(&sb);
+
+    assert_eq!(code, Some(5), "{report}");
+    assert_eq!(
+        report["scripts_using_changed_tools"],
+        json!({ "names": ["uses-alpha", "uses-both"], "more": 0 }),
+        "{report}"
+    );
+    assert_eq!(
+        report["scripts_using_removed_tools"],
+        json!({ "names": ["uses-beta", "uses-both"], "more": 0 }),
+        "{report}"
+    );
+}
+
+#[test]
+fn drift_text_lists_saved_scripts_that_use_a_changed_tool() {
+    let Some(sb) = generated("drift_text_lists_saved_scripts_that_use_a_changed_tool") else {
+        return;
+    };
+    save_script(&sb, "uses-alpha", &["mutable/alpha"]);
+    save_script(&sb, "uses-beta", &["mutable/beta"]);
+    set_tools(&sb, &[tool("alpha", "number"), tool("beta", "string")]);
+
+    let out = drift(&sb);
+
+    assert_eq!(out.code, Some(5), "{} {}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains(CHANGED_SCRIPTS_HEADING),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("uses-alpha"), "{}", out.stdout);
+    assert!(!out.stdout.contains("uses-beta"), "{}", out.stdout);
+}
+
+#[test]
+fn drift_json_always_carries_the_changed_tool_script_list() {
+    let Some(sb) = generated("drift_json_always_carries_the_changed_tool_script_list") else {
+        return;
+    };
+    save_script(&sb, "uses-alpha", &["mutable/alpha"]);
+
+    let (code, report) = drift_json(&sb);
+
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(
+        report["scripts_using_changed_tools"],
+        json!({ "names": [], "more": 0 }),
+        "{report}"
+    );
+}

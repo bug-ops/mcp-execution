@@ -13,8 +13,13 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
-use common::{Out, Sandbox, WATCHDOG, require_alt_runtime, require_node, run_with_watchdog};
+use common::{
+    KillOnDrop, Out, Sandbox, WATCHDOG, assert_gone, require_alt_runtime, require_node,
+    run_with_watchdog, send_signal, wait_for_exit, wait_for_pid,
+};
 use serde_json::{Value, json};
 
 const CAVEAT: &str = "run, --typecheck and --restrict need Node.js 22.18.0 (23.6.0 on the 23 line)";
@@ -247,7 +252,7 @@ fn setup_times_out_a_hanging_probe_and_removes_the_probe_file() {
 
     assert_ne!(out.code, Some(0), "{}", out.stdout);
     assert!(
-        out.elapsed < std::time::Duration::from_secs(40),
+        out.elapsed < Duration::from_secs(40),
         "took {:?}",
         out.elapsed
     );
@@ -305,4 +310,90 @@ fn setup_accepts_the_real_bun() {
 #[test]
 fn setup_accepts_the_real_deno() {
     assert_setup_accepts_the_real("deno", &["eval", "console.log(Deno.execPath())"]);
+}
+
+/// Kills the process named in the pid file on drop, so a failing test leaves nothing behind.
+struct KillPidFile(PathBuf);
+
+impl Drop for KillPidFile {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.0) {
+            send_signal("KILL", pid.trim());
+        }
+    }
+}
+
+/// A `node` shim that starts a long-running child without `exec` and waits for it; returns the
+/// guard holding the child's pid file.
+fn install_hanging_node(fakes: &Fakes) -> KillPidFile {
+    let pid_file = fakes.sb.root.join("node-child.pid");
+    fakes.install(
+        "node",
+        &format!("/bin/sleep 60 &\necho $! > '{}'\nwait", pid_file.display()),
+    );
+    KillPidFile(pid_file)
+}
+
+fn child_pid(guard: &KillPidFile) -> u32 {
+    wait_for_pid(&guard.0, Duration::from_secs(30), "node was not started")
+}
+
+/// Takes the 10 s Node.js version timeout.
+#[test]
+fn setup_gives_up_on_a_hanging_node_falls_back_to_bun_and_leaves_no_process() {
+    let fakes = Fakes::new();
+    let guard = install_hanging_node(&fakes);
+    fakes.install("bun", &prints("1.3.0"));
+
+    let out = fakes.setup(&["--format", "json"]);
+
+    assert!(
+        out.elapsed < Duration::from_secs(40),
+        "took {:?}",
+        out.elapsed
+    );
+    let result = parsed(&out);
+    assert_eq!(result["runtime"]["name"], "bun", "{result}");
+    assert_gone(
+        child_pid(&guard),
+        Duration::from_secs(5),
+        "the child of the node shim",
+    );
+}
+
+/// Takes the 10 s Node.js version timeout.
+#[test]
+fn setup_names_the_node_timeout_when_no_other_runtime_exists() {
+    let fakes = Fakes::new();
+    let _guard = install_hanging_node(&fakes);
+
+    let out = fakes.setup(&[]);
+
+    assert_ne!(out.code, Some(0), "{}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("Node.js did not answer `node --version` within 10 s"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn setup_cancelled_during_the_node_check_leaves_no_process_of_the_node_tree() {
+    let fakes = Fakes::new();
+    let guard = install_hanging_node(&fakes);
+    let mut cmd = fakes.sb.command();
+    cmd.env("PATH", &fakes.bin)
+        .current_dir(&fakes.cwd)
+        .arg("setup")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut setup = KillOnDrop(cmd.spawn().unwrap());
+    let pid = child_pid(&guard);
+
+    send_signal("TERM", &setup.0.id().to_string());
+    let code = wait_for_exit(&mut setup.0, Duration::from_secs(8), "setup did not stop");
+
+    assert_eq!(code, Some(143));
+    assert_gone(pid, Duration::from_secs(5), "the child of the node shim");
 }

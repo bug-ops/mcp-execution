@@ -377,3 +377,49 @@ async fn a_write_that_fails_leaves_no_temporary_file_behind() {
         "only the blocking directory may remain, no temporary file"
     );
 }
+
+fn device_names() -> Vec<String> {
+    let mut names: Vec<String> = ["con", "prn", "aux", "nul"].map(String::from).into();
+    for digit in 0..=9 {
+        names.push(format!("com{digit}"));
+        names.push(format!("lpt{digit}"));
+    }
+    names
+}
+
+#[test]
+fn recipe_name_rejects_every_windows_reserved_device_name() {
+    for name in ["con-1", "nul2", "com10", "lpt", "com", "console", "a-aux"] {
+        assert!(RecipeName::new(name).is_ok(), "{name}");
+    }
+    let names = device_names();
+    assert_eq!(names.len(), 24);
+
+    for name in names {
+        assert_matches!(
+            RecipeName::new(&name),
+            Err(ScriptError::InvalidName),
+            "{name} must be rejected"
+        );
+    }
+}
+
+/// A file saved before the rule: Windows cannot create it, so the fixture is Unix only.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_existing_device_name_script_is_not_listed_and_is_reported_by_check() {
+    let skill = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(scripts_dir(skill.path())).unwrap();
+    std::fs::write(
+        scripts_dir(skill.path()).join("nul.ts"),
+        script_text("nul", &["fixture/echo"], "export {};"),
+    )
+    .unwrap();
+
+    let listings = list(skill.path()).await.unwrap();
+    let report = check(skill.path(), &metadata_with(&["echo"])).await;
+
+    assert!(listings.is_empty(), "{listings:?}");
+    assert_eq!(report.invalid_scripts.len(), 1, "{report:?}");
+    assert!(report.invalid_scripts[0].contains("nul"), "{report:?}");
+}
