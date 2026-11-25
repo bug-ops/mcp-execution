@@ -10,6 +10,9 @@ description = "SKILL.md generation for Claude Code integration with MCP tools"
 keywords = ["mcp", "skill", "claude-code", "codegen"]
 categories = ["development-tools"]
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 

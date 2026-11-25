@@ -10,6 +10,9 @@ description = "MCP server that generates a typed TypeScript SDK from MCP servers
 keywords = ["mcp", "server", "codegen", "typescript"]
 categories = ["development-tools"]
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 

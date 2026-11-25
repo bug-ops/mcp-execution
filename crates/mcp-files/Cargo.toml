@@ -10,6 +10,10 @@ description = "Virtual filesystem for MCP code generation and organization"
 keywords = ["mcp", "filesystem", "vfs", "codegen"]
 categories = ["development-tools", "filesystem"]
 
+[package.metadata.docs.rs]
+features = ["parallel"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 

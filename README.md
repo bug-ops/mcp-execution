@@ -5,7 +5,7 @@
 [![CI](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.98-blue.svg)](https://blog.rust-lang.org/2025/01/23/Rust-1.91.0.html)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 Turn any MCP server into a typed TypeScript SDK that a model programs against. Loops, joins and large results stay in code, and only the answer reaches the model's context.
 
@@ -105,15 +105,6 @@ cargo add mcp-execution-introspector  # MCP server analysis
 cargo add mcp-execution-codegen       # TypeScript generation
 cargo add mcp-execution-files         # Virtual filesystem
 cargo add mcp-execution-skill         # SKILL.md generation
-```
-
-Or add to `Cargo.toml`:
-
-```toml
-[dependencies]
-mcp-execution-core = "0.11"
-mcp-execution-introspector = "0.11"
-mcp-execution-codegen = "0.11"
 ```
 
 > [!WARNING]
@@ -316,24 +307,21 @@ mcp-execution-cli completions bash
 > [!TIP]
 > Use `--from-config` to load server settings from `~/.claude/mcp.json` instead of manual arguments.
 
-> [!IMPORTANT]
-> **v0.9 breaking change:** `generate <command> --http <url>` and `introspect <command> --http <url>` now require either `--from-config`, a positional command, or `--http`/`--sse`, not a combination. If you were combining a positional command with `--http` or `--sse`, use one or the other exclusively.
+## Upgrading to 1.0
 
-> [!WARNING]
-> **v0.10 breaking change:** `_meta.json` metadata schema version bumped from 1 to 2. Files generated before this release will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
+Regenerate every server directory after each upgrade, because the generated bridge and the `_meta.json` schema change between releases and older output no longer parses or runs:
 
-> [!WARNING]
-> **Unreleased breaking change:** `_meta.json` metadata schema version bumped from 2 to 3 (tool annotations, result type text and origin, and manifest size were added). Files generated before this change will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
+```bash
+mcp-execution-cli generate --from-config <SERVER>
+```
 
-> [!WARNING]
-> **Unreleased breaking change:** the generated runtime bridge is now a thin client of the `mcp-execution-cli` helper, so every server directory must be regenerated after upgrading (`mcp-execution-cli generate --from-config <SERVER>`), and a tool file run directly with `node` needs a matching `mcp-execution-cli` (`MCP_EXECUTION_CLI` or `PATH`). `closeAllConnections`, the bridge's SIGINT/SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are removed. `call` takes the tool after `--`, and exit code 6 now means a script run by `run` failed. See the [changelog](CHANGELOG.md) for the full list.
+Breaking changes to act on when coming from 0.x:
 
-> [!WARNING]
-> **v0.10 breaking change:** server IDs and tool names must now consist only of Unicode
-> `Identifier_Status=Allowed` characters. A remote MCP server exposing a tool named with a space or
-> `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright instead of being silently accepted —
-> this closes a spoofing risk where a hostile server could publish a tool name that is visually
-> near-identical to a legitimate one.
+- **Generated output**: `_meta.json` is at schema version 3, and the bridge is a thin client of the `mcp-execution-cli` helper. A tool file run directly with `node` needs a matching `mcp-execution-cli` (`MCP_EXECUTION_CLI` or `PATH`). `closeAllConnections`, the bridge's SIGINT/SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are removed.
+- **CLI**: `generate` and `introspect` accept exactly one of `--from-config`, a positional command, or `--http`/`--sse`. `call` takes the tool after `--`. Exit code 6 means a script run by `run` failed.
+- **Names**: server IDs and tool names consist only of Unicode `Identifier_Status=Allowed` characters, so a server exposing a tool named with a space or `@`/`+`/`(`/`&`/`<`/`>` fails introspection instead of being accepted.
+
+The complete list is in the `### Breaking` section of each release in the [changelog](CHANGELOG.md).
 
 ## Performance
 
@@ -369,4 +357,6 @@ MSRV = stable minus two, raised in a minor release.
 
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE.md) or [MIT license](LICENSE.md) at your option.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you shall be dual-licensed as above, without any additional terms or conditions.

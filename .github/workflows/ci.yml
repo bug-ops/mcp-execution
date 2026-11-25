@@ -397,6 +397,16 @@ jobs:
           version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
           .github/scripts/changelog-section.sh "$version" > /dev/null
 
+      - name: Check every crate packages both license files
+        run: |
+          for name in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+            count="$(cargo package -p "$name" --list --locked | grep -c '^LICENSE-\(MIT\|APACHE\)$' || true)"
+            if [[ "$count" != 2 ]]; then
+              echo "::error::$name packages $count license files, expected LICENSE-MIT and LICENSE-APACHE"
+              exit 1
+            fi
+          done
+
       # An already published version only warns, and unpublished siblings are
       # resolved from the local tarballs, so a re-run after a partial publish passes.
       - name: Publish dry run (workspace)

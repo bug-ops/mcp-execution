@@ -10,6 +10,9 @@ description = "Core types, traits, and error handling for MCP execution"
 keywords = ["mcp", "execution", "core", "types"]
 categories = ["development-tools"]
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 

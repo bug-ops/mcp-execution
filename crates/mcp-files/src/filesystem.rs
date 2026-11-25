@@ -679,6 +679,7 @@ impl FileSystem {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[cfg(feature = "parallel")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "parallel")))]
     pub fn export_to_filesystem_parallel(&self, base_path: impl AsRef<Path>) -> Result<()> {
         use rayon::prelude::*;
 

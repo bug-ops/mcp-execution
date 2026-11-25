@@ -4,18 +4,11 @@
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-files)](https://docs.rs/mcp-execution-files)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN&flag=mcp-files)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.98-blue.svg)](https://github.com/bug-ops/mcp-execution)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 In-memory virtual filesystem for MCP tools organization and export.
 
 ## Installation
-
-```toml
-[dependencies]
-mcp-execution-files = "0.11"
-```
-
-Or with cargo-add:
 
 ```bash
 cargo add mcp-execution-files
@@ -145,4 +138,4 @@ MSRV = stable minus two, raised in a minor release.
 
 ## License
 
-Licensed under either of [Apache License 2.0](../../LICENSE.md) or [MIT license](../../LICENSE.md) at your option.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.

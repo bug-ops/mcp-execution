@@ -11,6 +11,9 @@ keywords = ["mcp", "cli", "codegen", "typescript"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 

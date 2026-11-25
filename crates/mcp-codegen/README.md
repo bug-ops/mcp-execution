@@ -4,18 +4,11 @@
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-codegen)](https://docs.rs/mcp-execution-codegen)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN&flag=mcp-codegen)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.98-blue.svg)](https://github.com/bug-ops/mcp-execution)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 TypeScript SDK generation for MCP tools: one typed file per tool, a type-only catalog and a runtime bridge, so a model can script against a server.
 
 ## Installation
-
-```toml
-[dependencies]
-mcp-execution-codegen = "0.11"
-```
-
-Or with cargo-add:
 
 ```bash
 cargo add mcp-execution-codegen
@@ -170,4 +163,4 @@ MSRV = stable minus two, raised in a minor release.
 
 ## License
 
-Licensed under either of [Apache License 2.0](../../LICENSE.md) or [MIT license](../../LICENSE.md) at your option.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
