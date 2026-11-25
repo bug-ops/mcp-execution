@@ -29,8 +29,7 @@ use clap::Parser;
 use clap::builder::{PossibleValuesParser, TypedValueParser as _};
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
-use mcp_execution_core::cli::{LOG_FORMAT_ENV_VAR, LogFormat};
-use mcp_execution_core::log_filter::cap_rmcp_log_level;
+use mcp_execution_core::cli::{LOG_FORMAT_ENV_VAR, LogFormat, RmcpLogCap};
 use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
 use mcp_execution_server::service::GeneratorService;
 use rmcp::RoleServer;
@@ -49,7 +48,6 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder, FramedRead, FramedWrite};
 use tokio_util::sync::PollSemaphore;
-use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Command-line arguments for the `mcp-execution` server binary.
@@ -118,6 +116,18 @@ fn warn_on_rejected_log_format(rejected: bool) {
             "invalid value for {LOG_FORMAT_ENV_VAR} (expected 'text' or 'json'), falling back to text"
         );
     }
+}
+
+/// Selects the log filter: an explicit `RUST_LOG` (`env`) is honoured, otherwise `info` with this
+/// crate at `debug`. Either way `rmcp`'s own targets are capped by [`RmcpLogCap::Info`] so a broad
+/// `debug` filter cannot echo a raw peer line.
+///
+/// # Errors
+///
+/// Returns an error if the cap directive does not parse, which `RmcpLogCap` rules out.
+fn log_filter(env: Option<EnvFilter>) -> Result<EnvFilter> {
+    let base = env.unwrap_or_else(|| EnvFilter::new("info,mcp_execution_server=debug"));
+    Ok(base.add_directive(RmcpLogCap::Info.directive().parse()?))
 }
 
 /// Maximum size, in bytes, of a single newline-delimited JSON-RPC request read from
@@ -571,15 +581,11 @@ async fn main() -> Result<()> {
         .with_target(true);
     let layer = match log_format {
         LogFormat::Json => fmt_layer.json().boxed(),
-        LogFormat::Text => fmt_layer.boxed(),
+        _ => fmt_layer.boxed(),
     };
 
     tracing_subscriber::registry()
-        .with(cap_rmcp_log_level(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,mcp_execution_server=debug")),
-            LevelFilter::INFO,
-        ))
+        .with(log_filter(EnvFilter::try_from_default_env().ok())?)
         .with(
             // Not wrapped in `mcp-execution-cli::runner`'s URL-redacting writer (see #353):
             // this process only ever builds a stdio server config from `IntrospectServerParams`
@@ -1804,6 +1810,55 @@ mod tests {
         for line in lines {
             serde_json::from_str::<serde_json::Value>(line)
                 .unwrap_or_else(|e| panic!("invalid JSON line: {e}\n{line}"));
+        }
+    }
+    fn debug_events_visible_through(filter: tracing_subscriber::EnvFilter) -> (bool, bool) {
+        use std::io::Write;
+        use std::sync::Mutex;
+
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                Write::write(&mut *self.0.lock().unwrap(), buf)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let make_writer = {
+            let buf = buf.clone();
+            move || SharedBuf(buf.clone())
+        };
+        let subscriber = tracing_subscriber::registry().with(filter).with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(make_writer)
+                .with_ansi(false),
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "rmcp::transport::async_rw", "raw untrusted peer line");
+            tracing::debug!(target: "mcp_execution_server", "own debug event");
+        });
+
+        let written = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        (
+            written.contains("raw untrusted peer line"),
+            written.contains("own debug event"),
+        )
+    }
+
+    #[test]
+    fn log_filter_suppresses_rmcp_debug_under_a_broad_and_the_default_filter() {
+        for env in [Some(tracing_subscriber::EnvFilter::new("debug")), None] {
+            let filter = super::log_filter(env).unwrap();
+            let (rmcp_visible, own_visible) = debug_events_visible_through(filter);
+            assert!(!rmcp_visible, "rmcp debug line was not suppressed");
+            assert!(own_visible, "own debug event was suppressed");
         }
     }
 }

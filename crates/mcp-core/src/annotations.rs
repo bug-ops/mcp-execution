@@ -15,13 +15,11 @@
 //! ```
 //! use mcp_execution_core::annotations::{AnnotationTitle, Hint, ToolAnnotations};
 //!
-//! let annotations = ToolAnnotations {
-//!     title: AnnotationTitle::new("Delete file"),
-//!     read_only: Hint::StatedFalse,
-//!     destructive: Hint::StatedTrue,
-//!     idempotent: Hint::NotStated,
-//!     open_world: Hint::from(Some(false)),
-//! };
+//! let mut annotations = ToolAnnotations::not_stated();
+//! annotations.title = AnnotationTitle::new("Delete file");
+//! annotations.read_only = Hint::StatedFalse;
+//! annotations.destructive = Hint::StatedTrue;
+//! annotations.open_world = Hint::from(Some(false));
 //!
 //! assert_eq!(annotations.destructive, Hint::StatedTrue);
 //! assert_eq!(annotations.idempotent, Hint::NotStated);
@@ -43,6 +41,8 @@ use thiserror::Error;
 /// assert_eq!(Hint::from(Some(false)), Hint::StatedFalse);
 /// assert_eq!(Hint::from(None), Hint::NotStated);
 /// ```
+///
+/// This is a closed set: adding a variant is a major change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Hint {
@@ -119,28 +119,25 @@ impl From<AnnotationTitle> for String {
 
 /// The annotations an MCP server advertised for one tool.
 ///
-/// Every field value is legal and there is deliberately no `Default`: the absence of
-/// annotations is `Option::<ToolAnnotations>::None` on the carrying type, never an
-/// all-[`Hint::NotStated`] value. Values are advisory and untrusted.
+/// Every field value is legal and there is deliberately no `Default`: the absence of annotations
+/// is `Option::<ToolAnnotations>::None` on the carrying type, never an all-[`Hint::NotStated`]
+/// value. [`ToolAnnotations::not_stated`] is the explicit starting point for building a value.
+/// Values are advisory and untrusted.
 ///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
 ///
-/// let annotations = ToolAnnotations {
-///     title: None,
-///     read_only: Hint::StatedTrue,
-///     destructive: Hint::NotStated,
-///     idempotent: Hint::NotStated,
-///     open_world: Hint::NotStated,
-/// };
+/// let mut annotations = ToolAnnotations::not_stated();
+/// annotations.read_only = Hint::StatedTrue;
 ///
 /// let json = serde_json::to_string(&annotations).unwrap();
 /// let back: ToolAnnotations = serde_json::from_str(&json).unwrap();
 /// assert_eq!(back, annotations);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolAnnotations {
     /// Display title, from `Tool.title` falling back to `annotations.title`.
     pub title: Option<AnnotationTitle>,
@@ -152,6 +149,34 @@ pub struct ToolAnnotations {
     pub idempotent: Hint,
     /// `openWorldHint`: the tool interacts with an open set of external entities.
     pub open_world: Hint,
+}
+
+impl ToolAnnotations {
+    /// Annotations with no title and every hint [`Hint::NotStated`], the starting point for
+    /// building a value from stated hints.
+    ///
+    /// There is deliberately no `Default`: an absent annotation set is
+    /// `Option::<ToolAnnotations>::None`, which `unwrap_or_default` must not turn into a value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
+    ///
+    /// let annotations = ToolAnnotations::not_stated();
+    /// assert!(annotations.title.is_none());
+    /// assert_eq!(annotations.read_only, Hint::NotStated);
+    /// ```
+    #[must_use]
+    pub const fn not_stated() -> Self {
+        Self {
+            title: None,
+            read_only: Hint::NotStated,
+            destructive: Hint::NotStated,
+            idempotent: Hint::NotStated,
+            open_world: Hint::NotStated,
+        }
+    }
 }
 
 #[cfg(test)]

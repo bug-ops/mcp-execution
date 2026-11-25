@@ -6,7 +6,7 @@
 //! crates report errors with the same privacy guarantee. [`validate_path_segment`] backs
 //! `ServerId::new`/`ToolName::new`'s own baseline path-segment invariant; the stricter,
 //! filesystem-safe-*slug* rule both crates' `server_id` confinement checks enforce lives in
-//! [`crate::validate_server_id_slug`] instead (see its own doc comment for why).
+//! [`crate::ServerSlug`] instead (see its own doc comment for why).
 
 use std::path::{Component, Path};
 

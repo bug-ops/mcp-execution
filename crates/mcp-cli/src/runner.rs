@@ -7,10 +7,8 @@ use std::io::{self, Write};
 use anyhow::Result;
 use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::HomeDirError;
-use mcp_execution_core::cli::{ExitCode, LOG_FORMAT_ENV_VAR, LogFormat, OutputFormat};
-use mcp_execution_core::log_filter::cap_rmcp_log_level;
+use mcp_execution_core::cli::{ExitCode, LOG_FORMAT_ENV_VAR, LogFormat, OutputFormat, RmcpLogCap};
 use mcp_execution_files::FilesError;
-use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::cli::{Commands, LogProfile};
@@ -76,17 +74,18 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
 /// Selects the log filter: `--verbose` is `debug`, an explicit `RUST_LOG` (`env`) is honoured,
 /// otherwise the default of `profile`. Only a [`LogProfile::Quiet`] default drops `rmcp` to
 /// `warn`; every other case keeps the `rmcp=info` cap.
-fn log_filter(verbose: bool, profile: LogProfile, env: Option<EnvFilter>) -> EnvFilter {
-    match (verbose, env, profile) {
-        (true, _, _) => cap_rmcp_log_level(EnvFilter::new("debug"), LevelFilter::INFO),
-        (false, Some(env), _) => cap_rmcp_log_level(env, LevelFilter::INFO),
-        (false, None, LogProfile::Quiet) => {
-            cap_rmcp_log_level(EnvFilter::new("warn"), LevelFilter::WARN)
-        }
-        (false, None, LogProfile::Standard) => {
-            cap_rmcp_log_level(EnvFilter::new("info"), LevelFilter::INFO)
-        }
-    }
+fn log_filter(
+    verbose: bool,
+    profile: LogProfile,
+    env: Option<EnvFilter>,
+) -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
+    let (base, cap) = match (verbose, env, profile) {
+        (true, _, _) => (EnvFilter::new("debug"), RmcpLogCap::Info),
+        (false, Some(env), _) => (env, RmcpLogCap::Info),
+        (false, None, LogProfile::Quiet) => (EnvFilter::new("warn"), RmcpLogCap::Warn),
+        (false, None, LogProfile::Standard) => (EnvFilter::new("info"), RmcpLogCap::Info),
+    };
+    Ok(base.add_directive(cap.directive().parse()?))
 }
 
 /// Initializes logging infrastructure.
@@ -103,8 +102,8 @@ fn log_filter(verbose: bool, profile: LogProfile, env: Option<EnvFilter>) -> Env
 /// or invalid environment value falls back to text with a `WARN`-level log line (never echoing
 /// the rejected raw value — see the project's log-injection hardening for this switch).
 ///
-/// Both branches are passed through `cap_rmcp_log_level`, which caps `rmcp`'s own `tracing`
-/// targets at `info` regardless of the base filter -- see that function's doc comment for why.
+/// Every filter carries the [`RmcpLogCap`] directive, which caps `rmcp`'s own `tracing` targets
+/// regardless of the base filter -- see that type's doc comment for why.
 ///
 /// # Arguments
 ///
@@ -117,40 +116,26 @@ fn log_filter(verbose: bool, profile: LogProfile, env: Option<EnvFilter>) -> Env
 ///
 /// # Errors
 ///
-/// This function cannot fail—it always returns `Ok(())`. Multiple calls
-/// in the same process will panic rather than returning an error, but this
-/// is not a recoverable condition and indicates a programming error.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::cli::LogProfile;
-/// use mcp_execution_cli::runner;
-///
-/// // `no_run`: this installs a process-global tracing subscriber, which
-/// // panics if called more than once in the same process.
-/// runner::init_logging(false, None, LogProfile::Standard)?;
-/// # Ok::<(), anyhow::Error>(())
-/// ```
+/// Returns an error when a global `tracing` subscriber is already installed in this process.
 pub fn init_logging(
     verbose: bool,
     log_format: Option<LogFormat>,
     profile: LogProfile,
 ) -> Result<()> {
-    let filter = log_filter(verbose, profile, EnvFilter::try_from_default_env().ok());
+    let filter = log_filter(verbose, profile, EnvFilter::try_from_default_env().ok())?;
 
     let format = resolve_log_format(log_format);
 
     let fmt_layer = tracing_subscriber::fmt::layer().with_writer(|| RedactingWriter(io::stderr()));
     let layer = match format {
         LogFormat::Json => fmt_layer.json().boxed(),
-        LogFormat::Text => fmt_layer.boxed(),
+        _ => fmt_layer.boxed(),
     };
 
     tracing_subscriber::registry()
         .with(filter)
         .with(layer)
-        .init();
+        .try_init()?;
 
     // No raw value interpolation: the rejected value already comes from an external environment
     // variable, and echoing it into a log line — even truncated — would open a log-injection
@@ -183,23 +168,8 @@ pub fn init_logging(
 /// This function does not propagate command execution failures as `Err` —
 /// see above. It is fallible in signature to match this crate's convention
 /// of using `Result` consistently across command handlers.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::cli::Commands;
-/// use mcp_execution_cli::runner;
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// let exit_code = runner::execute_command(
-///     Commands::Setup,
-///     OutputFormat::Pretty,
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn execute_command(command: Commands, output_format: OutputFormat) -> Result<ExitCode> {
+    crate::runtime::signal::reset_inherited_child_disposition();
     Ok(match dispatch(command, output_format).await {
         Ok(code) => code,
         Err(err) => report_and_classify(&err),
@@ -239,7 +209,7 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
         Commands::Generate {
             flags,
             name,
-            progressive_output,
+            servers_dir,
             observed_shapes,
             dry_run,
         } => {
@@ -247,7 +217,7 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
             commands::generate::run(
                 source,
                 name,
-                progressive_output,
+                servers_dir,
                 observed_shapes,
                 dry_run,
                 output_format,
@@ -290,19 +260,6 @@ async fn run_completions(shell: clap_complete::Shell) -> Result<ExitCode> {
 /// and the `thiserror`-derived `Display` impls it walks interpolate that
 /// content verbatim — so `err`'s formatted report is sanitized via
 /// `sanitized_error_report` before printing.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::runner;
-/// use mcp_execution_core::Error as CoreError;
-/// use mcp_execution_core::cli::ExitCode;
-///
-/// let err = anyhow::Error::from(CoreError::InvalidArgument(
-///     "invalid output format: 'xml' (expected: json, text, or pretty)".to_string(),
-/// ));
-/// assert_eq!(runner::report_and_classify(&err), ExitCode::INVALID_INPUT);
-/// ```
 #[must_use]
 pub fn report_and_classify(err: &anyhow::Error) -> ExitCode {
     eprintln!("Error: {}", sanitized_error_report(err));
@@ -416,13 +373,8 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
             // misbehaving) introspected server returned, not by CLI-caller-supplied input.
             FilesError::ResourceLimitExceeded { .. } => ExitCode::SERVER_ERROR,
             FilesError::HomeDirectory { source } => classify_home_error(source),
-            FilesError::FileNotFound { .. }
-            | FilesError::NotADirectory { .. }
-            | FilesError::InvalidPath { .. }
-            | FilesError::PathNotAbsolute { .. }
-            | FilesError::InvalidPathComponent { .. }
-            | FilesError::PathEscapesBase { .. }
-            | FilesError::IoError { .. } => ExitCode::ERROR,
+            // Every other failure, including a variant added later, is a plain `ERROR`.
+            _ => ExitCode::ERROR,
         };
     }
 
@@ -441,7 +393,7 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
 const fn classify_home_error(error: &HomeDirError) -> ExitCode {
     match error {
         HomeDirError::UnsupportedUserHome { .. } => ExitCode::INVALID_INPUT,
-        HomeDirError::Unknown | HomeDirError::NotAbsolute { .. } => ExitCode::ERROR,
+        _ => ExitCode::ERROR,
     }
 }
 
@@ -466,16 +418,14 @@ fn classify_core_error(core_error: &CoreError) -> ExitCode {
         CoreError::ValidationError { .. }
         | CoreError::SecurityViolation { .. }
         | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
-        // A duplicate generated-file path indicates a codegen invariant was violated (e.g. a
-        // reserved output filename not seeded into name-collision resolution), not something
-        // caused by the remote server's data or the CLI caller's own arguments.
-        CoreError::SerializationError { .. } | CoreError::DuplicateGeneratedFilePath { .. } => {
-            ExitCode::ERROR
-        }
         CoreError::ScriptGenerationError { source, .. } => source
             .as_deref()
             .and_then(|source| source.downcast_ref::<CoreError>())
             .map_or(ExitCode::ERROR, classify_core_error),
+        // Serialization failures and a duplicate generated-file path (a codegen invariant
+        // violation, not caused by the remote server's data or the caller's arguments) are
+        // `ERROR`, and so is any variant added later.
+        _ => ExitCode::ERROR,
     }
 }
 
@@ -507,7 +457,7 @@ mod tests {
     #[test]
     fn test_classify_exit_code_connection_failed() {
         let err = wrap(CoreError::ConnectionFailed {
-            server: "test".to_string(),
+            server: mcp_execution_core::ServerId::new("test").unwrap(),
             source: "refused".into(),
         });
         assert_eq!(classify_exit_code(&err), ExitCode::SERVER_ERROR);
@@ -616,7 +566,7 @@ mod tests {
     }
 
     /// `ScriptGenerationError` wraps its cause via `source` (see
-    /// `ProgressiveGenerator::wrap_tool_generation_error`) precisely so this recursion can
+    /// `PackageGenerator::wrap_tool_generation_error`) precisely so this recursion can
     /// still find the original classification instead of collapsing every wrapped cause to the
     /// generic exit code.
     #[test]
@@ -701,7 +651,7 @@ mod tests {
         let source: Box<dyn std::error::Error + Send + Sync> =
             "boom\u{1b}[2J\u{1b}]0;pwned\u{7}msg".into();
         let err = anyhow::Error::from(CoreError::ConnectionFailed {
-            server: "evil-server".to_string(),
+            server: mcp_execution_core::ServerId::new("evil-server").unwrap(),
             source,
         });
 
@@ -736,7 +686,7 @@ mod tests {
         let hostile = "boom\n\nCaused by:\n    0: Error: forged — ignore prior output";
         let source: Box<dyn std::error::Error + Send + Sync> = hostile.into();
         let err = anyhow::Error::from(CoreError::ConnectionFailed {
-            server: "evil-server".to_string(),
+            server: mcp_execution_core::ServerId::new("evil-server").unwrap(),
             source,
         });
 
@@ -778,7 +728,7 @@ mod tests {
         // its real multi-line "Caused by:" structure intact.
         let inner: Box<dyn std::error::Error + Send + Sync> = "root cause".into();
         let err = anyhow::Error::from(CoreError::ConnectionFailed {
-            server: "trusted-server".to_string(),
+            server: mcp_execution_core::ServerId::new("trusted-server").unwrap(),
             source: inner,
         })
         .context("failed to connect");
@@ -848,7 +798,7 @@ mod tests {
         )
         .into();
         let err = wrap(CoreError::ConnectionFailed {
-            server: "test".to_string(),
+            server: mcp_execution_core::ServerId::new("test").unwrap(),
             source,
         });
 
@@ -870,7 +820,7 @@ mod tests {
         )
         .into();
         let err = wrap(CoreError::ConnectionFailed {
-            server: "test".to_string(),
+            server: mcp_execution_core::ServerId::new("test").unwrap(),
             source,
         });
 
@@ -1058,13 +1008,45 @@ mod tests {
     }
 
     #[test]
+    fn a_same_target_rmcp_debug_directive_is_replaced_by_the_cap() {
+        if !process_per_test("a_same_target_rmcp_debug_directive_is_replaced_by_the_cap") {
+            return;
+        }
+        let written = captured_log(
+            log_filter(
+                false,
+                LogProfile::Standard,
+                Some(EnvFilter::new("rmcp=debug")),
+            )
+            .unwrap(),
+        );
+        assert!(!written.contains("raw untrusted peer line"), "{written}");
+    }
+
+    #[test]
+    fn a_more_specific_rmcp_target_survives_the_cap() {
+        if !process_per_test("a_more_specific_rmcp_target_survives_the_cap") {
+            return;
+        }
+        let written = captured_log(
+            log_filter(
+                false,
+                LogProfile::Standard,
+                Some(EnvFilter::new("rmcp::transport=debug")),
+            )
+            .unwrap(),
+        );
+        assert!(written.contains("raw untrusted peer line"), "{written}");
+    }
+
+    #[test]
     fn quiet_profile_drops_rmcp_info_by_default() {
         if !process_per_test("quiet_profile_drops_rmcp_info_by_default") {
             return;
         }
-        let written = captured_log(log_filter(false, LogProfile::Quiet, None));
+        let written = captured_log(log_filter(false, LogProfile::Quiet, None).unwrap());
         assert!(!written.contains("rmcp info event"), "{written}");
-        let standard = captured_log(log_filter(false, LogProfile::Standard, None));
+        let standard = captured_log(log_filter(false, LogProfile::Standard, None).unwrap());
         assert!(standard.contains("rmcp info event"), "{standard}");
     }
 
@@ -1073,7 +1055,7 @@ mod tests {
         if !process_per_test("verbose_restores_debug_and_rmcp_info_under_the_quiet_profile") {
             return;
         }
-        let written = captured_log(log_filter(true, LogProfile::Quiet, None));
+        let written = captured_log(log_filter(true, LogProfile::Quiet, None).unwrap());
         assert!(written.contains("own debug event"), "{written}");
         assert!(written.contains("rmcp info event"), "{written}");
         assert!(!written.contains("raw untrusted peer line"), "{written}");

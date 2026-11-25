@@ -5,7 +5,7 @@
 [![CI](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml/badge.svg)](https://github.com/bug-ops/mcp-execution/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.98-blue.svg)](https://blog.rust-lang.org/2025/01/23/Rust-1.91.0.html)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 Turn any MCP server into a typed TypeScript SDK that a model programs against. Loops, joins and large results stay in code, and only the answer reaches the model's context.
 
@@ -105,15 +105,6 @@ cargo add mcp-execution-introspector  # MCP server analysis
 cargo add mcp-execution-codegen       # TypeScript generation
 cargo add mcp-execution-files         # Virtual filesystem
 cargo add mcp-execution-skill         # SKILL.md generation
-```
-
-Or add to `Cargo.toml`:
-
-```toml
-[dependencies]
-mcp-execution-core = "0.11"
-mcp-execution-introspector = "0.11"
-mcp-execution-codegen = "0.11"
 ```
 
 > [!WARNING]
@@ -242,7 +233,19 @@ mcp-execution-cli scripts check --server github
 mcp-execution-cli drift --from-config github
 ```
 
-Exit 0: no drift. Exit 5: the tool list or endpoint differs from the recorded one. When the server was generated under another name or into another directory, pass the same `--name` and `--progressive-output` you gave `generate`.
+Exit 0: no drift. Exit 5: the tool list or endpoint differs from the recorded one. When the server was generated under another name or into another directory, pass the same `--name` and `--servers-dir` you gave `generate`.
+
+### Supported Runtimes
+
+| Runtime | Generated tool files (`<runtime> <tool>.ts '<json>'`) | `run`, `--typecheck`, `--restrict` |
+|---------|------------------------------------------------------|-------------------------------------|
+| Node.js 22.18+ (on the 23 line, 23.6+) | Supported | Supported |
+| Bun | Supported (tested with `bun <tool>.ts '<json>'`) | Not supported: `run` starts Node.js |
+| Deno | Supported (tested with `deno run -A <tool>.ts '<json>'`) | Not supported: `run` starts Node.js |
+
+The Bun and Deno rows are exercised by `acceptance_runtime_compat` against the fixture server; CI fails when either runtime is missing from its job because it sets `MCP_EXECUTION_REQUIRE_ALT_RUNTIMES=1`. Without that variable the tests skip a missing runtime. `setup` checks only the Node.js version.
+
+- **Node.js below 22.18:** run a tool file through a TypeScript loader, for example `npx tsx <tool>.ts '<json>'`; `run`, `typecheck` and `--restrict` still need Node.js 22.18 or newer.
 
 ## Key Features
 
@@ -316,24 +319,21 @@ mcp-execution-cli completions bash
 > [!TIP]
 > Use `--from-config` to load server settings from `~/.claude/mcp.json` instead of manual arguments.
 
-> [!IMPORTANT]
-> **v0.9 breaking change:** `generate <command> --http <url>` and `introspect <command> --http <url>` now require either `--from-config`, a positional command, or `--http`/`--sse`, not a combination. If you were combining a positional command with `--http` or `--sse`, use one or the other exclusively.
+## Upgrading to 1.0
 
-> [!WARNING]
-> **v0.10 breaking change:** `_meta.json` metadata schema version bumped from 1 to 2. Files generated before this release will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
+Regenerate every server directory when upgrading to 1.0, because the generated bridge and the `_meta.json` schema changed in 0.x releases and older output no longer parses or runs. Within 1.x the `_meta.json` and helper protocol versions do not change; they change only in a major release.
 
-> [!WARNING]
-> **Unreleased breaking change:** `_meta.json` metadata schema version bumped from 2 to 3 (tool annotations, result type text and origin, and manifest size were added). Files generated before this change will no longer parse and must be regenerated. Run `mcp-execution-cli generate --from-config <SERVER>` to update your generated tool files.
+```bash
+mcp-execution-cli generate --from-config <SERVER>
+```
 
-> [!WARNING]
-> **Unreleased breaking change:** the generated runtime bridge is now a thin client of the `mcp-execution-cli` helper, so every server directory must be regenerated after upgrading (`mcp-execution-cli generate --from-config <SERVER>`), and a tool file run directly with `node` needs a matching `mcp-execution-cli` (`MCP_EXECUTION_CLI` or `PATH`). `closeAllConnections`, the bridge's SIGINT/SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are removed. `call` takes the tool after `--`, and exit code 6 now means a script run by `run` failed. See the [changelog](CHANGELOG.md) for the full list.
+Breaking changes to act on when coming from 0.x:
 
-> [!WARNING]
-> **v0.10 breaking change:** server IDs and tool names must now consist only of Unicode
-> `Identifier_Status=Allowed` characters. A remote MCP server exposing a tool named with a space or
-> `@`/`+`/`(`/`&`/`<`/`>`/etc. now fails introspection outright instead of being silently accepted —
-> this closes a spoofing risk where a hostile server could publish a tool name that is visually
-> near-identical to a legitimate one.
+- **Generated output**: `_meta.json` is at schema version 3, and the bridge is a thin client of the `mcp-execution-cli` helper. A tool file run directly with `node` needs a matching `mcp-execution-cli` (`MCP_EXECUTION_CLI` or `PATH`). `closeAllConnections`, the bridge's SIGINT/SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are removed.
+- **CLI**: `generate` and `introspect` accept exactly one of `--from-config`, a positional command, or `--http`/`--sse`. `call` takes the tool after `--`. Exit code 6 means a script run by `run` failed. The `--progressive-output` flag of `generate` and `drift` is now `--servers-dir`.
+- **Names**: server IDs and tool names consist only of Unicode `Identifier_Status=Allowed` characters, so a server exposing a tool named with a space or `@`/`+`/`(`/`&`/`<`/`>` fails introspection instead of being accepted. The `server_id` of the MCP tools must be 1-64 lowercase letters, digits or hyphens; any other value is a tool result with `isError: true`.
+
+The complete list is in the `### Breaking` section of each release in the [changelog](CHANGELOG.md).
 
 ## Performance
 
@@ -345,7 +345,7 @@ cargo bench --profile bench-fast -p mcp-execution-codegen -p mcp-execution-files
 
 ## Documentation
 
-- [Usage Guide](examples/progressive-loading-usage.md) - Complete guide
+- [Usage Guide](examples/generated-package-usage.md) - Complete guide
 - [Host Code Mode notes](examples/host-code-mode.md) - What the host documents about its own code execution mode
 - [Claude Code Integration](crates/mcp-skill) - SKILL.md generation (`mcp-execution-cli skill`)
 
@@ -369,4 +369,6 @@ MSRV = stable minus two, raised in a minor release.
 
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE.md) or [MIT license](LICENSE.md) at your option.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you shall be dual-licensed as above, without any additional terms or conditions.

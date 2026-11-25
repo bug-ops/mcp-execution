@@ -147,12 +147,12 @@ issue #381). rmcp never echoes a no-initialize version (`2026-07-28`) via
   guard against reintroducing SSRF risk, since `ServerConfig`'s own docs
   note this crate is exactly the kind of server-context embedder expected
   to add SSRF allowlisting before ever setting Http/Sse transport.
-- `server_id` validated via `mcp_execution_core::validate_server_id_slug`
-  (issue #401 — previously imported from `mcp_execution_skill::validate_server_id`,
-  which now delegates to the same core function) before anything else; the
-  tracing span's `server_id` field is left empty on early validation
-  failure (never logging unvalidated attacker input into a structured
-  field).
+- `server_id` is a `mcp_execution_core::ServerSlug` in the parameter type (#677), so an invalid id never reaches
+  a handler: argument deserialization fails and the call returns a **tool result with `isError: true`** naming
+  `server_id` and the rule, not a JSON-RPC error (no `-32602`), and without echoing markup from the rejected value.
+  The same holds for `generate_skill` and `save_skill` (`tests/acceptance_server_slug.rs`). Semantic validation
+  inside a handler (output directory, session, confinement, content) still returns `invalid_params`. The tracing
+  span's `server_id` field is recorded only for a valid id.
 - `output_dir`, if given, is checked with the cheap, I/O-free
   `relative_subpath` (rejects absolute/`..`) — **not** the full
   filesystem-touching confinement walk, which is deliberately deferred to
@@ -253,7 +253,7 @@ issue #381). rmcp never echoes a no-initialize version (`2026-07-28`) via
    `pending`, **borrowed** (not consumed) so the caller can hand it back on failure:
    resolves and confines `output_dir` fresh, right here — not from any value cached
    on the session — via `output_dir::resolve_output_dir` (see [[#Output directory
-   resolution]]); `ProgressiveGenerator::generate_with_categories` →
+   resolution]]); `PackageGenerator::generate_with_categories` →
    `FilesBuilder::from_generated_code(code, "/")` → `vfs.file_count()` captured;
    exports inside `spawn_blocking`, holding a **per-`output_dir`** lock for the
    duration (see [[#Per-resource locking]]).
@@ -670,9 +670,9 @@ keeping, unlike the rejected-env-var case above.
 Issue #421: `rmcp` 3.1.2's own transport layer logs raw, unsanitized peer input at `debug` level
 (`rmcp::transport::async_rw`'s parse-failure line embeds the offending line verbatim) — this fires
 inside this binary's own decode path *before* §8's `SanitizedCodecError` mitigation ever sees it,
-so a broad `RUST_LOG=debug` streams untrusted peer text into the log unfiltered. `main` calls the shared
-`mcp_execution_core::log_filter::cap_rmcp_log_level(EnvFilter, LevelFilter::INFO)` (#608; the one copy
-`mcp-cli` also uses, [[../core/spec]]), which closes this specific path — *debug-level, raw-line*
+so a broad `RUST_LOG=debug` streams untrusted peer text into the log unfiltered. `main.rs`'s `log_filter(env)` adds the directive of
+`mcp_execution_core::cli::RmcpLogCap::Info` (`rmcp=info`; the one statement of the cap policy, also used by
+`mcp-cli`, [[../core/spec]], #608, #678), which closes this specific path — *debug-level, raw-line*
 logging — by `add_directive`-ing `rmcp=info` onto the *result* of
 `EnvFilter::try_from_default_env().unwrap_or_else(...)`, not folded into only the fallback string —
 a directive added solely to the fallback is dead code whenever `RUST_LOG` parses successfully,
@@ -699,7 +699,7 @@ cap's `rmcp=info` — `tracing_subscriber`'s `Directive` ordering does not compa
 `EnvFilter::add_directive` on a same-target directive *replaces* the existing entry, silently
 downgrading an operator's explicit `rmcp=debug` to `info`. Both the escape hatch and the
 replace-not-merge behavior are pinned by dedicated tests rather than assumed, per the original
-audit's request. `cap_rmcp_log_level` is a pure function (not env-mutating), so it is unit-tested
+audit's request. `log_filter` is a pure function (not env-mutating), so it is unit-tested
 directly with a scoped subscriber rather than by setting `RUST_LOG` in-process (parallel test
 threads share one process).
 
@@ -709,7 +709,7 @@ threads share one process).
 
 `OutputDirError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
 `source` carries the precise slug-format violation, so the message can't independently drift
-from the actual rule `mcp_execution_core::validate_server_id_slug` enforces), `AbsolutePath`,
+from the actual rule `mcp_execution_core::ServerSlug::new` enforces), `AbsolutePath`,
 `ParentTraversal`, `ServerDirIsSymlink`, `Escape`, `NotADirectory`, `CreateDir`, `Io` — every
 variant's embedded path/`server_id` is a sanitized display form
 (`sanitize_untrusted_inline`), not the raw caller-supplied text (issue #461; see §6).
@@ -722,22 +722,20 @@ environment's fault — I/O failure, task join error, serialization failure).
 ## 11. Cross-Crate Contracts
 
 - **Consumes**: `mcp-introspector::Introspector`/`ServerInfo`,
-  `mcp-codegen::ProgressiveGenerator`, `mcp-files::FilesBuilder`/
+  `mcp-codegen::PackageGenerator`, `mcp-files::FilesBuilder`/
   `FileSystem`, `mcp-skill::{scan_tools_directory, build_skill_context,
   resolve_skill_output_path, extract_skill_metadata,
   MAX_TOOL_FILES}`, `mcp-core::{ServerConfig, ServerId,
-  sanitize_path_for_error, validate_server_id_slug, ServerIdSlugError,
+  sanitize_path_for_error, ServerSlug, ServerIdSlugError,
   untrusted::*, confinement::{ConfinementError, ConfinementTarget,
   resolve_confined_path, resolve_confined_existing}}` (the `confinement::*`
   items: `resolve_confined_path` since #395 by `output_dir::resolve_output_dir`;
   `resolve_confined_existing` since #486 by `resolve_list_base_dir`, which also
   reuses `output_dir.rs`'s `relative_subpath` — see §6).
-  `validate_server_id` is no longer imported from `mcp-skill` (issue #401) —
-  the three tool handlers (`introspect_server`, `generate_skill`,
-  `save_skill`) now validate `server_id` via
-  `mcp_execution_core::validate_server_id_slug` directly, and
-  `output_dir::resolve_output_dir` gates `server_id` with the same function
-  before delegating the filesystem walk itself to `resolve_confined_path`.
+  The three tool handlers that take a `server_id` (`introspect_server`, `generate_skill`, `save_skill`) receive a
+  `ServerSlug` from deserialization (#677), converted to `ServerId` where a `ServerConfig` or pending generation
+  needs one; `output_dir::resolve_output_dir` (workspace-internal, takes `&str`) builds a `ServerSlug` before
+  delegating the filesystem walk to `resolve_confined_path`.
 - **Schema drift guards**: `service.rs`'s own tests assert the `schemars`-
   derived schema for `CategorizedTool`/`SaveCategorizedToolsParams`/
   `IntrospectServerParams` matches the real runtime constants
@@ -827,38 +825,43 @@ not part of this package: they are deferred to #589 under epic #559, depend on t
 
 ## 15. 1.0 Public API Contract
 
-> [!warning] Target requirement (1.0.0)
-> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
-> `NFR-COM-046`). The listing below was derived from `crates/mcp-server/src` at 9473243. Items marked **proposal** are
-> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+> [!info] As built; the semver promise binds from the 1.0.0 tag
+> Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
+> decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
+> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
+> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-047.6 | THE SYSTEM SHALL expose from `mcp-execution-server` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
 
-### Public surface (proposal, OD-5)
+### Public surface (OD-5 (a), #675)
 
-Today the library exports `clock`, `output_dir`, `service`, `state` and `types` and re-exports the skill types.
-**Proposed** stable surface (option (a) of OD-5): `GeneratorService` and the parameter and result types of the five
-tools (`IntrospectServerParams`, `IntrospectServerResult`, `IntrospectedToolSummary`, `SaveCategorizedToolsParams`,
-`SaveCategorizedToolsResult`, `CategorizedTool`, `ToolGenerationError`, `ListGeneratedServersParams`,
-`ListGeneratedServersResult`, `GeneratedServerInfo`, and the re-exported `GenerateSkill*`, `SaveSkill*`,
-`SkillCategory`, `SkillMetadata`, `SkillTool`, `ToolExample`). **Proposed** workspace-internal or hidden:
-`StateManager`, `PendingGeneration`, `StateError`, `Clock`, `SystemClock`, `resolve_output_dir`, `relative_subpath`,
-`OutputDirError`. The binary contract (tool names, parameter and result schemas) is `NFR-COM-066` and
-[[#13. Skill Name Rules (as built)]] and the tool sections.
+`GeneratorService` (module `service`) and the parameter and result types of the five tools (module `types`, re-exported
+at the root: `IntrospectServerParams`, `IntrospectServerResult`, `IntrospectedToolSummary`,
+`SaveCategorizedToolsParams`, `SaveCategorizedToolsResult`, `CategorizedTool`, `ToolGenerationError`,
+`ListGeneratedServersParams`, `ListGeneratedServersResult`, `GeneratedServerInfo`), plus the re-exported
+`GenerateSkill*`, `SaveSkill*`, `SkillCategory`, `SkillMetadata`, `SkillTool`, `ToolExample`. `PendingGeneration` is
+also still public in `types` and re-exported (open, #687). Parameter and result `server_id` fields are `ServerSlug`;
+`GeneratedServerInfo::id` is a `String` directory name (open, #687). The binary contract (tool names, parameter and
+result schemas) is `NFR-COM-066`, [[#13. Skill Name Rules (as built)]] and the tool sections; the output schemas of
+those `server_id` fields carry the slug bounds.
+
+### Workspace-internal (`NFR-COM-032`)
+
+`#[doc(hidden)]`: modules `clock` and `state` with the root re-exports `Clock`, `SystemClock`, `StateManager`, and the
+root re-exports `resolve_output_dir`, `relative_subpath`, `OutputDirError` (module `output_dir` is private).
 
 ### Foreign types (`NFR-COM-044`)
 
-`impl rmcp::ServerHandler for GeneratorService` (OD-4 option (c) accepts it for this crate only);
-`chrono::DateTime<Utc>` in the `Clock` trait (hidden under the proposal); `schemars::JsonSchema` and `serde`
-implementations on the parameter and result types.
+`impl rmcp::ServerHandler for GeneratorService` (OD-4 (c) accepts it for this crate only); `chrono::DateTime<Utc>`
+in public result types (and in the hidden `Clock` trait); `schemars::JsonSchema` and `serde` implementations on the
+parameter and result types.
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-Required on every public parameter and result struct that callers do not need to construct (they are produced by
-the server and deserialized from MCP requests), and on `ToolGenerationError`. Constructors or builders are
-required where tests or embedders construct them.
+`#[non_exhaustive]`: every parameter and result struct of the five tools, `CategorizedTool`, `ToolGenerationError`,
+`IntrospectedToolSummary`, `GeneratedServerInfo` and `PendingGeneration`. Requests are built by deserialization.
 
 ## 16. See Also
 

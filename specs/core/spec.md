@@ -45,8 +45,8 @@ related:
    - `metadata` — the `_meta.json` sidecar schema (version 3) shared by `mcp-codegen`
      (producer) and `mcp-skill`/`mcp-server`/`mcp-cli` (consumers), plus the one reader every
      consumer goes through (`read_server_metadata`, #618).
-   - `log_filter` (feature `tracing-filter`, #608) — `cap_rmcp_log_level`, the one `rmcp` log cap
-     shared by `mcp-cli` and `mcp-server`.
+   - `helper_protocol` — the helper wire constants and `ResultSource`, the one definition of where a
+     tool result is read from (#676).
    - `annotations` (#568) — `Hint`, `AnnotationTitle`, `ToolAnnotations`: the typed, sanitized
      shape of the untrusted tool annotations that `mcp-introspector` captures, `mcp-codegen`
      renders and stores, and `provenance` hashes.
@@ -64,9 +64,9 @@ related:
      (issue #433) is the second, independent layer `ServerId`/`ToolName`
      also gate on — a UTS #39 `Identifier_Status=Allowed` Unicode-safety
      check, unrelated to path-segment structure (see below).
-     `types::validate_server_id_slug` (issue #401) is the separate,
-     stricter charset check both crates' `server_id` confinement now
-     additionally enforces *before* calling into `resolve_confined_path`
+     `types::ServerSlug` (issues #401, #677) is the separate,
+     stricter validated type both crates' `server_id` confinement
+     requires *before* calling into `resolve_confined_path`
      (see below) — `resolve_confined_path` itself stays generic and does
      not know about the slug rule.
    - `confinement` — `resolve_confined_path` (issue #395), the shared
@@ -204,37 +204,45 @@ Human `mcp-cli` users now see the entity-escaped form too (e.g. `invalid server 
 accepted trade-off of applying one sanitization path uniformly to both the LLM- and
 human-facing surfaces, rather than maintaining two different escaping rules for the same field.
 
-### `validate_server_id_slug` / `ServerIdSlugError` (`src/types.rs`, issue #401)
+### `ServerSlug` / `ServerIdSlugError` (`src/types.rs`, issues #401, #677)
 
 ```rust
 pub const MAX_SERVER_ID_LENGTH: usize = 64;
+#[non_exhaustive]
 pub enum ServerIdSlugError { Empty, TooLong { len: usize, limit: usize }, InvalidCharacters }
-pub fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError>;
-// Rules: 1-64 bytes, only `[a-z0-9-]` (ASCII lowercase letters, digits, hyphen)
+pub struct ServerSlug(String); // private field; rule `[a-z0-9-]{1,64}`
+impl ServerSlug {
+    pub fn new(id: &str) -> Result<Self, ServerIdSlugError>;
+    pub fn as_str(&self) -> &str;
+}
+impl From<ServerSlug> for ServerId;
+// also: Display, AsRef<str>, Borrow<str>, TryFrom<String>, Serialize/Deserialize (try_from = "String"),
+// schemars::JsonSchema -> {type: string, maxLength: 64, pattern: "^[a-z0-9-]+$"}
 ```
-A stricter, opt-in invariant layered *on top of* `ServerId::new`'s baseline — not a replacement
-for it, and not enforced by `ServerId::new`/`Deserialize` itself. `ServerId::new` deliberately
-stays permissive (issue #311: a raw `mcp.json` key like `claude_ai_Gmail` is a valid `ServerId`
-but not a valid slug — callers that only need a safe path segment, e.g. `mcp-cli`'s config-key
-lookup, must keep accepting non-slug-shaped ids). Callers that need the id to become a directory
-name or generated-code identifier — where entry validation and filesystem confinement must
-agree on the exact same rule — call this function in addition to `ServerId::new`.
 
-This is the single, authoritative home for the rule previously hand-rolled independently in
-`mcp-execution-skill::validate_server_id`/`SkillServerIdError` (which now delegates to it —
-`SkillServerIdError` is a re-export of `ServerIdSlugError`, not a separate mirror type, so the
-two crates' error wording cannot drift apart) and imported piecemeal by
-`mcp-execution-server`'s tool handlers. It also now backs both crates' `server_id`
-output-confinement checks (`mcp-server::output_dir`, `mcp-skill::output_path`), which previously
-confined using the looser `validate_path_segment` even though entry validation already gated
-with the stricter rule — see [[../server/spec#Output directory resolution]] and
-[[../skill/spec]].
+The slug rule is decided and frozen (#677): 1 to 64 bytes of lowercase ASCII letters, digits and hyphens, with
+**no** restriction on leading, trailing or consecutive hyphens. Consequences: `-`, `--a` and `a-` are valid ids; a
+SKILL.md `name` of that shape may be refused by a host that applies the Agent Skills hyphen rule; `--a` given as a
+command-line positional must follow `--`. The rule does not exclude Windows reserved device names (`con`, `nul`),
+which is the open follow-up #696.
+
+`validate_server_id_slug` is private to this module and is the single place the rule lives. `ServerSlug` is the
+type of every public `server_id` whose producer validates the rule (`NFR-COM-035`); deserialization goes through
+`new`, so an invalid id in a request or file is rejected at parse time. A slug is always a valid `ServerId`; the
+converse does not hold.
+
+`ServerSlug` is a stricter invariant layered *on top of* `ServerId::new`'s baseline, not a replacement for it.
+`ServerId::new` stays permissive (issue #311: a raw `mcp.json` key like `claude_ai_Gmail` is a valid `ServerId`
+but not a slug; callers that only need a safe path segment, such as `mcp-cli`'s config-key lookup, keep accepting
+non-slug ids). Callers that need the id to become a directory name or generated-code identifier hold a
+`ServerSlug`. It also backs both crates' `server_id` output confinement (`mcp-server::output_dir`,
+`mcp-skill::output_path`); see [[../server/spec#Output directory resolution]] and [[../skill/spec]].
 
 ### `Error` / `Result<T>` (`src/error.rs`)
 
 ```rust
 pub enum Error {
-    ConnectionFailed { server: String, source: Box<dyn Error+Send+Sync> },
+    ConnectionFailed { server: ServerId, source: Box<dyn Error+Send+Sync> },
     SecurityViolation { reason: String },
     Timeout { operation: String, duration_secs: u64 },
     SerializationError { message: String, source: Option<serde_json::Error> },
@@ -600,7 +608,10 @@ MAX_UNTRUSTED_FIELD_LEN)` and returns `None` when the result is empty; the serde
 `String` routed through `try_from`/`into`, so deserialization re-sanitizes and rejects an empty
 title (the inner string is private, so an unsanitized title cannot exist). `ToolAnnotations` has
 **no `Default`**: every field value is legal, and "no annotations" is `Option::None` on the carrying
-type (`ToolInfo.annotations`, `ToolMetadata.annotations`), never an all-`NotStated` value. Contradictory
+type (`ToolInfo.annotations`, `ToolMetadata.annotations`), never an all-`NotStated` value. A caller builds
+a value from `ToolAnnotations::not_stated()` (`const`, every hint `NotStated`, no title) and sets the fields by name;
+there is no positional constructor, so two hints cannot be swapped silently, and no `Default`, so
+`Option::<ToolAnnotations>::unwrap_or_default()` does not exist. Contradictory
 hints (read-only with destructive) are stored as advertised.
 
 ### `provenance` module (`src/provenance.rs`)
@@ -609,7 +620,7 @@ hints (read-only with destructive) are stored as advertised.
 pub struct GenerationProvenance { generated_at: DateTime<Utc>, config_fingerprint: ConfigFingerprint, tool_digest: ToolDigest }
 pub struct ConfigFingerprint(String); // 64 lowercase hex chars (SHA-256)
 pub struct ToolDigest(String);        // 64 lowercase hex chars (SHA-256)
-pub struct ToolDigestEntry<'a> { name: &'a str, description: &'a str, input_schema: &'a Value, output_schema: Option<&'a Value>, annotations: Option<&'a ToolAnnotations> }
+pub struct ToolDigestEntry<'a> { name: &'a str, description: &'a str, input_schema: &'a Value, output_schema: Option<&'a Value>, annotations: Option<&'a ToolAnnotations> } // #[non_exhaustive], pub fields, `new(name, description, input_schema)`
 pub struct DigestFormatError { value: String } // not exactly 64 lowercase hex chars
 impl GenerationProvenance { pub fn capture(config: &ServerConfig, tools: &[ToolDigestEntry<'_>]) -> Self; }
 impl ConfigFingerprint { pub fn compute(config: &ServerConfig) -> Self; }
@@ -754,7 +765,7 @@ identifier safety. `ServerId::new`/`ToolName::new` apply both, in that order (st
 first, so a traversal attempt keeps reporting `InvalidFormat`). It is *not* used by
 `confinement::resolve_confined_path` or either crate's `server_id` output-confinement path —
 those stay scoped to filesystem-path safety, which `validate_path_segment`/
-`validate_server_id_slug` already cover; Unicode-identifier safety is a display/LLM-spoofing
+`ServerSlug` already cover; Unicode-identifier safety is a display/LLM-spoofing
 concern specific to `ServerId::new`/`ToolName::new`'s construction-time gate, not a filesystem
 concern. Backed by the `unicode-security` crate's `GeneralSecurityProfile::identifier_allowed`
 (Unicode 16.0 tables); does not detect homoglyphs (see `ServerId`/`ToolName`'s own doc comment
@@ -764,18 +775,12 @@ above for the full rationale).
 above) and, since #395, is used internally by `confinement::resolve_confined_path` as its own
 generic, looser structural check on the `segment` (`server_id`) it's given —
 `resolve_confined_path` stays a generic reusable primitive, not coupled to the `server_id`
-domain concept specifically. It is *no longer* the primary rule
-`mcp-skill::resolve_skill_output_path` and `mcp-server::output_dir::resolve_output_dir` gate
-`server_id` confinement with directly — since issue #401, both call `types::validate_server_id_slug`
-up front, before calling into `resolve_confined_path` at all (the same rule their respective
-entry-point handlers already validate with), so the domain-specific slug rule and the generic
-structural rule both apply, in that order. Neither confinement helper calls
-`validate_path_segment` directly anymore; `resolve_confined_path`'s internal re-check (and, on
-its `ConfinementError::InvalidSegment` path, each crate's `From<ConfinementError>` impl
-re-deriving a `ServerIdSlugError` by calling `validate_server_id_slug` again) exist purely as
-defense-in-depth against a `server_id` that reaches the walk some other way, or after a future
-change loosens the caller-side check — not because either helper still leans on
-`validate_path_segment` as its primary gate.
+domain concept specifically. It is *not* the primary rule of the two `server_id` confinement paths:
+`mcp-skill::resolve_skill_output_path` takes a `&ServerSlug`, so the slug rule holds by type, and the
+workspace-internal `mcp-server::output_dir::resolve_output_dir` (which takes `&str`) builds a `ServerSlug`
+before calling into `resolve_confined_path`. `resolve_confined_path`'s internal re-check (and, on its
+`ConfinementError::InvalidSegment` path, each crate's `From<ConfinementError>` impl re-deriving a
+`ServerIdSlugError` through `ServerSlug::new`) exist as defense-in-depth.
 `contains_parent_dir` (issue #289) is the shared `..`-only check used by
 `mcp-skill::output_path`, `mcp-server::output_dir`, and
 `mcp-cli::commands::skill::has_path_traversal` for the narrower "is any
@@ -1146,18 +1151,21 @@ it is called out here explicitly rather than left implicit in the per-field fram
 it would require either a request-wide (not per-field) budget threaded through every
 `sanitize_untrusted_text` call site, or the semantic check already noted as out of scope.
 
-### `log_filter` module (`src/log_filter.rs`, feature `tracing-filter`, #608)
+### `rmcp` log cap (`cli::RmcpLogCap`, workspace-internal, #608, #678)
 
 ```rust
-#[cfg_attr(docsrs, doc(cfg(feature = "tracing-filter")))]
-pub fn cap_rmcp_log_level(filter: EnvFilter, cap: LevelFilter) -> EnvFilter; // adds the directive `rmcp=<cap>`
+#[doc(hidden)]
+#[non_exhaustive]
+pub enum RmcpLogCap { Info, Warn }
+impl RmcpLogCap { pub const fn directive(self) -> &'static str; } // "rmcp=info" | "rmcp=warn"
 ```
 
-The one copy of the `rmcp` log cap; before #608 `mcp-cli` (`runner.rs`) and `mcp-server` (`main.rs`) each kept their own.
-`mcp-cli` passes `LevelFilter::INFO`, or `WARN` for the quiet profile of `call`, `run` and `helper`; `mcp-server` passes
-`INFO`. The cap replaces an equally specific `RUST_LOG=rmcp=...` directive rather than merging with it. The module and its
-`tracing-subscriber` (`env-filter`) dependency exist only with the `tracing-filter` feature, which `mcp-cli` and
-`mcp-server` enable; the default feature set of `mcp-core` stays free of `tracing-subscriber`.
+The one statement of the `rmcp` log cap policy, free of `tracing` types, so `mcp-core` does not depend on
+`tracing-subscriber`. It is workspace-internal (`NFR-COM-032`): not part of the documented 1.0 API. Each binary
+parses the directive and adds it to its own `EnvFilter`: `mcp-cli` uses `Info`, or `Warn` for the quiet profile of
+`call`, `run` and `helper`; `mcp-server` uses `Info`. The cap replaces an equally specific `RUST_LOG=rmcp=...`
+directive rather than merging with it. The former `log_filter` module (`cap_rmcp_log_level`) and the
+`tracing-filter` feature were removed (#678).
 
 ### Untrusted-text vectors (#624)
 
@@ -1173,9 +1181,9 @@ a capture of the function. The `untrusted_text` section of `mcp-codegen`'s `shar
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result`, `annotations::{AnnotationTitle, Hint, ToolAnnotations}` |
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`, v3), `annotations::*`, `provenance::ToolDigestEntry` (with `annotations`), `untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN, MAX_TOTAL_VARIATION_SELECTORS}` (rendered into the bridge),  `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen`; `confinement::open_confined_write` directly (issue #504) |
-| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*` (including `read_server_metadata_async`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `log_filter::cap_rmcp_log_level` (feature `tracing-filter`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
-| `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `metadata::{read_server_metadata, read_server_metadata_async, MetadataReadError}`, `log_filter::cap_rmcp_log_level` (feature `tracing-filter`), `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
+| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `ServerSlug`, `ServerId`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*` (including `read_server_metadata_async`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
+| `mcp-server` | `ServerConfig`, `ServerId`, `ServerSlug`, `ServerIdSlugError`, `sanitize_path_for_error`, `contains_parent_dir`, `untrusted::*`, `metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR, RmcpLogCap}`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}` |
+| `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR, RmcpLogCap}`, `helper_protocol::*` (including `ResultSource`), `metadata::{read_server_metadata, read_server_metadata_async, MetadataReadError}`, `ServerConfig`/`ServerConfigBuilder`, `ServerSlug`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth
 
@@ -1190,7 +1198,7 @@ relying solely on the invariant holding elsewhere.
 
 `resolve_confined_path` (issue #395) re-validates its `segment` argument via
 `validate_path_segment` on every call rather than trusting a caller's own upstream check (e.g.
-`mcp-server::service::introspect_server`'s tighter `validate_server_id` charset check) to have
+`mcp-server::service::introspect_server`'s tighter `ServerSlug` charset check) to have
 already run — the same self-defending posture: a future call site that reaches this function
 with an unvalidated `segment` is still caught here, not silently trusted. Both `mcp-skill` and
 `mcp-server` keep their own crate-specific `OutputPathError`/`OutputDirError` enums as the public
@@ -1255,9 +1263,13 @@ and byte-preserving of each variant's existing `Display` message.
 > The `_meta.json` v3 bump, the annotation types and the measurement fields (#568, #562's metadata
 > row) are implemented and described as built in [[#`metadata` module (`src/metadata.rs`)]],
 > [[#`annotations` module (`src/annotations.rs`, #568)]] and [[#`provenance` module (`src/provenance.rs`)]].
-> What remains here is the per-tool digest granularity. #580 is closed as completed without it (PR #631); the
-> excluded part is tracked by the open issue #683. When it lands, its content moves into the as-built sections
-> above and this section is removed in the same pull request.
+> What remains here is the per-tool digest granularity. #580 is closed as completed without it (PR #631).
+
+> [!important] Deferred past 1.0 (#683, decided 2026-11-25)
+> Per-tool digests are **not** part of 1.0. If they are added later, they land as an **optional** field of
+> `_meta.json` version 3 that every version 3 reader ignores when unknown (`NFR-COM-053`; wire-window decision
+> OD-2 (a)), not as a schema version bump and not as a change of the aggregate preimage. This is the deferral note
+> `NFR-COM-056` requires; the post-1.0 work is tracked by #688.
 
 ### Planned: provenance digest granularity (#683, left out of #580)
 
@@ -1277,8 +1289,8 @@ live listing with this record, so what it can say is fixed by what is recorded.
 | Do two tools sharing a raw name differ individually? | No, and names are not deduplicated at introspection (see [[../introspector/spec#7. Edge Cases & Notable Behaviors]]) |
 
 **Remaining candidate change.** Per-tool digests recorded beside the aggregate, so a drift report can
-name a changed tool. Duplicate raw names make a name-keyed map ambiguous; the keying is open. Because
-the schema is already at version 3, recording them needs a further bump, which is ask-first.
+name a changed tool. Duplicate raw names make a name-keyed map ambiguous; the keying is open. Per the
+deferral above, recording them is an optional version 3 field after 1.0.
 
 **Requirements.**
 
@@ -1292,22 +1304,25 @@ the schema is already at version 3, recording them needs a further bump, which i
 
 **Constraints.** The digest preimage is a persisted contract: it is built from explicitly sorted,
 length-framed fields and never from `Debug` or serialised JSON (hashing section above). Any change
-to it changes every recorded digest, so it is ask-first and lands only with a schema bump.
+to it changes every recorded digest, so it is ask-first and lands only with a schema bump (an added
+optional per-tool field does not change the preimage).
 
 **Open decisions.**
 
 - [NEEDS CLARIFICATION: Include per-tool digests, and key them by name, by position, or as a multiset, given duplicate raw names. Whether the aggregate stays beside them or is derived from them.]
-- [NEEDS CLARIFICATION: Where the shared entry mapping lives (it is private to codegen today, `ProgressiveGenerator::create_metadata_file`); candidate: beside `ToolDigestEntry` in this crate.]
+- [NEEDS CLARIFICATION: Where the shared entry mapping lives (it is private to codegen today, `PackageGenerator::create_metadata_file`); candidate: beside `ToolDigestEntry` in this crate.]
 - Ask first: any change to the preimage, the domain tags or the framing primitive; adding a dependency.
 
-**Depends on / blocks.** Tracked by #683. It changes `_meta.json`, so it is decided before the 1.0 wire-format freeze ([[../README#1.0 Contract]], NFR-COM-056).
+**Depends on / blocks.** Deferred past 1.0 (see the note above); tracked by #688. It does not block the 1.0
+wire-format freeze ([[../README#1.0 Contract]]).
 
 ## 8. 1.0 Public API Contract
 
-> [!warning] Target requirement (1.0.0)
-> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
-> `NFR-COM-046`). The listing below was derived from `crates/mcp-core/src` at 9473243. Items marked **proposal** are
-> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+> [!info] As built; the semver promise binds from the 1.0.0 tag
+> Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
+> decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
+> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
+> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -1317,41 +1332,47 @@ to it changes every recorded digest, so it is ask-first and lands only with a sc
 
 | Item | Kind | Notes |
 |------|------|-------|
-| `Error`, `ResourceKind`, `Result` | error types | Crate-wide error hierarchy |
-| `ServerId`, `ToolName`, `ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `validate_server_id_slug`, `MAX_SERVER_ID_LENGTH` | typed identifiers | The validated server id of `NFR-COM-035` is built here |
+| `Error`, `ResourceKind`, `Result` | error types | Crate-wide error hierarchy; `Error::ConnectionFailed.server` is a `ServerId` |
+| `ServerId`, `ToolName`, `ServerSlug`, `ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `MAX_SERVER_ID_LENGTH` | typed identifiers | The validated server id of `NFR-COM-035` is built here |
 | `ServerConfig`, `ServerConfigBuilder`, `Transport` | configuration | Validation runs at construction |
 | `validate_server_config`, `validate_url_scheme`, the `MAX_ARG_*`, `MAX_ENV_*`, `MAX_HEADER_*`, `MAX_URL_LEN` bounds | validation | The bound values are documented limits (`NFR-COM-040`) |
 | `HomeDir`, `HomeDirError`, `ServersDir`, `SkillsDir`, `expand_home` | directories | One resolution of home, servers and skills directories |
 | `contains_parent_dir`, `first_disallowed_identifier_char`, `sanitize_path_for_error`, `validate_path_segment`, `ConfinementError`, `ConfinementTarget`, `open_confined_write`, `resolve_confined_existing`, `resolve_confined_path`, `write_confined_file` | path confinement | Shared by `mcp-execution-skill` and `mcp-execution-server` |
 | `REDACTED_PLACEHOLDER`, `RedactedItems`, `RedactedMapValues`, `RedactedUrl`, `redact_urls_in_text` | redaction | Hand-written `Debug` discipline of the workspace |
-| module `annotations` | tool annotations | `Hint`, `AnnotationTitle`, `ToolAnnotations` |
+| module `annotations` | tool annotations | `Hint`, `AnnotationTitle`, `ToolAnnotations` (`not_stated()`, no `Default`) |
 | module `cli` | CLI contract types | `OutputFormat`, `LogFormat`, `ExitCode` (values frozen by `NFR-COM-061`), `ServerConnectionString`, `LOG_FORMAT_ENV_VAR` |
-| module `helper_protocol` | wire constants | `HELPER_PROTOCOL_VERSION` and the line bounds, environment names and channel key (`NFR-COM-050`) |
+| module `helper_protocol` | wire constants and types | `HELPER_PROTOCOL_VERSION`, the line bounds, environment names, channel key and `ResultSource` (`NFR-COM-050`, `NFR-COM-034`) |
 | module `metadata` | wire format | `METADATA_SCHEMA_VERSION` (3), `ServerMetadata`, `ToolMetadata`, `ParameterMetadata`, `ResultTypeOrigin`, `MetadataReadError`, `read_server_metadata`, `read_server_metadata_async`, file-name constants, `MAX_TOOL_COUNT`, `MAX_METADATA_FILE_BYTES` |
-| module `provenance` | persisted record | `GenerationProvenance`, `ToolDigestEntry`, `ToolDigest`, `ConfigFingerprint`; per-tool digests are #683 (`NFR-COM-056`) |
+| module `provenance` | persisted record | `GenerationProvenance`, `ToolDigestEntry`, `ToolDigest`, `ConfigFingerprint`; per-tool digests are deferred past 1.0 (#683, #688) |
 | module `untrusted` | injection defense | `sanitize_untrusted_text`, `sanitize_untrusted_inline`, `wrap_untrusted_block`, `is_bare_identifier`, the bound constants |
-| feature `tracing-filter`, module `log_filter` | helper | `cap_rmcp_log_level` takes a `tracing-subscriber` `EnvFilter`: exposure under OD-4 |
 
-### Workspace-shared candidates (proposal)
+### Workspace-internal (`NFR-COM-032`)
 
-Items that exist for sibling crates and may be listed as workspace-internal under `NFR-COM-032`:
-`forbidden_chars`, `forbidden_env_names`, `forbidden_env_prefix`, `env_name_charset_pattern`,
-`env_name_charset_desc` (rendered into the generated package by `mcp-execution-codegen`), and the three
-path-confinement write primitives. The decision belongs to the #673 review of each item.
+`cli::RmcpLogCap` (`#[doc(hidden)]`), excluded from the semver promise.
 
-### Foreign types (`NFR-COM-044`)
+### Workspace-shared candidates (open, #687)
 
-`tracing_subscriber::EnvFilter` (feature `tracing-filter`), `chrono::DateTime<Utc>`
-(`GenerationProvenance::generated_at`), `serde_json::Error` (`MetadataReadError::Malformed`), and the `serde`
-implementations of the wire types. Outcome per OD-4.
+Items that exist for sibling crates and may be listed as workspace-internal: `forbidden_chars`,
+`forbidden_env_names`, `forbidden_env_prefix`, `env_name_charset_pattern`, `env_name_charset_desc` (rendered into the
+generated package by `mcp-execution-codegen`), and the three path-confinement write primitives. They are public
+and documented today.
+
+### Foreign types (`NFR-COM-044`, OD-4 (c))
+
+`chrono::DateTime<Utc>` (`GenerationProvenance::generated_at`), `serde_json::Value` (`ToolDigestEntry`),
+`serde_json::Error` (`MetadataReadError::Malformed`), `schemars::JsonSchema` (implemented by hand for `ServerSlug`;
+`schemars` is a dependency of this crate since #677) and the `serde` implementations. No `tracing-subscriber` type
+or dependency.
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-Required (error, kind and option enums and wire structs with public fields): `Error`, `ResourceKind`,
-`ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `HomeDirError`, `ConfinementError`, `MetadataReadError`,
-`Transport`, `OutputFormat`, `LogFormat`, `ResultTypeOrigin`, `ServerMetadata`, `ToolMetadata`,
-`ParameterMetadata`, `GenerationProvenance`, `ToolAnnotations`. Closed candidates, to be confirmed in #674:
-`Hint` (stated true, stated false, not stated) and `ConfinementTarget` (file, directory).
+`#[non_exhaustive]`: `Error`, `ResourceKind`, `ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `HomeDirError`,
+`ConfinementError`, `MetadataReadError`, `Transport`, `OutputFormat`, `LogFormat`, `RmcpLogCap`, `ResultTypeOrigin`,
+`ServerMetadata`, `ToolMetadata`, `ParameterMetadata`, `GenerationProvenance`, `ToolDigestEntry`, `ToolAnnotations`.
+Structs built outside the crate have a constructor (`new` with the required fields; `ToolAnnotations::not_stated`).
+
+Closed sets (adding a variant is a major change, stated in the rustdoc): `Hint`, `ConfinementTarget`,
+`helper_protocol::ResultSource`.
 
 ### Owned wire formats
 

@@ -19,9 +19,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use mcp_execution_core::helper_protocol::ResultSource;
 use mcp_execution_core::{Error, ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{
-    CallTimeout, Introspector, ResultSource, ServerText, Session, ToolCall, ToolCallOutcome,
+    CallTimeout, Introspector, ServerText, Session, ToolCall, ToolCallOutcome,
 };
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
@@ -145,11 +146,7 @@ async fn call_within(
     let tool = ToolName::new(tool).unwrap();
     session
         .call_tool(
-            ToolCall {
-                tool: &tool,
-                arguments: Map::new(),
-                result_source: source,
-            },
+            ToolCall::new(&tool, Map::new(), source),
             CallTimeout::new(limit).unwrap(),
         )
         .await
@@ -244,10 +241,7 @@ async fn call_tool_reports_a_tool_error_with_bounded_server_text() {
     assert_eq!(
         short,
         ToolCallOutcome::ToolError {
-            server_text: Some(ServerText {
-                text: "boom".into(),
-                truncated: false
-            })
+            server_text: Some(ServerText::new("boom".into(), false))
         }
     );
     let ToolCallOutcome::ToolError {

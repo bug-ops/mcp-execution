@@ -10,12 +10,15 @@ fn annotations(
     idempotent: Hint,
     open_world: Hint,
 ) -> ToolAnnotations {
-    ToolAnnotations {
-        title: title.and_then(AnnotationTitle::new),
-        read_only,
-        destructive,
-        idempotent,
-        open_world,
+    {
+        let mut value = ToolAnnotations::not_stated();
+        value.read_only = read_only;
+        value.destructive = destructive;
+        value.idempotent = idempotent;
+        value.open_world = open_world;
+
+        value.title = title.and_then(AnnotationTitle::new);
+        value
     }
 }
 

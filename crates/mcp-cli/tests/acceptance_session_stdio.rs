@@ -19,9 +19,10 @@ use std::assert_matches;
 use std::time::Duration;
 
 use common::FIXTURE_BIN;
+use mcp_execution_core::helper_protocol::ResultSource;
 use mcp_execution_core::{Error, ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{
-    CallTimeout, Introspector, ResultSource, ServerText, Session, ToolCall, ToolCallOutcome,
+    CallTimeout, Introspector, ServerText, Session, ToolCall, ToolCallOutcome,
 };
 use serde_json::{Value, json};
 
@@ -49,11 +50,7 @@ async fn call(
     };
     session
         .call_tool(
-            ToolCall {
-                tool: &tool,
-                arguments,
-                result_source: ResultSource::Structured,
-            },
+            ToolCall::new(&tool, arguments, ResultSource::Structured),
             CallTimeout::new(limit).unwrap(),
         )
         .await
@@ -89,10 +86,7 @@ async fn stdio_call_tool_classifies_value_empty_tool_error_and_rpc_error() {
     assert_eq!(
         tool_error,
         ToolCallOutcome::ToolError {
-            server_text: Some(ServerText {
-                text: "fixture tool error".into(),
-                truncated: false
-            })
+            server_text: Some(ServerText::new("fixture tool error".into(), false))
         }
     );
     assert_matches!(rpc_error, ToolCallOutcome::RpcError { .. }, "{rpc_error:?}");

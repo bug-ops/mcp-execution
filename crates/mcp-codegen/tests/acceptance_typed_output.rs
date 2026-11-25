@@ -16,8 +16,8 @@ use acceptance_support::{
     REPLY_ECHO_ARGUMENTS, SERVER_ID, canonical_tempdir, fake_helper_js, file, generate,
     generate_with, run_node, server_info, tool, write_home, write_package,
 };
-use mcp_execution_codegen::progressive::BridgeContext;
-use mcp_execution_codegen::{ProgressiveGenerator, TemplateEngine};
+use mcp_execution_codegen::package::BridgeContext;
+use mcp_execution_codegen::{PackageGenerator, TemplateEngine};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
@@ -317,7 +317,7 @@ fn bridge_ts_with(configure: impl FnOnce(&mut BridgeContext)) -> String {
     configure(&mut context);
     TemplateEngine::new()
         .expect("template engine")
-        .render("progressive/runtime-bridge", &context)
+        .render("package/runtime-bridge", &context)
         .expect("bridge renders")
 }
 
@@ -446,9 +446,7 @@ fn properties_shape(keys: &[&str]) -> Value {
 
 fn undeclared_tool_file(jsonl: &str) -> String {
     let server = server_info(vec![tool("noop", json!({"type": "object"}), None)]);
-    let generator = ProgressiveGenerator::new()
-        .unwrap()
-        .with_observed_shapes(jsonl);
+    let generator = PackageGenerator::new().unwrap().with_observed_shapes(jsonl);
     file(&generate_with(&generator, &server), "noop.ts").to_string()
 }
 
@@ -522,7 +520,7 @@ fn observed_shape_hint_renders_only_for_tools_without_a_declared_output_schema()
         observed_line("typed_tool", &properties_shape(&["leaked"])),
     ]
     .join("\n");
-    let generator = ProgressiveGenerator::new()
+    let generator = PackageGenerator::new()
         .unwrap()
         .with_observed_shapes(&jsonl);
 

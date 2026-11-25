@@ -45,7 +45,7 @@
 
 mod session;
 
-pub use session::{CallTimeout, ResultSource, ServerText, Session, ToolCall, ToolCallOutcome};
+pub use session::{CallTimeout, ServerText, Session, ToolCall, ToolCallOutcome};
 
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
@@ -213,21 +213,20 @@ const HTTP_MAX_SSE_EVENT_SIZE: usize = 16 * 1024 * 1024;
 /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
 /// use mcp_execution_core::ServerId;
 ///
-/// let info = ServerInfo {
-///     id: ServerId::new("example").unwrap(),
-///     name: "Example Server".to_string(),
-///     version: "1.0.0".to_string(),
-///     tools: vec![],
-///     capabilities: ServerCapabilities {
-///         supports_tools: true,
-///         supports_resources: false,
-///         supports_prompts: false,
-///     },
-/// };
+/// let mut capabilities = ServerCapabilities::default();
+/// capabilities.supports_tools = true;
+/// let info = ServerInfo::new(
+///     ServerId::new("example").unwrap(),
+///     "Example Server".to_string(),
+///     "1.0.0".to_string(),
+///     vec![],
+///     capabilities,
+/// );
 ///
 /// assert_eq!(info.name, "Example Server");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ServerInfo {
     /// Unique server identifier
     pub id: ServerId,
@@ -252,10 +251,10 @@ pub struct ServerInfo {
 /// use mcp_execution_core::ToolName;
 /// use serde_json::json;
 ///
-/// let tool = ToolInfo {
-///     name: ToolName::new("send_message").unwrap(),
-///     description: "Sends a message to a chat".to_string(),
-///     input_schema: json!({
+/// let tool = ToolInfo::new(
+///     ToolName::new("send_message").unwrap(),
+///     "Sends a message".to_string(),
+///     json!({
 ///         "type": "object",
 ///         "properties": {
 ///             "chat_id": {"type": "string"},
@@ -263,13 +262,12 @@ pub struct ServerInfo {
 ///         },
 ///         "required": ["chat_id", "text"]
 ///     }),
-///     output_schema: None,
-///     annotations: None,
-/// };
+/// );
 ///
 /// assert_eq!(tool.name.as_str(), "send_message");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolInfo {
     /// Tool name
     pub name: ToolName,
@@ -284,7 +282,70 @@ pub struct ToolInfo {
     pub annotations: Option<ToolAnnotations>,
 }
 
+impl ServerInfo {
+    /// Creates a description from every field.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerId;
+    /// use mcp_execution_introspector::{ServerCapabilities, ServerInfo};
+    ///
+    /// let info = ServerInfo::new(
+    ///     ServerId::new("example").unwrap(),
+    ///     "Example Server".to_string(),
+    ///     "1.0.0".to_string(),
+    ///     vec![],
+    ///     ServerCapabilities::default(),
+    /// );
+    /// assert!(info.tools.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        id: ServerId,
+        name: String,
+        version: String,
+        tools: Vec<ToolInfo>,
+        capabilities: ServerCapabilities,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            version,
+            tools,
+            capabilities,
+        }
+    }
+}
+
 impl ToolInfo {
+    /// Creates a tool description from its name, description and input schema; the output
+    /// schema and annotations start as `None` and are set afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ToolName;
+    /// use mcp_execution_introspector::ToolInfo;
+    ///
+    /// let tool = ToolInfo::new(
+    ///     ToolName::new("echo").unwrap(),
+    ///     "Echo the input".to_string(),
+    ///     serde_json::json!({"type": "object"}),
+    /// );
+    /// assert!(tool.output_schema.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(name: ToolName, description: String, input_schema: serde_json::Value) -> Self {
+        Self {
+            name,
+            description,
+            input_schema,
+            output_schema: None,
+            annotations: None,
+        }
+    }
+
     /// Maps this tool to the borrowed view the generation digest is computed over.
     ///
     /// The only tool-to-digest mapping in the workspace: `generate` records the digest through
@@ -297,24 +358,22 @@ impl ToolInfo {
     /// use mcp_execution_introspector::ToolInfo;
     /// use serde_json::json;
     ///
-    /// let tool = ToolInfo {
-    ///     name: ToolName::new("send_message").unwrap(),
-    ///     description: "Sends a message".to_string(),
-    ///     input_schema: json!({"type": "object"}),
-    ///     output_schema: None,
-    ///     annotations: None,
-    /// };
+    /// let tool = ToolInfo::new(
+    ///     ToolName::new("send_message").unwrap(),
+    ///     "Sends a message".to_string(),
+    ///     json!({"type": "object"}),
+    /// );
     ///
     /// assert_eq!(tool.digest_entry().name, "send_message");
     /// ```
     #[must_use]
     pub fn digest_entry(&self) -> ToolDigestEntry<'_> {
-        ToolDigestEntry {
-            name: self.name.as_str(),
-            description: &self.description,
-            input_schema: &self.input_schema,
-            output_schema: self.output_schema.as_ref(),
-            annotations: self.annotations.as_ref(),
+        {
+            let mut value =
+                ToolDigestEntry::new(self.name.as_str(), &self.description, &self.input_schema);
+            value.output_schema = self.output_schema.as_ref();
+            value.annotations = self.annotations.as_ref();
+            value
         }
     }
 }
@@ -329,6 +388,7 @@ impl ToolInfo {
 /// assert_ne!(CacheScope::Public, CacheScope::Private);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CacheScope {
     /// Any client may cache and share the listing.
     Public,
@@ -351,6 +411,7 @@ pub enum CacheScope {
 /// assert!(hints.ttl.is_none() && hints.cache_scope.is_none());
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ListingHints {
     /// How long the server says the listing stays fresh.
     pub ttl: Option<Duration>,
@@ -397,11 +458,37 @@ impl ListingHints {
 /// # }
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Discovery {
     /// The discovered server description.
     pub info: ServerInfo,
     /// Freshness hints the server attached to its listing.
     pub hints: ListingHints,
+}
+
+impl Discovery {
+    /// Creates a discovery result from the server description and its listing hints.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerId;
+    /// use mcp_execution_introspector::{Discovery, ListingHints, ServerCapabilities, ServerInfo};
+    ///
+    /// let info = ServerInfo::new(
+    ///     ServerId::new("example").unwrap(),
+    ///     "Example".to_string(),
+    ///     "1.0.0".to_string(),
+    ///     vec![],
+    ///     ServerCapabilities::default(),
+    /// );
+    /// let discovery = Discovery::new(info, ListingHints::default());
+    /// assert!(discovery.hints.ttl.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(info: ServerInfo, hints: ListingHints) -> Self {
+        Self { info, hints }
+    }
 }
 
 /// Server capabilities.
@@ -413,16 +500,15 @@ pub struct Discovery {
 /// ```
 /// use mcp_execution_introspector::ServerCapabilities;
 ///
-/// let caps = ServerCapabilities {
-///     supports_tools: true,
-///     supports_resources: true,
-///     supports_prompts: false,
-/// };
+/// let mut caps = ServerCapabilities::default();
+/// caps.supports_tools = true;
+/// caps.supports_resources = true;
 ///
 /// assert!(caps.supports_tools);
 /// assert!(!caps.supports_prompts);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ServerCapabilities {
     /// Server supports tool execution
     pub supports_tools: bool,
@@ -608,6 +694,7 @@ impl Introspector {
             Transport::Http { .. } | Transport::Sse { .. } => {
                 discover_via_http(&server_id, config).await?
             }
+            _ => return Err(Error::InvalidArgument("unsupported transport".to_string())),
         };
 
         let info = build_server_info(&server_id, discovery.peer_meta, discovery.tools)?;
@@ -697,7 +784,7 @@ pub(crate) fn spawn_introspection_child(
     command.kill_on_drop(true);
 
     command.spawn().map_err(|e| Error::ConnectionFailed {
-        server: server_id.to_string(),
+        server: server_id.clone(),
         source: Box::new(e),
     })
 }
@@ -712,11 +799,11 @@ pub(crate) fn take_child_stdio(
     child: &mut Child,
 ) -> Result<(tokio::process::ChildStdout, tokio::process::ChildStdin)> {
     let stdout = child.stdout.take().ok_or_else(|| Error::ConnectionFailed {
-        server: server_id.to_string(),
+        server: server_id.clone(),
         source: Box::new(std::io::Error::other("child stdout was not captured")),
     })?;
     let stdin = child.stdin.take().ok_or_else(|| Error::ConnectionFailed {
-        server: server_id.to_string(),
+        server: server_id.clone(),
         source: Box::new(std::io::Error::other("child stdin was not captured")),
     })?;
     Ok((stdout, stdin))
@@ -810,7 +897,7 @@ async fn list_tools_bounded(
 fn map_list_tools_bounded_error(server_id: &ServerId, error: ListToolsBoundedError) -> Error {
     match error {
         ListToolsBoundedError::Service(e) => Error::ConnectionFailed {
-            server: server_id.to_string(),
+            server: server_id.clone(),
             source: Box::new(e),
         },
         ListToolsBoundedError::TooMany(actual) => Error::ResourceLimitExceeded {
@@ -1093,7 +1180,7 @@ where
             duration_secs: config.connect_timeout().as_secs(),
         })?
         .map_err(|e| Error::ConnectionFailed {
-            server: server_id.to_string(),
+            server: server_id.clone(),
             source: Box::new(e),
         })
 }
@@ -1231,12 +1318,12 @@ pub(crate) async fn connect_http_client(
     for (name, value) in config.headers() {
         let header_name =
             HeaderName::try_from(name.as_str()).map_err(|e| Error::ConnectionFailed {
-                server: server_id.to_string(),
+                server: server_id.clone(),
                 source: Box::new(e),
             })?;
         let header_value =
             HeaderValue::try_from(value.as_str()).map_err(|e| Error::ConnectionFailed {
-                server: server_id.to_string(),
+                server: server_id.clone(),
                 source: Box::new(e),
             })?;
         custom_headers.insert(header_name, header_value);
@@ -1433,14 +1520,17 @@ fn capture_annotations(
     wire: Option<rmcp::model::ToolAnnotations>,
 ) -> Option<ToolAnnotations> {
     let wire = wire.unwrap_or_default();
-    let captured = ToolAnnotations {
-        title: title
+    let captured = {
+        let mut value = ToolAnnotations::not_stated();
+        value.read_only = Hint::from(wire.read_only_hint);
+        value.destructive = Hint::from(wire.destructive_hint);
+        value.idempotent = Hint::from(wire.idempotent_hint);
+        value.open_world = Hint::from(wire.open_world_hint);
+
+        value.title = title
             .and_then(AnnotationTitle::new)
-            .or_else(|| wire.title.as_deref().and_then(AnnotationTitle::new)),
-        read_only: Hint::from(wire.read_only_hint),
-        destructive: Hint::from(wire.destructive_hint),
-        idempotent: Hint::from(wire.idempotent_hint),
-        open_world: Hint::from(wire.open_world_hint),
+            .or_else(|| wire.title.as_deref().and_then(AnnotationTitle::new));
+        value
     };
     let states_nothing = captured.title.is_none()
         && [

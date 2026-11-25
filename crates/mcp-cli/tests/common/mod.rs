@@ -128,6 +128,34 @@ pub fn require_node(test_name: &str) -> bool {
     require_tool("node", test_name)
 }
 
+/// The variable that makes a missing alternative runtime (Bun, Deno) a failure; CI sets it to `1`
+/// and the README cites it.
+pub const REQUIRE_ALT_RUNTIMES_ENV: &str = "MCP_EXECUTION_REQUIRE_ALT_RUNTIMES";
+
+/// Marker a skipped alternative-runtime test prints; the `node-latest` CI job fails when its
+/// output contains it.
+pub const ALT_RUNTIME_SKIP_MARKER: &str = "alt-runtime skipped";
+
+/// Whether the alternative runtime `program` is installed. A missing one fails the test only when
+/// [`REQUIRE_ALT_RUNTIMES_ENV`] is `1` (also under `CI`, where most legs have no such runtime);
+/// otherwise the test prints [`ALT_RUNTIME_SKIP_MARKER`] and skips.
+pub fn require_alt_runtime(program: &str, test_name: &str) -> bool {
+    let available = Command::new(program)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !available {
+        assert!(
+            std::env::var(REQUIRE_ALT_RUNTIMES_ENV).as_deref() != Ok("1"),
+            "{test_name}: {program} not found on PATH and {REQUIRE_ALT_RUNTIMES_ENV}=1"
+        );
+        eprintln!(
+            "{test_name}: {ALT_RUNTIME_SKIP_MARKER} ({program} missing or {REQUIRE_ALT_RUNTIMES_ENV} unset)"
+        );
+    }
+    available
+}
+
 /// Whether `tsc` is on PATH; hard-fails under CI, skips locally.
 pub fn require_tsc(test_name: &str) -> bool {
     require_tool(if cfg!(windows) { "tsc.cmd" } else { "tsc" }, test_name)
@@ -318,13 +346,7 @@ impl Sandbox {
     /// Generates the package of the `mcp.json` server `name` into the sandbox servers directory.
     pub fn generate_server(&self, name: &str) {
         let servers = self.servers.display().to_string();
-        let out = self.cli(&[
-            "generate",
-            "--from-config",
-            name,
-            "--progressive-output",
-            &servers,
-        ]);
+        let out = self.cli(&["generate", "--from-config", name, "--servers-dir", &servers]);
         assert_eq!(out.code, Some(0), "generate failed: {}", out.stderr);
         assert!(self.servers.join(name).join("index.ts").is_file());
     }
@@ -347,6 +369,29 @@ impl Sandbox {
         let path = self.root.join(name);
         std::fs::write(&path, body).unwrap();
         path
+    }
+
+    /// `run <script> -- <script_args>` started through `perl` that first sets the signals in
+    /// `ignored` (names such as `INT CHLD`) to `SIG_IGN`, which `exec` passes on to the runner,
+    /// in a process group of its own. Perl rather than `trap ''` because dash accepts
+    /// `trap '' CHLD` without ignoring SIGCHLD.
+    #[cfg(unix)]
+    pub fn runner_ignoring(&self, ignored: &str, script: &Path, script_args: &[&Path]) -> Command {
+        use std::os::unix::process::CommandExt as _;
+
+        let mut cmd = self.command_for("perl");
+        cmd.args([
+            "-e",
+            "$SIG{$_} = 'IGNORE' for split ' ', shift; exec @ARGV or die \"exec: $!\"",
+            ignored,
+        ])
+        .arg(CLI_BIN)
+        .args(["run", &script.display().to_string()])
+        .args(["--servers-dir", &self.servers.display().to_string()])
+        .args(["--timeout", "60", "--"])
+        .args(script_args.iter().map(|path| path.display().to_string()))
+        .process_group(0);
+        cmd
     }
 
     /// Forgets what the fixture logged so far (for example during `generate`).

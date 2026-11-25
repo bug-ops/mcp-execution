@@ -121,18 +121,37 @@ impl RecipeName {
 /// use mcp_execution_core::{ServerId, ToolName};
 /// use mcp_execution_skill::scripts::ToolRef;
 ///
-/// let tool = ToolRef {
-///     server: ServerId::new("github").unwrap(),
-///     tool: ToolName::new("list_issues").unwrap(),
-/// };
+/// let tool = ToolRef::new(ServerId::new("github").unwrap(), ToolName::new("list_issues").unwrap());
 /// assert_eq!(tool.tool.as_str(), "list_issues");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ToolRef {
     /// Server the tool belongs to.
     pub server: ServerId,
     /// Tool name on that server.
     pub tool: ToolName,
+}
+
+impl ToolRef {
+    /// Creates a reference to `tool` on `server`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::{ServerId, ToolName};
+    /// use mcp_execution_skill::scripts::ToolRef;
+    ///
+    /// let reference = ToolRef::new(
+    ///     ServerId::new("github").unwrap(),
+    ///     ToolName::new("create_issue").unwrap(),
+    /// );
+    /// assert_eq!(reference.server.as_str(), "github");
+    /// ```
+    #[must_use]
+    pub const fn new(server: ServerId, tool: ToolName) -> Self {
+        Self { server, tool }
+    }
 }
 
 /// Whether a script only reads or may change state on a server.
@@ -144,6 +163,8 @@ pub struct ToolRef {
 ///
 /// assert_ne!(WriteIntent::ReadOnly, WriteIntent::Writes);
 /// ```
+///
+/// This is a closed set: adding a variant is a major change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WriteIntent {
@@ -162,6 +183,8 @@ pub enum WriteIntent {
 ///
 /// assert_ne!(Overwrite::Refuse, Overwrite::Replace);
 /// ```
+///
+/// This is a closed set: adding a variant is a major change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overwrite {
     /// Fail with [`ScriptError::AlreadyExists`].
@@ -177,14 +200,15 @@ pub enum Overwrite {
 /// ```
 /// use mcp_execution_skill::scripts::ScriptParameter;
 ///
-/// let parameter = ScriptParameter {
-///     name: "owner".to_string(),
-///     description: "Repository owner".to_string(),
-/// };
+/// let parameter: ScriptParameter = serde_json::from_value(serde_json::json!({
+///     "name": "owner", "description": "Repository owner",
+/// }))
+/// .unwrap();
 /// assert_eq!(parameter.name, "owner");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ScriptParameter {
     /// Parameter name.
     pub name: String,
@@ -197,19 +221,16 @@ pub struct ScriptParameter {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_skill::scripts::{RecipeName, ScriptHeader, WriteIntent};
+/// use mcp_execution_skill::scripts::{WriteIntent, parse_header};
 ///
-/// let header = ScriptHeader {
-///     name: RecipeName::new("triage-issues").unwrap(),
-///     description: "List and group open issues".to_string(),
-///     parameters: vec![],
-///     tools: vec![],
-///     writes: WriteIntent::ReadOnly,
-/// };
+/// let text = "/*! mcp-script\n{\"v\":1,\"name\":\"triage-issues\",\"description\":\"d\",\
+///             \"parameters\":[],\"tools\":[],\"writes\":\"read_only\"}\n*/\nexport {};\n";
+/// let header = parse_header(text).unwrap();
 /// assert_eq!(header.writes, WriteIntent::ReadOnly);
 /// assert!(header.server().is_none());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ScriptHeader {
     /// Script name; must equal the file stem.
     pub name: RecipeName,
@@ -254,6 +275,7 @@ impl ScriptHeader {
 /// assert!(err.to_string().contains("missing name"));
 /// ```
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ScriptError {
     /// The script name is not a valid [`RecipeName`].
     #[error("invalid script name")]
@@ -304,15 +326,16 @@ pub enum ScriptError {
 /// ```
 /// use mcp_execution_skill::scripts::{RecipeName, ScriptListing, WriteIntent};
 ///
-/// let listing = ScriptListing {
-///     name: RecipeName::new("a").unwrap(),
-///     description: String::new(),
-///     tools: vec![],
-///     writes: WriteIntent::ReadOnly,
-/// };
+/// let listing = ScriptListing::new(
+///     RecipeName::new("a").unwrap(),
+///     String::new(),
+///     vec![],
+///     WriteIntent::ReadOnly,
+/// );
 /// assert_eq!(listing.writes, WriteIntent::ReadOnly);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ScriptListing {
     /// Script name.
     pub name: RecipeName,
@@ -324,24 +347,51 @@ pub struct ScriptListing {
     pub writes: WriteIntent,
 }
 
+impl ScriptListing {
+    /// Creates the listing entry of one saved script.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_skill::scripts::{RecipeName, ScriptListing, WriteIntent};
+    ///
+    /// let listing = ScriptListing::new(
+    ///     RecipeName::new("report").unwrap(),
+    ///     "Weekly report".to_string(),
+    ///     vec![],
+    ///     WriteIntent::ReadOnly,
+    /// );
+    /// assert!(listing.tools.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        name: RecipeName,
+        description: String,
+        tools: Vec<ToolRef>,
+        writes: WriteIntent,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            tools,
+            writes,
+        }
+    }
+}
+
 /// A saved script that references a tool the server no longer has.
 ///
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_core::{ServerId, ToolName};
-/// use mcp_execution_skill::scripts::{MissingTool, RecipeName, ToolRef};
+/// use mcp_execution_skill::scripts::MissingTool;
 ///
-/// let missing = MissingTool {
-///     script: RecipeName::new("a").unwrap(),
-///     tool: ToolRef {
-///         server: ServerId::new("github").unwrap(),
-///         tool: ToolName::new("gone").unwrap(),
-///     },
-/// };
-/// assert_eq!(missing.script.as_str(), "a");
+/// fn describe(missing: &MissingTool) -> String {
+///     format!("{} calls a removed tool", missing.script.as_str())
+/// }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MissingTool {
     /// Script that references the tool.
     pub script: RecipeName,
@@ -360,6 +410,7 @@ pub struct MissingTool {
 /// assert!(report.is_clean());
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CheckReport {
     /// Scripts referencing tools missing from the server metadata.
     pub missing_tools: Vec<MissingTool>,
@@ -498,11 +549,7 @@ fn confinement_error(error: ConfinementError) -> ScriptError {
         ConfinementError::Io(source) | ConfinementError::CreateDir { source, .. } => {
             ScriptError::Io(source)
         }
-        ConfinementError::InvalidSegment { .. }
-        | ConfinementError::SegmentIsSymlink { .. }
-        | ConfinementError::Escape { .. }
-        | ConfinementError::NotADirectory { .. }
-        | ConfinementError::WrongTargetKind { .. } => ScriptError::NotConfined,
+        _ => ScriptError::NotConfined,
     }
 }
 

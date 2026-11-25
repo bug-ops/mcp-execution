@@ -7,6 +7,9 @@
 //!   waits. Closing the job handle with the runner stops the grandchild, which `cmd.exe` alone
 //!   would not.
 //!
+//! - A non-detached `node` child of the script starts a detached grandchild and ends (#665): the
+//!   grandchild is in the runner's job, which does not allow breakaway, so it is gone too.
+//!
 //! Windows only. They cannot run on a Unix host; CI's windows-latest leg is the oracle.
 
 #![cfg(all(feature = "test-fixtures", windows))]
@@ -104,6 +107,40 @@ fn run_stops_a_process_the_script_left_after_a_normal_exit() {
     let _cleanup = Cleanup(leftover);
     assert_eq!(out.code, Some(0), "{out:?}");
     assert_gone(leftover, "the process the script left behind");
+}
+
+/// Starts a non-detached `node` that starts a detached grandchild, reports the grandchild's pid
+/// and ends. A detached start does not carry `CREATE_BREAKAWAY_FROM_JOB`, so the grandchild stays
+/// in the runner's job, which does not allow breakaway.
+const NESTED_LEAVING_SCRIPT: &str = "import { spawnSync } from 'node:child_process';\n\
+     const inner = \"const { spawn } = require('node:child_process');\
+     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });\
+     require('node:fs').writeFileSync(process.argv[1], String(child.pid));\
+     child.unref();\";\n\
+     spawnSync(process.execPath, ['-e', inner, process.argv[2]], { stdio: 'ignore' });\n";
+
+#[test]
+fn run_stops_a_grandchild_that_a_non_detached_node_child_left_behind() {
+    if !require_node("run_stops_a_grandchild_that_a_non_detached_node_child_left_behind") {
+        return;
+    }
+    let sb = Sandbox::new();
+    let script = sb.script("nested.mts", NESTED_LEAVING_SCRIPT);
+    let pid_file = sb.root.join("grandchild.pid");
+
+    let out = sb.run_script(
+        &script,
+        &["--timeout", "30", "--", &pid_file.display().to_string()],
+    );
+
+    let grandchild = read_pid(
+        &pid_file,
+        Duration::from_secs(1),
+        "the nested node never reported its grandchild",
+    );
+    let _cleanup = Cleanup(grandchild);
+    assert_eq!(out.code, Some(0), "{out:?}");
+    assert_gone(grandchild, "the grandchild of the non-detached node");
 }
 
 #[test]

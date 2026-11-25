@@ -277,17 +277,17 @@ async fn test_multiple_concurrent_sessions() {
     let mut sessions = Vec::new();
     for i in 0..5 {
         let server_id = ServerId::new(&format!("server-{i}")).unwrap();
-        let server_info = ServerInfo {
-            id: server_id.clone(),
-            name: format!("Server {i}"),
-            version: "1.0.0".to_string(),
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+        let server_info = ServerInfo::new(
+            server_id.clone(),
+            format!("Server {i}"),
+            "1.0.0".to_string(),
+            vec![],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-            tools: vec![],
-        };
+        );
 
         let config = ServerConfig::builder()
             .command("echo".to_string())
@@ -422,12 +422,13 @@ fn test_pending_generation_has_correct_timeout() {
 
 #[test]
 fn test_categorized_tool_serialization_roundtrip() {
-    let tool = CategorizedTool {
-        name: "test_tool".to_string(),
-        category: "testing".to_string(),
-        keywords: "test,tool,demo".to_string(),
-        short_description: "A test tool".to_string(),
-    };
+    let tool: CategorizedTool = serde_json::from_value(serde_json::json!({
+        "name": "test_tool",
+        "category": "testing",
+        "keywords": "test,tool,demo",
+        "short_description": "A test tool",
+    }))
+    .unwrap();
 
     let json = serde_json::to_string(&tool).unwrap();
     let deserialized: CategorizedTool = serde_json::from_str(&json).unwrap();
@@ -502,29 +503,27 @@ async fn test_state_manager_concurrent_read_write() {
 // ============================================================================
 
 fn create_test_server_info(server_id: ServerId) -> ServerInfo {
-    ServerInfo {
-        id: server_id,
-        name: "Test Server".to_string(),
-        version: "1.0.0".to_string(),
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
-        },
-        tools: vec![ToolInfo {
-            name: ToolName::new("test_tool").unwrap(),
-            description: "A test tool".to_string(),
-            input_schema: serde_json::json!({
+    ServerInfo::new(
+        server_id,
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        vec![ToolInfo::new(
+            ToolName::new("test_tool").unwrap(),
+            "A test tool".to_string(),
+            serde_json::json!({
                 "type": "object",
                 "properties": {
                     "message": {"type": "string"}
                 },
                 "required": ["message"]
             }),
-            output_schema: None,
-            annotations: None,
-        }],
-    }
+        )],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
+        },
+    )
 }
 
 fn create_test_pending(server_id_str: &str) -> PendingGeneration {

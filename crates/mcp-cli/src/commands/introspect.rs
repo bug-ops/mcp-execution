@@ -13,26 +13,6 @@ use tracing::info;
 ///
 /// Contains server information and list of available tools,
 /// formatted for display to the user.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::{IntrospectionResult, ServerMetadata};
-///
-/// let result = IntrospectionResult {
-///     server: ServerMetadata {
-///         id: "github".to_string(),
-///         name: "github".to_string(),
-///         version: "1.0.0".to_string(),
-///         supports_tools: true,
-///         supports_resources: false,
-///         supports_prompts: false,
-///     },
-///     tools: vec![],
-/// };
-///
-/// assert_eq!(result.server.name, "github");
-/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct IntrospectionResult {
     /// Server metadata
@@ -45,23 +25,6 @@ pub struct IntrospectionResult {
 ///
 /// Simplified representation of server information optimized
 /// for CLI output formatting.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::ServerMetadata;
-///
-/// let metadata = ServerMetadata {
-///     id: "github".to_string(),
-///     name: "GitHub MCP".to_string(),
-///     version: "1.0.0".to_string(),
-///     supports_tools: true,
-///     supports_resources: false,
-///     supports_prompts: false,
-/// };
-///
-/// assert_eq!(metadata.name, "GitHub MCP");
-/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerMetadata {
     /// Server identifier
@@ -82,21 +45,6 @@ pub struct ServerMetadata {
 ///
 /// Contains tool information with optional schema details
 /// when detailed output is requested.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::ToolDisplay;
-///
-/// let tool = ToolDisplay {
-///     name: "search".to_string(),
-///     description: "Search repositories".to_string(),
-///     input_schema: None,
-///     output_schema: None,
-/// };
-///
-/// assert_eq!(tool.name, "search");
-/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDisplay {
     /// Tool name
@@ -141,47 +89,6 @@ pub struct ToolDisplay {
 /// - Server connection fails
 /// - Server introspection fails
 /// - Output formatting fails
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
-/// use mcp_execution_cli::commands::introspect;
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// // Simple server
-/// let exit_code = introspect::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Stdio {
-///             command: "github-mcp-server".to_string(),
-///             args: vec!["stdio".to_string()],
-///             env: vec![],
-///             cwd: None,
-///         },
-///         connect_timeout_secs: None,
-///         discover_timeout_secs: None,
-///     },
-///     false,
-///     OutputFormat::Json
-/// ).await?;
-///
-/// // HTTP transport with a shorter connect timeout
-/// let exit_code = introspect::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Http {
-///             url: "https://api.githubcopilot.com/mcp/".to_string(),
-///             headers: vec!["Authorization=Bearer token".to_string()],
-///         },
-///         connect_timeout_secs: Some(5),
-///         discover_timeout_secs: None,
-///     },
-///     false,
-///     OutputFormat::Json
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(
     source: ServerSource,
     detailed: bool,
@@ -229,30 +136,6 @@ pub async fn run(
 ///
 /// * `server_info` - Server information from introspector
 /// * `detailed` - Whether to include detailed tool schemas
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::introspect::build_result;
-/// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
-/// use mcp_execution_core::ServerId;
-///
-/// let server_info = ServerInfo {
-///     id: ServerId::new("test").unwrap(),
-///     name: "Test Server".to_string(),
-///     version: "1.0.0".to_string(),
-///     tools: vec![],
-///     capabilities: ServerCapabilities {
-///         supports_tools: true,
-///         supports_resources: false,
-///         supports_prompts: false,
-///     },
-/// };
-///
-/// let result = build_result(&server_info, false);
-/// assert_eq!(result.server.name, "Test Server");
-/// assert_eq!(result.tools.len(), 0);
-/// ```
 #[must_use]
 pub fn build_result(server_info: &ServerInfo, detailed: bool) -> IntrospectionResult {
     let server = ServerMetadata {
@@ -350,17 +233,17 @@ mod tests {
 
     #[test]
     fn test_build_result_basic() {
-        let server_info = ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+        let server_info = ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let result = build_result(&server_info, false);
 
@@ -375,32 +258,34 @@ mod tests {
 
     #[test]
     fn test_build_result_with_tools_not_detailed() {
-        let server_info = ServerInfo {
-            id: ServerId::new("test").unwrap(),
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![
-                ToolInfo {
-                    name: ToolName::new("tool1").unwrap(),
-                    description: "First tool".to_string(),
-                    input_schema: json!({"type": "object"}),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new("tool2").unwrap(),
-                    description: "Second tool".to_string(),
-                    input_schema: json!({"type": "string"}),
-                    output_schema: Some(json!({"type": "boolean"})),
-                    annotations: None,
+        let server_info = ServerInfo::new(
+            ServerId::new("test").unwrap(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            vec![
+                ToolInfo::new(
+                    ToolName::new("tool1").unwrap(),
+                    "First tool".to_string(),
+                    json!({"type": "object"}),
+                ),
+                {
+                    let mut value = ToolInfo::new(
+                        ToolName::new("tool2").unwrap(),
+                        "Second tool".to_string(),
+                        json!({"type": "string"}),
+                    );
+                    value.output_schema = Some(json!({"type": "boolean"}));
+                    value
                 },
             ],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: true,
-                supports_prompts: true,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value.supports_resources = true;
+                value.supports_prompts = true;
+                value
             },
-        };
+        );
 
         let result = build_result(&server_info, false);
 
@@ -418,32 +303,32 @@ mod tests {
 
     #[test]
     fn test_build_result_with_tools_detailed() {
-        let server_info = ServerInfo {
-            id: ServerId::new("test").unwrap(),
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![
-                ToolInfo {
-                    name: ToolName::new("tool1").unwrap(),
-                    description: "First tool".to_string(),
-                    input_schema: json!({"type": "object", "properties": {"name": {"type": "string"}}}),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new("tool2").unwrap(),
-                    description: "Second tool".to_string(),
-                    input_schema: json!({"type": "string"}),
-                    output_schema: Some(json!({"type": "boolean"})),
-                    annotations: None,
+        let server_info = ServerInfo::new(
+            ServerId::new("test").unwrap(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            vec![
+                ToolInfo::new(
+                    ToolName::new("tool1").unwrap(),
+                    "First tool".to_string(),
+                    json!({"type": "object", "properties": {"name": {"type": "string"}}}),
+                ),
+                {
+                    let mut value = ToolInfo::new(
+                        ToolName::new("tool2").unwrap(),
+                        "Second tool".to_string(),
+                        json!({"type": "string"}),
+                    );
+                    value.output_schema = Some(json!({"type": "boolean"}));
+                    value
                 },
             ],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let result = build_result(&server_info, true);
 
@@ -474,12 +359,14 @@ mod tests {
 
     #[test]
     fn test_build_tool_metadata_not_detailed() {
-        let tool_info = ToolInfo {
-            name: ToolName::new("send_message").unwrap(),
-            description: "Sends a message".to_string(),
-            input_schema: json!({"type": "object"}),
-            output_schema: Some(json!({"type": "string"})),
-            annotations: None,
+        let tool_info = {
+            let mut value = ToolInfo::new(
+                ToolName::new("send_message").unwrap(),
+                "Sends a message".to_string(),
+                json!({"type": "object"}),
+            );
+            value.output_schema = Some(json!({"type": "string"}));
+            value
         };
 
         let metadata = build_tool_metadata(&tool_info, false);
@@ -492,18 +379,20 @@ mod tests {
 
     #[test]
     fn test_build_tool_metadata_detailed() {
-        let tool_info = ToolInfo {
-            name: ToolName::new("send_message").unwrap(),
-            description: "Sends a message".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "chat_id": {"type": "string"},
-                    "text": {"type": "string"}
-                }
-            }),
-            output_schema: Some(json!({"type": "string"})),
-            annotations: None,
+        let tool_info = {
+            let mut value = ToolInfo::new(
+                ToolName::new("send_message").unwrap(),
+                "Sends a message".to_string(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "chat_id": {"type": "string"},
+                        "text": {"type": "string"}
+                    }
+                }),
+            );
+            value.output_schema = Some(json!({"type": "string"}));
+            value
         };
 
         let metadata = build_tool_metadata(&tool_info, true);
@@ -628,39 +517,21 @@ mod tests {
 
     #[test]
     fn test_build_result_preserves_tool_order() {
-        let server_info = ServerInfo {
-            id: ServerId::new("test").unwrap(),
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![
-                ToolInfo {
-                    name: ToolName::new("alpha").unwrap(),
-                    description: "A".to_string(),
-                    input_schema: json!({}),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new("beta").unwrap(),
-                    description: "B".to_string(),
-                    input_schema: json!({}),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new("gamma").unwrap(),
-                    description: "C".to_string(),
-                    input_schema: json!({}),
-                    output_schema: None,
-                    annotations: None,
-                },
+        let server_info = ServerInfo::new(
+            ServerId::new("test").unwrap(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            vec![
+                ToolInfo::new(ToolName::new("alpha").unwrap(), "A".to_string(), json!({})),
+                ToolInfo::new(ToolName::new("beta").unwrap(), "B".to_string(), json!({})),
+                ToolInfo::new(ToolName::new("gamma").unwrap(), "C".to_string(), json!({})),
             ],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let result = build_result(&server_info, false);
 
@@ -780,17 +651,13 @@ mod tests {
 
     #[test]
     fn test_build_result_empty_tools() {
-        let server_info = ServerInfo {
-            id: ServerId::new("empty").unwrap(),
-            name: "Empty Server".to_string(),
-            version: "0.1.0".to_string(),
-            tools: vec![],
-            capabilities: ServerCapabilities {
-                supports_tools: false,
-                supports_resources: false,
-                supports_prompts: false,
-            },
-        };
+        let server_info = ServerInfo::new(
+            ServerId::new("empty").unwrap(),
+            "Empty Server".to_string(),
+            "0.1.0".to_string(),
+            vec![],
+            ServerCapabilities::default(),
+        );
 
         let result = build_result(&server_info, false);
 
@@ -803,26 +670,30 @@ mod tests {
     fn test_build_result_many_tools() {
         // Test with many tools to ensure no performance issues
         let tools: Vec<ToolInfo> = (0..100)
-            .map(|i| ToolInfo {
-                name: ToolName::new(&format!("tool_{i}")).unwrap(),
-                description: format!("Tool number {i}"),
-                input_schema: json!({"type": "object"}),
-                output_schema: Some(json!({"type": "string"})),
-                annotations: None,
+            .map(|i| {
+                let mut value = ToolInfo::new(
+                    ToolName::new(&format!("tool_{i}")).unwrap(),
+                    format!("Tool number {i}"),
+                    json!({"type": "object"}),
+                );
+                value.output_schema = Some(json!({"type": "string"}));
+                value
             })
             .collect();
 
-        let server_info = ServerInfo {
-            id: ServerId::new("many-tools").unwrap(),
-            name: "Server with many tools".to_string(),
-            version: "1.0.0".to_string(),
+        let server_info = ServerInfo::new(
+            ServerId::new("many-tools").unwrap(),
+            "Server with many tools".to_string(),
+            "1.0.0".to_string(),
             tools,
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: true,
-                supports_prompts: true,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value.supports_resources = true;
+                value.supports_prompts = true;
+                value
             },
-        };
+        );
 
         let result = build_result(&server_info, true);
 
@@ -836,29 +707,31 @@ mod tests {
 
     #[test]
     fn test_build_tool_metadata_complex_schema() {
-        let tool_info = ToolInfo {
-            name: ToolName::new("complex_tool").unwrap(),
-            description: "Tool with complex schema".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "minLength": 1},
-                    "age": {"type": "integer", "minimum": 0},
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    }
-                },
-                "required": ["name"]
-            }),
-            output_schema: Some(json!({
+        let tool_info = {
+            let mut value = ToolInfo::new(
+                ToolName::new("complex_tool").unwrap(),
+                "Tool with complex schema".to_string(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "minLength": 1},
+                        "age": {"type": "integer", "minimum": 0},
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        }
+                    },
+                    "required": ["name"]
+                }),
+            );
+            value.output_schema = Some(json!({
                 "type": "object",
                 "properties": {
                     "success": {"type": "boolean"},
                     "message": {"type": "string"}
                 }
-            })),
-            annotations: None,
+            }));
+            value
         };
 
         let metadata = build_tool_metadata(&tool_info, true);
@@ -950,23 +823,22 @@ mod tests {
 
     #[test]
     fn test_build_result_mixed_capabilities() {
-        let server_info = ServerInfo {
-            id: ServerId::new("mixed").unwrap(),
-            name: "Mixed Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![ToolInfo {
-                name: ToolName::new("tool1").unwrap(),
-                description: "First".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            }],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: true,
-                supports_prompts: false, // Mixed capabilities
+        let server_info = ServerInfo::new(
+            ServerId::new("mixed").unwrap(),
+            "Mixed Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                ToolName::new("tool1").unwrap(),
+                "First".to_string(),
+                json!({}),
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value.supports_resources = true;
+                value
             },
-        };
+        );
 
         let result = build_result(&server_info, false);
 

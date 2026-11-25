@@ -43,7 +43,7 @@ fn scripts_check_reads_a_server_generated_into_a_custom_servers_directory() {
         "generate",
         "--from-config",
         "fixture",
-        "--progressive-output",
+        "--servers-dir",
         &custom_arg,
     ]);
     assert_eq!(generated.code, Some(0), "generate: {}", generated.stderr);

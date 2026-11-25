@@ -85,7 +85,7 @@ fn run_generate(root: &Path, observed: &Path) -> (Output, String) {
             "fake",
             "--name",
             "fake",
-            "--progressive-output",
+            "--servers-dir",
         ])
         .arg(&out_dir)
         .arg("--observed-shapes")

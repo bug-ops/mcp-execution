@@ -54,10 +54,7 @@ use std::path::{Path, PathBuf};
 /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 ///
 /// let mut code = GeneratedCode::new();
-/// code.add_file(GeneratedFile {
-///     path: "manifest.json".to_string(),
-///     content: "{}".to_string(),
-/// })
+/// code.add_file(GeneratedFile::new("manifest.json".to_string(), "{}".to_string()))
 /// .unwrap();
 ///
 /// let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
@@ -106,10 +103,7 @@ impl FilesBuilder {
     /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
     ///
     /// let mut code = GeneratedCode::new();
-    /// code.add_file(GeneratedFile {
-    ///     path: "types.ts".to_string(),
-    ///     content: "export type Params = {};".to_string(),
-    /// })
+    /// code.add_file(GeneratedFile::new("types.ts".to_string(), "export type Params = {};".to_string()))
     /// .unwrap();
     ///
     /// let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
@@ -471,15 +465,15 @@ mod tests {
     #[test]
     fn test_from_generated_code() {
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "manifest.json".to_string(),
-            content: "{}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "manifest.json".to_string(),
+            "{}".to_string(),
+        ))
         .unwrap();
-        code.add_file(GeneratedFile {
-            path: "types.ts".to_string(),
-            content: "export {};".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "types.ts".to_string(),
+            "export {};".to_string(),
+        ))
         .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
@@ -494,10 +488,10 @@ mod tests {
     #[test]
     fn test_from_generated_code_nested_paths() {
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "tools/sendMessage.ts".to_string(),
-            content: "export function sendMessage() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "tools/sendMessage.ts".to_string(),
+            "export function sendMessage() {}".to_string(),
+        ))
         .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
@@ -546,10 +540,10 @@ mod tests {
     #[test]
     fn test_from_generated_code_with_additional_files() {
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "generated.ts".to_string(),
-            content: "// generated".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "generated.ts".to_string(),
+            "// generated".to_string(),
+        ))
         .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/test")
@@ -923,15 +917,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "index.ts".to_string(),
-            content: "export {};".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "index.ts".to_string(),
+            "export {};".to_string(),
+        ))
         .unwrap();
-        code.add_file(GeneratedFile {
-            path: "tools/create.ts".to_string(),
-            content: "export function create() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "tools/create.ts".to_string(),
+            "export function create() {}".to_string(),
+        ))
         .unwrap();
 
         let vfs = FilesBuilder::from_generated_code(code, "/github")

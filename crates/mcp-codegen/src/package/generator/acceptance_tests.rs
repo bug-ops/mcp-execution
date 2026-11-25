@@ -70,31 +70,29 @@ fn config() -> ServerConfig {
 }
 
 fn tool(name: &str, input: Value, output: Option<Value>) -> ToolInfo {
-    ToolInfo {
-        name: ToolName::new(name).unwrap(),
-        description: format!("Tool {name}"),
-        input_schema: input,
-        output_schema: output,
-        annotations: None,
+    {
+        let mut value = ToolInfo::new(ToolName::new(name).unwrap(), format!("Tool {name}"), input);
+        value.output_schema = output;
+        value
     }
 }
 
 fn info(tools: Vec<ToolInfo>) -> ServerInfo {
-    ServerInfo {
-        id: ServerId::new("acme").unwrap(),
-        name: "Acme".to_string(),
-        version: "1.0.0".to_string(),
+    ServerInfo::new(
+        ServerId::new("acme").unwrap(),
+        "Acme".to_string(),
+        "1.0.0".to_string(),
         tools,
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    }
+    )
 }
 
 fn generate(server: &ServerInfo) -> GeneratedCode {
-    ProgressiveGenerator::new()
+    PackageGenerator::new()
         .unwrap()
         .generate(server, &config())
         .expect("generation succeeds")
@@ -125,18 +123,24 @@ fn object_schema_with_properties(prefix: &str, target_bytes: usize) -> Value {
 
 fn adversarial_tool() -> ToolInfo {
     let near_limit = MAX_SCHEMA_SIZE_BYTES - 4096;
-    ToolInfo {
-        name: ToolName::new("a".repeat(MAX_TOOL_NAME_LEN)).unwrap(),
-        description: "\u{1}".repeat(MAX_TOOL_DESCRIPTION_LEN),
-        input_schema: object_schema_with_properties("in", near_limit),
-        output_schema: Some(object_schema_with_properties("out", near_limit)),
-        annotations: Some(ToolAnnotations {
-            title: AnnotationTitle::new(&"T".repeat(MAX_UNTRUSTED_FIELD_LEN)),
-            read_only: Hint::StatedTrue,
-            destructive: Hint::StatedFalse,
-            idempotent: Hint::StatedTrue,
-            open_world: Hint::StatedFalse,
-        }),
+    {
+        let mut value = ToolInfo::new(
+            ToolName::new("a".repeat(MAX_TOOL_NAME_LEN)).unwrap(),
+            "\u{1}".repeat(MAX_TOOL_DESCRIPTION_LEN),
+            object_schema_with_properties("in", near_limit),
+        );
+        value.output_schema = Some(object_schema_with_properties("out", near_limit));
+        value.annotations = Some({
+            let mut value = ToolAnnotations::not_stated();
+            value.read_only = Hint::StatedTrue;
+            value.destructive = Hint::StatedFalse;
+            value.idempotent = Hint::StatedTrue;
+            value.open_world = Hint::StatedFalse;
+
+            value.title = AnnotationTitle::new(&"T".repeat(MAX_UNTRUSTED_FIELD_LEN));
+            value
+        });
+        value
     }
 }
 

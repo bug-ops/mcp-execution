@@ -29,15 +29,6 @@ use mcp_execution_core::{
 /// # Errors
 ///
 /// Returns the [`ServerIdError`] [`ServerId::new`] reports.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::cli::parse_server_id;
-///
-/// assert!(parse_server_id("github").is_ok());
-/// assert!(parse_server_id("../x").is_err());
-/// ```
 pub fn parse_server_id(raw: &str) -> Result<ServerId, ServerIdError> {
     ServerId::new(raw)
 }
@@ -47,29 +38,17 @@ pub fn parse_server_id(raw: &str) -> Result<ServerId, ServerIdError> {
 /// This CLI introspects an MCP server and generates one TypeScript file per
 /// tool, a type-only catalog and a runtime bridge, so a model can script
 /// against the server.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::cli::Cli;
-/// use clap::Parser;
-///
-/// // Parse command-line arguments into a Cli struct
-/// let args = Cli::parse();
-/// println!("Verbose: {}", args.verbose);
-/// println!("Format: {:?}", args.format);
-/// ```
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 #[command(author = "MCP Execution Team")]
 pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
-    pub command: Commands,
+    pub(crate) command: Commands,
 
     /// Enable verbose logging (debug level)
     #[arg(short, long, global = true)]
-    pub verbose: bool,
+    pub(crate) verbose: bool,
 
     /// Output format
     #[arg(
@@ -80,7 +59,7 @@ pub struct Cli {
         value_parser = PossibleValuesParser::new(["json", "text", "pretty"])
             .map(|s| OutputFormat::from_str(&s).expect("possible values are OutputFormat variants"))
     )]
-    pub format: OutputFormat,
+    pub(crate) format: OutputFormat,
 
     /// Diagnostic log format: `text` (default) or `json`.
     ///
@@ -94,7 +73,7 @@ pub struct Cli {
         value_parser = PossibleValuesParser::new(["text", "json"])
             .map(|s| LogFormat::from_str(&s).expect("possible values are LogFormat variants"))
     )]
-    pub log_format: Option<LogFormat>,
+    pub(crate) log_format: Option<LogFormat>,
 }
 
 // Hand-written to redact `Commands::Introspect`'s `env`/`headers`/`http`/`sse`
@@ -133,30 +112,6 @@ impl fmt::Debug for Cli {
 /// positional `server`, `--http`, or `--sse` is set before [`TryFrom<ServerFlags> for
 /// ServerSource`](ServerSource) ever runs. This makes the illegal states (zero or multiple
 /// selectors) unconstructible outside this module rather than merely checked at runtime.
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-///
-/// // The positional `server` and `--from-config`/`--http`/`--sse` are
-/// // alternative selectors accepted by the same `server_source` group.
-/// let cli = Cli::parse_from(["mcp-execution-cli", "introspect", "github-mcp-server"]);
-/// assert_matches!(cli.command, Commands::Introspect { .. });
-///
-/// let cli = Cli::parse_from([
-///     "mcp-execution-cli",
-///     "introspect",
-///     "--http",
-///     "https://api.example.com/mcp",
-/// ]);
-/// assert_matches!(cli.command, Commands::Introspect { .. });
-///
-/// // Exactly one selector is required: none set is a parse error.
-/// assert!(Cli::try_parse_from(["mcp-execution-cli", "introspect"]).is_err());
-/// ```
 #[derive(Args)]
 #[command(group(
     ArgGroup::new("server_source")
@@ -359,29 +314,6 @@ impl TryFrom<ServerFlags> for ServerSource {
 }
 
 /// Available CLI subcommands.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::cli::{Cli, Commands};
-/// use clap::Parser;
-///
-/// let args = Cli::parse();
-/// match args.command {
-///     Commands::Introspect { .. } => println!("Introspect command"),
-///     Commands::Generate { .. } => println!("Generate command"),
-///     Commands::Server { .. } => println!("Server command"),
-///     Commands::Skill { .. } => println!("Skill command"),
-///     Commands::Setup => println!("Setup command"),
-///     Commands::Completions { .. } => println!("Completions command"),
-///     Commands::Run(_) => println!("Run command"),
-///     Commands::Call(_) => println!("Call command"),
-///     Commands::Scripts { .. } => println!("Scripts command"),
-///     Commands::Stats(_) => println!("Stats command"),
-///     Commands::Drift(_) => println!("Drift command"),
-///     Commands::Helper => println!("Helper command"),
-/// }
-/// ```
 #[derive(Subcommand)]
 pub enum Commands {
     /// Introspect an MCP server and display its capabilities.
@@ -435,9 +367,9 @@ pub enum Commands {
         detailed: bool,
     },
 
-    /// Generate Claude Code skill file from progressive loading tools.
+    /// Generate Claude Code skill file from a generated server package.
     ///
-    /// Scans generated progressive loading TypeScript files and creates
+    /// Scans the generated TypeScript files and creates
     /// an instruction skill (SKILL.md) for Claude Code integration.
     ///
     /// # Note
@@ -503,10 +435,10 @@ pub enum Commands {
         overwrite: bool,
     },
 
-    /// Generate progressive loading code from MCP server.
+    /// Generate a typed TypeScript package from an MCP server.
     ///
     /// Introspects an MCP server and generates TypeScript files
-    /// for progressive tool loading.
+    /// one per tool.
     ///
     /// # Configuration Modes
     ///
@@ -545,10 +477,10 @@ pub enum Commands {
         #[arg(long)]
         name: Option<String>,
 
-        /// Custom output directory for progressive loading files
+        /// Custom base directory for generated server packages
         /// (default: ~/.claude/servers/)
         #[arg(long)]
-        progressive_output: Option<PathBuf>,
+        servers_dir: Option<PathBuf>,
 
         /// Result shapes recorded by a past run of the generated tools
         ///
@@ -624,18 +556,22 @@ pub enum Commands {
     ///
     /// Signals: SIGINT and SIGTERM, and on Unix also SIGHUP and SIGQUIT, stop the script and any
     /// running type check and exit 130, 143, 129 or 131 (Ctrl-C and Ctrl-Break report as SIGINT
-    /// on Windows). A SIGHUP or SIGQUIT that was already ignored when the runner started (as
-    /// under `nohup`) stays ignored; the script is not covered by that, because node resets an
-    /// inherited SIGHUP ignore, so on a terminal the hang-up still ends the script and the run.
-    /// To keep a run alive after the terminal closes, use `setsid` or tmux. On Unix the
-    /// processes that stay in the script's process group are stopped with it, also on the run
-    /// timeout and after the script exited by itself, so a background process the script left
-    /// behind does not outlive the run; a process that starts its own session or group is not
-    /// stopped. On Windows the script runs in a job object that ends all its processes
-    /// with it, also after a normal exit; if the job cannot be set up only the script process
-    /// itself is stopped, and a process it started before the job took effect can escape. SIGKILL cannot be handled: if the runner is killed
-    /// that way, including a `kill -9` of its whole process group, the script process it
-    /// started can keep running. Once a signal arrived, closing the MCP sessions is bounded to
+    /// on Windows). On Unix a SIGINT, SIGHUP or SIGQUIT that was already ignored when the runner
+    /// started (a background job of a non-interactive shell ignores SIGINT and SIGQUIT, `nohup`
+    /// ignores SIGHUP) is not acted on by the runner; SIGTERM is always handled. The script is
+    /// not covered by that, because node resets these inherited ignores, so on a terminal, where
+    /// the script is the foreground group, Ctrl-C, Ctrl-\ or a hang-up still end it and the run
+    /// is reported as cancelled (exit 130, 131 or 129). To keep a run alive after the terminal
+    /// closes, use `setsid` or tmux. On Unix the processes that stay in the script's process
+    /// group are stopped with it, also on the run timeout and after the script exited by itself,
+    /// so a background process the script left behind does not outlive the run; a process that
+    /// starts its own session or group is not stopped. On Windows the script runs in a job
+    /// object that ends all its processes with it, also after a normal exit; if the job cannot
+    /// be set up only the script process itself is stopped, and a process it started before the
+    /// job took effect can escape. SIGKILL cannot be handled: if the runner is killed that way,
+    /// including a `kill -9` of its whole process group, the script process it started can keep
+    /// running.
+    /// Once a signal arrived, closing the MCP sessions is bounded to
     /// about 4 seconds, and a further signal cuts it short; the run then exits with the
     /// signal's code without the call summary. A run that was not signalled always waits for
     /// the sessions to close. On a terminal the script's process group is the foreground group
@@ -684,15 +620,6 @@ pub enum Commands {
 ///
 /// Commands whose stderr is read by a script or an agent (`call`, `run`, the helper) default to
 /// warnings only; `--verbose` or `RUST_LOG` restores the standard behaviour.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::cli::{Commands, LogProfile};
-///
-/// assert_eq!(Commands::Setup.log_profile(), LogProfile::Standard);
-/// assert_eq!(Commands::Helper.log_profile(), LogProfile::Quiet);
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogProfile {
     /// Default `info` level.
@@ -703,14 +630,6 @@ pub enum LogProfile {
 
 impl Commands {
     /// Returns the default logging profile of this command.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_cli::cli::{Commands, LogProfile};
-    ///
-    /// assert_eq!(Commands::Setup.log_profile(), LogProfile::Standard);
-    /// ```
     #[must_use]
     pub const fn log_profile(&self) -> LogProfile {
         match self {
@@ -747,14 +666,14 @@ impl fmt::Debug for Commands {
             Self::Generate {
                 flags,
                 name,
-                progressive_output,
+                servers_dir,
                 observed_shapes,
                 dry_run,
             } => f
                 .debug_struct("Generate")
                 .field("flags", flags)
                 .field("name", name)
-                .field("progressive_output", progressive_output)
+                .field("servers_dir", servers_dir)
                 .field("observed_shapes", observed_shapes)
                 .field("dry_run", dry_run)
                 .finish(),
@@ -947,14 +866,11 @@ mod tests {
             "mcp-cli",
             "generate",
             "server",
-            "--progressive-output",
+            "--servers-dir",
             "/tmp/output",
         ]);
-        if let Commands::Generate {
-            progressive_output, ..
-        } = cli.command
-        {
-            assert_eq!(progressive_output, Some(PathBuf::from("/tmp/output")));
+        if let Commands::Generate { servers_dir, .. } = cli.command {
+            assert_eq!(servers_dir, Some(PathBuf::from("/tmp/output")));
         } else {
             panic!("Expected Generate command");
         }

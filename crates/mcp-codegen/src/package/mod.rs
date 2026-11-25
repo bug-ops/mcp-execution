@@ -32,7 +32,7 @@
 //! ## Basic Usage
 //!
 //! ```no_run
-//! use mcp_execution_codegen::progressive::ProgressiveGenerator;
+//! use mcp_execution_codegen::package::PackageGenerator;
 //! use mcp_execution_introspector::{Introspector, ServerInfo};
 //! use mcp_execution_core::{ServerId, ServerConfig};
 //!
@@ -46,7 +46,7 @@
 //! let info = introspector.discover_server(server_id, &config).await?;
 //!
 //! // Generate progressive loading files
-//! let generator = ProgressiveGenerator::new()?;
+//! let generator = PackageGenerator::new()?;
 //! let code = generator.generate(&info, &config)?;
 //!
 //! // Files are generated, ready to write to disk
@@ -75,15 +75,6 @@
 //! $ cat ~/.claude/servers/github/createIssue.ts
 //! // TypeScript code for createIssue tool
 //! ```
-//!
-//! # Feature Flag
-//!
-//! This module is only available when the `progressive` feature is enabled:
-//!
-//! ```toml
-//! [dependencies]
-//! mcp-codegen = { version = "0.1", features = ["progressive"] }
-//! ```
 
 mod annotations;
 mod catalog;
@@ -93,8 +84,7 @@ mod tool_types;
 pub mod types;
 
 // Re-export main types
-pub use generator::{ProgressiveGenerator, TSCONFIG_JSON};
+pub use generator::{PackageGenerator, TSCONFIG_JSON};
 pub use types::{
-    BridgeContext, CategoryInfo, IndexContext, ResultSource, ToolCategorization, ToolContext,
-    ToolSummary,
+    BridgeContext, CategoryInfo, IndexContext, ToolCategorization, ToolContext, ToolSummary,
 };

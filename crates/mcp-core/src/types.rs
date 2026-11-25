@@ -52,6 +52,7 @@ use thiserror::Error;
 /// assert_matches!(err, ServerIdError::InvalidFormat { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ServerIdError {
     /// `id` is not a single non-empty path segment: it is empty, or contains a `..`, a path
     /// separator, or a root/prefix component.
@@ -96,11 +97,11 @@ pub enum ServerIdError {
 /// since server IDs are ultimately confined into filesystem paths (e.g.
 /// `~/.claude/servers/{server_id}`) and rendered into LLM-facing text.
 ///
-/// This baseline invariant is deliberately looser than [`validate_server_id_slug`]'s: a
-/// `ServerId` may contain uppercase letters, underscores, or other path-segment-safe
-/// characters that are not valid in a filesystem-safe *slug*. If you need the id to become a
-/// directory name or generated-code identifier — not just a safe path segment — validate it
-/// with [`validate_server_id_slug`] too, in addition to constructing it here.
+/// This baseline invariant is deliberately looser than [`ServerSlug`]'s: a `ServerId` may
+/// contain uppercase letters, underscores, or other path-segment-safe characters that are not
+/// valid in a filesystem-safe *slug*. If you need the id to become a directory name or
+/// generated-code identifier — not just a safe path segment — hold it as a [`ServerSlug`]; every
+/// slug converts into a `ServerId`.
 ///
 /// # Examples
 ///
@@ -211,16 +212,17 @@ impl fmt::Display for ServerId {
     }
 }
 
-/// Maximum length, in bytes, of a slug-shaped server id (see [`validate_server_id_slug`]).
+/// Maximum length, in bytes, of a [`ServerSlug`].
 pub const MAX_SERVER_ID_LENGTH: usize = 64;
 
-/// Errors returned by [`validate_server_id_slug`].
+/// Errors returned by [`ServerSlug::new`].
 ///
 /// Every message names the parameter as `server_id` (matching the MCP tool JSON field and this
 /// crate's other `server_id`-named APIs) rather than "server id" — callers surface these
 /// messages verbatim to end users/MCP clients, so wording here must stay actionable and
 /// consistent with every other layer that reports the same rejection.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ServerIdSlugError {
     /// The candidate was empty.
     #[error("server_id must not be empty")]
@@ -241,37 +243,8 @@ pub enum ServerIdSlugError {
     InvalidCharacters,
 }
 
-/// Validates that `id` is a filesystem-safe server id *slug*: 1-64 lowercase ASCII letters,
-/// digits, or hyphens (`^[a-z0-9-]+$`).
-///
-/// This is a stricter, opt-in invariant layered on top of [`ServerId::new`]'s own baseline
-/// (single non-empty path segment, no `..` or path separator): every slug-shaped id is
-/// automatically a valid [`ServerId`], but not every valid `ServerId` is slug-shaped — e.g. a
-/// raw `mcp.json` key like `claude_ai_Gmail` (mixed case, underscore) is a legitimate
-/// `ServerId` but not a valid slug. [`ServerId::new`] deliberately does not enforce this
-/// tighter rule itself, since callers that only need a safe path segment (e.g. looking up an
-/// existing `mcp.json` entry) must keep accepting non-slug-shaped ids. Callers that need the id
-/// to become a directory name or generated-code identifier — where entry validation and
-/// filesystem confinement must agree on the exact same rule — should call this function too,
-/// in addition to [`ServerId::new`].
-///
-/// # Errors
-///
-/// Returns [`ServerIdSlugError`] if `id` is empty, exceeds [`MAX_SERVER_ID_LENGTH`] bytes, or
-/// contains a character other than a lowercase ASCII letter, digit, or hyphen.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::validate_server_id_slug;
-///
-/// assert!(validate_server_id_slug("github").is_ok());
-/// assert!(validate_server_id_slug("my-server-123").is_ok());
-/// assert!(validate_server_id_slug("").is_err());
-/// assert!(validate_server_id_slug("GitHub").is_err());
-/// assert!(validate_server_id_slug("my_server").is_err());
-/// ```
-pub fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
+/// Checks the slug rule `[a-z0-9-]{1,64}`; the single place the rule lives.
+fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
     if id.is_empty() {
         return Err(ServerIdSlugError::Empty);
     }
@@ -288,6 +261,127 @@ pub fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
         return Err(ServerIdSlugError::InvalidCharacters);
     }
     Ok(())
+}
+
+/// A filesystem-safe server id *slug*: 1-64 lowercase ASCII letters, digits, or hyphens
+/// (`[a-z0-9-]{1,64}`).
+///
+/// The id that becomes a directory name or generated-code identifier, so it is the type of every
+/// public `server_id` whose producer validates this rule (the MCP tool parameters, skill
+/// generation). The rule is frozen with no leading, trailing or consecutive-hyphen restriction,
+/// so `-`, `--a` and `a-` are valid slugs; a host that applies the Agent Skills `name` hyphen
+/// rule may still refuse such a name, and `--a` as a command-line positional must follow `--`.
+///
+/// A slug is always a valid [`ServerId`] (the converse does not hold: a raw `mcp.json` key such
+/// as `claude_ai_Gmail` is a `ServerId` but not a slug), which `From<ServerSlug> for ServerId`
+/// expresses.
+///
+/// [`Deserialize`] is routed through [`ServerSlug::new`] (via `#[serde(try_from = "String")]`),
+/// so a request or file holding an invalid id is rejected at parse time; the JSON Schema is a
+/// bounded string with the same pattern.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::ServerSlug;
+///
+/// let slug = ServerSlug::new("my-server-123").unwrap();
+/// assert_eq!(slug.as_str(), "my-server-123");
+/// assert!(ServerSlug::new("").is_err());
+/// assert!(ServerSlug::new("GitHub").is_err());
+/// assert!(ServerSlug::new("my_server").is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ServerSlug(String);
+
+impl ServerSlug {
+    /// Creates a slug, validating the rule `[a-z0-9-]{1,64}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServerIdSlugError`] if `id` is empty, exceeds [`MAX_SERVER_ID_LENGTH`] bytes, or
+    /// contains a character other than a lowercase ASCII letter, digit, or hyphen.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::{ServerIdSlugError, ServerSlug};
+    ///
+    /// assert!(ServerSlug::new("github").is_ok());
+    /// assert_eq!(ServerSlug::new("").unwrap_err(), ServerIdSlugError::Empty);
+    /// ```
+    pub fn new(id: &str) -> Result<Self, ServerIdSlugError> {
+        validate_server_id_slug(id)?;
+        Ok(Self(id.to_owned()))
+    }
+
+    /// Returns the slug as a string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerSlug;
+    ///
+    /// assert_eq!(ServerSlug::new("github").unwrap().as_str(), "github");
+    /// ```
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for ServerSlug {
+    type Error = ServerIdSlugError;
+
+    /// Delegates to [`ServerSlug::new`] — the sole entry point [`Deserialize`] uses.
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        validate_server_id_slug(&id)?;
+        Ok(Self(id))
+    }
+}
+
+impl From<ServerSlug> for ServerId {
+    /// Every slug is a single path segment of Unicode-safe characters, so no validation can fail.
+    fn from(slug: ServerSlug) -> Self {
+        Self(slug.0)
+    }
+}
+
+impl fmt::Display for ServerSlug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for ServerSlug {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for ServerSlug {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl schemars::JsonSchema for ServerSlug {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ServerSlug".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "maxLength": MAX_SERVER_ID_LENGTH,
+            "pattern": "^[a-z0-9-]+$",
+        })
+    }
 }
 
 /// Error returned when a candidate string fails the invariant [`ToolName::new`] enforces.
@@ -307,6 +401,7 @@ pub fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
 /// assert_matches!(err, ToolNameError::InvalidFormat { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ToolNameError {
     /// `name` is not a single non-empty path segment: it is empty, or contains a `..`, a path
     /// separator, or a root/prefix component.
@@ -832,6 +927,62 @@ mod tests {
             assert!(validate_server_id_slug(candidate).is_err());
             assert!(ServerId::new(candidate).is_ok());
         }
+    }
+
+    /// Every string of up to three characters over the slug alphabet is a valid slug and
+    /// converts into a valid `ServerId` (the `From` impl cannot fail), and a single foreign
+    /// character anywhere is rejected.
+    #[test]
+    fn test_server_slug_accepts_exactly_the_alphabet_and_converts_to_a_server_id() {
+        const ALPHABET: &str = "abcdefghijklmnopqrstuvwxyz0123456789-";
+        let chars: Vec<char> = ALPHABET.chars().collect();
+        let mut candidates = vec![String::new()];
+        let mut frontier = vec![String::new()];
+        for _ in 0..3 {
+            let mut next = Vec::new();
+            for prefix in &frontier {
+                for c in &chars {
+                    next.push(format!("{prefix}{c}"));
+                }
+            }
+            candidates.extend(next.iter().cloned());
+            frontier = next;
+        }
+        for candidate in candidates.iter().filter(|c| !c.is_empty()) {
+            let slug = ServerSlug::new(candidate).unwrap();
+            let id = ServerId::new(candidate).unwrap();
+            assert_eq!(ServerId::from(slug), id, "{candidate:?}");
+            for foreign in ['A', '_', '.', '/', ' ', '\u{e9}'] {
+                assert!(ServerSlug::new(&format!("{candidate}{foreign}")).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn test_server_slug_schema_is_a_bounded_pattern_string() {
+        let schema = serde_json::to_value(schemars::schema_for!(ServerSlug)).unwrap();
+        assert_eq!(schema["type"], "string");
+        assert_eq!(schema["maxLength"], MAX_SERVER_ID_LENGTH);
+        assert_eq!(schema["pattern"], "^[a-z0-9-]+$");
+    }
+
+    #[test]
+    fn test_server_slug_as_ref_and_borrow_give_the_slug_text() {
+        use std::borrow::Borrow as _;
+
+        let slug = ServerSlug::new("my-server").unwrap();
+        let as_ref: &str = slug.as_ref();
+        let borrowed: &str = slug.borrow();
+        assert_eq!(as_ref, "my-server");
+        assert_eq!(borrowed, "my-server");
+        let set = std::collections::HashSet::from([slug]);
+        assert!(set.contains("my-server"));
+    }
+
+    #[test]
+    fn test_server_slug_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ServerSlug>();
     }
 
     #[test]

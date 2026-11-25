@@ -6,8 +6,8 @@
 
 use crate::common::ts_types::{ConvertedType, RenderStyle, convert_schema};
 use crate::common::typescript::sanitize_jsdoc;
-use crate::progressive::generator::STORED_TYPE_TEXT_MAX_BYTES;
-use crate::progressive::types::ResultSource;
+use crate::package::generator::STORED_TYPE_TEXT_MAX_BYTES;
+use mcp_execution_core::helper_protocol::ResultSource;
 use mcp_execution_core::metadata::{ParameterMetadata, ResultTypeOrigin};
 use mcp_execution_introspector::ToolInfo;
 use serde_json::Value;
@@ -207,15 +207,18 @@ impl<'a> ToolConversions<'a> {
         self.input
             .members()
             .iter()
-            .map(|member| ParameterMetadata {
-                name: member.name.clone(),
-                typescript_type: if member.type_text.len() <= STORED_TYPE_TEXT_MAX_BYTES {
-                    member.type_text.clone()
-                } else {
-                    "unknown".to_string()
-                },
-                required: member.required,
-                description: self.raw_description(&member.name),
+            .map(|member| {
+                let mut value = ParameterMetadata::new(
+                    member.name.clone(),
+                    if member.type_text.len() <= STORED_TYPE_TEXT_MAX_BYTES {
+                        member.type_text.clone()
+                    } else {
+                        "unknown".to_string()
+                    },
+                    member.required,
+                );
+                value.description = self.raw_description(&member.name);
+                value
             })
             .collect()
     }
@@ -238,12 +241,11 @@ mod tests {
     use serde_json::json;
 
     fn tool(input: &Value, output: Option<Value>) -> ToolInfo {
-        ToolInfo {
-            name: ToolName::new("t").unwrap(),
-            description: String::new(),
-            input_schema: input.clone(),
-            output_schema: output,
-            annotations: None,
+        {
+            let mut value =
+                ToolInfo::new(ToolName::new("t").unwrap(), String::new(), input.clone());
+            value.output_schema = output;
+            value
         }
     }
 

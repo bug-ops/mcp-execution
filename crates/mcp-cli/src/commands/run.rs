@@ -51,7 +51,7 @@ use crate::runtime::typecheck::{TypecheckOutcome, typecheck};
 
 /// Names the file a `test-fixtures` build creates once it is ready to read a script from stdin.
 #[cfg(feature = "test-fixtures")]
-pub(crate) const TEST_READY_FILE_ENV: &str = "MCP_EXECUTION_TEST_READY_FILE";
+pub const TEST_READY_FILE_ENV: &str = "MCP_EXECUTION_TEST_READY_FILE";
 
 #[cfg(feature = "test-fixtures")]
 fn announce_readiness() {
@@ -69,16 +69,6 @@ fn announce_readiness() {
 pub const MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
 
 /// Where the script text comes from.
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use mcp_execution_cli::commands::run::ScriptSource;
-///
-/// assert_eq!("-".parse::<ScriptSource>().unwrap(), ScriptSource::Stdin);
-/// assert_matches!("a.ts".parse::<ScriptSource>().unwrap(), ScriptSource::File(_));
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptSource {
     /// Read the script from standard input.
@@ -103,17 +93,6 @@ impl FromStr for ScriptSource {
 ///
 /// The script runs with the user's privileges: neither the journal nor `--dry-run` is a
 /// sandbox. Under `run` the script's own stdin is reserved for the helper channel.
-///
-/// # Examples
-///
-/// ```
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-///
-/// let cli = Cli::parse_from(["mcp-execution-cli", "run", "script.ts", "--timeout", "5"]);
-/// let Commands::Run(args) = cli.command else { panic!("expected run") };
-/// assert_eq!(args.timeout.get().as_secs(), 5);
-/// ```
 #[derive(Debug, Clone, Args)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -579,23 +558,6 @@ async fn remove_scratch(dir: &Path) {
 /// Returns an error for runner failures (input, node missing or too old, I/O); a failing script,
 /// a timeout or a cancellation by SIGINT, SIGTERM, SIGHUP or SIGQUIT (exit 130, 143, 129 or 131)
 /// is reported through the exit code instead.
-///
-/// # Examples
-///
-/// ```no_run
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-/// use mcp_execution_cli::commands::run::run;
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// let cli = Cli::parse_from(["mcp-execution-cli", "run", "script.ts"]);
-/// let Commands::Run(args) = cli.command else { return Ok(()) };
-/// let code = run(args, OutputFormat::Text).await?;
-/// println!("{code}");
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(args: RunArgs, format: OutputFormat) -> Result<ExitCode> {
     refuse_inside_run()?;
     let mut termination = Termination::install();

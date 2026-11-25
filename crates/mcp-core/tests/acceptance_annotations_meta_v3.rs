@@ -9,22 +9,23 @@ use mcp_execution_core::provenance::{ToolDigest, ToolDigestEntry};
 use serde_json::{Value, json};
 
 fn annotations(title: Option<&str>, read_only: Hint, destructive: Hint) -> ToolAnnotations {
-    ToolAnnotations {
-        title: title.and_then(AnnotationTitle::new),
-        read_only,
-        destructive,
-        idempotent: Hint::NotStated,
-        open_world: Hint::NotStated,
+    {
+        let mut value = {
+            let mut value = ToolAnnotations::not_stated();
+            value.read_only = read_only;
+            value.destructive = destructive;
+            value
+        };
+        value.title = title.and_then(AnnotationTitle::new);
+        value
     }
 }
 
 fn digest_with(schema: &Value, annotations: Option<&ToolAnnotations>) -> ToolDigest {
-    ToolDigest::compute(&[ToolDigestEntry {
-        name: "delete_file",
-        description: "Deletes a file",
-        input_schema: schema,
-        output_schema: None,
-        annotations,
+    ToolDigest::compute(&[{
+        let mut value = ToolDigestEntry::new("delete_file", "Deletes a file", schema);
+        value.annotations = annotations;
+        value
     }])
 }
 

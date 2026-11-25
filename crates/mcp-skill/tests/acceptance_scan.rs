@@ -10,7 +10,7 @@ use mcp_execution_core::metadata::{
     ResultTypeOrigin, ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::provenance::GenerationProvenance;
-use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+use mcp_execution_core::{ServerConfig, ServerId, ServerSlug, ToolName};
 use mcp_execution_skill::{
     ParsedParameter, ParsedToolFile, ScanError, build_skill_context, scan_tools_directory,
 };
@@ -22,25 +22,25 @@ fn sidecar(schema_version: u32, description: Option<String>) -> ServerMetadata {
         .command("docker".to_string())
         .build()
         .unwrap();
-    ServerMetadata {
+    ServerMetadata::new(
         schema_version,
-        server_id: ServerId::new("acme").unwrap(),
-        server_name: "Acme".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: vec![ToolMetadata {
-            name: ToolName::new("get_thing").unwrap(),
-            typescript_name: "getThing".to_string(),
-            category: None,
-            keywords: vec![],
-            description,
-            parameters: vec![],
-            annotations: None,
-            result_type: None,
-            result_type_origin: ResultTypeOrigin::Undeclared,
-            manifest_size_bytes: 0,
+        ServerId::new("acme").unwrap(),
+        "Acme".to_string(),
+        "1.0.0".to_string(),
+        vec![{
+            let mut value = ToolMetadata::new(
+                ToolName::new("get_thing").unwrap(),
+                "getThing".to_string(),
+                vec![],
+                vec![],
+                ResultTypeOrigin::Undeclared,
+                0,
+            );
+            value.description = description;
+            value
         }],
-        provenance: GenerationProvenance::capture(&config, &[]),
-    }
+        GenerationProvenance::capture(&config, &[]),
+    )
 }
 
 fn write_package(dir: &Path, meta: &ServerMetadata) {
@@ -105,23 +105,20 @@ async fn scan_tools_directory_rejects_a_sidecar_over_the_shared_cap() {
 }
 
 fn param(name: &str, required: bool) -> ParsedParameter {
-    ParsedParameter {
-        name: name.to_string(),
-        typescript_type: "string".to_string(),
-        required,
-        description: None,
-    }
+    ParsedParameter::new(name.to_string(), "string".to_string(), required)
 }
 
 fn tool_with_params(params: Vec<ParsedParameter>) -> ParsedToolFile {
-    ParsedToolFile {
-        name: "search".to_string(),
-        typescript_name: "search".to_string(),
-        server_id: "acme".to_string(),
-        category: None,
-        keywords: vec![],
-        description: Some("Searches".to_string()),
-        parameters: params,
+    {
+        let mut value = ParsedToolFile::new(
+            "search".to_string(),
+            "search".to_string(),
+            ServerId::new("acme").unwrap(),
+            vec![],
+            params,
+        );
+        value.description = Some("Searches".to_string());
+        value
     }
 }
 
@@ -133,7 +130,7 @@ fn build_skill_context_displays_non_identifier_keys_as_json_literals() {
         param("filter.name", false),
     ])];
 
-    let context = build_skill_context("acme", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("acme").unwrap(), &tools, None, None);
     let skill_tool = &context.categories[0].tools[0];
 
     assert_eq!(skill_tool.required_params, vec!["title", "\"per-page\""]);
@@ -149,7 +146,7 @@ fn build_skill_context_example_omits_non_identifier_keys() {
         param("per-page", true),
     ])];
 
-    let context = build_skill_context("acme", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("acme").unwrap(), &tools, None, None);
     let example = &context.example_tools[0];
 
     assert!(example.cli_command.contains("title"));
@@ -169,7 +166,7 @@ fn build_skill_context_example_omits_non_identifier_keys() {
 fn build_skill_context_cannot_close_a_code_span_with_a_key_backtick() {
     let tools = vec![tool_with_params(vec![param("a`b", true)])];
 
-    let context = build_skill_context("acme", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("acme").unwrap(), &tools, None, None);
     let displayed = &context.categories[0].tools[0].required_params[0];
 
     assert!(!displayed.contains('`'), "{displayed}");

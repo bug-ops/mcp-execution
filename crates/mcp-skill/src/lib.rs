@@ -13,12 +13,14 @@
 //! # Examples
 //!
 //! ```no_run
+//! use mcp_execution_core::ServerSlug;
 //! use mcp_execution_skill::{scan_tools_directory, build_skill_context, ScanError};
 //! use std::path::Path;
 //!
 //! # async fn example() -> Result<(), ScanError> {
 //! let result = scan_tools_directory(Path::new("~/.claude/servers/github")).await?;
-//! let context = build_skill_context("github", &result.tools, None, None);
+//! let server_id = ServerSlug::new("github").unwrap();
+//! let context = build_skill_context(&server_id, &result.tools, None, None);
 //! # Ok(())
 //! # }
 //! ```
@@ -42,5 +44,5 @@ pub use types::{
     GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH, MAX_SKILL_DESCRIPTION_LENGTH,
     MAX_SKILL_NAME_LENGTH, MAX_USE_CASE_HINT_LENGTH, MAX_USE_CASE_HINTS, SaveSkillParams,
     SaveSkillResult, SkillCategory, SkillDirectoryMismatch, SkillMetadata, SkillName,
-    SkillNameError, SkillServerIdError, SkillTool, ToolExample, validate_server_id,
+    SkillNameError, SkillTool, ToolExample,
 };

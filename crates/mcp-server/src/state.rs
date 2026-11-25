@@ -162,17 +162,15 @@ impl PendingTable {
 /// # async fn example() {
 /// let state = StateManager::new();
 ///
-/// # let server_info = ServerInfo {
-/// #     id: ServerId::new("test").unwrap(),
-/// #     name: "Test".to_string(),
-/// #     version: "1.0.0".to_string(),
-/// #     capabilities: mcp_execution_introspector::ServerCapabilities {
-/// #         supports_tools: true,
-/// #         supports_resources: false,
-/// #         supports_prompts: false,
-/// #     },
-/// #     tools: vec![],
-/// # };
+/// # let mut capabilities = mcp_execution_introspector::ServerCapabilities::default();
+/// # capabilities.supports_tools = true;
+/// # let server_info = ServerInfo::new(
+/// #     ServerId::new("test").unwrap(),
+/// #     "Test".to_string(),
+/// #     "1.0.0".to_string(),
+/// #     vec![],
+/// #     capabilities,
+/// # );
 /// let pending = PendingGeneration::new(
 ///     ServerId::new("github").unwrap(),
 ///     server_info,
@@ -587,23 +585,21 @@ mod tests {
         use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
         let server_id = ServerId::new("test").unwrap();
-        let server_info = ServerInfo {
-            id: server_id.clone(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+        let server_info = ServerInfo::new(
+            server_id.clone(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                ToolName::new("test_tool").unwrap(),
+                "Test tool".to_string(),
+                serde_json::json!({}),
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-            tools: vec![ToolInfo {
-                name: ToolName::new("test_tool").unwrap(),
-                description: "Test tool".to_string(),
-                input_schema: serde_json::json!({}),
-                output_schema: None,
-                annotations: None,
-            }],
-        };
+        );
         let config = ServerConfig::builder()
             .command("echo".to_string())
             .build()

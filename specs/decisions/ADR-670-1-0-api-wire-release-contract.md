@@ -8,9 +8,9 @@ tags:
   - release
   - api
 created: 2026-11-25
-status: proposed
+status: accepted
 decided: 2026-11-25
-decided-by: user (stable crate set only)
+decided-by: user (stable crate set, OD-1, OD-2, OD-4, OD-5, per-tool digest deferral); OD-3 open
 related:
   - "[[../constitution]]"
   - "[[../README]]"
@@ -25,9 +25,9 @@ related:
 > [!important]
 > Decision record for #670 (parent #669, API freeze #673 with #674 to #680).
 >
-> **Status: proposed.** One decision is taken (2026-11-25, by the user): **all seven workspace crates are stable
-> 1.x libraries.** Five points are open and need the user's decision before the 1.0.0 tag. The numbered
-> requirements are in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]].
+> **Status: accepted, one point open.** Decided on 2026-11-25 by the user: all seven workspace crates are stable
+> 1.x libraries, and the decisions of section 3. Only OD-3 (MSRV against semver) is open. The numbered requirements
+> are in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]].
 
 ## 1. Context
 
@@ -49,28 +49,26 @@ Not a user decision but recorded here as an assumption to confirm: lockstep vers
 deprecation window of one minor release (`NFR-COM-045`), and that `--format text` and `--format pretty` are not
 part of the CLI contract (`NFR-COM-065`).
 
-## 3. Open decisions (Ask First)
+## 3. Decisions on the Ask First points
 
-| ID | Question | Options | Recommendation |
-|----|----------|---------|----------------|
-| OD-1 | Rename "progressive" before 1.0.0 (#680)? | (a) rename the Rust items, the flag and the example; (b) keep deliberately; (c) rename items, keep the flag | (a): free now, a major release later |
-| OD-2 | Compatibility window of `_meta.json` v3 and helper protocol v1 | (a) exact match for all of 1.x, a bump only in a major, regeneration is the migration; (b) read the current and previous version, write the current; (c) accept any version at or above a floor | (a), with additive optional fields inside a version; decide whether the unversioned saved-script header gets a version before 1.0.0 |
-| OD-3 | Is an MSRV raise breaking for the libraries? | (a) no: minor only, never patch, at most stable minus two, changelog `Changed`; (b) yes: major; (c) as (a) with one minor of advance notice | (a) |
-| OD-4 | Foreign types in public signatures (#678) | (a) forbid, wrap or hide all; (b) accept all, tie majors; (c) accept `rmcp::ServerHandler` on the server crate only, keep `tracing-subscriber` out of `mcp-execution-core` | (c), accept and list `serde`, `serde_json`, `schemars`, `chrono`; wrap the `handlebars` errors |
-| OD-5 | Intended public surface of the `cli` and `server` libraries (#675) | (a) minimal embedder surface, the rest `pub(crate)` or hidden; (b) keep all public; (c) binaries only | (a); (c) contradicts the stable-set decision |
+| ID | Plan id | Question | Decision (2026-11-25) |
+|----|---------|----------|------------------------|
+| OD-5 | D1 | Public surface of `cli` and `server` (#675) | (a), narrower than the first proposal: `cli` exposes only `Cli` and `run` (`runtime` is `#[doc(hidden)]`); `server` hides `clock`, `state` and the output-directory re-exports |
+| OD-4 | D2 | Foreign types (#678) | (c): `rmcp::ServerHandler` on the server only; core drops `log_filter`, the `tracing-filter` feature and `tracing-subscriber`; the cap policy is the `#[doc(hidden)]` `core::cli::RmcpLogCap` (workspace-internal, no copied helper); `handlebars` errors are boxed; `serde`, `serde_json`, `schemars`, `chrono`, and `clap`/`anyhow` on `cli`, are accepted |
+| OD-1 | D3 | Rename "progressive" (#680) | (a): module `package`, `PackageGenerator`, `templates/package/`, flag `--servers-dir`, `examples/generated-package-usage.md`; no shim |
+| none | D4 | Per-tool digests (#683) | Deferred past 1.0; if added, an optional `_meta.json` v3 field (`NFR-COM-053`); post-1.0 work in #688 |
+| OD-2 | OD-2 | Wire compatibility window | (a): exact match for 1.x, a bump only in a major, additive optional fields inside a version. Not decided: whether the saved-script header gets a version before 1.0.0 |
+| OD-3 | none | MSRV raise against semver | **Open.** The recommendation stays (a); meanwhile the rolling rule recorded under `Changed` holds |
 
-Details, the affected requirement IDs and the exposures found in the code (`serde_json::Value`, `serde_json::Error`,
-`handlebars` errors, `chrono::DateTime`, `clap` derives) are in the NFR section 12.7 and `NFR-COM-044`.
+Also decided with the API freeze: the server-id slug rule `[a-z0-9-]{1,64}` is frozen with no hyphen-position rule
+(#677, [[../core/spec]]).
 
 ## 4. Consequences
 
-- Until the open decisions are made, the requirements that depend on them state what holds meanwhile: the as-built
-  exact-match rule for wire versions, the rolling MSRV rule recorded under `Changed`, and no new foreign type.
-- #673 and #674 to #680 cite the requirement IDs; #679 adds the `cargo semver-checks` job with its baseline at the
-  1.0.0 release.
-- #683 (per-tool digests, left out of #580) changes `_meta.json` if implemented, so it is decided before the tag
-  (`NFR-COM-056`).
-- Rejecting a recommendation changes the affected requirement text only; no code changes in the specification PR.
+- The decisions above are implemented with the API freeze (#673, #674 to #680) and the release pipeline (#672).
+- Still open before the 1.0.0 tag include #686 (the `semver` job becomes blocking at the baseline), #687 (remaining
+  public surface), #691 and #696.
+- The `cargo semver-checks` job of #679 exists; its step is non-blocking until the 1.0.0 baseline.
 
 ## 5. See Also
 

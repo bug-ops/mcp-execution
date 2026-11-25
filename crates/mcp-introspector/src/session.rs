@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use mcp_execution_core::helper_protocol::MAX_RESPONSE_LINE_BYTES;
+use mcp_execution_core::helper_protocol::{MAX_RESPONSE_LINE_BYTES, ResultSource};
 use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
 use mcp_execution_core::{
     Error, ResourceKind, Result, ServerConfig, ServerId, ToolName, Transport,
@@ -96,40 +96,21 @@ impl CallTimeout {
     }
 }
 
-/// Where a tool call's result value is read from.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_introspector::ResultSource;
-///
-/// assert_ne!(ResultSource::Structured, ResultSource::Content);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResultSource {
-    /// Prefer `structuredContent`; the tool declares an output schema.
-    Structured,
-    /// Take `content[0]`, parsing its text as JSON and falling back to the raw string.
-    Content,
-}
-
 /// One tool invocation.
 ///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_core::ToolName;
-/// use mcp_execution_introspector::{ResultSource, ToolCall};
+/// use mcp_execution_core::helper_protocol::ResultSource;
+/// use mcp_execution_introspector::ToolCall;
 ///
 /// let tool = ToolName::new("echo").unwrap();
-/// let call = ToolCall {
-///     tool: &tool,
-///     arguments: serde_json::Map::new(),
-///     result_source: ResultSource::Content,
-/// };
+/// let call = ToolCall::new(&tool, serde_json::Map::new(), ResultSource::Content);
 /// assert_eq!(call.tool.as_str(), "echo");
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ToolCall<'a> {
     /// Tool to call.
     pub tool: &'a ToolName,
@@ -139,6 +120,34 @@ pub struct ToolCall<'a> {
     pub result_source: ResultSource,
 }
 
+impl<'a> ToolCall<'a> {
+    /// Creates a call of `tool` with `arguments`, reading the result from `result_source`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ToolName;
+    /// use mcp_execution_core::helper_protocol::ResultSource;
+    /// use mcp_execution_introspector::ToolCall;
+    ///
+    /// let tool = ToolName::new("echo").unwrap();
+    /// let call = ToolCall::new(&tool, serde_json::Map::new(), ResultSource::Content);
+    /// assert_eq!(call.tool.as_str(), "echo");
+    /// ```
+    #[must_use]
+    pub const fn new(
+        tool: &'a ToolName,
+        arguments: serde_json::Map<String, serde_json::Value>,
+        result_source: ResultSource,
+    ) -> Self {
+        Self {
+            tool,
+            arguments,
+            result_source,
+        }
+    }
+}
+
 /// Server-supplied text, sanitized and capped.
 ///
 /// # Examples
@@ -146,15 +155,33 @@ pub struct ToolCall<'a> {
 /// ```
 /// use mcp_execution_introspector::ServerText;
 ///
-/// let text = ServerText { text: "boom".to_string(), truncated: false };
+/// let text = ServerText::new("boom".to_string(), false);
 /// assert!(!text.truncated);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ServerText {
     /// Sanitized text.
     pub text: String,
     /// Whether the original was longer than the cap.
     pub truncated: bool,
+}
+
+impl ServerText {
+    /// Creates server text from already sanitized `text` and whether it was cut.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_introspector::ServerText;
+    ///
+    /// let text = ServerText::new("boom".to_string(), false);
+    /// assert!(!text.truncated);
+    /// ```
+    #[must_use]
+    pub const fn new(text: String, truncated: bool) -> Self {
+        Self { text, truncated }
+    }
 }
 
 /// How a tool call ended, when the call itself completed.
@@ -172,6 +199,7 @@ pub struct ServerText {
 /// assert_matches!(outcome, ToolCallOutcome::Value(_));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ToolCallOutcome {
     /// The extracted result value.
     Value(serde_json::Value),
@@ -264,16 +292,13 @@ impl Session {
     ///
     /// ```no_run
     /// use mcp_execution_core::ToolName;
-    /// use mcp_execution_introspector::{CallTimeout, ResultSource, Session, ToolCall};
+    /// use mcp_execution_core::helper_protocol::ResultSource;
+    /// use mcp_execution_introspector::{CallTimeout, Session, ToolCall};
     /// use std::time::Duration;
     ///
     /// # async fn example(session: &Session) -> Result<(), Box<dyn std::error::Error>> {
     /// let tool = ToolName::new("echo")?;
-    /// let call = ToolCall {
-    ///     tool: &tool,
-    ///     arguments: serde_json::Map::new(),
-    ///     result_source: ResultSource::Content,
-    /// };
+    /// let call = ToolCall::new(&tool, serde_json::Map::new(), ResultSource::Content);
     /// let outcome = session.call_tool(call, CallTimeout::new(Duration::from_secs(30))?).await?;
     /// println!("{outcome:?}");
     /// # Ok(())
@@ -371,7 +396,7 @@ impl Session {
 
     fn connection_failed(&self, source: impl std::error::Error + Send + Sync + 'static) -> Error {
         Error::ConnectionFailed {
-            server: self.server_id.to_string(),
+            server: self.server_id.clone(),
             source: Box::new(source),
         }
     }
@@ -423,6 +448,7 @@ impl Introspector {
             Transport::Http { .. } | Transport::Sse { .. } => {
                 (connect_http_client(&server_id, config).await?, None, None)
             }
+            _ => return Err(Error::InvalidArgument("unsupported transport".to_string())),
         };
 
         Ok(Session {

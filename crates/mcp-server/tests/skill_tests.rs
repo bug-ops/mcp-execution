@@ -8,7 +8,7 @@ use mcp_execution_core::metadata::{
     METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::provenance::GenerationProvenance;
-use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+use mcp_execution_core::{ServerConfig, ServerId, ServerSlug, ToolName};
 use mcp_execution_skill::{ParsedToolFile, ScanError, build_skill_context, scan_tools_directory};
 use std::assert_matches;
 use tempfile::TempDir;
@@ -30,41 +30,44 @@ fn test_provenance() -> GenerationProvenance {
 /// Also writes a matching stub `{typescript_name}.ts` file for each tool, since
 /// `scan_tools_directory` now cross-checks the sidecar against files on disk.
 async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
-    let meta = ServerMetadata {
-        schema_version: METADATA_SCHEMA_VERSION,
-        server_id: ServerId::new("test").unwrap(),
-        server_name: "Test Server".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: tool_names
+    let meta = ServerMetadata::new(
+        METADATA_SCHEMA_VERSION,
+        ServerId::new("test").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        tool_names
             .iter()
-            .map(|name| ToolMetadata {
-                name: ToolName::new(*name).unwrap(),
-                typescript_name: to_camel_case(name),
-                category: Some("test-category".to_string()),
-                keywords: vec!["test".to_string(), (*name).to_string()],
-                description: Some(format!("Test tool: {name}")),
-                parameters: vec![
-                    ParameterMetadata {
-                        name: "required_param".to_string(),
-                        typescript_type: "string".to_string(),
-                        required: true,
-                        description: Some("A required parameter".to_string()),
-                    },
-                    ParameterMetadata {
-                        name: "optional_param".to_string(),
-                        typescript_type: "number".to_string(),
-                        required: false,
-                        description: None,
-                    },
-                ],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
+            .map(|name| {
+                let mut value = ToolMetadata::new(
+                    ToolName::new(*name).unwrap(),
+                    to_camel_case(name),
+                    vec!["test".to_string(), (*name).to_string()],
+                    vec![
+                        {
+                            let mut value = ParameterMetadata::new(
+                                "required_param".to_string(),
+                                "string".to_string(),
+                                true,
+                            );
+                            value.description = Some("A required parameter".to_string());
+                            value
+                        },
+                        ParameterMetadata::new(
+                            "optional_param".to_string(),
+                            "number".to_string(),
+                            false,
+                        ),
+                    ],
+                    mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                    0,
+                );
+                value.category = Some("test-category".to_string());
+                value.description = Some(format!("Test tool: {name}"));
+                value
             })
             .collect(),
-        provenance: test_provenance(),
-    };
+        test_provenance(),
+    );
 
     let content = serde_json::to_string_pretty(&meta).unwrap();
     fs::write(dir.join(METADATA_FILE_NAME), content)
@@ -113,7 +116,7 @@ async fn test_scan_tools_directory_integration() {
     assert!(tools.iter().any(|t| t.name == "get_user"));
 
     let create_issue = tools.iter().find(|t| t.name == "create_issue").unwrap();
-    assert_eq!(create_issue.server_id, "test");
+    assert_eq!(create_issue.server_id.as_str(), "test");
     assert_eq!(create_issue.category, Some("test-category".to_string()));
     assert_eq!(create_issue.parameters.len(), 2);
 
@@ -145,30 +148,41 @@ async fn test_scan_tools_directory_integration() {
 #[tokio::test]
 async fn test_build_skill_context_integration() {
     let tools = vec![
-        ParsedToolFile {
-            name: "create_issue".to_string(),
-            typescript_name: "createIssue".to_string(),
-            server_id: "github".to_string(),
-            category: Some("issues".to_string()),
-            keywords: vec!["create".to_string(), "issue".to_string()],
-            description: Some("Create a new issue".to_string()),
-            parameters: vec![],
+        {
+            let mut value = ParsedToolFile::new(
+                "create_issue".to_string(),
+                "createIssue".to_string(),
+                ServerId::new("github").unwrap(),
+                vec!["create".to_string(), "issue".to_string()],
+                vec![],
+            );
+            value.category = Some("issues".to_string());
+            value.description = Some("Create a new issue".to_string());
+            value
         },
-        ParsedToolFile {
-            name: "list_repos".to_string(),
-            typescript_name: "listRepos".to_string(),
-            server_id: "github".to_string(),
-            category: Some("repos".to_string()),
-            keywords: vec!["list".to_string(), "repos".to_string()],
-            description: Some("List repositories".to_string()),
-            parameters: vec![],
+        {
+            let mut value = ParsedToolFile::new(
+                "list_repos".to_string(),
+                "listRepos".to_string(),
+                ServerId::new("github").unwrap(),
+                vec!["list".to_string(), "repos".to_string()],
+                vec![],
+            );
+            value.category = Some("repos".to_string());
+            value.description = Some("List repositories".to_string());
+            value
         },
     ];
 
     let use_case_hints = vec!["CI/CD".to_string()];
-    let context = build_skill_context("github", &tools, Some(&use_case_hints), None);
+    let context = build_skill_context(
+        &ServerSlug::new("github").unwrap(),
+        &tools,
+        Some(&use_case_hints),
+        None,
+    );
 
-    assert_eq!(context.server_id, "github");
+    assert_eq!(context.server_id.as_str(), "github");
     assert_eq!(context.skill_name, "github");
     assert_eq!(context.tool_count, 2);
     assert_eq!(context.categories.len(), 2);
@@ -285,18 +299,21 @@ async fn test_scan_directory_ignores_stray_files() {
 #[tokio::test]
 async fn test_build_skill_context_many_categories() {
     let tools: Vec<ParsedToolFile> = (0..20)
-        .map(|i| ParsedToolFile {
-            name: format!("tool_{i}"),
-            typescript_name: format!("tool{i}"),
-            server_id: "test".to_string(),
-            category: Some(format!("category-{}", i % 5)), // 5 different categories
-            keywords: vec![format!("keyword{i}")],
-            description: Some(format!("Tool {i}")),
-            parameters: vec![],
+        .map(|i| {
+            let mut value = ParsedToolFile::new(
+                format!("tool_{i}"),
+                format!("tool{i}"),
+                ServerId::new("test").unwrap(),
+                vec![format!("keyword{i}")],
+                vec![],
+            );
+            value.category = Some(format!("category-{}", i % 5));
+            value.description = Some(format!("Tool {i}"));
+            value
         })
         .collect();
 
-    let context = build_skill_context("test", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("test").unwrap(), &tools, None, None);
 
     assert_eq!(context.tool_count, 20);
     assert_eq!(context.categories.len(), 5);
@@ -311,7 +328,7 @@ async fn test_build_skill_context_many_categories() {
 async fn test_build_skill_context_empty_tools() {
     let tools: Vec<ParsedToolFile> = vec![];
 
-    let context = build_skill_context("test", &tools, None, None);
+    let context = build_skill_context(&ServerSlug::new("test").unwrap(), &tools, None, None);
 
     assert_eq!(context.tool_count, 0);
     assert_eq!(context.categories.len(), 0);
@@ -431,25 +448,25 @@ async fn test_scan_directory_file_too_large() {
     )]
     let large_description = "a".repeat((MAX_FILE_SIZE as usize) + 1);
 
-    let mut meta = ServerMetadata {
-        schema_version: METADATA_SCHEMA_VERSION,
-        server_id: ServerId::new("test").unwrap(),
-        server_name: "Test Server".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: vec![ToolMetadata {
-            name: ToolName::new("large_tool").unwrap(),
-            typescript_name: "largeTool".to_string(),
-            category: None,
-            keywords: vec!["large".to_string()],
-            description: Some(String::new()),
-            parameters: vec![],
-            annotations: None,
-            result_type: None,
-            result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-            manifest_size_bytes: 0,
+    let mut meta = ServerMetadata::new(
+        METADATA_SCHEMA_VERSION,
+        ServerId::new("test").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        vec![{
+            let mut value = ToolMetadata::new(
+                ToolName::new("large_tool").unwrap(),
+                "largeTool".to_string(),
+                vec!["large".to_string()],
+                vec![],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            );
+            value.description = Some(String::new());
+            value
         }],
-        provenance: test_provenance(),
-    };
+        test_provenance(),
+    );
     meta.tools[0].description = Some(large_description);
 
     let content = serde_json::to_string_pretty(&meta).unwrap();

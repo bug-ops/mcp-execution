@@ -41,7 +41,7 @@ async fn test_discover_server_stdio_handshake_failure_is_connection_failed_not_t
 
     match result {
         Err(Error::ConnectionFailed { server, source }) => {
-            assert_eq!(server, "stdio-immediate-exit");
+            assert_eq!(server.as_str(), "stdio-immediate-exit");
             // Pins the failure to the handshake step inside `connect_and_list_tools`
             // (`lib.rs:991`), not to `spawn_introspection_child`'s spawn-failure or
             // pipe-capture `ConnectionFailed` sites (`lib.rs:628`/`646`/`650`) —

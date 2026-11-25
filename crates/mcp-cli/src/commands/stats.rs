@@ -20,17 +20,6 @@ use crate::cli::parse_server_id;
 const BYTES_PER_TOKEN_ESTIMATE: u64 = 4;
 
 /// Options of the `stats` command.
-///
-/// # Examples
-///
-/// ```
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-///
-/// let cli = Cli::parse_from(["mcp-execution-cli", "stats", "github"]);
-/// let Commands::Stats(args) = cli.command else { panic!("expected stats") };
-/// assert_eq!(args.server.as_str(), "github");
-/// ```
 #[derive(Debug, Clone, Args)]
 pub struct StatsArgs {
     /// Server identifier of a generated server
@@ -211,18 +200,6 @@ fn measure(servers_dir: &ServersDir, server: ServerId) -> Result<StatsReport> {
 /// Returns an error when the server's `_meta.json` is missing, unreadable, over the size or
 /// tool-count bound, or not a regular file. A `_meta.json` older than schema v3 is an
 /// `InvalidArgument` error (exit 2) that asks for regeneration; no figures are printed.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::stats::{StatsArgs, run};
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example(args: StatsArgs) -> anyhow::Result<()> {
-/// run(args, OutputFormat::Text).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(args: StatsArgs, _format: OutputFormat) -> Result<ExitCode> {
     let servers_dir = ServersDir::resolve(args.servers_dir)?;
     let report = tokio::task::spawn_blocking(move || measure(&servers_dir, args.server))

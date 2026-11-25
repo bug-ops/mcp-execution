@@ -60,21 +60,6 @@ const LIST_AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(3);
 /// a PATH lookup while `info`/`validate` perform a full handshake, so the
 /// two can disagree about more than timing (pre-existing behavior, unrelated
 /// to #280's http/sse scope).
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::ServerStatus;
-///
-/// assert_eq!(
-///     serde_json::to_string(&ServerStatus::Available).unwrap(),
-///     "\"available\""
-/// );
-/// assert_eq!(
-///     serde_json::to_string(&ServerStatus::Unavailable).unwrap(),
-///     "\"unavailable\""
-/// );
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ServerStatus {
@@ -87,20 +72,6 @@ pub enum ServerStatus {
 }
 
 /// Represents a configured server entry for output.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::{ServerEntry, ServerStatus};
-///
-/// let entry = ServerEntry {
-///     id: "github".to_string(),
-///     command: "github-mcp-server".to_string(),
-///     status: ServerStatus::Available,
-/// };
-///
-/// assert_eq!(entry.id, "github");
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServerEntry {
     /// Server identifier.
@@ -117,24 +88,6 @@ pub struct ServerEntry {
 }
 
 /// List of configured servers.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::{ServerEntry, ServerList, ServerStatus};
-///
-/// let list = ServerList {
-///     servers: vec![
-///         ServerEntry {
-///             id: "github".to_string(),
-///             command: "github-mcp-server".to_string(),
-///             status: ServerStatus::Available,
-///         }
-///     ],
-/// };
-///
-/// assert_eq!(list.servers.len(), 1);
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServerList {
     /// All configured servers.
@@ -146,18 +99,6 @@ pub struct ServerList {
 /// The message is passed through [`escape_error_text`] before it is stored, so it is safe to
 /// print and carries no credentials embedded in URLs. Serializes adjacently tagged, e.g.
 /// `{"kind":"invalid_configuration","message":"..."}`.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::UnavailableReason;
-///
-/// let reason = UnavailableReason::IntrospectionFailed("connection refused".to_string());
-/// assert_eq!(
-///     serde_json::to_string(&reason).unwrap(),
-///     r#"{"kind":"introspection_failed","message":"connection refused"}"#
-/// );
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "message", rename_all = "snake_case")]
 pub enum UnavailableReason {
@@ -172,24 +113,6 @@ pub enum UnavailableReason {
 /// Makes "available with a reason" and "unavailable without one" unrepresentable. Serializes
 /// flat when used as [`ServerInfo::status`]: `{"status":"available"}` or
 /// `{"status":"unavailable","reason":{...}}`.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::{ServerAvailability, UnavailableReason};
-///
-/// let down = ServerAvailability::Unavailable {
-///     reason: UnavailableReason::IntrospectionFailed("timeout".to_string()),
-/// };
-/// assert_eq!(
-///     serde_json::to_string(&down).unwrap(),
-///     r#"{"status":"unavailable","reason":{"kind":"introspection_failed","message":"timeout"}}"#
-/// );
-/// assert_eq!(
-///     serde_json::to_string(&ServerAvailability::Available).unwrap(),
-///     r#"{"status":"available"}"#
-/// );
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum ServerAvailability {
@@ -203,24 +126,6 @@ pub enum ServerAvailability {
 }
 
 /// Detailed server information for output.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::{ServerAvailability, ServerInfo, ToolSummary};
-///
-/// let info = ServerInfo {
-///     id: "github".to_string(),
-///     name: "GitHub MCP".to_string(),
-///     version: "1.0.0".to_string(),
-///     command: "github-mcp-server".to_string(),
-///     status: ServerAvailability::Available,
-///     tools: vec![],
-///     capabilities: vec!["tools".to_string()],
-/// };
-///
-/// assert_eq!(info.id, "github");
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServerInfo {
     /// Server identifier.
@@ -241,19 +146,6 @@ pub struct ServerInfo {
 }
 
 /// Tool summary for output.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::ToolSummary;
-///
-/// let tool = ToolSummary {
-///     name: "search".to_string(),
-///     description: "Search repositories".to_string(),
-/// };
-///
-/// assert_eq!(tool.name, "search");
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSummary {
     /// Tool name.
@@ -263,20 +155,6 @@ pub struct ToolSummary {
 }
 
 /// Validation result for a server command.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::server::ValidationResult;
-///
-/// let result = ValidationResult {
-///     command: "server".to_string(),
-///     valid: true,
-///     message: "Command is valid".to_string(),
-/// };
-///
-/// assert!(result.valid);
-/// ```
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ValidationResult {
     /// The validated command.
@@ -309,22 +187,6 @@ pub struct ValidationResult {
 /// (for both `Info` and `Validate`) are also caught internally and reported via
 /// `ExitCode::ERROR`. So is an entry that is present but fails security validation (e.g. an
 /// invalid URL scheme, #305/#304) — only a genuinely absent entry propagates as `Err`.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::server;
-/// use mcp_execution_core::cli::{ExitCode, OutputFormat};
-///
-/// # #[tokio::main]
-/// # async fn main() {
-/// let result = server::run(
-///     mcp_execution_cli::ServerAction::List,
-///     OutputFormat::Json
-/// ).await;
-/// assert!(result.is_ok());
-/// # }
-/// ```
 pub async fn run(action: ServerAction, output_format: OutputFormat) -> Result<ExitCode> {
     info!("Server action: {:?}", action);
     info!("Output format: {}", output_format);

@@ -12,12 +12,11 @@ use super::common::{
 use crate::formatters::escape_display;
 use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
-use mcp_execution_core::{ServerConfig, ServerId};
+use mcp_execution_core::{ServerConfig, ServerId, ServerSlug};
 use mcp_execution_files::{ExportOptions, FilesBuilder};
 use mcp_execution_introspector::{Introspector, ServerInfo};
-use mcp_execution_skill::validate_server_id;
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -116,54 +115,6 @@ fn format_size(bytes: usize) -> String {
 /// - Tool introspection fails
 /// - Code generation fails
 /// - File export fails (skipped in dry-run mode)
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
-/// use mcp_execution_cli::commands::generate;
-/// use mcp_execution_core::cli::OutputFormat;
-/// use std::path::PathBuf;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// // Generate from a stdio transport
-/// let exit_code = generate::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Stdio {
-///             command: "github-mcp-server".to_string(),
-///             args: vec![],
-///             env: vec![],
-///             cwd: None,
-///         },
-///         connect_timeout_secs: None,
-///         discover_timeout_secs: None,
-///     },
-///     None,
-///     None,
-///     None,
-///     false,
-///     OutputFormat::Pretty
-/// ).await?;
-///
-/// // Generate with custom output directory and name override
-/// let exit_code = generate::run(
-///     ServerSource::Flags {
-///         transport: TransportArgs::Http {
-///             url: "https://api.example.com/mcp/".to_string(),
-///             headers: vec!["Authorization=Bearer token".to_string()],
-///         },
-///         connect_timeout_secs: Some(10),
-///         discover_timeout_secs: Some(30),
-///     },
-///     Some("my-custom-name".to_string()),
-///     Some(PathBuf::from("/tmp/generated")),
-///     Some(PathBuf::from("/tmp/observed-shapes.jsonl")),
-///     false,
-///     OutputFormat::Json
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(
     source: ServerSource,
     name: Option<String>,
@@ -210,7 +161,7 @@ pub async fn run(
 ///
 /// # Errors
 ///
-/// Returns an error if `name` fails [`validate_server_id`](mcp_execution_skill::validate_server_id),
+/// Returns an error if `name` fails [`ServerSlug::new`](mcp_execution_core::ServerSlug::new),
 /// or if the connection or tool discovery fails.
 async fn discover_server_info(
     server_id: ServerId,
@@ -288,7 +239,7 @@ fn generate_code(
     server_config: &ServerConfig,
     observed_jsonl: Option<&str>,
 ) -> Result<GeneratedCode> {
-    let mut generator = ProgressiveGenerator::new().context("failed to create code generator")?;
+    let mut generator = PackageGenerator::new().context("failed to create code generator")?;
     if let Some(jsonl) = observed_jsonl {
         generator = generator.with_observed_shapes(jsonl);
     }
@@ -315,7 +266,7 @@ fn generate_code(
 /// constraint (#311).
 ///
 /// For the stdio arm (`derive_server_id_from_path_or_name`), the http/sse arm
-/// (`derive_server_id_from_url`), and `--name` (its own `validate_server_id`
+/// (`derive_server_id_from_url`), and `--name` (its own `ServerSlug`
 /// check in `discover_server_info`), this check is a redundant backstop:
 /// each of those already guarantees the id is valid before it ever reaches
 /// here, so failing here for one of them would indicate a bug in that arm's
@@ -331,7 +282,7 @@ fn generate_code(
 /// # Errors
 ///
 /// Returns an error if `server_info.id` fails
-/// [`validate_server_id`](mcp_execution_skill::validate_server_id). When
+/// [`ServerSlug::new`](mcp_execution_core::ServerSlug::new). When
 /// `is_from_unvalidated_config_key` is `true`, the error names
 /// `~/.claude/mcp.json` and suggests the `--name` override (with a
 /// filesystem-safe slug derived from the offending id) as a fix, since the
@@ -343,7 +294,7 @@ fn resolve_server_dir_name(
     is_from_unvalidated_config_key: bool,
 ) -> Result<String> {
     let server_dir_name = server_id.to_string();
-    validate_server_id(&server_dir_name).map_err(|source| {
+    ServerSlug::new(&server_dir_name).map_err(|source| {
         if is_from_unvalidated_config_key {
             let suggested_name = derive_server_id_from_path_or_name(&server_dir_name);
             anyhow::anyhow!(
@@ -370,11 +321,11 @@ fn resolve_server_dir_name(
 /// # Errors
 ///
 /// Returns an error if `name` is not a valid server id.
-pub(crate) fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
+pub fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
     name.map(|custom_name| {
-        validate_server_id(custom_name)
-            .with_context(|| format!("invalid --name '{custom_name}'"))?;
-        ServerId::new(custom_name).with_context(|| format!("invalid --name '{custom_name}'"))
+        ServerSlug::new(custom_name)
+            .map(ServerId::from)
+            .with_context(|| format!("invalid --name '{custom_name}'"))
     })
     .transpose()
 }
@@ -386,7 +337,7 @@ pub(crate) fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
 ///
 /// Returns an error if the id is not a valid directory name (see `resolve_server_dir_name`) or the
 /// base directory cannot be resolved.
-pub(crate) fn generated_location(
+pub fn generated_location(
     server_id: &ServerId,
     is_from_unvalidated_config_key: bool,
     output_dir: Option<PathBuf>,
@@ -446,7 +397,7 @@ fn format_dry_run(result: &DryRunResult, output_format: OutputFormat) -> Result<
             format_size(result.total_size),
             result.output_path
         ),
-        OutputFormat::Pretty => {
+        _ => {
             use std::fmt::Write as _;
 
             let mut out = format!(
@@ -537,8 +488,8 @@ fn format_success(result: &GenerationResult, output_format: OutputFormat) -> Res
             result.tool_count,
             result.output_path
         ),
-        OutputFormat::Pretty => format!(
-            "✓ Successfully generated progressive loading files\n  Server: {} ({})\n  Tools: {}\n  Location: {}\n  Next step: {NPM_INSTALL_HINT}",
+        _ => format!(
+            "✓ Successfully generated the TypeScript package\n  Server: {} ({})\n  Tools: {}\n  Location: {}\n  Next step: {NPM_INSTALL_HINT}",
             escape_display(&result.server_name),
             result.server_id,
             result.tool_count,
@@ -556,28 +507,26 @@ mod tests {
     use serde_json::json;
 
     fn create_mock_server_info() -> ServerInfo {
-        ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![ToolInfo {
-                name: mcp_execution_core::ToolName::new("test_tool").unwrap(),
-                description: "A test tool".to_string(),
-                input_schema: json!({
+        ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                mcp_execution_core::ToolName::new("test_tool").unwrap(),
+                "A test tool".to_string(),
+                json!({
                     "type": "object",
                     "properties": {
                         "param": {"type": "string"}
                     }
                 }),
-                output_schema: None,
-                annotations: None,
-            }],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        }
+        )
     }
 
     /// `ServerConfig` passed alongside `create_mock_server_info`'s output so `generate` can
@@ -720,14 +669,14 @@ mod tests {
     }
 
     #[test]
-    fn test_progressive_generator_creation() {
-        let generator = ProgressiveGenerator::new();
+    fn test_package_generator_creation() {
+        let generator = PackageGenerator::new();
         assert!(generator.is_ok());
     }
 
     #[test]
-    fn test_progressive_code_generation() {
-        let generator = ProgressiveGenerator::new().unwrap();
+    fn test_package_code_generation() {
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
 
         let result = generator.generate(&server_info, &create_mock_server_config());
@@ -823,7 +772,7 @@ mod tests {
 
     #[test]
     fn test_dry_run_collects_file_metadata() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
         let generated_code = generator
             .generate(&server_info, &create_mock_server_config())
@@ -860,7 +809,7 @@ mod tests {
     fn test_dry_run_does_not_write_files() {
         use std::path::Path;
 
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
         let generated_code = generator
             .generate(&server_info, &create_mock_server_config())
@@ -1070,7 +1019,7 @@ mod tests {
         std::fs::create_dir_all(&base_dir).unwrap();
         let escape_target = temp.path().join("escaped");
 
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
         let generated_code = generator
             .generate(&server_info, &create_mock_server_config())

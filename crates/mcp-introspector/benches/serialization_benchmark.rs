@@ -16,33 +16,36 @@ use std::hint::black_box;
 /// Creates a sample `ServerInfo` for benchmarking
 fn create_server_info(tool_count: usize) -> ServerInfo {
     let tools = (0..tool_count)
-        .map(|i| ToolInfo {
-            name: ToolName::new(format!("tool_{i}")).unwrap(),
-            description: format!("Test tool number {i}"),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "arg1": {"type": "string"},
-                    "arg2": {"type": "number"}
-                },
-                "required": ["arg1"]
-            }),
-            output_schema: Some(json!({"type": "boolean"})),
-            annotations: None,
+        .map(|i| {
+            let mut value = ToolInfo::new(
+                ToolName::new(format!("tool_{i}")).unwrap(),
+                format!("Test tool number {i}"),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "arg1": {"type": "string"},
+                        "arg2": {"type": "number"}
+                    },
+                    "required": ["arg1"]
+                }),
+            );
+            value.output_schema = Some(json!({"type": "boolean"}));
+            value
         })
         .collect();
 
-    ServerInfo {
-        id: ServerId::new("test-server").unwrap(),
-        name: "Test Server".to_string(),
-        version: "1.0.0".to_string(),
+    ServerInfo::new(
+        ServerId::new("test-server").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
         tools,
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: true,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value.supports_resources = true;
+            value
         },
-    }
+    )
 }
 
 /// Benchmarks `ServerInfo` serialization
@@ -92,24 +95,26 @@ fn bench_server_info_deserialization(c: &mut Criterion) {
 
 /// Benchmarks `ToolInfo` serialization
 fn bench_tool_info_serialization(c: &mut Criterion) {
-    let tool = ToolInfo {
-        name: ToolName::new("test_tool").unwrap(),
-        description: "A test tool for benchmarking".to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "user": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string"},
-                        "name": {"type": "string"}
-                    }
-                },
-                "message": {"type": "string"}
-            }
-        }),
-        output_schema: Some(json!({"type": "object"})),
-        annotations: None,
+    let tool = {
+        let mut value = ToolInfo::new(
+            ToolName::new("test_tool").unwrap(),
+            "A test tool for benchmarking".to_string(),
+            json!({
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"}
+                        }
+                    },
+                    "message": {"type": "string"}
+                }
+            }),
+        );
+        value.output_schema = Some(json!({"type": "object"}));
+        value
     };
 
     c.bench_function("tool_info_serialization", |b| {
@@ -121,13 +126,11 @@ fn bench_tool_info_serialization(c: &mut Criterion) {
 
 /// Benchmarks `ToolInfo` deserialization
 fn bench_tool_info_deserialization(c: &mut Criterion) {
-    let tool = ToolInfo {
-        name: ToolName::new("test_tool").unwrap(),
-        description: "A test tool for benchmarking".to_string(),
-        input_schema: json!({"type": "object"}),
-        output_schema: None,
-        annotations: None,
-    };
+    let tool = ToolInfo::new(
+        ToolName::new("test_tool").unwrap(),
+        "A test tool for benchmarking".to_string(),
+        json!({"type": "object"}),
+    );
 
     let json = serde_json::to_string(&tool).unwrap();
 
@@ -140,10 +143,11 @@ fn bench_tool_info_deserialization(c: &mut Criterion) {
 
 /// Benchmarks `ServerCapabilities` serialization
 fn bench_capabilities_serialization(c: &mut Criterion) {
-    let caps = ServerCapabilities {
-        supports_tools: true,
-        supports_resources: true,
-        supports_prompts: false,
+    let caps = {
+        let mut value = ServerCapabilities::default();
+        value.supports_tools = true;
+        value.supports_resources = true;
+        value
     };
 
     c.bench_function("capabilities_serialization", |b| {

@@ -21,25 +21,24 @@
 //!
 //! let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
 //!
-//! let meta = ServerMetadata {
-//!     schema_version: METADATA_SCHEMA_VERSION,
-//!     server_id: ServerId::new("github").unwrap(),
-//!     server_name: "GitHub".to_string(),
-//!     server_version: "1.0.0".to_string(),
-//!     tools: vec![ToolMetadata {
-//!         name: ToolName::new("create_issue").unwrap(),
-//!         typescript_name: "createIssue".to_string(),
-//!         category: Some("issues".to_string()),
-//!         keywords: vec!["create".to_string(), "issue".to_string()],
-//!         description: Some("Creates a new issue".to_string()),
-//!         parameters: vec![],
-//!         annotations: None,
-//!         result_type: None,
-//!         result_type_origin: ResultTypeOrigin::Undeclared,
-//!         manifest_size_bytes: 0,
-//!     }],
-//!     provenance: GenerationProvenance::capture(&config, &[]),
-//! };
+//! let mut tool = ToolMetadata::new(
+//!     ToolName::new("create_issue").unwrap(),
+//!     "createIssue".to_string(),
+//!     vec!["create".to_string(), "issue".to_string()],
+//!     vec![],
+//!     ResultTypeOrigin::Undeclared,
+//!     0,
+//! );
+//! tool.category = Some("issues".to_string());
+//! tool.description = Some("Creates a new issue".to_string());
+//! let meta = ServerMetadata::new(
+//!     METADATA_SCHEMA_VERSION,
+//!     ServerId::new("github").unwrap(),
+//!     "GitHub".to_string(),
+//!     "1.0.0".to_string(),
+//!     vec![tool],
+//!     GenerationProvenance::capture(&config, &[]),
+//! );
 //!
 //! let json = serde_json::to_string(&meta).unwrap();
 //! let round_tripped: ServerMetadata = serde_json::from_str(&json).unwrap();
@@ -174,18 +173,19 @@ pub const MAX_METADATA_FILE_BYTES: u64 = 1024 * 1024;
 ///
 /// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
 ///
-/// let meta = ServerMetadata {
-///     schema_version: METADATA_SCHEMA_VERSION,
-///     server_id: ServerId::new("github").unwrap(),
-///     server_name: "GitHub".to_string(),
-///     server_version: "1.0.0".to_string(),
-///     tools: vec![],
-///     provenance: GenerationProvenance::capture(&config, &[]),
-/// };
+/// let meta = ServerMetadata::new(
+///     METADATA_SCHEMA_VERSION,
+///     ServerId::new("github").unwrap(),
+///     "GitHub".to_string(),
+///     "1.0.0".to_string(),
+///     vec![],
+///     GenerationProvenance::capture(&config, &[]),
+/// );
 ///
 /// assert_eq!(meta.tools.len(), 0);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ServerMetadata {
     /// Schema version this sidecar was produced with.
     ///
@@ -220,6 +220,115 @@ pub struct ServerMetadata {
     pub provenance: GenerationProvenance,
 }
 
+impl ToolMetadata {
+    /// Creates tool metadata from the fields every tool has; the optional `category`,
+    /// `description`, `annotations` and `result_type` start as `None` and are set afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ToolName;
+    /// use mcp_execution_core::metadata::{ResultTypeOrigin, ToolMetadata};
+    ///
+    /// let mut tool = ToolMetadata::new(
+    ///     ToolName::new("create_issue").unwrap(),
+    ///     "createIssue".to_string(),
+    ///     vec!["issue".to_string()],
+    ///     vec![],
+    ///     ResultTypeOrigin::Undeclared,
+    ///     0,
+    /// );
+    /// tool.description = Some("Create an issue".to_string());
+    /// assert!(tool.category.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        name: ToolName,
+        typescript_name: String,
+        keywords: Vec<String>,
+        parameters: Vec<ParameterMetadata>,
+        result_type_origin: ResultTypeOrigin,
+        manifest_size_bytes: u64,
+    ) -> Self {
+        Self {
+            name,
+            typescript_name,
+            category: None,
+            keywords,
+            description: None,
+            parameters,
+            annotations: None,
+            result_type: None,
+            result_type_origin,
+            manifest_size_bytes,
+        }
+    }
+}
+
+impl ParameterMetadata {
+    /// Creates a parameter from its name, TypeScript type and requiredness; the `description`
+    /// starts as `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::metadata::ParameterMetadata;
+    ///
+    /// let param = ParameterMetadata::new("title".to_string(), "string".to_string(), true);
+    /// assert!(param.description.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(name: String, typescript_type: String, required: bool) -> Self {
+        Self {
+            name,
+            typescript_type,
+            required,
+            description: None,
+        }
+    }
+}
+
+impl ServerMetadata {
+    /// Creates metadata from every field; there is nothing optional.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::metadata::{METADATA_SCHEMA_VERSION, ServerMetadata};
+    /// use mcp_execution_core::provenance::GenerationProvenance;
+    /// use mcp_execution_core::{ServerConfig, ServerId};
+    ///
+    /// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
+    /// let meta = ServerMetadata::new(
+    ///     METADATA_SCHEMA_VERSION,
+    ///     ServerId::new("github").unwrap(),
+    ///     "GitHub".to_string(),
+    ///     "1.0.0".to_string(),
+    ///     vec![],
+    ///     GenerationProvenance::capture(&config, &[]),
+    /// );
+    /// assert!(meta.tools.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        schema_version: u32,
+        server_id: ServerId,
+        server_name: String,
+        server_version: String,
+        tools: Vec<ToolMetadata>,
+        provenance: GenerationProvenance,
+    ) -> Self {
+        Self {
+            schema_version,
+            server_id,
+            server_name,
+            server_version,
+            tools,
+            provenance,
+        }
+    }
+}
+
 /// Structured metadata for a single generated tool.
 ///
 /// # Examples
@@ -228,22 +337,21 @@ pub struct ServerMetadata {
 /// use mcp_execution_core::metadata::{ResultTypeOrigin, ToolMetadata};
 /// use mcp_execution_core::ToolName;
 ///
-/// let tool = ToolMetadata {
-///     name: ToolName::new("create_issue").unwrap(),
-///     typescript_name: "createIssue".to_string(),
-///     category: Some("issues".to_string()),
-///     keywords: vec!["create".to_string(), "issue".to_string()],
-///     description: Some("Creates a new issue".to_string()),
-///     parameters: vec![],
-///     annotations: None,
-///     result_type: None,
-///     result_type_origin: ResultTypeOrigin::Undeclared,
-///     manifest_size_bytes: 0,
-/// };
+/// let mut tool = ToolMetadata::new(
+///     ToolName::new("create_issue").unwrap(),
+///     "createIssue".to_string(),
+///     vec!["create".to_string(), "issue".to_string()],
+///     vec![],
+///     ResultTypeOrigin::Undeclared,
+///     0,
+/// );
+/// tool.category = Some("issues".to_string());
+/// tool.description = Some("Creates a new issue".to_string());
 ///
 /// assert_eq!(tool.name.as_str(), "create_issue");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ToolMetadata {
     /// Original MCP tool name (the call identifier), unmodified.
     ///
@@ -296,6 +404,7 @@ pub struct ToolMetadata {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ResultTypeOrigin {
     /// Converted from an output schema the server declared.
     Declared,
@@ -312,16 +421,13 @@ pub enum ResultTypeOrigin {
 /// ```
 /// use mcp_execution_core::metadata::ParameterMetadata;
 ///
-/// let param = ParameterMetadata {
-///     name: "title".to_string(),
-///     typescript_type: "string".to_string(),
-///     required: true,
-///     description: Some("Issue title".to_string()),
-/// };
+/// let mut param = ParameterMetadata::new("title".to_string(), "string".to_string(), true);
+/// param.description = Some("Issue title".to_string());
 ///
 /// assert!(param.required);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParameterMetadata {
     /// Parameter name.
     pub name: String,
@@ -338,6 +444,7 @@ pub struct ParameterMetadata {
 
 /// Refusal reasons of [`read_server_metadata`], one variant per distinct failure.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum MetadataReadError {
     /// The sidecar file does not exist.
     #[error("metadata sidecar not found")]

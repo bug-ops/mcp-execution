@@ -57,15 +57,15 @@ fn test_meta_json_sidecar_survives_export() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut code = GeneratedCode::new();
-    code.add_file(GeneratedFile {
-        path: "index.ts".to_string(),
-        content: "export {};".to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "index.ts".to_string(),
+        "export {};".to_string(),
+    ))
     .unwrap();
-    code.add_file(GeneratedFile {
-        path: "_meta.json".to_string(),
-        content: r#"{"schema_version":1,"server_id":"github"}"#.to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "_meta.json".to_string(),
+        r#"{"schema_version":1,"server_id":"github"}"#.to_string(),
+    ))
     .unwrap();
 
     let vfs = FilesBuilder::from_generated_code(code, "/github")
@@ -90,10 +90,10 @@ fn test_export_github_server_structure() {
     let mut code = GeneratedCode::new();
 
     // Add index file
-    code.add_file(GeneratedFile {
-        path: "index.ts".to_string(),
-        content: "// GitHub MCP Server\nexport * from './tools';".to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "index.ts".to_string(),
+        "// GitHub MCP Server\nexport * from './tools';".to_string(),
+    ))
     .unwrap();
 
     // Simulate 30 GitHub tools
@@ -131,18 +131,18 @@ fn test_export_github_server_structure() {
     ];
 
     for tool in &tool_names {
-        code.add_file(GeneratedFile {
-            path: format!("tools/{tool}.ts"),
-            content: format!("export function {tool}(params: any) {{ return {{}}; }}"),
-        })
+        code.add_file(GeneratedFile::new(
+            format!("tools/{tool}.ts"),
+            format!("export function {tool}(params: any) {{ return {{}}; }}"),
+        ))
         .unwrap();
     }
 
     // Add manifest
-    code.add_file(GeneratedFile {
-        path: "manifest.json".to_string(),
-        content: format!(r#"{{"version": "1.0.0", "tools": {}}}"#, tool_names.len()),
-    })
+    code.add_file(GeneratedFile::new(
+        "manifest.json".to_string(),
+        format!(r#"{{"version": "1.0.0", "tools": {}}}"#, tool_names.len()),
+    ))
     .unwrap();
 
     // Export to filesystem
@@ -177,15 +177,15 @@ fn test_export_multiple_servers() {
     // Create GitHub server structure
     let github_code = {
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "createIssue.ts".to_string(),
-            content: "export function createIssue() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "createIssue.ts".to_string(),
+            "export function createIssue() {}".to_string(),
+        ))
         .unwrap();
-        code.add_file(GeneratedFile {
-            path: "getIssue.ts".to_string(),
-            content: "export function getIssue() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "getIssue.ts".to_string(),
+            "export function getIssue() {}".to_string(),
+        ))
         .unwrap();
         code
     };
@@ -193,15 +193,15 @@ fn test_export_multiple_servers() {
     // Create Slack server structure
     let slack_code = {
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "sendMessage.ts".to_string(),
-            content: "export function sendMessage() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "sendMessage.ts".to_string(),
+            "export function sendMessage() {}".to_string(),
+        ))
         .unwrap();
-        code.add_file(GeneratedFile {
-            path: "listChannels.ts".to_string(),
-            content: "export function listChannels() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "listChannels.ts".to_string(),
+            "export function listChannels() {}".to_string(),
+        ))
         .unwrap();
         code
     };
@@ -364,26 +364,26 @@ fn test_export_typescript_module() {
 
     let mut code = GeneratedCode::new();
 
-    code.add_file(GeneratedFile {
-        path: "index.ts".to_string(),
-        content: r"export * from './types';
+    code.add_file(GeneratedFile::new(
+        "index.ts".to_string(),
+        r"export * from './types';
 export * from './tools';"
             .to_string(),
-    })
+    ))
     .unwrap();
 
-    code.add_file(GeneratedFile {
-        path: "types/index.ts".to_string(),
-        content: "export type ToolParams = { id: number };".to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "types/index.ts".to_string(),
+        "export type ToolParams = { id: number };".to_string(),
+    ))
     .unwrap();
 
-    code.add_file(GeneratedFile {
-        path: "tools/create.ts".to_string(),
-        content: r"import type { ToolParams } from '../types';
+    code.add_file(GeneratedFile::new(
+        "tools/create.ts".to_string(),
+        r"import type { ToolParams } from '../types';
 export function create(params: ToolParams) { return params.id; }"
             .to_string(),
-    })
+    ))
     .unwrap();
 
     let vfs = FilesBuilder::from_generated_code(code, "/module")
@@ -511,44 +511,44 @@ mod windows_tests {
 /// (`MAX_EXPORT_FILES`, `MAX_EXPORT_BYTES`) and reach the disk intact.
 #[test]
 fn test_export_of_output_generated_at_the_maximum_tool_count_succeeds() {
-    use mcp_execution_codegen::ProgressiveGenerator;
+    use mcp_execution_codegen::PackageGenerator;
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use mcp_execution_introspector::{MAX_TOOL_COUNT, ServerCapabilities, ServerInfo, ToolInfo};
     use serde_json::json;
 
     let tools = (0..MAX_TOOL_COUNT)
-        .map(|i| ToolInfo {
-            name: ToolName::new(format!("tool_{i:04}")).unwrap(),
-            description: format!("Tool {i}"),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "repo": {"type": "string", "description": "Repository"},
-                    "page": {"type": "integer"},
-                    "state": {"enum": ["open", "closed"]}
-                },
-                "required": ["repo"]
-            }),
-            output_schema: None,
-            annotations: None,
+        .map(|i| {
+            ToolInfo::new(
+                ToolName::new(format!("tool_{i:04}")).unwrap(),
+                format!("Tool {i}"),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "repo": {"type": "string", "description": "Repository"},
+                        "page": {"type": "integer"},
+                        "state": {"enum": ["open", "closed"]}
+                    },
+                    "required": ["repo"]
+                }),
+            )
         })
         .collect();
-    let server = ServerInfo {
-        id: ServerId::new("acme").unwrap(),
-        name: "Acme".to_string(),
-        version: "1.0.0".to_string(),
+    let server = ServerInfo::new(
+        ServerId::new("acme").unwrap(),
+        "Acme".to_string(),
+        "1.0.0".to_string(),
         tools,
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
     let config = ServerConfig::builder()
         .command("test-command".to_string())
         .build()
         .unwrap();
-    let code = ProgressiveGenerator::new()
+    let code = PackageGenerator::new()
         .unwrap()
         .generate(&server, &config)
         .expect("generation at the maximum tool count succeeds");

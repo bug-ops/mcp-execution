@@ -10,6 +10,9 @@ description = "TypeScript SDK generation from MCP tool definitions"
 keywords = ["mcp", "codegen", "typescript", "sdk"]
 categories = ["development-tools"]
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 

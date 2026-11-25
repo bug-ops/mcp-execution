@@ -10,6 +10,9 @@ description = "MCP server that generates a typed TypeScript SDK from MCP servers
 keywords = ["mcp", "server", "codegen", "typescript"]
 categories = ["development-tools"]
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 
@@ -23,7 +26,7 @@ chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 futures-util = { workspace = true }
 mcp-execution-codegen = { workspace = true }
-mcp-execution-core = { workspace = true, features = ["tracing-filter"] }
+mcp-execution-core = { workspace = true }
 mcp-execution-files = { workspace = true }
 mcp-execution-introspector = { workspace = true }
 mcp-execution-skill = { workspace = true }

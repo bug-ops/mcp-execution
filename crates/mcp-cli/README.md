@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/mcp-execution-cli)](https://docs.rs/mcp-execution-cli)
 [![codecov](https://codecov.io/gh/bug-ops/mcp-execution/graph/badge.svg?token=2UEW36O9AN&flag=mcp-cli)](https://codecov.io/gh/bug-ops/mcp-execution)
 [![MSRV](https://img.shields.io/badge/MSRV-1.98-blue.svg)](https://github.com/bug-ops/mcp-execution)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 Command-line interface that turns an MCP server into a typed TypeScript SDK a model programs against, so loops, joins and large results stay in code and only the answer reaches the context.
 
@@ -113,7 +113,7 @@ mcp-execution-cli generate <SERVER> [OPTIONS]
 - `--connect-timeout-secs <SECS>`: Connection timeout (1-600s; conflicts with `--from-config`)
 - `--discover-timeout-secs <SECS>`: Tool discovery timeout (1-600s; conflicts with `--from-config`)
 - `--name <NAME>`: Custom server name for output directory
-- `--progressive-output <PATH>`: Custom output directory
+- `--servers-dir <PATH>`: Custom output directory
 - `--dry-run`: Preview files that would be generated without writing to disk
 - `--format <FORMAT>`: Output format (json, text, pretty)
 - `--log-format <FORMAT>`: Diagnostic log format (text, json); falls back to
@@ -209,7 +209,7 @@ Compare a live server's tool list with the metadata recorded at generation:
 mcp-execution-cli drift --from-config github
 ```
 
-Takes the server flags of `generate` plus `--name` and `--progressive-output` (pass the same values you gave `generate`). Exit 0: no drift. Exit 5: the lists differ. Writes nothing.
+Takes the server flags of `generate` plus `--name` and `--servers-dir` (pass the same values you gave `generate`). Exit 0: no drift. Exit 5: the lists differ. Writes nothing.
 
 ### `introspect`
 
@@ -392,4 +392,4 @@ MSRV = stable minus two, raised in a minor release.
 
 ## License
 
-Licensed under either of [Apache License 2.0](../../LICENSE.md) or [MIT license](../../LICENSE.md) at your option.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.

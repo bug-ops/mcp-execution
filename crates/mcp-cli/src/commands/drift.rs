@@ -31,17 +31,6 @@ const MAX_PRINTED_NAMES: usize = 20;
 const MAX_NAME_CHARS: usize = 128;
 
 /// Options of the `drift` command.
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use clap::Parser;
-/// use mcp_execution_cli::cli::{Cli, Commands};
-///
-/// let cli = Cli::parse_from(["mcp-execution-cli", "drift", "--from-config", "github"]);
-/// assert_matches!(cli.command, Commands::Drift(_));
-/// ```
 #[derive(Debug, Args)]
 pub struct DriftArgs {
     /// Server selection, transport, and timeout flags (shared with `introspect`)
@@ -52,25 +41,16 @@ pub struct DriftArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Base directory of the generated files (same as `generate --progressive-output`;
+    /// Base directory of the generated files (same as `generate --servers-dir`;
     /// default: ~/.claude/servers/)
     #[arg(long)]
-    pub progressive_output: Option<PathBuf>,
+    pub servers_dir: Option<PathBuf>,
 }
 
 /// Result of comparing a live server with the recorded generation provenance.
 ///
 /// The endpoint is checked first: when the connection parameters differ, a tool difference is not
 /// attributed to the server changing.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::drift::DriftOutcome;
-///
-/// assert!(!DriftOutcome::NoDrift.is_drift());
-/// assert!(DriftOutcome::EndpointDiffers.is_drift());
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum DriftOutcome {
@@ -89,18 +69,6 @@ pub enum DriftOutcome {
 
 impl DriftOutcome {
     /// Whether the outcome is anything other than [`DriftOutcome::NoDrift`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_cli::commands::drift::DriftOutcome;
-    ///
-    /// let outcome = DriftOutcome::ToolsDiffer {
-    ///     added: vec![],
-    ///     removed: vec!["gone".to_string()],
-    /// };
-    /// assert!(outcome.is_drift());
-    /// ```
     #[must_use]
     pub const fn is_drift(&self) -> bool {
         !matches!(self, Self::NoDrift)
@@ -111,20 +79,6 @@ impl DriftOutcome {
 ///
 /// Uses the same fingerprint and digest functions `generate` records with, so equal inputs
 /// always compare equal.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::drift::{DriftOutcome, compare};
-/// use mcp_execution_core::provenance::{ConfigFingerprint, ToolDigest};
-/// use mcp_execution_core::ServerConfig;
-///
-/// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
-/// let fingerprint = ConfigFingerprint::compute(&config);
-/// let digest = ToolDigest::compute(&[]);
-/// let outcome = compare(&fingerprint, &digest, &[], &fingerprint, &[]);
-/// assert_eq!(outcome, DriftOutcome::NoDrift);
-/// ```
 #[must_use]
 pub fn compare(
     recorded_fingerprint: &ConfigFingerprint,
@@ -241,7 +195,7 @@ impl DriftReport {
             ttl_seconds: hints.ttl.map(|ttl| ttl.as_secs()),
             cache_scope: hints.cache_scope.map(|scope| match scope {
                 CacheScope::Public => "public",
-                CacheScope::Private => "private",
+                _ => "private",
             }),
             notices,
         }
@@ -275,23 +229,11 @@ impl DriftReport {
 ///
 /// Returns a classified error when the check could not run: invalid server selection, connection
 /// or discovery failure, or a missing, oversized, unreadable or unsupported `_meta.json`.
-///
-/// # Examples
-///
-/// ```no_run
-/// use mcp_execution_cli::commands::drift::{DriftArgs, run};
-/// use mcp_execution_core::cli::OutputFormat;
-///
-/// # async fn example(args: DriftArgs) -> anyhow::Result<()> {
-/// run(args, OutputFormat::Text).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
     let DriftArgs {
         flags,
         name,
-        progressive_output,
+        servers_dir,
     } = args;
     let override_id = name_override(name.as_deref())?;
     let source = ServerSource::try_from(flags)?;
@@ -299,11 +241,10 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
         matches!(source, ServerSource::Config { .. }) && override_id.is_none();
     let (server_id, config) = resolve_server_config(source)?;
     let skill_id = override_id.unwrap_or_else(|| server_id.clone());
-    let (_, server_dir) =
-        generated_location(&skill_id, from_unvalidated_config_key, progressive_output)?;
+    let (_, server_dir) = generated_location(&skill_id, from_unvalidated_config_key, servers_dir)?;
     let recorded = read_generated_metadata_async(server_dir, &skill_id).await?;
 
-    let Discovery { info, hints } = Introspector::new()
+    let Discovery { info, hints, .. } = Introspector::new()
         .discover(server_id.clone(), &config)
         .await
         .with_context(|| format!("failed to connect to server '{server_id}'"))?;
@@ -330,12 +271,11 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     };
-    match format {
-        OutputFormat::Json => crate::formatters::emit(&report, format, exit),
-        OutputFormat::Text | OutputFormat::Pretty => {
-            println!("{}", report.text());
-            Ok(exit)
-        }
+    if format == OutputFormat::Json {
+        crate::formatters::emit(&report, format, exit)
+    } else {
+        println!("{}", report.text());
+        Ok(exit)
     }
 }
 
@@ -389,13 +329,7 @@ mod tests {
     }
 
     fn entry<'a>(name: &'a str, schema: &'a serde_json::Value) -> ToolDigestEntry<'a> {
-        ToolDigestEntry {
-            name,
-            description: "d",
-            input_schema: schema,
-            output_schema: None,
-            annotations: None,
-        }
+        ToolDigestEntry::new(name, "d", schema)
     }
 
     #[test]
@@ -456,14 +390,16 @@ mod tests {
         use mcp_execution_core::ToolName;
         use mcp_execution_skill::scripts::{RecipeName, ToolRef, WriteIntent};
 
-        let listing = |name: &str, server: &str, tool: &str| ScriptListing {
-            name: RecipeName::new(name).unwrap(),
-            description: String::new(),
-            tools: vec![ToolRef {
-                server: ServerId::new(server).unwrap(),
-                tool: ToolName::new(tool).unwrap(),
-            }],
-            writes: WriteIntent::ReadOnly,
+        let listing = |name: &str, server: &str, tool: &str| {
+            ScriptListing::new(
+                RecipeName::new(name).unwrap(),
+                String::new(),
+                vec![ToolRef::new(
+                    ServerId::new(server).unwrap(),
+                    ToolName::new(tool).unwrap(),
+                )],
+                WriteIntent::ReadOnly,
+            )
         };
         let listings = [
             listing("hit", "s", "gone"),
@@ -480,9 +416,10 @@ mod tests {
 
     #[test]
     fn private_scope_warns_about_credentials() {
-        let hints = ListingHints {
-            ttl: None,
-            cache_scope: Some(CacheScope::Private),
+        let hints = {
+            let mut value = ListingHints::default();
+            value.cache_scope = Some(CacheScope::Private);
+            value
         };
         let report = DriftReport::new(&DriftOutcome::NoDrift, hints, &[]);
         assert!(report.text().contains("depend on credentials"));

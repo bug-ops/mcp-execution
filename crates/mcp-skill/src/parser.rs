@@ -60,10 +60,12 @@ static FRONTMATTER_REGEX: LazyLock<Regex> =
 
 // `sanitize_path_for_error` lives in `mcp-execution-core`, the workspace's
 // security-validation foundation crate.
+use mcp_execution_core::ServerId;
 use mcp_execution_core::sanitize_path_for_error;
 
 /// Errors that can occur while scanning a server directory for its `_meta.json` sidecar.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ScanError {
     /// I/O error reading the directory or sidecar file.
     #[error("I/O error: {0}")]
@@ -164,6 +166,7 @@ pub enum ScanError {
 /// Callers that only inspect `tools` would otherwise have no way to detect
 /// this drift short of tailing server-side `tracing` output.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ScanResult {
     /// Parsed tools, sorted by name.
     pub tools: Vec<ParsedToolFile>,
@@ -172,8 +175,26 @@ pub struct ScanResult {
     pub warnings: Vec<String>,
 }
 
+impl ScanResult {
+    /// Creates a scan result from the parsed tools and the warnings raised while scanning.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_skill::ScanResult;
+    ///
+    /// let result = ScanResult::new(vec![], vec![]);
+    /// assert!(result.tools.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn new(tools: Vec<ParsedToolFile>, warnings: Vec<String>) -> Self {
+        Self { tools, warnings }
+    }
+}
+
 /// Parsed metadata from a server's generated tool set.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ParsedToolFile {
     /// Original MCP tool name.
     pub name: String,
@@ -182,7 +203,7 @@ pub struct ParsedToolFile {
     pub typescript_name: String,
 
     /// Server identifier.
-    pub server_id: String,
+    pub server_id: ServerId,
 
     /// Category for grouping.
     pub category: Option<String>,
@@ -197,8 +218,47 @@ pub struct ParsedToolFile {
     pub parameters: Vec<ParsedParameter>,
 }
 
+impl ParsedToolFile {
+    /// Creates a parsed tool; `category` and `description` start as `None` and are set afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerId;
+    /// use mcp_execution_skill::ParsedToolFile;
+    ///
+    /// let tool = ParsedToolFile::new(
+    ///     "create_issue".to_string(),
+    ///     "createIssue".to_string(),
+    ///     ServerId::new("github").unwrap(),
+    ///     vec!["issue".to_string()],
+    ///     vec![],
+    /// );
+    /// assert!(tool.category.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        name: String,
+        typescript_name: String,
+        server_id: ServerId,
+        keywords: Vec<String>,
+        parameters: Vec<ParsedParameter>,
+    ) -> Self {
+        Self {
+            name,
+            typescript_name,
+            server_id,
+            category: None,
+            keywords,
+            description: None,
+            parameters,
+        }
+    }
+}
+
 /// A parsed parameter from a tool's metadata.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ParsedParameter {
     /// Parameter name.
     pub name: String,
@@ -211,6 +271,28 @@ pub struct ParsedParameter {
 
     /// Parameter description.
     pub description: Option<String>,
+}
+
+impl ParsedParameter {
+    /// Creates a parameter; `description` starts as `None` and is set afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_skill::ParsedParameter;
+    ///
+    /// let parameter = ParsedParameter::new("title".to_string(), "string".to_string(), true);
+    /// assert!(parameter.description.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(name: String, typescript_type: String, required: bool) -> Self {
+        Self {
+            name,
+            typescript_type,
+            required,
+            description: None,
+        }
+    }
 }
 
 impl From<mcp_execution_core::metadata::ParameterMetadata> for ParsedParameter {
@@ -235,12 +317,12 @@ impl From<mcp_execution_core::metadata::ParameterMetadata> for ParsedParameter {
 /// fixtures) are unaffected and can still set an arbitrary `server_id` themselves.
 fn parsed_tool_file_from_metadata(
     meta: mcp_execution_core::metadata::ToolMetadata,
-    server_id: &str,
+    server_id: &ServerId,
 ) -> ParsedToolFile {
     ParsedToolFile {
         name: meta.name.into_inner(),
         typescript_name: meta.typescript_name,
-        server_id: server_id.to_string(),
+        server_id: server_id.clone(),
         category: meta.category,
         keywords: meta.keywords,
         description: meta.description,
@@ -320,7 +402,7 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
 
     let warnings = verify_tool_files_on_disk(&canonical_base, &meta.tools, &meta_path).await?;
 
-    let server_id = meta.server_id.into_inner();
+    let server_id = meta.server_id;
     let mut tools: Vec<ParsedToolFile> = meta
         .tools
         .into_iter()
@@ -349,6 +431,7 @@ fn scan_error(error: MetadataReadError, meta_path: &Path) -> ScanError {
         MetadataReadError::SchemaMismatch { found, expected } => {
             ScanError::UnsupportedSchema { found, expected }
         }
+        other => ScanError::Io(std::io::Error::other(other)),
     }
 }
 
@@ -846,32 +929,36 @@ mod tests {
     }
 
     fn sample_metadata(tool_count: usize) -> ServerMetadata {
-        ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new("github").unwrap(),
-            server_name: "GitHub".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: (0..tool_count)
-                .map(|i| ToolMetadata {
-                    name: ToolName::new(format!("tool_{i}")).unwrap(),
-                    typescript_name: format!("tool{i}"),
-                    category: Some("test".to_string()),
-                    keywords: vec!["test".to_string()],
-                    description: Some(format!("Tool {i}")),
-                    parameters: vec![ParameterMetadata {
-                        name: "param".to_string(),
-                        typescript_type: "string".to_string(),
-                        required: true,
-                        description: Some("A parameter".to_string()),
-                    }],
-                    annotations: None,
-                    result_type: None,
-                    result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                    manifest_size_bytes: 0,
+        ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new("github").unwrap(),
+            "GitHub".to_string(),
+            "1.0.0".to_string(),
+            (0..tool_count)
+                .map(|i| {
+                    let mut value = ToolMetadata::new(
+                        ToolName::new(format!("tool_{i}")).unwrap(),
+                        format!("tool{i}"),
+                        vec!["test".to_string()],
+                        vec![{
+                            let mut value = ParameterMetadata::new(
+                                "param".to_string(),
+                                "string".to_string(),
+                                true,
+                            );
+                            value.description = Some("A parameter".to_string());
+                            value
+                        }],
+                        mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                        0,
+                    );
+                    value.category = Some("test".to_string());
+                    value.description = Some(format!("Tool {i}"));
+                    value
                 })
                 .collect(),
-            provenance: test_provenance(),
-        }
+            test_provenance(),
+        )
     }
 
     /// Writes `_meta.json` plus a matching stub `.ts` file for each tool, since
@@ -905,7 +992,7 @@ mod tests {
 
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "tool_0");
-        assert_eq!(tools[0].server_id, "github");
+        assert_eq!(tools[0].server_id.as_str(), "github");
         assert_eq!(tools[0].parameters.len(), 1);
         assert_eq!(
             tools[0].parameters[0].description,
@@ -920,30 +1007,22 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let mut meta = sample_metadata(0);
         meta.tools = vec![
-            ToolMetadata {
-                name: ToolName::new("zebra").unwrap(),
-                typescript_name: "zebra".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            },
-            ToolMetadata {
-                name: ToolName::new("alpha").unwrap(),
-                typescript_name: "alpha".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            },
+            ToolMetadata::new(
+                ToolName::new("zebra").unwrap(),
+                "zebra".to_string(),
+                vec![],
+                vec![],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            ),
+            ToolMetadata::new(
+                ToolName::new("alpha").unwrap(),
+                "alpha".to_string(),
+                vec![],
+                vec![],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            ),
         ];
         write_metadata(temp_dir.path(), &meta).await;
 

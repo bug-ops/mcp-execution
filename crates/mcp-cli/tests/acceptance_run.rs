@@ -298,8 +298,9 @@ fn run_script_stdin_reads_eof_and_istty_does_not_throw() {
     let Some(sb) = sandbox("run_script_stdin_reads_eof_and_istty_does_not_throw") else {
         return;
     };
+    // `.mts`: Node 22.18 does not detect top-level await in a `.ts` file as ESM (#626).
     let script = sb.script(
-        "stdin.ts",
+        "stdin.mts",
         "console.log('ISTTY=' + String(process.stdin.isTTY));\n\
          let bytes = 0;\n\
          for await (const chunk of process.stdin) bytes += chunk.length;\n\

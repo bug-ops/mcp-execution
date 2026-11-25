@@ -3,34 +3,16 @@
 //! Defines data structures used during progressive code generation,
 //! where each tool is generated as a separate file.
 
-use crate::progressive::observed::{
+use crate::package::observed::{
     OBSERVED_SHAPE_MAX_DEPTH, OBSERVED_SHAPE_MAX_KEY_LEN, OBSERVED_SHAPE_MAX_KEYS,
     OBSERVED_SHAPE_MAX_LINE_BYTES,
 };
 use mcp_execution_core::helper_protocol::{
     CLI_PATH_ENV, HELPER_CHANNEL_KEY, HELPER_ENV, HELPER_PROTOCOL_VERSION, HELPER_TOKEN_ENV,
-    MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV,
+    MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV, ResultSource,
 };
 use mcp_execution_core::untrusted::BARE_IDENTIFIER_PATTERN;
 use serde::{Deserialize, Serialize};
-
-/// How the generated tool function asks the runtime bridge for a tool's result.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::progressive::ResultSource;
-///
-/// assert_eq!(serde_json::to_string(&ResultSource::Structured).unwrap(), "\"structured\"");
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResultSource {
-    /// The text content of the result; used when the server declares no output schema.
-    Content,
-    /// The result's `structuredContent`; used when the server declares an output schema.
-    Structured,
-}
 
 /// Context for rendering a single tool template.
 ///
@@ -40,7 +22,8 @@ pub enum ResultSource {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::{ResultSource, ToolContext};
+/// use mcp_execution_codegen::package::ToolContext;
+/// use mcp_execution_core::helper_protocol::ResultSource;
 ///
 /// let context = ToolContext {
 ///     server_id: "github".to_string(),
@@ -63,6 +46,7 @@ pub enum ResultSource {
 /// assert_eq!(context.server_id, "github");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct ToolContext {
     /// MCP server identifier, sanitized for safe embedding in a `JSDoc` comment
     pub server_id: String,
@@ -91,7 +75,7 @@ pub struct ToolContext {
     pub category: Option<String>,
     /// Optional keywords for discovery via grep/search
     pub keywords: Option<String>,
-    /// Short description for header comment. Always populated: `ProgressiveGenerator`'s only
+    /// Short description for header comment. Always populated: `PackageGenerator`'s only
     /// constructor falls back to `description` when no categorization short description is
     /// available, so `None` is not a state this type can represent.
     pub short_description: String,
@@ -106,7 +90,7 @@ pub struct ToolContext {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::IndexContext;
+/// use mcp_execution_codegen::package::IndexContext;
 ///
 /// let context = IndexContext {
 ///     server_name: "GitHub".to_string(),
@@ -119,6 +103,7 @@ pub struct ToolContext {
 /// assert_eq!(context.tool_count, 30);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct IndexContext {
     /// Server name for documentation
     pub server_name: String,
@@ -141,7 +126,7 @@ pub struct IndexContext {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ToolSummary;
+/// use mcp_execution_codegen::package::ToolSummary;
 ///
 /// let summary = ToolSummary {
 ///     typescript_name: "createIssue".to_string(),
@@ -174,17 +159,18 @@ pub struct ToolSummary {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ToolCategorization;
+/// use mcp_execution_codegen::package::ToolCategorization;
 ///
-/// let cat = ToolCategorization {
-///     category: "issues".to_string(),
-///     keywords: vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()],
-///     short_description: "Create a new issue in a repository".to_string(),
-/// };
+/// let cat = ToolCategorization::new(
+///     "issues".to_string(),
+///     vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()],
+///     "Create a new issue in a repository".to_string(),
+/// );
 ///
 /// assert_eq!(cat.category, "issues");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolCategorization {
     /// Category for tool grouping
     pub category: String,
@@ -201,11 +187,9 @@ pub struct ToolCategorization {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::{CategoryInfo, ToolSummary};
+/// use mcp_execution_codegen::package::{CategoryInfo, ToolSummary};
 ///
-/// let category = CategoryInfo {
-///     name: "issues".to_string(),
-///     tools: vec![
+/// let category = CategoryInfo::new("issues".to_string(), vec![
 ///         ToolSummary {
 ///             typescript_name: "createIssue".to_string(),
 ///             description: "Creates a new issue".to_string(),
@@ -213,17 +197,59 @@ pub struct ToolCategorization {
 ///             keywords: Some("create,issue".to_string()),
 ///             short_description: Some("Create issue".to_string()),
 ///         },
-///     ],
-/// };
+///     ]);
 ///
 /// assert_eq!(category.name, "issues");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CategoryInfo {
     /// Category name
     pub name: String,
     /// Tools in this category
     pub tools: Vec<ToolSummary>,
+}
+
+impl ToolCategorization {
+    /// Creates a categorization from its category, keywords and short description.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::package::ToolCategorization;
+    ///
+    /// let categorization = ToolCategorization::new(
+    ///     "issues".to_string(),
+    ///     vec!["create".to_string()],
+    ///     "Create an issue".to_string(),
+    /// );
+    /// assert_eq!(categorization.category, "issues");
+    /// ```
+    #[must_use]
+    pub const fn new(category: String, keywords: Vec<String>, short_description: String) -> Self {
+        Self {
+            category,
+            keywords,
+            short_description,
+        }
+    }
+}
+
+impl CategoryInfo {
+    /// Creates a category from its name and tools.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::package::CategoryInfo;
+    ///
+    /// let category = CategoryInfo::new("issues".to_string(), vec![]);
+    /// assert!(category.tools.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn new(name: String, tools: Vec<ToolSummary>) -> Self {
+        Self { name, tools }
+    }
 }
 
 /// Context for rendering the runtime bridge template.
@@ -241,7 +267,7 @@ pub struct CategoryInfo {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::BridgeContext;
+/// use mcp_execution_codegen::package::BridgeContext;
 ///
 /// let context = BridgeContext::default();
 /// assert_eq!(context.helper_protocol_version, 1);
@@ -249,6 +275,7 @@ pub struct CategoryInfo {
 /// assert_ne!(context.identifier_pattern(), "");
 /// ```
 #[derive(Debug, Clone, Serialize)]
+#[doc(hidden)]
 pub struct BridgeContext {
     /// Helper protocol version the bridge speaks
     /// ([`mcp_execution_core::helper_protocol::HELPER_PROTOCOL_VERSION`]).
@@ -291,7 +318,7 @@ impl BridgeContext {
     /// # Examples
     ///
     /// ```
-    /// use mcp_execution_codegen::progressive::BridgeContext;
+    /// use mcp_execution_codegen::package::BridgeContext;
     ///
     /// assert!(!BridgeContext::default().identifier_pattern().is_empty());
     /// ```
@@ -316,7 +343,7 @@ impl Default for BridgeContext {
             observed_shape_max_keys: OBSERVED_SHAPE_MAX_KEYS,
             observed_shape_max_key_len: OBSERVED_SHAPE_MAX_KEY_LEN,
             observed_shape_max_line_bytes: OBSERVED_SHAPE_MAX_LINE_BYTES,
-            identifier_pattern: crate::progressive::generator::sanitize_ts_string_literal(
+            identifier_pattern: crate::package::generator::sanitize_ts_string_literal(
                 BARE_IDENTIFIER_PATTERN,
             ),
         }

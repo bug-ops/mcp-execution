@@ -6,7 +6,7 @@ Complete examples and guides for generating a typed TypeScript SDK from an MCP s
 
 | Document | Description | Best For |
 |----------|-------------|----------|
-| [progressive-loading-usage.md](./progressive-loading-usage.md) | Complete usage tutorial | Learning how the generated SDK is used |
+| [generated-package-usage.md](./generated-package-usage.md) | Complete usage tutorial | Learning how the generated SDK is used |
 | [mcp.json.example](./mcp.json.example) | MCP server configurations | Configuring your MCP servers |
 | [host-code-mode.md](./host-code-mode.md) | What the host documents about its own code execution mode | Deciding how it relates to `run` |
 
@@ -28,7 +28,7 @@ Then ask Claude Code to call the generated tools, directly or from a script.
 
 ### 2. For CLI Users
 
-If you're using the CLI directly, start with [progressive-loading-usage.md](./progressive-loading-usage.md):
+If you're using the CLI directly, start with [generated-package-usage.md](./generated-package-usage.md):
 
 ```bash
 # Generate TypeScript files for GitHub server
@@ -109,11 +109,11 @@ configs keep working unchanged.
 
 `generate` writes one TypeScript file per MCP tool, a type-only `catalog.ts` with one signature per tool, and a runtime bridge. A model reads the signatures it needs, then writes a script that calls the tools and prints only the answer. Loops, joins and large results stay in the script.
 
-For a single lookup or one or two sequential calls, a direct tool call is cheaper than a script; see [progressive-loading-usage.md](./progressive-loading-usage.md#script-or-direct-call).
+For a single lookup or one or two sequential calls, a direct tool call is cheaper than a script; see [generated-package-usage.md](./generated-package-usage.md#script-or-direct-call).
 
 ## From Generation to a Saved Script
 
-Every server below is read from `~/.claude/mcp.json` (see [mcp.json.example](./mcp.json.example)). The commands and their flags are described in [progressive-loading-usage.md](./progressive-loading-usage.md).
+Every server below is read from `~/.claude/mcp.json` (see [mcp.json.example](./mcp.json.example)). The commands and their flags are described in [generated-package-usage.md](./generated-package-usage.md).
 
 ```bash
 # 1. Generate, then read the catalog: one type-only signature per tool
@@ -311,7 +311,7 @@ cargo bench --profile bench-fast -p mcp-execution-codegen -p mcp-execution-files
 
 ### Getting Help
 
-1. Check [progressive-loading-usage.md](./progressive-loading-usage.md) for detailed guide
+1. Check [generated-package-usage.md](./generated-package-usage.md) for detailed guide
 2. Open an issue on GitHub
 
 ## Contributing Examples

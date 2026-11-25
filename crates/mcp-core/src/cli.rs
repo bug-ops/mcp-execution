@@ -49,6 +49,7 @@ use std::str::FromStr;
 /// assert_eq!(format, OutputFormat::Pretty);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum OutputFormat {
     /// JSON output for machine parsing
     Json,
@@ -350,6 +351,7 @@ impl fmt::Display for ExitCode {
 /// assert_eq!(format, LogFormat::Text);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum LogFormat {
     /// Human-readable text logs.
     #[default]
@@ -491,6 +493,55 @@ impl FromStr for LogFormat {
             _ => Err(crate::Error::InvalidArgument(format!(
                 "invalid log format: '{s}' (expected: text or json)"
             ))),
+        }
+    }
+}
+
+/// Level to which the workspace binaries cap `rmcp`'s own `tracing` targets.
+///
+/// `rmcp`'s transport layer logs raw, unsanitized peer input at `debug` level (for example the
+/// parse-failure line of `rmcp::transport::async_rw` embeds the offending line verbatim), and
+/// both binaries talk to untrusted MCP peers. Capping the bare `rmcp` target keeps a broad
+/// `debug` filter (`--verbose`, `RUST_LOG=debug`) from streaming that text into the log (#421).
+/// A *more specific* target such as `RUST_LOG=rmcp::transport=debug` still wins over the cap,
+/// which is the escape hatch; an equally specific `RUST_LOG=rmcp=debug` is replaced by it.
+///
+/// The type carries no `tracing` types, so `mcp-execution-core` stays free of that dependency:
+/// each binary feeds [`directive`](Self::directive) to its own `EnvFilter`. It is
+/// workspace-internal and not part of the documented 1.0 API.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::cli::RmcpLogCap;
+///
+/// assert_eq!(RmcpLogCap::Warn.directive(), "rmcp=warn");
+/// ```
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RmcpLogCap {
+    /// Cap `rmcp` at `info`.
+    Info,
+    /// Cap `rmcp` at `warn`.
+    Warn,
+}
+
+impl RmcpLogCap {
+    /// The `tracing` filter directive that applies this cap, always a valid directive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::RmcpLogCap;
+    ///
+    /// assert_eq!(RmcpLogCap::Info.directive(), "rmcp=info");
+    /// ```
+    #[must_use]
+    pub const fn directive(self) -> &'static str {
+        match self {
+            Self::Info => "rmcp=info",
+            Self::Warn => "rmcp=warn",
         }
     }
 }

@@ -6,25 +6,32 @@
 //! The default name (FR-043.5) and `SkillName` validation (FR-043.6) are already unit-tested at
 //! their implementation; the "name differs from the directory" rule is pinned through the CLI in
 //! `crates/mcp-cli/tests/acceptance_scripts_cmd.rs`.
+#![expect(
+    clippy::unwrap_used,
+    reason = "test, bench and example code may panic on failure"
+)]
 
 use std::collections::BTreeSet;
 
+use mcp_execution_core::{ServerId, ServerSlug};
 use mcp_execution_skill::{ParsedParameter, ParsedToolFile, build_skill_context, render_skill_md};
 
 fn tool(index: usize, category: &str, description: &str) -> ParsedToolFile {
-    ParsedToolFile {
-        name: format!("tool_{index:04}"),
-        typescript_name: format!("tool{index:04}"),
-        server_id: "acme".to_string(),
-        category: Some(category.to_string()),
-        keywords: vec!["thing".to_string()],
-        description: Some(description.to_string()),
-        parameters: vec![ParsedParameter {
-            name: "repo".to_string(),
-            typescript_type: "string".to_string(),
-            required: true,
-            description: None,
-        }],
+    {
+        let mut value = ParsedToolFile::new(
+            format!("tool_{index:04}"),
+            format!("tool{index:04}"),
+            ServerId::new("acme").unwrap(),
+            vec!["thing".to_string()],
+            vec![ParsedParameter::new(
+                "repo".to_string(),
+                "string".to_string(),
+                true,
+            )],
+        );
+        value.category = Some(category.to_string());
+        value.description = Some(description.to_string());
+        value
     }
 }
 
@@ -49,7 +56,7 @@ fn commands(text: &str) -> BTreeSet<String> {
 
 #[test]
 fn render_teaches_the_direct_call_and_the_script_runner_commands() {
-    let context = build_skill_context("acme", &tools(12), None, None);
+    let context = build_skill_context(&ServerSlug::new("acme").unwrap(), &tools(12), None, None);
 
     let rendered = render_skill_md(&context).unwrap();
 
@@ -72,8 +79,20 @@ fn render_teaches_the_direct_call_and_the_script_runner_commands() {
 
 #[test]
 fn rendered_body_size_does_not_depend_on_the_tool_count() {
-    let small = render_skill_md(&build_skill_context("acme", &tools(10), None, None)).unwrap();
-    let large = render_skill_md(&build_skill_context("acme", &tools(1000), None, None)).unwrap();
+    let small = render_skill_md(&build_skill_context(
+        &ServerSlug::new("acme").unwrap(),
+        &tools(10),
+        None,
+        None,
+    ))
+    .unwrap();
+    let large = render_skill_md(&build_skill_context(
+        &ServerSlug::new("acme").unwrap(),
+        &tools(1000),
+        None,
+        None,
+    ))
+    .unwrap();
 
     assert!(
         small.len().abs_diff(large.len()) <= 256,
@@ -85,9 +104,14 @@ fn rendered_body_size_does_not_depend_on_the_tool_count() {
 
 #[test]
 fn rendered_skill_states_the_privilege_level_and_when_not_to_script() {
-    let rendered = render_skill_md(&build_skill_context("acme", &tools(3), None, None))
-        .unwrap()
-        .to_lowercase();
+    let rendered = render_skill_md(&build_skill_context(
+        &ServerSlug::new("acme").unwrap(),
+        &tools(3),
+        None,
+        None,
+    ))
+    .unwrap()
+    .to_lowercase();
 
     assert!(rendered.contains("sandbox"), "{rendered}");
     assert!(rendered.contains("privileges"), "{rendered}");

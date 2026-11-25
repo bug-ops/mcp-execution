@@ -874,7 +874,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(mut writer: W, mut queued: mpsc::Rece
 mod tests {
     use super::*;
     use crate::runtime::dirs::{RunId, RuntimeDirs};
-    use crate::runtime::protocol::ResultKind;
+    use mcp_execution_core::helper_protocol::ResultSource;
     use std::assert_matches;
 
     fn request(server: &str, tool: &str) -> Request {
@@ -883,7 +883,7 @@ mod tests {
             server: mcp_execution_core::ServerId::new(server).unwrap(),
             tool: mcp_execution_core::ToolName::new(tool).unwrap(),
             arguments: serde_json::Map::new(),
-            result: ResultKind::Content,
+            result: ResultSource::Content,
         }
     }
 

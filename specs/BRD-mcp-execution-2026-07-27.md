@@ -110,7 +110,7 @@ Agent hosts now defer tool definitions natively, which reduces cost 1 for
 users of those hosts without this project. Costs 2 to 4 are not addressed by
 host-side deferral. The generated tool files today print each result in full
 and end in one pretty-printed JSON document per shell command
-(`crates/mcp-codegen/templates/progressive/tool.ts.hbs:81-105`), so the
+(`crates/mcp-codegen/templates/package/tool.ts.hbs:81-105`), so the
 released system does not yet address them either; the planned capabilities
 are listed under [[#Planned script-first capabilities]].
 
@@ -896,13 +896,12 @@ Questions only the maintainer can answer, raised by the planned direction:
 Open decisions of the 1.0 contract (Ask First, with options and recommendations in
 [[NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]]):
 
-- [ ] Is the `progressive` name renamed before 1.0.0, in the Rust items, the flag and the example? (OD-1, #680)
-- [ ] What is the compatibility window of `_meta.json` and the helper protocol: exact match for the whole 1.x line,
-  "read old, write new", or a floor? (OD-2)
+- [x] Is the `progressive` name renamed before 1.0.0? Yes (OD-1 (a), #680).
+- [x] Wire-format compatibility window? Exact match for the 1.x line (OD-2 (a)); whether the saved-script header
+  gets a version is still open.
 - [ ] Is an MSRV raise a breaking change of the library crates, or a minor-release change? (OD-3)
-- [ ] May `rmcp` and `tracing-subscriber` types stay in public signatures, and under what version-coupling rule?
-  (OD-4, #678)
-- [ ] What is the intended public surface of the `cli` and `server` library crates? (OD-5, #675)
+- [x] Which foreign types may stay in public signatures? OD-4 (c) (#678)
+- [x] Intended public surface of the `cli` and `server` library crates? Minimal (OD-5 (a), #675).
 
 ## Glossary
 

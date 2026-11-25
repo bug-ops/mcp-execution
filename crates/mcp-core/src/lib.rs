@@ -42,8 +42,6 @@ mod types;
 pub mod annotations;
 pub mod cli;
 pub mod helper_protocol;
-#[cfg(feature = "tracing-filter")]
-pub mod log_filter;
 pub mod metadata;
 pub mod provenance;
 pub mod untrusted;
@@ -53,8 +51,8 @@ pub use error::{Error, ResourceKind, Result};
 
 // Re-export domain types
 pub use types::{
-    MAX_SERVER_ID_LENGTH, ServerId, ServerIdError, ServerIdSlugError, ToolName, ToolNameError,
-    validate_server_id_slug,
+    MAX_SERVER_ID_LENGTH, ServerId, ServerIdError, ServerIdSlugError, ServerSlug, ToolName,
+    ToolNameError,
 };
 
 // Re-export server configuration types

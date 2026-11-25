@@ -11,6 +11,9 @@ keywords = ["mcp", "cli", "codegen", "typescript"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 
@@ -63,7 +66,7 @@ colored = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
 mcp-execution-codegen = { workspace = true }
-mcp-execution-core = { workspace = true, features = ["tracing-filter"] }
+mcp-execution-core = { workspace = true }
 mcp-execution-files = { workspace = true }
 mcp-execution-introspector = { workspace = true }
 mcp-execution-skill = { workspace = true }

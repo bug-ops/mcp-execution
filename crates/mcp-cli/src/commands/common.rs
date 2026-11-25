@@ -30,19 +30,6 @@ const FALLBACK_SERVER_ID_SLUG: &str = "http-server";
 ///
 /// The `mcp_servers` field defaults to an empty map so that an absent file or
 /// a file containing only `{}` does not produce a deserialization error.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::common::McpConfig;
-/// use std::collections::HashMap;
-///
-/// let config = McpConfig {
-///     mcp_servers: HashMap::new(),
-/// };
-///
-/// assert!(config.mcp_servers.is_empty());
-/// ```
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpConfig {
@@ -56,37 +43,6 @@ pub struct McpConfig {
 /// This is the single source of truth for "stdio vs http vs sse", shared by
 /// both the `mcp.json` config path ([`McpServerEntry`]) and the CLI-flag path
 /// ([`TransportArgs`] converts into this via `TryFrom`).
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use mcp_execution_cli::commands::common::McpTransport;
-/// use std::collections::HashMap;
-///
-/// let transport = McpTransport::Http {
-///     url: "https://api.example.com/mcp".to_string(),
-///     headers: HashMap::new(),
-/// };
-/// assert_matches!(transport, McpTransport::Http { .. });
-/// ```
-///
-/// Debug output redacts header/env values (keeping keys), `args` wholesale,
-/// and URL userinfo/query strings, mirroring `mcp_execution_core::ServerConfig`:
-///
-/// ```
-/// use mcp_execution_cli::commands::common::McpTransport;
-/// use std::collections::HashMap;
-///
-/// let transport = McpTransport::Http {
-///     url: "https://api.example.com/mcp".to_string(),
-///     headers: HashMap::from([("Authorization".to_string(), "Bearer sk-secret".to_string())]),
-/// };
-///
-/// let debug_output = format!("{transport:?}");
-/// assert!(debug_output.contains("Authorization"));
-/// assert!(!debug_output.contains("sk-secret"));
-/// ```
 #[derive(Clone)]
 pub enum McpTransport {
     /// Stdio transport: spawn a subprocess and speak MCP over stdin/stdout.
@@ -146,24 +102,6 @@ impl fmt::Debug for McpTransport {
 }
 
 /// Individual MCP server configuration entry from `mcp.json`.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::common::McpServerEntry;
-/// use std::collections::HashMap;
-///
-/// let entry = McpServerEntry {
-///     transport: mcp_execution_cli::commands::common::McpTransport::Http {
-///         url: "https://api.example.com".to_string(),
-///         headers: HashMap::new(),
-///     },
-///     connect_timeout_secs: Some(30),
-///     discover_timeout_secs: Some(30),
-/// };
-///
-/// assert_eq!(entry.connect_timeout_secs, Some(30));
-/// ```
 #[derive(Debug, Clone)]
 pub struct McpServerEntry {
     /// The server's transport and its transport-specific settings.
@@ -399,7 +337,7 @@ fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
 ///
 /// Returns an error if the home directory cannot be determined, the file
 /// cannot be read, or the JSON is malformed.
-pub(crate) fn load_mcp_config() -> Result<McpConfig> {
+pub fn load_mcp_config() -> Result<McpConfig> {
     load_mcp_config_from(&mcp_config_path()?)
 }
 
@@ -408,7 +346,7 @@ pub(crate) fn load_mcp_config() -> Result<McpConfig> {
 /// # Errors
 ///
 /// Returns an error if the home directory is unknown or relative.
-pub(crate) fn mcp_config_path() -> Result<PathBuf> {
+pub fn mcp_config_path() -> Result<PathBuf> {
     Ok(HomeDir::from_env()?
         .as_path()
         .join(".claude")
@@ -446,7 +384,7 @@ fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)>> {
 ///
 /// Returns an error if the home directory cannot be determined, or the config
 /// file exists but cannot be read or parsed.
-pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
+pub fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
     list_mcp_servers_from(&mcp_config_path()?)
 }
 
@@ -488,7 +426,7 @@ pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
 /// Unicode-identifier-safe set (e.g. a space) is no longer usable as a
 /// `ServerId` at all, and this function surfaces that as an ordinary
 /// `ServerId::new` error rather than a silent pass-through.
-pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
+pub fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpServerEntry)> {
     let (server_id, entry) = get_mcp_server_entry(name)?;
     let server_config = build_core_config(&entry)?;
     Ok((server_id, server_config, entry))
@@ -508,7 +446,7 @@ pub(crate) fn get_mcp_server(name: &str) -> Result<(ServerId, ServerConfig, McpS
 ///
 /// Returns an error if the config file is missing or malformed, or the named server is not
 /// present.
-pub(crate) fn get_mcp_server_entry(name: &str) -> Result<(ServerId, McpServerEntry)> {
+pub fn get_mcp_server_entry(name: &str) -> Result<(ServerId, McpServerEntry)> {
     let config = load_mcp_config()?;
     lookup_server_entry(&config, name)
 }
@@ -524,10 +462,7 @@ pub(crate) fn get_mcp_server_entry(name: &str) -> Result<(ServerId, McpServerEnt
 ///
 /// Returns an error if the named server is not present in `config`, or its name is not a valid
 /// [`ServerId`].
-pub(crate) fn lookup_server_entry(
-    config: &McpConfig,
-    name: &str,
-) -> Result<(ServerId, McpServerEntry)> {
+pub fn lookup_server_entry(config: &McpConfig, name: &str) -> Result<(ServerId, McpServerEntry)> {
     let entry = config
         .mcp_servers
         .get(name)
@@ -558,7 +493,7 @@ pub(crate) fn lookup_server_entry(
 ///
 /// Returns an error if the config file is missing, malformed, or the server
 /// name is not present.
-pub(crate) fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
+pub fn load_server_from_config(name: &str) -> Result<(ServerId, ServerConfig)> {
     let (id, config, _) = get_mcp_server(name)?;
     Ok((id, config))
 }
@@ -617,7 +552,7 @@ fn builder_for_transport(transport: McpTransport) -> ServerConfigBuilder {
 /// Returns an error if the entry fails [`ServerConfigBuilder::build`]'s
 /// security validation (e.g. a shell metacharacter or forbidden environment
 /// variable in a hand-edited `mcp.json`).
-pub(crate) fn build_core_config(entry: &McpServerEntry) -> Result<ServerConfig> {
+pub fn build_core_config(entry: &McpServerEntry) -> Result<ServerConfig> {
     let mut builder = builder_for_transport(entry.transport.clone());
 
     if let Some(secs) = entry.connect_timeout_secs {
@@ -688,40 +623,6 @@ fn parse_key_value(s: &str, kind: &str) -> Result<(String, String)> {
 /// (e.g. as a library), which is exactly why every variant already being
 /// well-formed matters. `TryFrom<TransportArgs> for McpTransport` does the
 /// `KEY=VALUE` parsing for environment variables and headers.
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use mcp_execution_cli::commands::common::TransportArgs;
-///
-/// let transport = TransportArgs::Stdio {
-///     command: "github-mcp-server".to_string(),
-///     args: vec!["stdio".to_string()],
-///     env: vec![],
-///     cwd: None,
-/// };
-/// assert_matches!(transport, TransportArgs::Stdio { .. });
-/// ```
-///
-/// Debug output redacts `env`/`headers` entries wholesale, not just a value
-/// half — these are raw, unparsed `KEY=VALUE` strings, and per
-/// `parse_key_value`'s own doc comment the whole string may be the secret
-/// with no discernible key:
-///
-/// ```
-/// use mcp_execution_cli::commands::common::TransportArgs;
-///
-/// let transport = TransportArgs::Http {
-///     url: "https://api.example.com/mcp".to_string(),
-///     headers: vec!["Authorization=Bearer sk-secret".to_string()],
-/// };
-///
-/// let debug_output = format!("{transport:?}");
-/// assert!(!debug_output.contains("sk-secret"));
-/// assert!(!debug_output.contains("Authorization"));
-/// assert!(debug_output.contains("<redacted>"));
-/// ```
 #[derive(Clone)]
 pub enum TransportArgs {
     /// Stdio transport (default): raw CLI flags.
@@ -844,7 +745,7 @@ impl TryFrom<TransportArgs> for McpTransport {
 /// `KEY=VALUE` format, or if the resulting [`ServerConfig`] fails security
 /// validation (shell metacharacters, forbidden environment variables,
 /// invalid URL scheme, unsafe headers, or out-of-bounds timeouts).
-pub(crate) fn build_server_config(
+pub fn build_server_config(
     transport: TransportArgs,
     connect_timeout_secs: Option<u64>,
     discover_timeout_secs: Option<u64>,
@@ -881,44 +782,6 @@ pub(crate) fn build_server_config(
 /// the same exclusivity group (a `from_config` selection can never carry a
 /// meaningless `connect_timeout_secs`/`discover_timeout_secs` override, since
 /// those live on the `Flags` arm only).
-///
-/// # Examples
-///
-/// ```
-/// use std::assert_matches;
-/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
-///
-/// let source = ServerSource::Flags {
-///     transport: TransportArgs::Stdio {
-///         command: "github-mcp-server".to_string(),
-///         args: vec!["stdio".to_string()],
-///         env: vec![],
-///         cwd: None,
-///     },
-///     connect_timeout_secs: None,
-///     discover_timeout_secs: None,
-/// };
-///
-/// assert_matches!(source, ServerSource::Flags { .. });
-/// ```
-///
-/// Debug output redacts via [`TransportArgs`]'s own redacting `Debug` impl:
-///
-/// ```
-/// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
-///
-/// let source = ServerSource::Flags {
-///     transport: TransportArgs::Http {
-///         url: "https://api.example.com/mcp".to_string(),
-///         headers: vec!["Authorization=Bearer sk-secret".to_string()],
-///     },
-///     connect_timeout_secs: None,
-///     discover_timeout_secs: None,
-/// };
-///
-/// let debug_output = format!("{source:?}");
-/// assert!(!debug_output.contains("sk-secret"));
-/// ```
 #[derive(Debug, Clone)]
 pub enum ServerSource {
     /// Load server configuration from `~/.claude/mcp.json` by name.
@@ -951,7 +814,7 @@ pub enum ServerSource {
 /// Returns an error if `source` is `Config` and the named server is missing
 /// from the config file or the file is malformed, or if `source` is `Flags`
 /// and the resulting [`ServerConfig`] fails security validation.
-pub(crate) fn resolve_server_config(source: ServerSource) -> Result<(ServerId, ServerConfig)> {
+pub fn resolve_server_config(source: ServerSource) -> Result<(ServerId, ServerConfig)> {
     match source {
         ServerSource::Config { name } => {
             debug!("Loading server configuration from ~/.claude/mcp.json: {name}");
@@ -1049,7 +912,7 @@ fn derive_server_id_from_url(url: &str) -> ServerId {
 /// discard `base_dir` entirely, and `..` segments walk back out of it.
 /// Delegates to [`slugify`], which strips path separators and `..` by
 /// construction.
-pub(crate) fn derive_server_id_from_path_or_name(raw: &str) -> ServerId {
+pub fn derive_server_id_from_path_or_name(raw: &str) -> ServerId {
     slugify(raw)
 }
 
@@ -1062,7 +925,7 @@ pub(crate) fn derive_server_id_from_path_or_name(raw: &str) -> ServerId {
 /// # Errors
 ///
 /// Returns an invalid-input error when the marker is set to a non-empty value.
-pub(crate) fn refuse_inside_run() -> Result<()> {
+pub fn refuse_inside_run() -> Result<()> {
     if std::env::var_os(RUN_MARKER_ENV).is_some_and(|value| !value.is_empty()) {
         return Err(anyhow::Error::new(
             mcp_execution_core::Error::InvalidArgument(
@@ -2353,7 +2216,7 @@ mod tests {
         // into a filesystem path via PathBuf::join).
         let id = derive_server_id_from_url("https://api.example.com/../../etc/passwd");
         assert!(!id.as_str().contains(".."));
-        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
     }
 
     #[test]
@@ -2393,7 +2256,7 @@ mod tests {
     fn test_derive_server_id_from_url_truncates_to_length_limit() {
         let long_path = "a".repeat(200);
         let id = derive_server_id_from_url(&format!("https://example.com/{long_path}"));
-        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
     }
 
     #[test]
@@ -2403,7 +2266,7 @@ mod tests {
         // path, not the parse-failure path covered by the test below.
         let id = derive_server_id_from_url("https://...");
         assert_eq!(id.as_str(), FALLBACK_SERVER_ID_SLUG);
-        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
     }
 
     #[test]
@@ -2451,7 +2314,7 @@ mod tests {
         for url in urls {
             let id = derive_server_id_from_url(url);
             assert!(
-                mcp_execution_skill::validate_server_id(id.as_str()).is_ok(),
+                mcp_execution_core::ServerSlug::new(id.as_str()).is_ok(),
                 "derived id {:?} from url {url:?} must satisfy validate_server_id",
                 id.as_str()
             );
@@ -2467,7 +2330,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
         assert!(!id.as_str().contains("token"));
     }
 
@@ -2479,14 +2342,14 @@ mod tests {
     fn test_derive_server_id_from_path_or_name_rejects_parent_traversal() {
         let id = derive_server_id_from_path_or_name("../../../../etc/passwd");
         assert!(!id.as_str().contains(".."));
-        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
     }
 
     #[test]
     fn test_derive_server_id_from_path_or_name_rejects_absolute_path() {
         let id = derive_server_id_from_path_or_name("/etc/cron.d/evil");
         assert!(!id.as_str().starts_with('/'));
-        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
     }
 
     #[test]
@@ -2535,7 +2398,7 @@ mod tests {
         // single-segment id rather than being rejected outright.
         let id = derive_server_id_from_path_or_name("/usr/local/bin/mcp-server");
         assert_eq!(id.as_str(), "usr-local-bin-mcp-server");
-        assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+        assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
     }
 
     #[test]
@@ -2553,7 +2416,7 @@ mod tests {
                 build_server_config(stdio_transport(command, vec![], vec![], None), None, None)
                     .unwrap();
 
-            assert!(mcp_execution_skill::validate_server_id(id.as_str()).is_ok());
+            assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
             let joined = base_dir.join(id.as_str());
             assert!(
                 joined.starts_with(&base_dir),

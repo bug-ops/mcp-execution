@@ -25,15 +25,15 @@ pub fn test_config() -> ServerConfig {
 
 /// Creates a mock server info for testing.
 pub fn create_test_server_info() -> ServerInfo {
-    ServerInfo {
-        id: ServerId::new("github").unwrap(),
-        name: "GitHub".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![
-            ToolInfo {
-                name: ToolName::new("create_issue").unwrap(),
-                description: "Creates a new issue".to_string(),
-                input_schema: json!({
+    ServerInfo::new(
+        ServerId::new("github").unwrap(),
+        "GitHub".to_string(),
+        "1.0.0".to_string(),
+        vec![
+            ToolInfo::new(
+                ToolName::new("create_issue").unwrap(),
+                "Creates a new issue".to_string(),
+                json!({
                     "type": "object",
                     "properties": {
                         "repo": {
@@ -51,13 +51,11 @@ pub fn create_test_server_info() -> ServerInfo {
                     },
                     "required": ["repo", "title"]
                 }),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                name: ToolName::new("update_issue").unwrap(),
-                description: "Updates an existing issue".to_string(),
-                input_schema: json!({
+            ),
+            ToolInfo::new(
+                ToolName::new("update_issue").unwrap(),
+                "Updates an existing issue".to_string(),
+                json!({
                     "type": "object",
                     "properties": {
                         "repo": {
@@ -72,13 +70,11 @@ pub fn create_test_server_info() -> ServerInfo {
                     },
                     "required": ["repo", "issue_number"]
                 }),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                name: ToolName::new("get_issue").unwrap(),
-                description: "Gets issue information".to_string(),
-                input_schema: json!({
+            ),
+            ToolInfo::new(
+                ToolName::new("get_issue").unwrap(),
+                "Gets issue information".to_string(),
+                json!({
                     "type": "object",
                     "properties": {
                         "repo": {
@@ -90,16 +86,14 @@ pub fn create_test_server_info() -> ServerInfo {
                     },
                     "required": ["repo", "issue_number"]
                 }),
-                output_schema: None,
-                annotations: None,
-            },
+            ),
         ],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    }
+    )
 }
 
 /// Name of the `tsc` executable to spawn directly via [`std::process::Command`].

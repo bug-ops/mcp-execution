@@ -103,7 +103,7 @@ const STALE_ARTIFACT_MIN_AGE: Duration = Duration::from_mins(5);
 /// `export_to_filesystem_parallel`, behind the `parallel` feature) call will write
 /// (denial-of-service protection, CWE-400).
 ///
-/// Equal to `mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES` (rather than
+/// Equal to `mcp_execution_codegen::package::generator::MAX_GENERATED_FILES` (rather than
 /// chosen independently), since a `FileSystem` built via `FilesBuilder::from_generated_code`
 /// carries exactly the same files as the `GeneratedCode` it came from — no extra headroom is
 /// needed for that path, and equality means a `FileSystem` built from that crate's normal
@@ -123,12 +123,11 @@ const STALE_ARTIFACT_MIN_AGE: Duration = Duration::from_mins(5);
 /// // MAX_EXPORT_FILES is a constant used internally by FileSystem
 /// let _fs = FileSystem::new();
 /// ```
-pub const MAX_EXPORT_FILES: usize =
-    mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES;
+pub const MAX_EXPORT_FILES: usize = mcp_execution_codegen::package::generator::MAX_GENERATED_FILES;
 
 /// Maximum total bytes across every file a single export call will write.
 ///
-/// Equal to `mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES` for the same
+/// Equal to `mcp_execution_codegen::package::generator::MAX_GENERATED_BYTES` for the same
 /// consistency reason as [`MAX_EXPORT_FILES`]. The codegen value is `MAX_TOOL_COUNT` times a
 /// per-tool bound that covers the tool file, its `_meta.json` entry, its `catalog.ts` entry and
 /// its `index.ts` line (a tool that would exceed the bound is rendered in a degraded form),
@@ -141,8 +140,7 @@ pub const MAX_EXPORT_FILES: usize =
 /// // MAX_EXPORT_BYTES is a constant used internally by FileSystem
 /// let _fs = FileSystem::new();
 /// ```
-pub const MAX_EXPORT_BYTES: usize =
-    mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES;
+pub const MAX_EXPORT_BYTES: usize = mcp_execution_codegen::package::generator::MAX_GENERATED_BYTES;
 
 /// An in-memory virtual filesystem for MCP tool definitions.
 ///
@@ -679,6 +677,7 @@ impl FileSystem {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[cfg(feature = "parallel")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "parallel")))]
     pub fn export_to_filesystem_parallel(&self, base_path: impl AsRef<Path>) -> Result<()> {
         use rayon::prelude::*;
 
@@ -1077,6 +1076,7 @@ impl Default for FileSystem {
 /// let options = ExportOptions::default().with_atomic_writes(true);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ExportOptions {
     /// Use atomic writes (write to temp file, then rename)
     pub atomic: bool,

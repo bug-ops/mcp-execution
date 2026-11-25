@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`mcp-execution-cli`**: the library surface is only `Cli` and `run`; issue #675 (#699)
+- **`mcp-execution-core`, `mcp-execution-skill`**: `log_filter` and the `tracing-filter` feature are removed and `TemplateError` no longer exposes handlebars types; issue #678 (#699)
+- **Workspace**: one `ResultSource` in `mcp-execution-core` replaces the per-crate copies; issue #676 (#699)
+- **Workspace**: public server ids are `ServerSlug` or `ServerId`, the string validators are removed, and `mcp-execution-server` returns a bad `server_id` as an `isError` tool result; issue #677 (#699)
+- **`mcp-execution-codegen`, `mcp-execution-cli`**: `ProgressiveGenerator` is `PackageGenerator` and `--progressive-output` is `--servers-dir`; issue #680 (#699)
+- **Workspace**: growable public enums and structs are `#[non_exhaustive]` with constructors; issue #674 (#699)
 - **`mcp-execution-files`**: `FilesError` gains `HomeDirectory`, which `build_and_export` returns for a home directory error instead of an I/O error, so the CLI exits 2; issue #657 (#668)
 - **`mcp-execution-core`, `mcp-execution-files`, `mcp-execution-cli`, `mcp-execution-server`**: a `~name` path in a directory option is refused with an invalid-argument error (`HomeDirError::UnsupportedUserHome`) instead of creating a literal `~name` directory; write `./~name` for a directory with that name; issue #647 (#661)
 - **`mcp-execution-cli`**: on Unix `run` handles SIGHUP and SIGQUIT as cancel (exit 129 and 131) and now stops under `nohup`; use `setsid` or tmux for a run that must outlive the terminal; issue #646 (#661)
@@ -63,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: `call`, `run` and the hidden `helper` log at `warn` by default; `--verbose` or `RUST_LOG` restores the standard output (#574, #631)
 - **`mcp-execution-core`**: `ResourceKind` gains the variant `ResponseLine`, which breaks exhaustive matches on the public enum (#575, #631)
 - **`mcp-execution-cli`**: `runner::init_logging` takes a third `LogProfile` argument (#574, #631)
-- **`mcp-execution-cli`**: `drift` takes `--name` and `--progressive-output` like `generate`, and `setup` also checks for the helper binary (`SetupResult.helper_binary` in JSON output) (#580, #631)
+- **`mcp-execution-cli`**: `drift` takes `--name` and the output directory flag like `generate`, and `setup` also checks for the helper binary (`SetupResult.helper_binary` in JSON output) (#580, #631)
 - **Workspace**: the MSRV is Rust 1.98 and follows a rolling stable-minus-two policy; issue #641 (#654)
 - **`mcp-execution-core`**: `ServersDir` and `SkillsDir` move from `mcp-execution-cli` to `mcp-execution-core`, a bare `~` expands to the home directory, a relative or unknown home is an error instead of a `./.claude` fallback, and `generate_skill` expands `~` in `servers_dir`; issues #634, #637 (#654)
 - **Tests**: variant assertions use `assert_matches!`, so a failure prints the value; issue #642 (#654)
@@ -73,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: one `_meta.json` reader in `mcp-execution-core`, `scripts check --servers-dir`, `stats` measures files in one blocking task; issues #618, #619, #621 (#640)
 - **`mcp-execution-cli`**: helper responses are encoded once, tool results and arguments are moved instead of copied, the helper reads with a 64 KiB buffer; issues #620, #623, #628 (#640)
 - **`mcp-execution-cli`**: `run --typecheck` caps `tsc` output at 8 MiB per stream and canonicalizes each file once; issue #622 (#640)
-- **`mcp-execution-core`**: one `cap_rmcp_log_level` behind the `tracing-filter` feature replaces the copies in `mcp-execution-cli` and `mcp-execution-server`; issue #608 (#640)
+- **`mcp-execution-cli`, `mcp-execution-server`**: both cap `rmcp` logging with one shared policy from `mcp-execution-core`; issue #608 (#640)
 - **`mcp-execution-server`**: the per-server introspector lock map is removed, so introspecting one server id is no longer serialized; issue #611 (#640)
 - **Documentation**: contributor instructions drop stale versions and unverified samples; issue #607 (#640)
 - **`mcp-execution-codegen`**: tool files are slim and delegate to `_runtime/cli.ts` through `runIfMain` (#603)
@@ -92,6 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-cli`**: `run` resets an inherited SIGCHLD ignore and keeps a SIGINT ignored at startup; issues #663, #664 (#699)
+- **CI**: the release runs the full CI first, publishes to crates.io before creating the GitHub release and takes notes from the changelog; issue #672 (#699)
+- **Packaging**: every published crate ships both license texts and docs.rs metadata; issue #681 (#699)
+- **Documentation**: install instructions are version-free and one 1.0 upgrade section replaces the warning stack; issue #682 (#699)
+- **CI**: clippy runs on Windows and macOS, a non-blocking semver check and a Bun/Deno job are added; issues #662, #679, #605, #626 (#699)
+- **`mcp-execution-cli`**: Node 22.18, Bun, Deno and Windows job object behaviour are covered by tests; issues #605, #626, #665 (#699)
 - **`mcp-execution-cli`**: `run` stops the script when the runner receives SIGINT or SIGTERM; a SIGKILL of the runner can still leave the script running; issue #627 (#640)
 - **`mcp-execution-cli`**: the `run` spill notice says only the first bytes were saved when the capture limit cut the output; issue #625 (#640)
 - **`mcp-execution-cli`**: a helper response replaced for exceeding the line cap is journaled as failed with its real size; issue #620 (#640)

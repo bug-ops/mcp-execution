@@ -6,6 +6,8 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// Wire protocol version sent in the hello line and checked by both ends.
 ///
 /// # Examples
@@ -127,3 +129,27 @@ pub const HELPER_CHANNEL_KEY: &str = "mcp-execution.helper-channel";
 /// assert_ne!(RUN_MARKER_ENV, HELPER_ENV);
 /// ```
 pub const RUN_MARKER_ENV: &str = "MCP_EXECUTION_RUN";
+
+/// Where a tool call's result value is read from; the wire form of the helper request's
+/// `result` field and the selector the generated tool function and the runner agree on.
+///
+/// This is a closed set: adding a variant changes the helper protocol, so it is a major
+/// change.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::helper_protocol::ResultSource;
+///
+/// assert_eq!(serde_json::to_string(&ResultSource::Structured).unwrap(), "\"structured\"");
+/// let parsed: ResultSource = serde_json::from_str("\"content\"").unwrap();
+/// assert_eq!(parsed, ResultSource::Content);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultSource {
+    /// Prefer `structuredContent`; the tool declares an output schema.
+    Structured,
+    /// Take `content[0]`, parsing its text as JSON and falling back to the raw string.
+    Content,
+}

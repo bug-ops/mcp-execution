@@ -50,7 +50,7 @@ Convert `ServerInfo`/`ToolInfo` (JSON Schema-based tool definitions) into:
 ```rust
 // mcp_execution_codegen (crate root)
 pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
-pub use progressive::ProgressiveGenerator;
+pub use package::{PackageGenerator, TSCONFIG_JSON};
 pub use template_engine::TemplateEngine;
 
 impl GeneratedCode {
@@ -59,9 +59,9 @@ impl GeneratedCode {
     pub fn add_file(&mut self, file: GeneratedFile) -> Result<()>;
 }
 
-// mcp_execution_codegen::progressive
-pub struct ProgressiveGenerator<'a> { /* engine: TemplateEngine<'a>, observed: ObservedShapes */ }
-impl<'a> ProgressiveGenerator<'a> {
+// mcp_execution_codegen::package
+pub struct PackageGenerator<'a> { /* engine: TemplateEngine<'a>, observed: ObservedShapes */ }
+impl<'a> PackageGenerator<'a> {
     pub fn new() -> Result<Self>;
     // Parses a JSON-lines recording of result shapes (#587). Lines that fail the shape rules are
     // skipped and counted in one tracing::warn!; the last valid line wins per (server id, raw
@@ -115,8 +115,7 @@ impl Default for BridgeContext { /* populates every field from mcp_execution_cor
 pub const MAX_GENERATED_FILES: usize; // = introspector::MAX_TOOL_COUNT + FIXED_FILE_COUNT (7)
 pub const MAX_GENERATED_BYTES: usize; // = MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX, see [[#9. Resource-Exhaustion Bounds (CWE-400)]]
 
-// mcp_execution_codegen::progressive
-pub enum ResultSource { Content, Structured } // serde snake_case; how a tool function asks the bridge for its result
+// `ResultSource` is `mcp_execution_core::helper_protocol::ResultSource` (#676); this crate defines none.
 
 // mcp_execution_codegen::common::typescript
 pub const MAX_SCHEMA_RECURSION_DEPTH: usize = 128; // see [[#Recursion Depth Bound]]
@@ -248,7 +247,7 @@ into a consumer's own build).
 the converter (`convert_schema`; every descent counts: a property, an item type, a composition
 member, an `additionalProperties` schema and a `$ref` hop) and the JSDoc description sanitizer
 (`sanitize_schema_jsdoc_descriptions`/`sanitize_schema_jsdoc_value` in
-`progressive::generator`) will descend into a nested schema
+`package::generator`) will descend into a nested schema
 before treating the remaining branch as opaque (`unknown`, with a `DepthExceeded` diagnostic in
 the converter, or leaving a `description` unsanitized) rather than recursing
 further. The sanitizer logs a single `tracing::warn!` per call the first
@@ -461,7 +460,7 @@ Responsibilities:
 
 ### Provable bytes bound (FR-030.8)
 
-| Constant (`progressive/generator.rs`) | Value / definition |
+| Constant (`package/generator.rs`) | Value / definition |
 |---|---|
 | `PER_TOOL_BYTES_MAX` | `2 * (MAX_TOOL_NAME_LEN + MAX_TOOL_DESCRIPTION_LEN + MAX_SCHEMA_SIZE_BYTES)` = 147,968 |
 | `MAX_GENERATED_BYTES` | `MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX` = 148,230,144 (about 148.2 MB) |
@@ -479,8 +478,8 @@ one tool contributes to its tool file, its `_meta.json` entry, its `catalog.ts` 
 
 **Two-stage per-tool degrade.** For each tool the generator measures `T` (the tool file's bytes)
 and `M` (the bytes of its compact `_meta.json` entry, plus 1 for the comma). The stage logic lives in
-`ProgressiveGenerator::render_within_budget`; the per-tool conversions and the `DegradeStage`
-(`Full`, `ResultGeneric`, `AllGeneric`) live in the internal `progressive/tool_types.rs`
+`PackageGenerator::render_within_budget`; the per-tool conversions and the `DegradeStage`
+(`Full`, `ResultGeneric`, `AllGeneric`) live in the internal `package/tool_types.rs`
 (`ToolConversions`, `ToolTypes`; `pub(crate)`, no public API).
 
 - **Stage A** applies whenever the tool's total `T + M` exceeds `PER_TOOL_RENDER_BUDGET`,
@@ -561,7 +560,7 @@ already exceed the cap for large servers.
   `mcp-core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN,
   MAX_TOTAL_VARIATION_SELECTORS}` (rendered into the bridge).
 - **Consumed by** `mcp-cli`'s `generate --observed-shapes` through
-  `ProgressiveGenerator::with_observed_shapes`.
+  `PackageGenerator::with_observed_shapes`.
 
 ## 12. Edge Cases & Notable Behaviors
 
@@ -575,7 +574,7 @@ already exceed the cap for large servers.
   per character — a name like `café_menu_日本語` sanitizes to `caf_menu_`,
   and regenerating a server whose tools have such names can produce
   different identifiers than an older generated package did.
-- `ProgressiveGenerator::render_within_budget` converts each tool's schemas once
+- `PackageGenerator::render_within_budget` converts each tool's schemas once
   (`ToolConversions`); the tool file, the catalog entry and the `_meta.json` entry are all rendered
   from that one conversion at the same degrade stage (FR-032.11, issue #295's single-walk rule).
 - An object schema with no properties renders `{ [key: string]: unknown }` when
@@ -696,8 +695,8 @@ warning). Server strings reach the output only via `sanitize_jsdoc` (comments) o
 Every Result type ends in `| undefined` (the `void` member of the old open decision is `undefined`
 on all tools). The generated tool function passes `result_source` (`'structured'` when the tool
 declares an output schema, else `'content'`) as the fourth argument of `callMCPTool`, independent
-of the degrade stage: extraction semantics never depend on byte budgets. `ResultSource` is a
-public enum (`Content`, `Structured`). `_meta.json` records `result_type` (the `Compact` text,
+of the degrade stage: extraction semantics never depend on byte budgets. `ResultSource` is the closed enum of
+`mcp-execution-core` (`helper_protocol::ResultSource`: `Content`, `Structured`; #676). `_meta.json` records `result_type` (the `Compact` text,
 `None` above 1024 bytes or when degraded) and `result_type_origin` (`declared`, `degraded`,
 `undeclared`).
 
@@ -817,7 +816,7 @@ key matches `^[A-Za-z_$][A-Za-z0-9_$]*$` and is at most 32 characters; otherwise
 `{"type":"object","additionalProperties":<shape of its first value>}`, so IDs, emails, paths and
 UUIDs used as map keys never reach the record. Nesting stops at depth 4. A line over 8192 bytes
 **including the trailing newline** is not recorded. Every bound is a Rust constant in
-`progressive/observed.rs` (`OBSERVED_SHAPE_MAX_DEPTH` = 4, `OBSERVED_SHAPE_MAX_KEYS` = 16,
+`package/observed.rs` (`OBSERVED_SHAPE_MAX_DEPTH` = 4, `OBSERVED_SHAPE_MAX_KEYS` = 16,
 `OBSERVED_SHAPE_MAX_KEY_LEN` = 32, `OBSERVED_SHAPE_MAX_LINE_BYTES` = 8192) and the identifier
 pattern is `core::untrusted::BARE_IDENTIFIER_PATTERN`; all are rendered into the bridge from Rust through
 `BridgeContext` (the pattern through `sanitize_ts_string_literal`, private with an accessor), so
@@ -829,7 +828,7 @@ recorder and the Rust reader against the same cases.
 descriptor must be a regular file owned by the current user with no group or other permission bits
 (where `process.getuid` exists); otherwise recording is silently skipped (debug-logged).
 
-**Reader and rendering.** `ProgressiveGenerator::with_observed_shapes(&str)` parses the JSON lines
+**Reader and rendering.** `PackageGenerator::with_observed_shapes(&str)` parses the JSON lines
 and treats them as untrusted: a line is skipped (counted in one warning) if it is not valid JSON, is
 longer than 8192 bytes, is deeper than 4, breaks the key rule, or uses a keyword outside `type`,
 `properties`, `required`, `items`, `additionalProperties`. The last valid line wins per (server id,
@@ -913,7 +912,7 @@ every server directory generated before the upgrade must be regenerated.
 > [!info] Fixed-file rule
 > Every generation emits `FIXED_FILE_COUNT` = 7 fixed files: `index.ts`, `catalog.ts`, the runtime
 > bridge, `_runtime/cli.ts`, `package.json`, `tsconfig.json` and `_meta.json`
-> (`crates/mcp-codegen/src/progressive/generator.rs`). `MAX_GENERATED_FILES` is the introspection
+> (`crates/mcp-codegen/src/package/generator.rs`). `MAX_GENERATED_FILES` is the introspection
 > tool-count bound plus that constant, and `mcp-files` sets its export bound equal to it
 > ([[../files/spec]]). A change that adds or removes a fixed generated file updates, in the same
 > pull request, `FIXED_FILE_COUNT`, the equal bounds in `mcp-files`, and the "tool count + 7" and
@@ -927,7 +926,7 @@ by the decision record #569: nothing here lands unless it chooses the Rust binar
 client; otherwise the bridge stays the only client and this subsection is removed.
 
 **Why.** The generated bridge is the only code that calls a tool. It is stdio-only (a validated
-http or sse entry is rejected, `templates/progressive/runtime-bridge.ts.hbs:634-650`), pins the
+http or sse entry is rejected, `templates/package/runtime-bridge.ts.hbs:634-650`), pins the
 handshake to protocol `2024-11-05` (`:966`), and mirrors the Rust-side config validation in
 TypeScript (section 8, the runtime bridge). Keeping it beside a Rust call path
 would make two ways to call a tool.
@@ -960,10 +959,11 @@ generated file.
 
 ## 16. 1.0 Public API Contract
 
-> [!warning] Target requirement (1.0.0)
-> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
-> `NFR-COM-046`). The listing below was derived from `crates/mcp-codegen/src` at 9473243. Items marked **proposal** are
-> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+> [!info] As built; the semver promise binds from the 1.0.0 tag
+> Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
+> decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
+> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
+> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -973,13 +973,18 @@ generated file.
 
 | Item | Kind | Notes |
 |------|------|-------|
-| `ProgressiveGenerator`, `TSCONFIG_JSON`, module `progressive` | generator | The name is **Open decision OD-1**; a rename changes this row, the module, `NFR-COM-060`'s `--progressive-output` flag and the example file |
+| `PackageGenerator`, `TSCONFIG_JSON`, module `package` | generator | Renamed from the "progressive" names before 1.0.0 (OD-1 (a), #680), with `templates/package/` and the CLI flag `--servers-dir`; generated export names are unchanged |
 | `GeneratedCode`, `GeneratedFile` | output | The file set and the fixed-file rule ([[#15. Bridge Retirement Requirements (#575)]]) |
 | `MAX_GENERATED_FILES`, `MAX_GENERATED_BYTES`, `MAX_CATALOG_BYTES` and the catalog and observed-shape bound constants | bounds | Derived from the introspector bounds |
-| `ObservedShapes`, `CatalogEntry`, `render_catalog`, `jsdoc_tags`, `catalog_hints` | generation helpers | **Proposal:** keep `ObservedShapes`; hide the rest as workspace-internal |
+| `ObservedShapes`, `CatalogEntry`, `render_catalog`, `jsdoc_tags`, `catalog_hints` | generation helpers | Public today; whether they stay is open (#687) |
 | `convert_schema`, `ConvertedType`, `RenderStyle` (module `common::ts_types`) | schema converter | One converter (#603) |
-| `ToolDefinition`, `TemplateContext`, `TemplateEngine`, `ToolContext`, `IndexContext`, `ToolSummary`, `ToolCategorization`, `CategoryInfo`, `BridgeContext` | rendering inputs | **Proposal:** the template contexts and `TemplateEngine` are rendering internals, workspace-internal unless a sibling crate needs them; `ToolCategorization` and `CategoryInfo` are used by `mcp-execution-server` and stay public |
-| `to_camel_case`, `to_pascal_case`, `sanitize_ts_identifier` (module `common::typescript`) | helpers | **Proposal:** workspace-internal |
+| `ToolDefinition`, `TemplateContext`, `TemplateEngine`, `ToolSummary`, `ToolCategorization`, `CategoryInfo` | rendering inputs | `ToolCategorization` and `CategoryInfo` are used by `mcp-execution-server`; whether the others stay public is open (#687) |
+| `to_camel_case`, `to_pascal_case`, `sanitize_ts_identifier` (module `common::typescript`) | helpers | Public today; open (#687) |
+
+### Workspace-internal (`NFR-COM-032`)
+
+`ToolContext`, `IndexContext` and `BridgeContext` are `#[doc(hidden)]`: render contexts holding sanitized display
+strings, excluded from the semver promise (their `server_id` strings are therefore outside `NFR-COM-035`).
 
 ### Foreign types (`NFR-COM-044`)
 
@@ -987,8 +992,8 @@ generated file.
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-Required: `RenderStyle`, `ResultSource` (until it is removed in favour of the introspector's, `NFR-COM-034`),
-`GeneratedCode`, `GeneratedFile`, `ToolDefinition`, `ToolCategorization`, `CategoryInfo`.
+`#[non_exhaustive]`: `RenderStyle`, `GeneratedCode`, `GeneratedFile`, `ToolDefinition`, `ToolCategorization`,
+`CategoryInfo`. This crate defines no `ResultSource` (#676).
 
 ### Owned wire formats
 

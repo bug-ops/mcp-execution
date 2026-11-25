@@ -22,25 +22,21 @@ fn sidecar_json() -> String {
         .command("docker".to_string())
         .build()
         .unwrap();
-    let meta = ServerMetadata {
-        schema_version: METADATA_SCHEMA_VERSION,
-        server_id: ServerId::new("acme").unwrap(),
-        server_name: "Acme".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: vec![ToolMetadata {
-            name: ToolName::new("get_thing").unwrap(),
-            typescript_name: "getThing".to_string(),
-            category: None,
-            keywords: vec![],
-            description: None,
-            parameters: vec![],
-            annotations: None,
-            result_type: None,
-            result_type_origin: ResultTypeOrigin::Undeclared,
-            manifest_size_bytes: 0,
-        }],
-        provenance: GenerationProvenance::capture(&config, &[]),
-    };
+    let meta = ServerMetadata::new(
+        METADATA_SCHEMA_VERSION,
+        ServerId::new("acme").unwrap(),
+        "Acme".to_string(),
+        "1.0.0".to_string(),
+        vec![ToolMetadata::new(
+            ToolName::new("get_thing").unwrap(),
+            "getThing".to_string(),
+            vec![],
+            vec![],
+            ResultTypeOrigin::Undeclared,
+            0,
+        )],
+        GenerationProvenance::capture(&config, &[]),
+    );
     serde_json::to_string(&meta).unwrap()
 }
 

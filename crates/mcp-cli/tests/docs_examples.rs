@@ -247,7 +247,7 @@ fn docs_never_call_a_measurement_savings() {
 fn documented_commands_are_real_subcommands() {
     use clap::CommandFactory as _;
 
-    let names: Vec<String> = mcp_execution_cli::cli::Cli::command()
+    let names: Vec<String> = mcp_execution_cli::Cli::command()
         .get_subcommands()
         .map(|c| c.get_name().to_owned())
         .collect();
@@ -592,8 +592,7 @@ fn command_problems(words: &[Word], generated: &Path) -> Vec<String> {
         .collect();
     match program.text.as_str() {
         "mcp-execution-cli" => {
-            if let Err(e) =
-                mcp_execution_cli::cli::Cli::try_parse_from(words.iter().map(|w| &w.text))
+            if let Err(e) = mcp_execution_cli::Cli::try_parse_from(words.iter().map(|w| &w.text))
                 && e.use_stderr()
             {
                 problems.push(format!("does not parse: {}", e.render()));

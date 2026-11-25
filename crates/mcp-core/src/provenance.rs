@@ -440,16 +440,11 @@ fn push_url_and_headers(
 /// use serde_json::json;
 ///
 /// let schema = json!({"type": "object"});
-/// let entry = ToolDigestEntry {
-///     name: "create_issue",
-///     description: "Creates a new issue",
-///     input_schema: &schema,
-///     output_schema: None,
-///     annotations: None,
-/// };
+/// let entry = ToolDigestEntry::new("create_issue", "Creates a new issue", &schema);
 /// assert_eq!(entry.name, "create_issue");
 /// ```
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct ToolDigestEntry<'a> {
     /// The tool's MCP name (the call identifier).
     pub name: &'a str,
@@ -462,6 +457,36 @@ pub struct ToolDigestEntry<'a> {
     /// The tool's advertised annotations, if the server reported any. Its presence and four hints
     /// are part of the digest; the title text is not.
     pub annotations: Option<&'a ToolAnnotations>,
+}
+
+impl<'a> ToolDigestEntry<'a> {
+    /// Creates a view from the tool's name, description and input schema; `output_schema` and
+    /// `annotations` start as `None` and are set afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::provenance::ToolDigestEntry;
+    /// use serde_json::json;
+    ///
+    /// let schema = json!({"type": "object"});
+    /// let entry = ToolDigestEntry::new("create_issue", "Creates a new issue", &schema);
+    /// assert!(entry.output_schema.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        name: &'a str,
+        description: &'a str,
+        input_schema: &'a serde_json::Value,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            input_schema,
+            output_schema: None,
+            annotations: None,
+        }
+    }
 }
 
 /// A stable digest of the discovered tool list (names, descriptions, and input/output schemas)
@@ -479,13 +504,7 @@ pub struct ToolDigestEntry<'a> {
 /// use serde_json::json;
 ///
 /// let schema = json!({"type": "object"});
-/// let entries = vec![ToolDigestEntry {
-///     name: "create_issue",
-///     description: "Creates a new issue",
-///     input_schema: &schema,
-///     output_schema: None,
-///     annotations: None,
-/// }];
+/// let entries = vec![ToolDigestEntry::new("create_issue", "Creates a new issue", &schema)];
 ///
 /// let digest = ToolDigest::compute(&entries);
 /// assert_eq!(digest.as_str().len(), 64);
@@ -526,8 +545,8 @@ impl ToolDigest {
     ///
     /// let schema_a = json!({"type": "object"});
     /// let schema_b = json!({"type": "string"});
-    /// let a = ToolDigestEntry { name: "a", description: "", input_schema: &schema_a, output_schema: None, annotations: None };
-    /// let b = ToolDigestEntry { name: "b", description: "", input_schema: &schema_b, output_schema: None, annotations: None };
+    /// let a = ToolDigestEntry::new("a", "", &schema_a);
+    /// let b = ToolDigestEntry::new("b", "", &schema_b);
     ///
     /// assert_eq!(
     ///     ToolDigest::compute(&[a, b]),
@@ -679,6 +698,7 @@ fn hash_value_into(pre: &mut Preimage, value: &serde_json::Value) {
 /// assert_eq!(provenance.tool_digest.as_str().len(), 64);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GenerationProvenance {
     /// Wall-clock time generation completed, from the `generate` command's own clock.
     pub generated_at: DateTime<Utc>,
@@ -689,6 +709,37 @@ pub struct GenerationProvenance {
 }
 
 impl GenerationProvenance {
+    /// Creates a record from its three parts, for callers that already hold them (for example a
+    /// test fixture); a `generate` run uses [`Self::capture`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use mcp_execution_core::ServerConfig;
+    /// use mcp_execution_core::provenance::{ConfigFingerprint, GenerationProvenance, ToolDigest};
+    ///
+    /// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
+    /// let provenance = GenerationProvenance::new(
+    ///     Utc::now(),
+    ///     ConfigFingerprint::compute(&config),
+    ///     ToolDigest::compute(&[]),
+    /// );
+    /// assert!(provenance.generated_at <= Utc::now());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        generated_at: DateTime<Utc>,
+        config_fingerprint: ConfigFingerprint,
+        tool_digest: ToolDigest,
+    ) -> Self {
+        Self {
+            generated_at,
+            config_fingerprint,
+            tool_digest,
+        }
+    }
+
     /// Captures provenance for a `generate` run: stamps the current time and computes both the
     /// config fingerprint and tool digest from the same inputs the run is generating from, so
     /// the digest can never drift from the emitted files.

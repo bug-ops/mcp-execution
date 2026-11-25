@@ -57,14 +57,13 @@ pub use template::{TemplateError, render_skill_md};
 pub use types::{GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH,
     MAX_SKILL_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH, MAX_USE_CASE_HINT_LENGTH,
     MAX_USE_CASE_HINTS, SaveSkillParams, SaveSkillResult, SkillCategory,
-    SkillDirectoryMismatch, SkillMetadata, SkillName, SkillNameError, SkillServerIdError,
-    SkillTool, ToolExample, validate_server_id};
+    SkillDirectoryMismatch, SkillMetadata, SkillName, SkillNameError,
+    SkillTool, ToolExample};
 
 pub use mcp_execution_core::MAX_SERVER_ID_LENGTH; // = 64, re-exported (issue #401)
-pub use mcp_execution_core::ServerIdSlugError as SkillServerIdError; // re-exported, not a separate mirror type
-pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError>;
-// Rules: non-empty, <= 64 bytes, only [a-z0-9-]. Delegates to
-// mcp_execution_core::validate_server_id_slug — the authoritative owner of this invariant.
+// Server ids are `mcp_execution_core::ServerSlug` (`[a-z0-9-]{1,64}`, #677): `GenerateSkillParams`,
+// `GenerateSkillResult` and `SaveSkillParams` carry it in `server_id`, so an invalid id fails
+// deserialization. `validate_server_id` and `SkillServerIdError` were removed.
 
 pub const MAX_SKILL_NAME_LENGTH: usize = MAX_SERVER_ID_LENGTH; // 64 chars (Agent Skills `name` limit; the
 // default name is the server id, so it always fits). Counted in chars to agree with
@@ -99,13 +98,13 @@ pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024; // 8 KiB, extracted YAML block
 pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError>;
 pub struct ScanResult { pub tools: Vec<ParsedToolFile>, pub warnings: Vec<String> }
 
-pub fn build_skill_context(server_id: &str, tools: &[ParsedToolFile], use_case_hints: Option<&[String]>, custom_name: Option<&SkillName>) -> GenerateSkillResult;
+pub fn build_skill_context(server_id: &ServerSlug, tools: &[ParsedToolFile], use_case_hints: Option<&[String]>, custom_name: Option<&SkillName>) -> GenerateSkillResult;
 
 pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, TemplateError>;
 
 pub fn extract_skill_metadata(content: &str) -> Result<SkillMetadata, SkillMetadataError>;
 
-pub async fn resolve_skill_output_path(base_dir: &Path, server_id: &str, output_path: Option<&Path>) -> Result<PathBuf, OutputPathError>;
+pub async fn resolve_skill_output_path(base_dir: &Path, server_id: &ServerSlug, output_path: Option<&Path>) -> Result<PathBuf, OutputPathError>;
 ```
 
 Key types (`types.rs`): `GenerateSkillParams`/`GenerateSkillResult` (the
@@ -568,29 +567,27 @@ server" guidance, matching its sibling `StaleMetadata` (issue #468).
 `InvalidYaml`, `MissingField`, `NameTooLong { len, limit }` (issue #419 — `name` exceeded
 `MAX_SKILL_NAME_LENGTH`; see §7), `NameInvalidCharacters` (#582).
 
-`OutputPathError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
-confinement now validates `server_id` via `mcp_execution_core::validate_server_id_slug`, the
-same rule `mcp-server`'s tool handlers gate entry with, rather than the looser
-`validate_path_segment`; `source` carries the precise violation so the message can't drift from
-the actual rule enforced), `AbsolutePath`, `ParentTraversal`,
+`OutputPathError`: `InvalidServerId { server_id: String, source: ServerIdSlugError }` (issue #401; the
+`String` holds the rejected raw segment, sanitized, and is a listed exemption from `NFR-COM-035`). Since #677
+`resolve_skill_output_path` takes a `&ServerSlug` and does not validate the id itself; the variant is produced only
+by the `From<ConfinementError>` conversion. Other variants: `AbsolutePath`, `ParentTraversal`,
 `TildeComponent` (issue #434/#441 — a literal `~` path component anywhere
 in `output_path`, distinct from `ParentTraversal`; see §8),
 `InvalidPath`, `ServerIdIsSymlink`, `Escape`, `NotADirectory`, `NotAFile`,
 `CreateDir`, `Io`.
 
-`SkillServerIdError`: re-export of `mcp_execution_core::ServerIdSlugError` — `Empty`,
-`TooLong { len, limit }`, `InvalidCharacters` (issue #401; previously a hand-rolled,
-structurally identical mirror type with its own `#[error(...)]` wording, which had let this
-crate's error messages drift from `mcp-core`'s/`mcp-server`'s for identical input).
+`TemplateError`: `RenderFailed` and `RegistrationFailed`, each holding
+`#[source] Box<dyn Error + Send + Sync>`, so no `handlebars` type is public (#678). `RegistrationFailed` is never
+constructed today (#691).
 
 ## 10. Cross-Crate Contracts
 
 - **Consumes** `mcp-core`: `metadata::{METADATA_FILE_NAME,
   METADATA_SCHEMA_VERSION, ServerMetadata}`, `sanitize_path_for_error`,
-  `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`,
+  `ServerSlug`, `ServerId`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`,
   `untrusted::*`, and (since #395) `confinement::{ConfinementError,
   ConfinementTarget, resolve_confined_path}` for `resolve_skill_output_path`'s
-  walk — `validate_server_id_slug` gates `server_id` before that walk starts
+  walk — the `&ServerSlug` parameter gates `server_id` before that walk starts
   (issue #401); `validate_path_segment` is no longer called directly by this
   crate.
 - **Used by** `mcp-cli skill` (directly calls `scan_tools_directory` +
@@ -635,7 +632,7 @@ crate's error messages drift from `mcp-core`'s/`mcp-server`'s for identical inpu
   `ToolExample.cli_command` is the `call` form; a tool name outside `[A-Za-z0-9_.-]` is shown as `<tool>`.
 - **`SkillName`** replaces `validate_skill_name` (removed, no shim). `SkillName::in_directory` returns
   `SkillDirectoryMismatch` (no text, no echo): a custom name must equal its directory (CLI default directory is the
-  server id; with `--output` it is the parent directory name, via `skill_directory_name(server_id, Option<&Path>)`
+  server id; with `--output` it is the parent directory name, via `skill_directory_name(&ServerSlug, Option<&Path>)`
   in `output_path.rs`, shared by CLI and server).
 - **Description limit.** `MAX_SKILL_DESCRIPTION_LENGTH` 1024, enforced in `extract_skill_metadata`
   (`SkillMetadataError::DescriptionTooLong`) so every caller gets it.
@@ -736,7 +733,7 @@ takes `Option<&SkillName>` (section 12). `validate_skill_name` no longer exists.
 
 - Resolved: a custom skill name that differs from its directory is rejected (`SkillName::in_directory`); with `--output` the parent directory name must equal the skill name; `render_generation_prompt` and `skill-generation.hbs` were removed; one shared partial `templates/workflow.hbs` serves the template and the prompt; the body is bounded by a listing of 12 categories times 3 tools (section 12).
 - Deferred (follow-up, user-approved): load-time catalog insertion with a static fallback (FR-043.8).
-- [NEEDS CLARIFICATION: a server id that is a valid slug (`[a-z0-9-]`, at most 64 bytes, §2) but would break the Agent Skills rule if that rule also forbids leading, trailing or consecutive hyphens; confirm the exact rule from the specification text before implementing.]
+- Resolved (#677): the slug rule is `[a-z0-9-]{1,64}`, frozen, with no restriction on leading, trailing or consecutive hyphens. `-`, `--a` and `a-` are valid ids; a SKILL.md `name` of that shape may be refused by a host that applies the Agent Skills hyphen rule; `--a` as a CLI positional must follow `--`. Windows reserved device names are also accepted today (open follow-up #696).
 - [NEEDS CLARIFICATION: whether the skill mentions the host's own code mode in one line or leaves that to the documentation (#560); see [[../decisions/ADR-581-code-mode-interoperability]].]
 
 Ask first: removing the exported prompt renderer; raising any body or catalog bound above its derived value;
@@ -801,10 +798,11 @@ versions, follow the YAML tooling rules); the numeric bounds; scripts that refer
 
 ## 15. 1.0 Public API Contract
 
-> [!warning] Target requirement (1.0.0)
-> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
-> `NFR-COM-046`). The listing below was derived from `crates/mcp-skill/src` at 9473243. Items marked **proposal** are
-> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+> [!info] As built; the semver promise binds from the 1.0.0 tag
+> Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
+> decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
+> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
+> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -815,7 +813,7 @@ versions, follow the YAML tooling rules); the numeric bounds; scripts that refer
 | Item | Kind | Notes |
 |------|------|-------|
 | `build_skill_context`, `render_skill_md`, `extract_skill_metadata`, `scan_tools_directory` | skill pipeline | `build_skill_context` takes `Option<&SkillName>` |
-| `SkillName`, `SkillNameError`, `SkillDirectoryMismatch`, `validate_server_id`, `SkillServerIdError` | validated names | The server id of `NFR-COM-035` replaces the `String` ids of the parameter and result structs |
+| `SkillName`, `SkillNameError`, `SkillDirectoryMismatch` | validated names | Server ids are `mcp_execution_core::ServerSlug` in `GenerateSkillParams`, `GenerateSkillResult`, `SaveSkillParams`, `build_skill_context`, `resolve_skill_output_path` and `skill_directory_name`; `ParsedToolFile::server_id` is a `ServerId` (its producer is `ServerMetadata::server_id`) |
 | `GenerateSkillParams`, `GenerateSkillResult`, `SaveSkillParams`, `SaveSkillResult`, `SkillCategory`, `SkillMetadata`, `SkillTool`, `ToolExample` | tool parameter and result types | Also the schema of the `mcp-execution` server tools (`NFR-COM-066`) |
 | `resolve_skill_output_path`, `skill_directory_name`, `OutputPathError` | confinement | |
 | `ParsedParameter`, `ParsedToolFile`, `ScanError`, `ScanResult`, `SkillMetadataError`, `TemplateError` | parser and template types | |
@@ -824,15 +822,18 @@ versions, follow the YAML tooling rules); the numeric bounds; scripts that refer
 
 ### Foreign types (`NFR-COM-044`)
 
-`handlebars::RenderError` and `handlebars::TemplateError` inside `TemplateError`; `schemars::JsonSchema` and `serde`
-implementations on the parameter and result types.
+`schemars::JsonSchema` and `serde` implementations on the parameter and result types. No `handlebars` type is public
+(`TemplateError` boxes its source, #678).
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-`#[non_exhaustive]` exists on one type today (`crates/mcp-skill/src/parser.rs`). Required on every error enum
-(`OutputPathError`, `ScriptError`, `SkillNameError`, `TemplateError`, `ScanError`, `SkillMetadataError`) and on the
-result and header structs with public fields. Closed candidates, to be confirmed in #674: `WriteIntent` and
-`Overwrite`.
+`#[non_exhaustive]`: the errors `OutputPathError`, `ScriptError`, `SkillNameError`, `TemplateError`, `ScanError`,
+`SkillMetadataError`; the parameter types `GenerateSkillParams` and `SaveSkillParams` (built by deserialization);
+the results and records `GenerateSkillResult`, `SaveSkillResult`, `SkillCategory`, `SkillTool`, `ToolExample`,
+`SkillMetadata`, `ScanResult`, `ParsedToolFile`, `ParsedParameter`; the script types `ToolRef`, `ScriptParameter`,
+`ScriptHeader`, `ScriptListing`, `MissingTool`, `CheckReport`.
+
+Closed sets (adding a variant is a major change): `WriteIntent`, `Overwrite`.
 
 ## 16. See Also
 

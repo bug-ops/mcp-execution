@@ -91,8 +91,8 @@ impl FilesBuilder {
     pub fn file_count(&self) -> usize;
 }
 
-pub const MAX_EXPORT_FILES: usize; // = mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES
-pub const MAX_EXPORT_BYTES: usize; // = mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES
+pub const MAX_EXPORT_FILES: usize; // = mcp_execution_codegen::package::generator::MAX_GENERATED_FILES
+pub const MAX_EXPORT_BYTES: usize; // = mcp_execution_codegen::package::generator::MAX_GENERATED_BYTES
 ```
 
 ## 3. Input Contract
@@ -366,7 +366,7 @@ is outside the base" (#311).
 
 ## 10. Export Bounds Follow the Code-Generation Bounds (#566, #567, #482)
 
-`MAX_EXPORT_FILES` is defined as `mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES`
+`MAX_EXPORT_FILES` is defined as `mcp_execution_codegen::package::generator::MAX_GENERATED_FILES`
 and `MAX_EXPORT_BYTES` as `MAX_GENERATED_BYTES` (`crates/mcp-files/src/filesystem.rs`);
 `check_export_bounds` rejects above either. This block holds no number of its own: the equality that
 keeps a normal `GeneratedCode` from being rejected at export survives every change to the fixed
@@ -406,10 +406,11 @@ fixed file; each follows the rule above in the same pull request
 
 ## 11. 1.0 Public API Contract
 
-> [!warning] Target requirement (1.0.0)
-> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
-> `NFR-COM-046`). The listing below was derived from `crates/mcp-files/src` at 9473243. Items marked **proposal** are
-> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+> [!info] As built; the semver promise binds from the 1.0.0 tag
+> Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
+> decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
+> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
+> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -427,11 +428,18 @@ fixed file; each follows the rule above in the same pull request
 
 ### Foreign types (`NFR-COM-044`)
 
-None beyond the `serde` implementations, if any; confirmed by the #678 review.
+None beyond the `serde` implementations, if any.
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-Required: `FilesError`, `FilesResourceKind`, `ExportOptions` (with a builder), `FileEntry`.
+`#[non_exhaustive]`: `FilesError`, `FilesResourceKind`, `ExportOptions` (built with `new`/`default` and its `with_*`
+methods). `FileEntry` has private fields, so it needs no attribute.
+
+### docs.rs build and packaging (#681)
+
+docs.rs builds this crate with `features = ["parallel"]` and `--cfg docsrs`, so the `parallel` item carries its
+feature badge. No published crate uses `all-features` on docs.rs, which would document the fixture-only
+`test-fixtures` features (`NFR-COM-033`). Every published crate packages `LICENSE-MIT` and `LICENSE-APACHE`.
 
 ## 12. See Also
 

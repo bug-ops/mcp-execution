@@ -10,6 +10,9 @@ description = "MCP server introspection and tool discovery using rmcp SDK"
 keywords = ["mcp", "introspection", "rmcp", "tools"]
 categories = ["development-tools"]
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lints]
 workspace = true
 

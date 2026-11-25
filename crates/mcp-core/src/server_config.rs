@@ -101,6 +101,7 @@ static EMPTY_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(HashMap::new
 /// ```
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "transport", rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Transport {
     /// Stdio transport: subprocess communication via stdin/stdout.
     Stdio {

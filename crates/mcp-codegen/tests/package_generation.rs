@@ -11,7 +11,7 @@
 
 mod support;
 
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_core::{ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
@@ -23,8 +23,8 @@ use support::{
 };
 
 #[test]
-fn test_progressive_generator_creates_correct_number_of_files() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_generator_creates_correct_number_of_files() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -48,28 +48,26 @@ fn test_progressive_generator_creates_correct_number_of_files() {
 /// template` failure (#458) through the public entry point. The converter now degrades a
 /// non-object root to generic parameters instead of failing, so no render or track failure is
 /// reachable through `generate_with_categories` any more; the per-tool error wrapper keeps its
-/// unit tests in `progressive/generator.rs`. This test pins the new behavior: generation
+/// unit tests in `package/generator.rs`. This test pins the new behavior: generation
 /// succeeds and the parameters are the generic record type.
 #[test]
 fn test_generate_with_categories_degrades_non_object_schema_to_generic_params() {
-    let server_info = ServerInfo {
-        id: ServerId::new("bulk-server").unwrap(),
-        name: "Bulk Server".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![ToolInfo {
-            name: ToolName::new("malformed_tool").unwrap(),
-            description: String::new(),
-            input_schema: json!([1, 2, 3]),
-            output_schema: None,
-            annotations: None,
-        }],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let server_info = ServerInfo::new(
+        ServerId::new("bulk-server").unwrap(),
+        "Bulk Server".to_string(),
+        "1.0.0".to_string(),
+        vec![ToolInfo::new(
+            ToolName::new("malformed_tool").unwrap(),
+            String::new(),
+            json!([1, 2, 3]),
+        )],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    );
+    let generator = PackageGenerator::new().expect("Failed to create generator");
 
     let code = generator
         .generate_with_categories(&server_info, &test_config(), &HashMap::new())
@@ -90,8 +88,8 @@ fn test_generate_with_categories_degrades_non_object_schema_to_generic_params() 
 }
 
 #[test]
-fn test_progressive_tool_files_exist() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_tool_files_exist() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -124,8 +122,8 @@ fn test_progressive_tool_files_exist() {
 }
 
 #[test]
-fn test_progressive_tool_file_structure() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_tool_file_structure() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -184,8 +182,8 @@ fn test_progressive_tool_file_structure() {
 }
 
 #[test]
-fn test_progressive_tool_file_has_proper_types() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_tool_file_has_proper_types() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -218,8 +216,8 @@ fn test_progressive_tool_file_has_proper_types() {
 }
 
 #[test]
-fn test_progressive_index_structure() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_index_structure() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -272,8 +270,8 @@ fn test_progressive_index_structure() {
 }
 
 #[test]
-fn test_progressive_index_doc_comment_not_prematurely_closed() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_index_doc_comment_not_prematurely_closed() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -309,8 +307,8 @@ fn test_progressive_index_doc_comment_not_prematurely_closed() {
 /// `test_generated_index_resolves_at_runtime_under_node_esm` for the full runtime
 /// reproduction; this is the cheap, toolchain-free companion check.
 #[test]
-fn test_progressive_index_uses_ts_specifiers_not_js() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_index_uses_ts_specifiers_not_js() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -342,8 +340,8 @@ fn test_progressive_index_uses_ts_specifiers_not_js() {
 }
 
 #[test]
-fn test_progressive_runtime_bridge_structure() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_runtime_bridge_structure() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
 
     let code = generator
@@ -391,20 +389,20 @@ fn test_progressive_runtime_bridge_structure() {
 }
 
 #[test]
-fn test_progressive_generator_with_empty_server() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_generator_with_empty_server() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
 
-    let server_info = ServerInfo {
-        id: ServerId::new("empty").unwrap(),
-        name: "Empty Server".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let server_info = ServerInfo::new(
+        ServerId::new("empty").unwrap(),
+        "Empty Server".to_string(),
+        "1.0.0".to_string(),
+        vec![],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     let code = generator
         .generate(&server_info, &test_config())
@@ -429,29 +427,27 @@ fn test_progressive_generator_with_empty_server() {
 }
 
 #[test]
-fn test_progressive_tool_camel_case_conversion() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_tool_camel_case_conversion() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
 
-    let server_info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![ToolInfo {
-            name: ToolName::new("send_test_message").unwrap(),
-            description: "Test tool".to_string(),
-            input_schema: json!({
+    let server_info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test".to_string(),
+        "1.0.0".to_string(),
+        vec![ToolInfo::new(
+            ToolName::new("send_test_message").unwrap(),
+            "Test tool".to_string(),
+            json!({
                 "type": "object",
                 "properties": {},
             }),
-            output_schema: None,
-            annotations: None,
-        }],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        )],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     let code = generator
         .generate(&server_info, &test_config())
@@ -475,17 +471,17 @@ fn test_progressive_tool_camel_case_conversion() {
 }
 
 #[test]
-fn test_progressive_tool_with_complex_types() {
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+fn test_package_tool_with_complex_types() {
+    let generator = PackageGenerator::new().expect("Failed to create generator");
 
-    let server_info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![ToolInfo {
-            name: ToolName::new("complex_tool").unwrap(),
-            description: "Tool with complex types".to_string(),
-            input_schema: json!({
+    let server_info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test".to_string(),
+        "1.0.0".to_string(),
+        vec![ToolInfo::new(
+            ToolName::new("complex_tool").unwrap(),
+            "Tool with complex types".to_string(),
+            json!({
                 "type": "object",
                 "properties": {
                     "items": {
@@ -504,15 +500,13 @@ fn test_progressive_tool_with_complex_types() {
                 },
                 "required": ["items"]
             }),
-            output_schema: None,
-            annotations: None,
-        }],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        )],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     let code = generator
         .generate(&server_info, &test_config())
@@ -565,7 +559,7 @@ fn test_generated_tool_passes_tsc_noemit() {
         return;
     }
 
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
         .generate(&server_info, &test_config())
@@ -612,29 +606,27 @@ fn test_typed_additional_properties_params_are_constructible_under_tsc() {
     if !require_ts_toolchain(test_name, true) {
         return;
     }
-    let server_info = ServerInfo {
-        id: ServerId::new("typed-extra").unwrap(),
-        name: "Typed Extra".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![ToolInfo {
-            name: ToolName::new("tag_item").unwrap(),
-            description: "Tags an item".to_string(),
-            input_schema: json!({
+    let server_info = ServerInfo::new(
+        ServerId::new("typed-extra").unwrap(),
+        "Typed Extra".to_string(),
+        "1.0.0".to_string(),
+        vec![ToolInfo::new(
+            ToolName::new("tag_item").unwrap(),
+            "Tags an item".to_string(),
+            json!({
                 "type": "object",
                 "properties": {"name": {"type": "string"}, "label": {"type": "string"}},
                 "required": ["name"],
                 "additionalProperties": {"type": "number"}
             }),
-            output_schema: None,
-            annotations: None,
-        }],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        )],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
-    let code = ProgressiveGenerator::new()
+    );
+    let code = PackageGenerator::new()
         .unwrap()
         .generate(&server_info, &test_config())
         .unwrap();
@@ -675,26 +667,27 @@ fn test_typed_additional_properties_params_are_constructible_under_tsc() {
 /// type away in favor of the generic union.
 #[test]
 fn test_root_narrowing_keyword_keeps_the_declared_result_type() {
-    let server_info = ServerInfo {
-        id: ServerId::new("narrow").unwrap(),
-        name: "Narrow".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![ToolInfo {
-            name: ToolName::new("list_ids").unwrap(),
-            description: String::new(),
-            input_schema: json!({"type": "object"}),
-            output_schema: Some(
-                json!({"type": "array", "items": {"type": "string"}, "uniqueItems": true}),
-            ),
-            annotations: None,
+    let server_info = ServerInfo::new(
+        ServerId::new("narrow").unwrap(),
+        "Narrow".to_string(),
+        "1.0.0".to_string(),
+        vec![{
+            let mut value = ToolInfo::new(
+                ToolName::new("list_ids").unwrap(),
+                String::new(),
+                json!({"type": "object"}),
+            );
+            value.output_schema =
+                Some(json!({"type": "array", "items": {"type": "string"}, "uniqueItems": true}));
+            value
         }],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
-    let code = ProgressiveGenerator::new()
+    );
+    let code = PackageGenerator::new()
         .unwrap()
         .generate(&server_info, &test_config())
         .unwrap();
@@ -729,7 +722,7 @@ fn test_generated_index_resolves_at_runtime_under_node_esm() {
         return;
     }
 
-    let generator = ProgressiveGenerator::new().expect("Failed to create generator");
+    let generator = PackageGenerator::new().expect("Failed to create generator");
     let server_info = create_test_server_info();
     let code = generator
         .generate(&server_info, &test_config())

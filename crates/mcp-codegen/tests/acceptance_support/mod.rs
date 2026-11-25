@@ -8,7 +8,7 @@
     reason = "shared by several test crates; each uses a subset"
 )]
 
-use mcp_execution_codegen::{GeneratedCode, ProgressiveGenerator};
+use mcp_execution_codegen::{GeneratedCode, PackageGenerator};
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::Value;
@@ -56,37 +56,35 @@ fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
 
 /// A tool with the given schemas and no annotations.
 pub fn tool(name: &str, input: Value, output: Option<Value>) -> ToolInfo {
-    ToolInfo {
-        name: ToolName::new(name).unwrap(),
-        description: format!("Tool {name}"),
-        input_schema: input,
-        output_schema: output,
-        annotations: None,
+    {
+        let mut value = ToolInfo::new(ToolName::new(name).unwrap(), format!("Tool {name}"), input);
+        value.output_schema = output;
+        value
     }
 }
 
 /// A server named [`SERVER_ID`] exposing `tools`.
 pub fn server_info(tools: Vec<ToolInfo>) -> ServerInfo {
-    ServerInfo {
-        id: ServerId::new(SERVER_ID).unwrap(),
-        name: "Fake".to_string(),
-        version: "1.0.0".to_string(),
+    ServerInfo::new(
+        ServerId::new(SERVER_ID).unwrap(),
+        "Fake".to_string(),
+        "1.0.0".to_string(),
         tools,
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    }
+    )
 }
 
 /// Generates the package for `server` with the default generator.
 pub fn generate(server: &ServerInfo) -> GeneratedCode {
-    generate_with(&ProgressiveGenerator::new().expect("generator"), server)
+    generate_with(&PackageGenerator::new().expect("generator"), server)
 }
 
 /// Generates the package for `server` with `generator`.
-pub fn generate_with(generator: &ProgressiveGenerator<'_>, server: &ServerInfo) -> GeneratedCode {
+pub fn generate_with(generator: &PackageGenerator<'_>, server: &ServerInfo) -> GeneratedCode {
     let config = ServerConfig::builder()
         .command("test-command".to_string())
         .build()
