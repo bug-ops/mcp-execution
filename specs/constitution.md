@@ -43,7 +43,7 @@ related:
 
 ## II. Technology Stack
 
-- Language: Rust, edition 2024, MSRV 1.98 (`Cargo.toml` `workspace.package`; rolling policy: stable minus two, raised in a minor release).
+- Language: Rust, edition 2024, MSRV 1.98 (`Cargo.toml` `workspace.package`; rolling policy: stable minus two, raised in a minor release; how a raise relates to library semver from 1.0.0 is open decision OD-3 in [[NFR-mcp-execution-2026-07-27#12.5 MSRV and semver]]).
 - Async runtime: `tokio` throughout.
 - MCP protocol: `rmcp` (official Rust SDK), both as client (`mcp-introspector`)
   and server (`mcp-server`).
@@ -227,7 +227,7 @@ and issue-number references dedicated to it.
 - Conventional Commits (see `.claude/rules/commits-and-issues.md` — not part
   of this reverse-engineered constitution, but the enclosing repo's own
   convention).
-- CHANGELOG.md maintained under `[Unreleased]` until a version is cut.
+- CHANGELOG.md maintained under `[Unreleased]` until a version is cut. From 1.0.0 the semver policy, the `### Breaking` rule and the release gates of [[NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] apply.
 
 ---
 

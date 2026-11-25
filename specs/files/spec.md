@@ -404,9 +404,39 @@ Ask first: giving `mcp-files` a bound that is not equal to the code-generation b
 fixed file; each follows the rule above in the same pull request
 ([[../codegen/spec#15. Bridge Retirement Requirements (#575)]]).
 
-## 11. See Also
+## 11. 1.0 Public API Contract
+
+> [!warning] Target requirement (1.0.0)
+> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
+> `NFR-COM-046`). The listing below was derived from `crates/mcp-files/src` at 9473243. Items marked **proposal** are
+> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-047.4 | THE SYSTEM SHALL expose from `mcp-execution-files` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
+
+### Public surface
+
+| Item | Kind | Notes |
+|------|------|-------|
+| `FilesBuilder`, `FileSystem`, `ExportOptions` | builder and export | `build_and_export`, `export_to_filesystem` |
+| `FileEntry`, `FilePath` | types | `FilePath` is a validated newtype |
+| `FilesError`, `FilesResourceKind`, `Result` | errors | `FilesError::HomeDirectory` exists since #657 |
+| `MAX_EXPORT_FILES`, `MAX_EXPORT_BYTES` | bounds | Equal to the code-generation bounds ([[#10. Export Bounds Follow the Code-Generation Bounds (#566, #567, #482)]]) |
+| feature `parallel` | cargo feature | Optional `rayon`; documented, off by default |
+
+### Foreign types (`NFR-COM-044`)
+
+None beyond the `serde` implementations, if any; confirmed by the #678 review.
+
+### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
+
+Required: `FilesError`, `FilesResourceKind`, `ExportOptions` (with a builder), `FileEntry`.
+
+## 12. See Also
 
 - [[../codegen/spec]] — source of `GeneratedCode` and derived resource bounds
 - [[../codegen/spec#15. Bridge Retirement Requirements (#575)]] — the fixed-file rule
 - [[../server/spec#Per-resource locking]] — higher-layer serialization for concurrent exports to the same target
 - [[../cli/spec#generate]] — CLI-side consumer, via `export_to_filesystem_with_options` with `ExportOptions::with_confine_to`
+- [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] — 1.0 API, wire-format, CLI and release contract

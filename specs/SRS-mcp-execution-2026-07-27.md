@@ -81,7 +81,7 @@ script runner that executes generated TypeScript has since been added
 
 - [[BRD-mcp-execution-2026-07-27]] — Business Requirements Document
 - [[NFR-mcp-execution-2026-07-27]] — Non-Functional Requirements Specification
-- [[README]] — cross-block architecture, data flow, and discrepancies vs. `CLAUDE.md`
+- [[README]] — cross-block architecture, data flow, and cross-block contracts
 - [[constitution]] — reverse-engineered project principles
 - `specs/core/spec.md`, `specs/introspector/spec.md`, `specs/codegen/spec.md`, `specs/files/spec.md`, `specs/skill/spec.md`, `specs/server/spec.md`, `specs/cli/spec.md` — the per-crate informal specs this SRS formalizes
 - [[cli/spec]] — CLI and the script runtime (sections 16 to 19)
@@ -1123,6 +1123,38 @@ mock servers. The system shall not label any output as savings.
 - *Detail*: [[cli/spec]], [[core/spec]], the requirements section of each named block spec.
 - *Source*: [[BRD-mcp-execution-2026-07-27]], FR-046
 
+**FR-047** (#670, #673): The system shall publish the seven workspace crates (`mcp-execution-core`,
+`-introspector`, `-codegen`, `-files`, `-skill`, `-server`, `-cli`) as stable 1.x libraries at one workspace
+version; each crate shall expose only the public surface listed in its spec, mark growable enums and option
+structs `#[non_exhaustive]`, define each cross-crate concept once, carry server ids as a validated type, and list
+every third-party type in its public signatures. The system shall classify changes as breaking or compatible by
+the written semver policy, give each wire format (`_meta.json`, the helper protocol, the exported names of the
+generated package, the saved-script header) one version with a stated compatibility window, and guard every crate
+with `cargo semver-checks`.
+
+- *Detail*: [[NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-056`,
+  `NFR-COM-070` to `NFR-COM-072`) and the section "1.0 Public API Contract" of each block spec (`FR-047.1` to
+  `FR-047.7`).
+- *Open decisions*: OD-1 (the `progressive` name), OD-2 (compatibility window), OD-3 (MSRV against semver),
+  OD-4 (foreign types), OD-5 (surface of `cli` and `server`); see the NFR section 12.7.
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-047
+
+**FR-048** (#670): The system shall keep the documented commands, flags, exit-code values and `--format json`
+output of `mcp-execution-cli`, and the tool names and schemas of the `mcp-execution` server, stable within a major
+version, write results to stdout and diagnostics to stderr, and not promise the text of the human-readable formats.
+
+- *Detail*: [[NFR-mcp-execution-2026-07-27#12.4 Command-line and server-tool contract]] (`NFR-COM-060` to
+  `NFR-COM-066`), [[cli/spec#20. 1.0 Public API Contract]], [[server/spec#15. 1.0 Public API Contract]].
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-048
+
+**FR-049** (#669, #670): The system shall gate a release on the full check set run on the tagged commit, run a
+publish dry-run before the real publish, take the release notes from the curated `CHANGELOG.md`, check that the tag,
+the manifests and the changelog agree, publish idempotently in dependency order, and complete one rehearsal release
+before 1.0.0.
+
+- *Detail*: [[NFR-mcp-execution-2026-07-27#12.6 Release pipeline]] (`NFR-MNT-040` to `NFR-MNT-049`).
+- *Source*: [[BRD-mcp-execution-2026-07-27]], FR-049
+
 ### 3.3 Performance Requirements
 
 > [!note]
@@ -1215,6 +1247,7 @@ written) and the in-memory-only session table in `mcp-execution-server`
 | FR-029 | Test (unit, symlink-at-boundary scenarios) | Fresh-resolution-per-write and boundary-symlink rejection both confirmed | Passing |
 | FR-030 to FR-035 | Test (acceptance, unit, tsc and node runs of generated code) | Criteria in [[codegen/spec#13. Script-First Capabilities (implemented, #556)]] and the core, introspector, skill and cli specs | Passing |
 | FR-036 to FR-046 | Test (acceptance tests of the script-first work, unit tests, fixtures) | Criteria are stated per requirement in [[#3.2.8 Script-First Capabilities]] and in the block specs | Passing, with the deferrals listed in 3.2.8 |
+| FR-047 to FR-049 | Per-requirement methods in [[NFR-mcp-execution-2026-07-27#12.8 Verification and traceability]] (rustdoc listing, `cargo semver-checks`, golden fixtures, binary-level tests, release workflow gates) | Criteria are the acceptance column of `NFR-COM-030` to `NFR-COM-072` and `NFR-MNT-040` to `NFR-MNT-049` | Planned (target 1.0.0); five open decisions |
 
 > [!note]
 > "Passing" reflects the existing, already-implemented test suite this SRS
@@ -1294,6 +1327,9 @@ Rows of the script-first work. NFR IDs marked planned are defined in
 | BRD-FR-044 | FR-044 | [[skill/spec]], [[cli/spec]] | #579 |
 | BRD-FR-045 | FR-045 | [[cli/spec]], [[core/spec]], [[introspector/spec]] | #580 |
 | BRD-FR-046 | FR-046 | [[cli/spec]], [[core/spec]] | #562 |
+| BRD-FR-047 | FR-047 | all seven crate specs (`FR-047.1` to `FR-047.7`), [[NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] | #670, #673 to #680 |
+| BRD-FR-048 | FR-048 | [[cli/spec]], [[server/spec]] | #670 |
+| BRD-FR-049 | FR-049 | [[NFR-mcp-execution-2026-07-27#12.6 Release pipeline]] | #669, #670 |
 
 ### 5.2 Use Case Diagrams / Flows
 

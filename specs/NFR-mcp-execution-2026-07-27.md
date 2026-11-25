@@ -21,7 +21,7 @@ related:
 
 > [!abstract]
 > Quality attribute requirements for **mcp-execution**, workspace version
-> `0.8.0`. Based on ISO/IEC 25010:2011. Traceable to
+> `0.11.0`. Based on ISO/IEC 25010:2011. Traceable to
 > [[BRD-mcp-execution-2026-07-27]]. Every target below is either (a) a
 > literal constant already enforced in the codebase, (b) a measured figure
 > already published in `README.md`, or (c) explicitly marked as **not
@@ -29,9 +29,11 @@ related:
 > comment target) without a corresponding CI gate. No numeric target in this
 > document was invented for the occasion.
 >
-> The one exception is [[#11. Planned Non-Functional Requirements]], which
-> records requirements of the direction adopted on 2026-11-24. They are
-> planned, unenforced and unmeasured, and some values are open.
+> Two exceptions: [[#11. Planned Non-Functional Requirements]] records
+> requirements of the direction adopted on 2026-11-24 (planned, unenforced and
+> unmeasured, some values open), and [[#12. 1.0 Contract Requirements]] records
+> the API, wire-format, command-line, MSRV and release-pipeline contract that
+> 1.0.0 promises (target requirements, with explicit open decisions).
 
 ## 1. Introduction
 
@@ -293,7 +295,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | ID | Requirement | Details |
 |----|------------|---------|
 | NFR-MNT-001 | Architecture style | Layered workspace (Cargo workspace, 7 crates), strict low→high dependency direction, zero circular or upward dependencies (`mcp-core` has zero intra-workspace dependencies) — see [[README#Block Structure]] |
-| NFR-MNT-002 | API versioning | Semantic Versioning (workspace version `0.8.0`, pre-1.0 — breaking changes are permitted and are documented under `[Unreleased]`/`Breaking` in `CHANGELOG.md` rather than deferred) |
+| NFR-MNT-002 | API versioning | Semantic Versioning. Before 1.0.0 breaking changes are permitted without shims and are documented under `[Unreleased]`/`Breaking` in `CHANGELOG.md` rather than deferred. From 1.0.0 the policy of [[#12.2 Semver policy]] binds (`NFR-COM-040` to `NFR-COM-046`) |
 | NFR-MNT-003 | Lint policy as a modularity/quality gate | Clippy `all`/`cargo`/`nursery`/`pedantic` set to `deny` at workspace level; any `#[allow(...)]` narrower than workspace scope requires a justification comment (enforced by convention, backfilled per `CHANGELOG.md` `[Unreleased]`/`Documentation`, #186) |
 
 ### 7.2 Testability
@@ -303,7 +305,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | NFR-MNT-010 | Test count | README states "657 tests with 100% pass rate" — a point-in-time claim as of the README's last edit, not independently re-verified while writing this document |
 | NFR-MNT-011 | Coverage measurement vs. enforcement | Coverage is generated and uploaded to Codecov on every CI run (`coverage` job, `cargo llvm-cov nextest`), but **`fail_ci_if_error: false`** is set on the upload step and no numeric coverage threshold gate exists in `.github/workflows/ci.yml` — coverage is tracked, not enforced. No specific percentage target should be asserted as a requirement without adding such a gate. |
 | NFR-MNT-012 | Doc-tests as executable documentation | `#![warn(missing_docs)]` workspace-wide; every `pub` item requires a doc comment with a runnable `# Examples` section, verified by `cargo test --doc --all-features --workspace` in CI |
-| NFR-MNT-013 | CI/CD pipeline | Build + lint (`fmt --check`, `clippy -D warnings`) + test (`nextest`) + doc-test + coverage + MSRV check + `cargo-deny` security/license/source audit + benchmark build, on every push/PR (`.github/workflows/ci.yml`) |
+| NFR-MNT-013 | CI/CD pipeline | Build + lint (`fmt --check`, `clippy -D warnings`) + test (`nextest`) + doc-test + coverage + MSRV check + `cargo-deny` security/license/source audit + benchmark build, on every push/PR (`.github/workflows/ci.yml`). The release pipeline requirements (tests before publishing, publish dry-run, release notes from the curated changelog, `cargo semver-checks`) extend it in [[#12.6 Release pipeline]] (`NFR-MNT-040` to `NFR-MNT-049`) |
 | NFR-MNT-014 | Regression traceability | Tests are named and commented to cite the exact issue number they guard against (e.g. `test_build_and_export_rejects_empty_top_level_component`), making the test suite itself a changelog of past correctness/security incidents |
 
 ### 7.3 Analysability
@@ -327,9 +329,9 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 
 | ID | Requirement | Details |
 |----|------------|---------|
-| NFR-POR-010 | Installation methods | `cargo install mcp-execution-cli` (crates.io, recommended); pre-built release binaries (GitHub Releases, per-platform archives); build from source (`cargo install --path crates/mcp-cli`); individual library crates via `cargo add` |
+| NFR-POR-010 | Installation methods | `cargo install mcp-execution-cli` (crates.io, recommended); pre-built release binaries (GitHub Releases, per-platform archives); build from source (`cargo install --path crates/mcp-cli`); individual library crates via `cargo add` (all seven are stable libraries from 1.0.0, `NFR-COM-030`). Every channel carries the tagged version, and nothing is published before the gate of `NFR-MNT-041` passes |
 | NFR-POR-011 | Configuration management | A single JSON file, `~/.claude/mcp.json`, read directly from the filesystem, plus one narrow environment-variable exception: `MCP_EXECUTION_LOG_FORMAT` (issue #399) selects diagnostic log format (`text`/`json`) for `mcp-execution-cli` and the `mcp-execution` server binary — an operational logging-output switch, not a secrets-manager-style configuration path, with no secret-shaped value ever accepted or echoed. No other environment-variable-based or secrets-manager-based configuration path exists for this project's *own* configuration (as opposed to the *target* MCP servers it introspects, whose env vars it explicitly validates — see [[#4.1 Confidentiality]]) |
-| NFR-POR-012 | MSRV policy | Rust 1.98 minimum, enforced by a dedicated CI job (`msrv`); rolling policy: MSRV = stable minus two, raised in a minor release (README states it) |
+| NFR-POR-012 | MSRV policy | Rust 1.98 minimum, enforced by a dedicated CI job (`msrv`); rolling policy: MSRV = stable minus two, raised in a minor release (README states it). How a raise relates to semver for the library crates is an open decision (OD-3, `NFR-COM-070` to `NFR-COM-072`) |
 
 ## 9. Verification Matrix
 
@@ -343,6 +345,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | NFR-MNT-011 (coverage) | `cargo llvm-cov nextest` → Codecov upload | CI (`coverage` job, Linux only) | Every push/PR; **not gating** (`fail_ci_if_error: false`, no threshold check) |
 | NFR-POR-012 (MSRV) | `cargo check`/`build` pinned to Rust 1.98 | CI (`msrv` job) | Every push/PR |
 | NFR-PERF-030 to NFR-PERF-032, NFR-SEC-050 to NFR-SEC-055, NFR-MNT-030, NFR-COM-020, NFR-POR-020 | Planned, not yet implemented | Not applicable until the owning capability lands | Not applicable |
+| NFR-COM-030 to NFR-COM-072, NFR-MNT-040 to NFR-MNT-049 | Per-requirement methods in [[#12.8 Verification and traceability]]; target requirements binding from the 1.0.0 tag | CI and the release workflow | See that table |
 
 ## 10. Open Questions
 
@@ -372,6 +375,10 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 > - [ ] Do successful tool results printed to the caller fall under the
 >   untrusted-text boundary rule, or are they an accepted exception
 >   (NFR-SEC-054)?
+> - [ ] The five open decisions of the 1.0 contract (OD-1 to OD-5): the
+>   `progressive` name, the wire-format compatibility window, MSRV against
+>   semver, foreign types in public signatures and the intended public surface
+>   of the `cli` and `server` libraries — see [[#12.7 Open decisions (Ask First)]].
 
 ## 11. Planned Non-Functional Requirements
 
@@ -413,6 +420,187 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 |----|------------|---------|
 | NFR-COM-020 | The `_meta.json` version 3 bump is a breaking change | Existing version 2 directories are rejected with a message that says to regenerate; the bump happens once, with one registry of fields; the change is recorded in `CHANGELOG.md` and no compatibility shim is added before 1.0 (FR-034, #568) |
 | NFR-POR-020 | Minimum Node.js version for running generated files and scripts | Node.js 22.18.0 (23.6.0 on the 23 line) or later, the first versions that run `.ts` files without a flag; `setup` enforces it (NFR-COM-011, #564). A script runner may need a higher floor (#571) |
+
+## 12. 1.0 Contract Requirements
+
+> [!abstract]
+> What the 1.0.0 release promises and how that promise is verified: the set of stable library crates, the
+> public-API and semver policy, wire-format compatibility, the command-line contract, the MSRV rule for
+> libraries and the release pipeline. Source: issue #670 (parent #669, API freeze #673 with sub-issues #674 to
+> #680). Requirement groups are numbered inside the existing ISO/IEC 25010 categories: Compatibility
+> (`NFR-COM-030` to `NFR-COM-072`) and Maintainability (`NFR-MNT-040` to `NFR-MNT-049`). Business need:
+> [[BRD-mcp-execution-2026-07-27#1.0 contract (target release 1.0.0)|BRD FR-047 to FR-049]]; per-crate public
+> surface: the section "1.0 Public API Contract" of each crate spec (`FR-047.1` to `FR-047.7`); index:
+> [[README#1.0 Contract]]; decision record: [[decisions/ADR-670-1-0-api-wire-release-contract]].
+
+> [!warning] Status of this section
+> Requirements stated without a marker are **decided** (the stable set is decided by the maintainer) or are
+> direct consequences of the issues that cite them. Five points are **not decided** and are written as
+> `Open decision / Ask First` items in [[#12.7 Open decisions (Ask First)]]: the `progressive` name (OD-1), the
+> wire-format compatibility window (OD-2), MSRV against semver (OD-3), foreign types in public signatures
+> (OD-4) and the intended public surface of the `cli` and `server` libraries (OD-5). A requirement that depends on
+> one says so and states what holds **until** it is decided. Until 1.0.0 is tagged, `NFR-MNT-002` (breaking
+> changes allowed, no shims) stays in force; this section binds from the tag.
+
+### 12.1 Stable library set and public surface
+
+Traces to: BRD FR-047, SRS FR-047, issues #673, #675, #676, #677.
+
+| ID | Requirement | Priority | Acceptance criteria |
+|----|-------------|----------|---------------------|
+| NFR-COM-030 | THE SYSTEM SHALL publish exactly seven library crates as stable 1.x libraries: `mcp-execution-core`, `-introspector`, `-codegen`, `-files`, `-skill`, `-server`, `-cli`. THE SYSTEM SHALL release them at one shared workspace version (lockstep, as today through `workspace.package`) | must | `Cargo.toml` `workspace.package.version` is the only version source, and every crate inherits it. The release gate of `NFR-MNT-040` fails when a crate or an intra-workspace dependency version differs |
+| NFR-COM-031 | THE SYSTEM SHALL define a crate's public API as the items reachable by a `pub` path from the crate root that are not `#[doc(hidden)]`, together with its documented cargo features, its documented wire and file formats (section 12.3) and, for `mcp-execution-cli` and the `mcp-execution` server binary, the contract of section 12.4. Everything else is internal and MAY change in any release | must | Each crate spec lists its public surface (section "1.0 Public API Contract"). The `cargo public-api` output or the rustdoc item list of each crate equals that listing, checked in the review of every PR that changes a `pub` item |
+| NFR-COM-032 | THE SYSTEM SHALL keep an internal module, field or helper out of the public API: `pub(crate)`, private, or `#[doc(hidden)]` only where an integration test or a sibling crate needs the item, and in the latter case the item is listed as "workspace-internal" in the crate spec and excluded from the semver promise | must | The `pub` items of `mcp-execution-cli` and `mcp-execution-server` equal the listing of the crate spec (the surface proposed in OD-5, or the decided one). No `pub` field exists in a type that is not on the listing |
+| NFR-COM-033 | THE SYSTEM SHALL NOT expose a cargo feature that exists only for tests or fixtures (today `test-fixtures` of `mcp-execution-cli` and `mcp-execution-introspector`) as a documented feature of a published crate | must | `cargo doc --all-features` for the published crates shows no fixture-only item; the feature, if kept, is absent from crate docs and READMEs and its items are `#[doc(hidden)]` and unlisted, or the fixtures move to an unpublished (`publish = false`) workspace member |
+| NFR-COM-034 | THE SYSTEM SHALL define a concept that crosses crates once, in the lowest crate that needs it, and reuse it above (today `ResultSource` is defined in `mcp-execution-introspector` and in `mcp-execution-codegen`, and `ResultKind` in `mcp-execution-cli` expresses the same idea) | must | A search over `crates/*/src` finds one public definition of each cross-crate concept; the two former `ResultSource` types are one type; the crate specs name the owner |
+| NFR-COM-035 | THE SYSTEM SHALL carry a server id in public signatures as a validated type built once at the boundary, never as `String` or `&str` (today `String` ids in `mcp-execution-codegen`, `mcp-execution-skill` and `mcp-execution-server` structs, and a slug check that returns `()`) | must | No public struct field or function parameter named for a server id has type `String` or `&str`; the slug rule is enforced by a constructor, with a rejection test per forbidden character class |
+
+### 12.2 Semver policy
+
+Traces to: BRD FR-047, SRS FR-047, issues #673, #674, #678, #679.
+
+| ID | Requirement | Priority | Acceptance criteria |
+|----|-------------|----------|---------------------|
+| NFR-COM-040 | THE SYSTEM SHALL treat each of these as a breaking change, released only in a major version: removing or renaming a public item; changing a signature, a type, a bound or an `async`, `const` or `unsafe` qualifier of a public item; adding a variant to, or a public field to, a type that is not `#[non_exhaustive]`; adding a required method to a public trait that downstream code implements; removing a documented feature; changing a documented default or a documented error condition in a way a correct caller can observe; changing the major version of, or removing, a dependency whose types appear in a public signature (`NFR-COM-044`); and a breaking change to a wire format or to the command-line contract (sections 12.3 and 12.4) | must | `cargo semver-checks` (`NFR-MNT-046`) reports no major-level lint on a minor or patch release; the remaining items are checked by the reviewer against this list, and a breaking PR cites the clause |
+| NFR-COM-041 | THE SYSTEM SHALL treat each of these as compatible, allowed in a minor version: adding a public item; adding a variant to or a field of a `#[non_exhaustive]` type; adding a defaulted trait method; adding a cargo feature that is off by default; adding a command, a flag or an optional JSON field (`NFR-COM-060`, `NFR-COM-062`); and tightening an internal limit that is not documented as part of the contract. A patch version SHALL contain only fixes that change no public item | must | A minor release diff contains only these categories; the `CHANGELOG.md` section lists each under "Added" or "Changed" |
+| NFR-COM-042 | THE SYSTEM SHALL mark `#[non_exhaustive]` every public enum and every public struct with public fields that may grow without a major release: error enums, kind and status enums, outcome enums, option and configuration structs and result structs. A struct that callers must create SHALL offer a constructor or builder, because `#[non_exhaustive]` forbids struct-literal construction outside the crate | must | Every public enum of the published crates carries `#[non_exhaustive]` unless it is listed as closed (`NFR-COM-043`); each `#[non_exhaustive]` struct has a documented constructor or builder; the `ResourceKind` case recorded as breaking in the changelog is closed by it |
+| NFR-COM-043 | THE SYSTEM SHALL keep a set exhaustive only when it is closed by definition, SHALL say so in the type's documentation ("closed set: adding a variant is a major change") and SHALL list it in the crate spec | must | Each exhaustive public enum has that sentence in its rustdoc and an entry in its crate spec; an exhaustive enum with no such entry is a defect found by the check of `NFR-COM-042` |
+| NFR-COM-044 | WHERE a type of a third-party crate appears in a public signature, trait implementation or public field, THE SYSTEM SHALL list it in the crate spec with the crate and its version range, and SHALL treat a major-version change of that crate as a breaking change of this crate. THE SYSTEM SHALL NOT add a new foreign type to a public signature without the Ask First decision of OD-4. **Open decision (OD-4):** whether `rmcp` and `tracing-subscriber` types may stay, and under what rule. Known exposures at 9473243: `rmcp::ServerHandler` implemented by `GeneratorService` (`mcp-execution-server`), `EnvFilter` in `cap_rmcp_log_level` (`mcp-execution-core`, feature `tracing-filter`), `chrono::DateTime<Utc>` in `GenerationProvenance::generated_at` (`mcp-execution-core`), `serde_json::Value` in `ToolInfo` (`mcp-execution-introspector`) and `ToolDefinition` (`mcp-execution-codegen`), `serde_json::Error` in `MetadataReadError::Malformed` (`mcp-execution-core`), `handlebars::RenderError` and `handlebars::TemplateError` in `mcp-execution-skill::TemplateError`, `chrono::DateTime<Utc>` in the `Clock` trait (`mcp-execution-server`), `clap::Parser` and `clap::Subcommand` implementations on `Cli` and `Commands` (`mcp-execution-cli`), and `serde` and `schemars::JsonSchema` implementations on public types | must | The crate specs carry the exposure lists above; a review check compares the list with the public signatures; the OD-4 outcome replaces the list with either "none" or the accepted list and its coupling rule |
+| NFR-COM-045 | WHEN a change is breaking per `NFR-COM-040`, THE SYSTEM SHALL ship it only with a major version bump and record it under `### Breaking` in `CHANGELOG.md`; from 1.0.0 THE SYSTEM SHOULD announce a removal first with `#[deprecated]` (stating the replacement) in an earlier minor release, unless the change fixes a defect that makes the old behavior unsafe | must (deprecation: should) | Each `Breaking` entry names the clause; each removal after 1.0.0 is preceded by a `#[deprecated]` release or carries a recorded safety exception |
+| NFR-COM-046 | THE SYSTEM SHALL treat the serialized form (field names, value types, enum spellings) of a public type as public API only when the type documents it as persisted or wire (`_meta.json`, helper protocol, JSON command output); for any other type the serialized form MAY change in a minor release | should | Types that are wire or persisted carry that statement in rustdoc and are listed in section 12.3; other types do not |
+
+### 12.3 Wire-format compatibility
+
+Traces to: BRD FR-047, SRS FR-047, FR-034, FR-040, issues #670, #683.
+
+| ID | Requirement | Priority | Acceptance criteria |
+|----|-------------|----------|---------------------|
+| NFR-COM-050 | THE SYSTEM SHALL treat these formats as the wire contract, each owned by one crate and one spec: `_meta.json` (`schema_version` 3, owned by `mcp-execution-core::metadata`, [[core/spec]]); the helper protocol (`HELPER_PROTOCOL_VERSION` 1, line bounds, hello, environment names and channel key, owned by `mcp-execution-core::helper_protocol`, [[core/spec]] section 6); the names exported by a generated tool file (`{name}`, `{Name}Params`, `{Name}Result`) and by `_runtime/mcp-bridge.ts` (`callMCPTool`, `McpToolError`, [[codegen/spec]] sections 14 and 15); and the saved-script header (`mcp-script`, [[skill/spec]] section 13) | must | Each format is listed in its owner's spec with its version constant or "unversioned"; adding a format requires adding it to this list |
+| NFR-COM-051 | THE SYSTEM SHALL give each versioned wire format one integer version, SHALL have a producer write exactly one current version, and SHALL treat a version bump as a breaking change recorded under `### Breaking` in `CHANGELOG.md` with the regeneration step the user must take | must | `METADATA_SCHEMA_VERSION` and `HELPER_PROTOCOL_VERSION` are the only definitions of their versions; the bridge template renders the helper version from the core constant (as built); a PR that changes either constant carries a `Breaking` entry |
+| NFR-COM-052 | WHEN a consumer reads a version it does not support, THE SYSTEM SHALL reject it with a value-free message that names the found and expected versions and the action (regenerate, upgrade), and SHALL NOT parse it on a best-effort basis. As built: `read_server_metadata` accepts exactly version 3 and returns `MetadataReadError::SchemaMismatch { found, expected }`; the helper closes the channel without a reply on a version mismatch | must | The existing mismatch tests (a `_meta.json` of another version is rejected, a helper hello with a wrong version closes the channel) stay green; a new version adds one rejection test for the previous one |
+| NFR-COM-053 | THE SYSTEM SHALL evolve a wire format inside one version only by adding optional fields that every consumer of that version ignores when unknown. THE SYSTEM SHALL record, per format, whether unknown fields are ignored or rejected: the `_meta.json` types do not use `deny_unknown_fields` (unknown fields are ignored), while the saved-script header and the policy file use `#[serde(deny_unknown_fields)]`, so a new field there breaks an older reader and is a version-level change | must | The wire-format listing of each owner spec carries the unknown-field rule; a test per format shows an extra field is ignored or rejected as stated |
+| NFR-COM-054 | THE SYSTEM SHALL state how long an older version stays readable and how a bump is signalled to a user who has output from the previous release. **Open decision (OD-2):** the exact compatibility window ("read old, write new", exact match with regeneration, or a fixed N-1 window). Until it is decided the as-built rule of `NFR-COM-052` (exact match, regenerate) holds and no format changes its version | must | The ADR records the chosen window; the spec of each owner states it; a test pins it with a committed fixture of the previous version |
+| NFR-COM-055 | THE SYSTEM SHOULD pin each wire format with committed golden fixtures that the current code reads or rejects as specified: a valid `_meta.json` of the current version, one of another version, and a helper hello transcript | should | The fixtures live under the owning crate's `tests/`; CI runs them; a change to a fixture is a reviewed change of the `Breaking` class |
+| NFR-COM-056 | THE SYSTEM SHALL decide before the 1.0.0 tag whether the per-tool digest granularity left out of #580 (tracked by #683) changes the `_meta.json` shape; a change that alters the shape lands before the tag, as an optional field or with a version bump per `NFR-COM-051` | must | #683 is closed, or explicitly deferred with a note in [[core/spec#7. Planned Changes (script-first direction, adopted 2026-11-24)]], before the release gate of `NFR-MNT-049` runs |
+
+### 12.4 Command-line and server-tool contract
+
+Traces to: BRD FR-048, SRS FR-048, issues #670, #675, #680.
+
+| ID | Requirement | Priority | Acceptance criteria |
+|----|-------------|----------|---------------------|
+| NFR-COM-060 | THE SYSTEM SHALL keep the documented command set, flag names, flag meanings, default values and positional arguments of `mcp-execution-cli` stable within a major version: removing, renaming or changing the meaning of a command or flag is breaking; adding a command or an optional flag is compatible. The hidden `helper` command is internal and covered by the helper protocol (`NFR-COM-050`), not by this clause. **Open decision (OD-1):** whether the `--progressive-output` flag and the `progressive` names are renamed before 1.0.0 | must | The command and flag listing of [[cli/spec]] section 2 and sections 16 to 19 equals the `--help` output of every command (checked by the `docs_examples` test or its successor); a PR that changes a flag edits both |
+| NFR-COM-061 | THE SYSTEM SHALL keep the exit-code values and their meanings stable: 0 success, 1 other error, 2 invalid input, 3 remote server fault, 4 timeout, 5 check failed (drift or saved-script problems), 6 script failed, and 129, 130, 131, 143 for a `run` stopped by SIGHUP, SIGINT, SIGQUIT, SIGTERM. Moving a condition from one code to another is breaking. Introducing a new code value is **Ask First** | must | The `ExitCode` constants in `mcp-execution-core::cli` and the classification table of [[cli/spec]] section 5 agree; each code has a test that reaches it through the binary |
+| NFR-COM-062 | THE SYSTEM SHALL keep the `--format json` output of each command stable in field names, value types and meaning within a major version: removing, renaming or retyping a field is breaking; adding an optional field is compatible and consumers are told to ignore unknown fields. The `run` output framing (budget head, spill path notice, `script_status` trailer and, with `--format json`, its stream objects) is part of this contract | must | Each command's JSON shape is documented in [[cli/spec]]; a golden test per command compares the field set; the `run` framing has the existing acceptance tests |
+| NFR-COM-063 | THE SYSTEM SHALL write the command result to stdout and diagnostics, logs and error text to stderr, in every `--format` | must | A test per command with `--format json` parses stdout as the documented shape while stderr carries the diagnostics |
+| NFR-COM-064 | THE SYSTEM SHALL keep the documented environment variables stable: `MCP_EXECUTION_LOG_FORMAT` and `MCP_EXECUTION_CLI`. The helper channel variables (`MCP_EXECUTION_HELPER`, `MCP_EXECUTION_HELPER_TOKEN`, `MCP_EXECUTION_RUN`) are wire-level (`NFR-COM-050`) | should | The variable list of [[cli/spec]] equals the constants of `mcp-execution-core::cli` and `helper_protocol` |
+| NFR-COM-065 | THE SYSTEM SHALL NOT promise the text of `--format text` and `--format pretty` output or of log lines; a change to them is not a breaking change. **Assumption, confirm:** the maintainer may instead freeze `text` | should | The rustdoc and the CLI spec say "human-readable, not a stable interface" for both formats |
+| NFR-COM-066 | THE SYSTEM SHALL keep the tool names and the parameter and result schemas of the `mcp-execution` server binary ([[server/spec]]) stable within a major version, with the same removal, rename and retype rule as `NFR-COM-062` | should | The tool list and schemas of [[server/spec]] equal what `tools/list` returns, pinned by the existing schema drift-guard tests |
+
+### 12.5 MSRV and semver
+
+Traces to: BRD FR-047, SRS FR-047, issue #670; extends `NFR-POR-012`.
+
+| ID | Requirement | Priority | Acceptance criteria |
+|----|-------------|----------|---------------------|
+| NFR-COM-070 | THE SYSTEM SHALL declare the MSRV once in `workspace.package.rust-version`, inherit it in every crate, enforce it by the CI `msrv` job, and SHALL NOT raise it in a patch release | must | Each crate manifest inherits `rust-version` from the workspace; the `msrv` job pins the declared version |
+| NFR-COM-071 | WHEN the MSRV is raised, THE SYSTEM SHALL change `rust-version`, the `msrv` job, the documentation and `CHANGELOG.md` in one pull request and SHALL NOT raise it to a version newer than stable minus two at that time (the rule of `NFR-POR-012`) | must | The PR diff touches all four; the new MSRV is at most stable minus two on the PR date |
+| NFR-COM-072 | THE SYSTEM SHALL state whether an MSRV raise is a breaking change of the library crates. **Open decision (OD-3):** the constitution says the MSRV is raised "in a minor release"; semver for libraries from 1.0.0 may require a major release. Until it is decided the rules of `NFR-COM-070` and `NFR-COM-071` hold and the raise is recorded under `### Changed` | must | The ADR records the chosen reading; `NFR-POR-012` and [[constitution#II. Technology Stack]] quote it |
+
+### 12.6 Release pipeline
+
+Traces to: BRD FR-049, SRS FR-049, issue #669 exit criteria; extends `NFR-MNT-013`, `NFR-POR-010` and `NFR-POR-012`.
+
+> [!info] State at 9473243 (as built, not a requirement)
+> `.github/workflows/release.yml` runs on a `v*.*.*` tag. It builds six targets, then creates the GitHub Release
+> (notes from `git log` subjects plus GitHub-generated notes, not from `CHANGELOG.md`), and only then, in the
+> `publish-crates` job, builds each crate, runs `cargo test --workspace` (default features, not the CI feature
+> set) and publishes through trusted publishing. There is no publish dry-run and no semver check in CI or in the
+> release workflow. The requirements below close those gaps.
+
+| ID | Requirement | Priority | Acceptance criteria |
+|----|-------------|----------|---------------------|
+| NFR-MNT-040 | WHEN a release tag `vX.Y.Z` is pushed, THE SYSTEM SHALL verify before any build or publish step that `X.Y.Z` equals the workspace version and every intra-workspace dependency version, and that `CHANGELOG.md` has a section `[X.Y.Z]` with no entry left under `[Unreleased]` | must | A tag whose version differs from the manifest, or with no changelog section, fails the first job; a run on a throwaway tag shows both failures |
+| NFR-MNT-041 | THE SYSTEM SHALL run, as a gate that every artifact-producing job depends on (`needs:`), the full check set on the tagged commit with the exact CI invocations: `cargo +nightly fmt --check`, `cargo +stable clippy --all-targets --all-features --workspace -- -D warnings`, `cargo nextest run --all-features --workspace --no-fail-fast`, `cargo test --doc --all-features --workspace`, `cargo-deny`, the MSRV check and the docs build. Nothing public (GitHub Release, archives, crates) SHALL be created before the gate passes | must | In the workflow graph no job that uploads a release asset or calls `cargo publish` can start unless the gate job succeeded; the gate job's commands match `.github/workflows/ci.yml` |
+| NFR-MNT-042 | THE SYSTEM SHALL run `cargo publish --workspace --dry-run` as a gate before the real publish, and SHALL run it on every pull request that changes a manifest, the lockfile or the release workflow | must | The dry-run step exists in the release workflow before the publish step and in CI behind a path filter; a manifest error (missing metadata, an unpublishable path dependency) fails the PR |
+| NFR-MNT-043 | THE SYSTEM SHALL publish the seven crates in dependency order and SHALL be safe to re-run after a partial failure: a crate version already on crates.io is skipped, and a crate version different from the tag is never published | must | Re-running the workflow on a tag where the first crates are already published completes the rest; the job log lists published, skipped and failed crates |
+| NFR-MNT-044 | THE SYSTEM SHALL take the GitHub Release body from the `[X.Y.Z]` section of `CHANGELOG.md` verbatim and SHALL fail when that section is missing or empty; it SHALL NOT use `git log` subjects or auto-generated notes as the body | must | The release body of a tag equals the changelog section byte for byte; a tag with an empty section fails before the release is created |
+| NFR-MNT-045 | THE SYSTEM SHALL list every change that is breaking per `NFR-COM-040` under `### Breaking` of the version's changelog section, one line ending with the PR link | must | The `semver-checks` result and the review are compared against the section before the tag; a breaking PR without the entry blocks the release |
+| NFR-MNT-046 | THE SYSTEM SHALL run `cargo semver-checks` in CI for each of the seven published crates against the last published version on crates.io, on every pull request and in the release gate, with the action pinned to a full commit SHA | must (from the 1.0.0 baseline) | The job exists, covers all seven crates and fails on a major-level lint; before 1.0.0 is published there is no meaningful baseline, so the job is added with the 1.0.0 release (#679) and until then runs without failing the build |
+| NFR-MNT-047 | WHEN `cargo semver-checks` reports a lint on a change intended as compatible, THE SYSTEM SHALL fix the change or reclassify it as breaking with a major version; a suppression of a lint SHALL carry a comment naming the issue and the reason and is **Ask First** | must | No exclusion, lint allow or baseline override exists without that comment. `cargo semver-checks` cannot see MSRV, behavior, wire or CLI changes, so those stay covered by the `NFR-COM-040` review, the `NFR-COM-055` fixtures and the `NFR-COM-060` to `NFR-COM-062` tests |
+| NFR-MNT-048 | THE SYSTEM SHALL keep crates.io publication on trusted publishing (OIDC, no long-lived token) and every workflow action pinned to a full commit SHA with a trailing version comment | must | `.github/workflows/*.yml` contains no `uses:` with a tag or branch; the publish job holds no secret token |
+| NFR-MNT-049 | BEFORE the first 1.0.0 tag, THE SYSTEM SHALL complete one rehearsal release (a 0.12.0 trial as in #669) that passes every gate above and leaves the latest version of all seven crates on crates.io | must (one time) | The rehearsal run links to the passing gate, dry run and publish; crates.io lists the trial version for the seven crates |
+
+### 12.7 Open decisions (Ask First)
+
+> [!question] OD-1: rename "progressive" before 1.0.0? (#680)
+> Today `ProgressiveGenerator`, the `progressive` module of `mcp-execution-codegen`, the `--progressive-output`
+> flag and `examples/progressive-loading-usage.md` carry the old name of the product direction; 45 files under
+> `crates/` mention it. After 1.0.0 a rename is a major release.
+> **Options.** (a) Rename before 1.0.0 (type, module, flag, example file) and record it as `Breaking`.
+> (b) Keep the names deliberately and say why in the spec. (c) Rename the Rust items and keep the flag.
+> **Recommendation.** (a): it is the only moment the rename costs nothing, and the project already describes
+> itself as script-first. The new names are part of the decision and are not proposed here. No shim, per
+> `NFR-MNT-002`. Affects `NFR-COM-031`, `NFR-COM-060`.
+
+> [!question] OD-2: wire-format compatibility window (#670)
+> `_meta.json` v3 and helper protocol v1 are read by exact match today (`NFR-COM-052`).
+> **Options.** (a) Exact match for the whole 1.x line: the version never changes inside a major, a bump happens in
+> a major release only, and regeneration is the migration. (b) "Read old, write new": a consumer accepts the
+> current and the previous version, a producer writes the current. (c) Accept any version at or above a floor.
+> **Recommendation.** (a), with additive optional fields allowed inside the version (`NFR-COM-053`): the output is
+> reproducible from a live server, the helper and the bridge are produced and consumed by one release family, and
+> (b) doubles the read paths and the fixtures. A bump then needs the major release that `NFR-COM-051` already
+> demands. Open inside it: the saved-script header has no version field; add one before 1.0.0 or document it as
+> unversioned. Affects `NFR-COM-051` to `NFR-COM-056`.
+
+> [!question] OD-3: MSRV against semver for libraries (#670)
+> **Options.** (a) An MSRV raise is not breaking: a minor release only, never a patch, at most stable minus two,
+> always in the changelog under `Changed`. (b) It is breaking: a major release. (c) As (a), plus an advance notice
+> in the changelog one minor release before the raise.
+> **Recommendation.** (a): it matches the constitution and common practice for Rust libraries, a major per MSRV bump
+> would mean a major every few months under the rolling policy, and Cargo's resolver can select a compatible
+> version. Affects `NFR-COM-070` to `NFR-COM-072`, `NFR-POR-012`.
+
+> [!question] OD-4: foreign types in public signatures (#678)
+> **Options.** (a) Forbid: wrap `EnvFilter` (or drop `cap_rmcp_log_level` from the public API) and hide the
+> `ServerHandler` implementation. (b) Accept all, list them, and tie each crate's major version to the foreign
+> crate's major. (c) Split: accept `rmcp::ServerHandler` on `mcp-execution-server` only, because being an `rmcp`
+> server is that crate's purpose, and keep `tracing-subscriber` out of `mcp-execution-core`.
+> **Recommendation.** (c). `EnvFilter` couples the foundation crate, which every other crate depends on, to a
+> logging crate's major version for a helper only the CLI uses; the `rmcp` implementation is inherent to the server
+> crate and its coupling is recorded by `NFR-COM-044` (see also
+> [[decisions/ADR-529-rmcp-3-5-latest-promotion-revisit]]). Also decide the other exposures found in the code: `chrono::DateTime`, `serde_json::Value` and `serde_json::Error`,
+> `handlebars` errors in `mcp-execution-skill`, and the `serde` and `schemars` implementations (recommendation: accept
+> `serde`, `serde_json`, `schemars` and `chrono` and list them; wrap the two `handlebars` error types, since the
+> template engine is an implementation detail). Affects `NFR-COM-044`.
+
+> [!question] OD-5: intended public surface of the `cli` and `server` libraries (#675)
+> The listings in [[cli/spec#20. 1.0 Public API Contract]] and [[server/spec#15. 1.0 Public API Contract]] are
+> proposals derived from the code (what the binaries and tests need), not decisions.
+> **Options.** (a) Minimal: the library exposes only what an embedder needs (the `Cli` and `Commands` parse types and
+> an entry point for `cli`; `GeneratorService` with its parameter and result types for `server`), and everything
+> else is `pub(crate)` or `#[doc(hidden)]`. (b) Keep the modules public as today. (c) Publish `cli` and `server` as
+> binaries only.
+> **Recommendation.** (a); (c) contradicts the maintainer's decision that all seven crates are stable libraries.
+> Affects `NFR-COM-032`, `FR-047.6`, `FR-047.7`.
+
+### 12.8 Verification and traceability
+
+| ID | Method | Environment | Frequency |
+|----|--------|-------------|-----------|
+| NFR-COM-030 to NFR-COM-035 | Rustdoc item list or `cargo public-api` compared with the crate spec listing; the checks of the acceptance column | CI and review | Every PR that changes a `pub` item |
+| NFR-COM-040 to NFR-COM-046 | `cargo semver-checks` plus review against the clause list | CI (`NFR-MNT-046`) and review | Every PR and release |
+| NFR-COM-050 to NFR-COM-056 | Golden fixtures and mismatch tests under `crates/*/tests/` | CI (`test` job) | Every push/PR |
+| NFR-COM-060 to NFR-COM-066 | `docs_examples` test, golden JSON tests and binary-level exit-code tests | CI (`test` job) | Every push/PR |
+| NFR-COM-070 to NFR-COM-072 | `msrv` job and diff review | CI | Every push/PR |
+| NFR-MNT-040 to NFR-MNT-049 | Release workflow gates, a throwaway-tag run and the rehearsal release | Release workflow | Every tag, and once before 1.0.0 |
+
+| BRD | SRS | NFR | Block specs |
+|-----|-----|-----|-------------|
+| FR-047 | FR-047 | NFR-COM-030 to NFR-COM-035, NFR-COM-040 to NFR-COM-046, NFR-COM-050 to NFR-COM-056, NFR-COM-070 to NFR-COM-072 | `FR-047.1` to `FR-047.7` in the seven crate specs |
+| FR-048 | FR-048 | NFR-COM-060 to NFR-COM-066 | [[cli/spec]], [[server/spec]] |
+| FR-049 | FR-049 | NFR-MNT-040 to NFR-MNT-049 | [[README#1.0 Contract]] |
 
 ## See Also
 

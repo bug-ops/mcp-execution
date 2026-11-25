@@ -381,7 +381,45 @@ protocol-version decision record.
 
 **Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-## 12. See Also
+## 12. 1.0 Public API Contract
+
+> [!warning] Target requirement (1.0.0)
+> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
+> `NFR-COM-046`). The listing below was derived from `crates/mcp-introspector/src` at 9473243. Items marked **proposal** are
+> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-047.2 | THE SYSTEM SHALL expose from `mcp-execution-introspector` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
+
+### Public surface
+
+| Item | Kind | Notes |
+|------|------|-------|
+| `Introspector` | entry point | `connect`, `discover`, `discover_server` |
+| `ServerInfo`, `ToolInfo`, `ServerCapabilities`, `Discovery`, `ListingHints`, `CacheScope` | result types | Public fields today; need constructors once `#[non_exhaustive]` |
+| `Session`, `CallTimeout`, `ToolCall`, `ToolCallOutcome`, `ServerText`, `ResultSource` | call API | The one MCP client of the workspace ([[#10. `Session` and `discover` (as built)]]) |
+| `MAX_TOOL_COUNT` (re-export), `MAX_TOOL_NAME_LEN`, `MAX_TOOL_DESCRIPTION_LEN`, `MAX_SERVER_NAME_LEN`, `MAX_SERVER_VERSION_LEN`, `MAX_SCHEMA_SIZE_BYTES` | bounds | Root of the CWE-400 bound cascade |
+
+### Workspace-internal
+
+The `test-fixtures` feature (server-side `rmcp` features for fixture servers) is not a public feature
+(`NFR-COM-033`).
+
+### Foreign types (`NFR-COM-044`)
+
+`serde_json::Value` in `ToolInfo::input_schema` and `output_schema`, and the `serde` implementations. The
+`rmcp` client held by `Session` is a private field; the review of #678 confirms that no `rmcp` type is reachable
+from a public signature.
+
+### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
+
+Required: `CacheScope`, `ToolCallOutcome`, `ServerInfo`, `ToolInfo`, `ServerCapabilities`, `Discovery`,
+`ListingHints`, `ToolCall`. `ResultSource` has one definition (`NFR-COM-034`): the lowest crate that needs it is
+this one, so `mcp-execution-codegen` and `mcp-execution-cli` reuse it (**proposal**; the `ResultKind` of the helper
+protocol in `mcp-execution-cli` is reduced to a re-export or a mapping).
+
+## 13. See Also
 
 - [[../core/spec]] — `ServerConfig`/security validation this crate re-checks
 - [[../codegen/spec]] — consumer of `ServerInfo`/`ToolInfo`
@@ -390,3 +428,4 @@ protocol-version decision record.
 - [[../server/spec#introspect_server]] — MCP-tool-level wrapper around this crate
 - [[#11. Script-First Requirements]] — freshness hints, shared connect step; [[#10. `Session` and `discover` (as built)]] and [[#9. Annotation Capture (#568)]] — implemented
 - [[../cli/spec]] — the tool-call path that reuses the shared connect step
+- [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] — 1.0 API, wire-format, CLI and release contract

@@ -28,8 +28,8 @@ related:
 > `mcp-execution-core`, `mcp-execution-introspector`, `mcp-execution-codegen`,
 > `mcp-execution-files`, `mcp-execution-skill`.
 >
-> Not merely a "progressive loading" server as CLAUDE.md's crate table
-> summarizes it — see [[../README#Discrepancies vs CLAUDE.md]].
+> Not merely a "progressive loading" server: it also exposes skill generation
+> (`generate_skill`, `save_skill`) and a listing tool — see [[#1. Responsibility]].
 
 ## 1. Responsibility
 
@@ -825,7 +825,42 @@ that mirror the runtime rule.
 not part of this package: they are deferred to #589 under epic #559, depend on the runtime block
 ([[../cli/spec]]), and nothing in this section reserves a tool name or a schema for them.
 
-## 15. See Also
+## 15. 1.0 Public API Contract
+
+> [!warning] Target requirement (1.0.0)
+> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
+> `NFR-COM-046`). The listing below was derived from `crates/mcp-server/src` at 9473243. Items marked **proposal** are
+> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-047.6 | THE SYSTEM SHALL expose from `mcp-execution-server` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
+
+### Public surface (proposal, OD-5)
+
+Today the library exports `clock`, `output_dir`, `service`, `state` and `types` and re-exports the skill types.
+**Proposed** stable surface (option (a) of OD-5): `GeneratorService` and the parameter and result types of the five
+tools (`IntrospectServerParams`, `IntrospectServerResult`, `IntrospectedToolSummary`, `SaveCategorizedToolsParams`,
+`SaveCategorizedToolsResult`, `CategorizedTool`, `ToolGenerationError`, `ListGeneratedServersParams`,
+`ListGeneratedServersResult`, `GeneratedServerInfo`, and the re-exported `GenerateSkill*`, `SaveSkill*`,
+`SkillCategory`, `SkillMetadata`, `SkillTool`, `ToolExample`). **Proposed** workspace-internal or hidden:
+`StateManager`, `PendingGeneration`, `StateError`, `Clock`, `SystemClock`, `resolve_output_dir`, `relative_subpath`,
+`OutputDirError`. The binary contract (tool names, parameter and result schemas) is `NFR-COM-066` and
+[[#13. Skill Name Rules (as built)]] and the tool sections.
+
+### Foreign types (`NFR-COM-044`)
+
+`impl rmcp::ServerHandler for GeneratorService` (OD-4 option (c) accepts it for this crate only);
+`chrono::DateTime<Utc>` in the `Clock` trait (hidden under the proposal); `schemars::JsonSchema` and `serde`
+implementations on the parameter and result types.
+
+### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
+
+Required on every public parameter and result struct that callers do not need to construct (they are produced by
+the server and deserialized from MCP requests), and on `ToolGenerationError`. Constructors or builders are
+required where tests or embedders construct them.
+
+## 16. See Also
 
 - [[../introspector/spec]] — wrapped by `introspect_server`
 - [[../codegen/spec]] / [[../files/spec]] — wrapped by `save_categorized_tools`
@@ -833,3 +868,4 @@ not part of this package: they are deferred to #589 under epic #559, depend on t
 - [[../cli/spec]] — the CLI-driven alternative path to the same underlying crates
 - [[#14. Script-First Requirements]] — script-first skill through the tool handlers (#578); as built in section 13
 - [[../cli/spec]] — the script runtime, which a future gateway (#589) would depend on
+- [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] — 1.0 API, wire-format, CLI and release contract

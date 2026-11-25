@@ -532,7 +532,7 @@ the one bump of the script-first package (FR-034.1, FR-034.2).
 | `result_type_origin` | `declared`, `degraded` (the server declared an output schema but the generic type is used) or `undeclared`. This is the stored output-schema flag, and it distinguishes "declared but not translated" | FR-046, FR-030 | in |
 | `manifest_size_bytes` | Length of the compact `serde_json::to_vec` of the introspected, sanitized `ToolInfo` (after the introspector's bounds, including annotations and output schema) | FR-046 | in |
 | `parameters[].name` | The **raw** schema key (never renamed or suffixed, #584); `parameters[].typescript_type` is `"unknown"` above 1024 bytes | FR-031 | in |
-| Per-tool digests | Name the changed tool in a drift report | FR-045 | out for this package; still planned with #580 ([[#7. Planned Changes (script-first direction, adopted 2026-11-24)]]) |
+| Per-tool digests | Name the changed tool in a drift report | FR-045 | out of the delivered #580 scope; tracked by the open follow-up #683 ([[#7. Planned Changes (script-first direction, adopted 2026-11-24)]]) |
 | Annotations inside the digest entries | An annotation-only change reads as drift | FR-045, FR-034 | in (see [[#`provenance` module (`src/provenance.rs`)]]) |
 | Catalog reference, converter diagnostics | | FR-032, FR-031 | out (diagnostics are `tracing::warn!` only) |
 
@@ -1255,10 +1255,11 @@ and byte-preserving of each variant's existing `Display` message.
 > The `_meta.json` v3 bump, the annotation types and the measurement fields (#568, #562's metadata
 > row) are implemented and described as built in [[#`metadata` module (`src/metadata.rs`)]],
 > [[#`annotations` module (`src/annotations.rs`, #568)]] and [[#`provenance` module (`src/provenance.rs`)]].
-> What remains here is the per-tool digest granularity (#580). When it lands, its content moves into
-> the as-built sections above and this section is removed in the same pull request.
+> What remains here is the per-tool digest granularity. #580 is closed as completed without it (PR #631); the
+> excluded part is tracked by the open issue #683. When it lands, its content moves into the as-built sections
+> above and this section is removed in the same pull request.
 
-### Planned: provenance digest granularity (#580)
+### Planned: provenance digest granularity (#683, left out of #580)
 
 **Why.** `GenerationProvenance` holds `generated_at`, a `config_fingerprint` and one aggregate
 `tool_digest`. The aggregate is built by hashing each tool entry on its own, sorting those hashes
@@ -1299,12 +1300,69 @@ to it changes every recorded digest, so it is ask-first and lands only with a sc
 - [NEEDS CLARIFICATION: Where the shared entry mapping lives (it is private to codegen today, `ProgressiveGenerator::create_metadata_file`); candidate: beside `ToolDigestEntry` in this crate.]
 - Ask first: any change to the preimage, the domain tags or the framing primitive; adding a dependency.
 
-**Depends on / blocks.** Blocks the "name the changed tool" part of #580.
+**Depends on / blocks.** Tracked by #683. It changes `_meta.json`, so it is decided before the 1.0 wire-format freeze ([[../README#1.0 Contract]], NFR-COM-056).
 
-## 8. See Also
+## 8. 1.0 Public API Contract
+
+> [!warning] Target requirement (1.0.0)
+> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
+> `NFR-COM-046`). The listing below was derived from `crates/mcp-core/src` at 9473243. Items marked **proposal** are
+> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-047.1 | THE SYSTEM SHALL expose from `mcp-execution-core` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
+
+### Public surface
+
+| Item | Kind | Notes |
+|------|------|-------|
+| `Error`, `ResourceKind`, `Result` | error types | Crate-wide error hierarchy |
+| `ServerId`, `ToolName`, `ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `validate_server_id_slug`, `MAX_SERVER_ID_LENGTH` | typed identifiers | The validated server id of `NFR-COM-035` is built here |
+| `ServerConfig`, `ServerConfigBuilder`, `Transport` | configuration | Validation runs at construction |
+| `validate_server_config`, `validate_url_scheme`, the `MAX_ARG_*`, `MAX_ENV_*`, `MAX_HEADER_*`, `MAX_URL_LEN` bounds | validation | The bound values are documented limits (`NFR-COM-040`) |
+| `HomeDir`, `HomeDirError`, `ServersDir`, `SkillsDir`, `expand_home` | directories | One resolution of home, servers and skills directories |
+| `contains_parent_dir`, `first_disallowed_identifier_char`, `sanitize_path_for_error`, `validate_path_segment`, `ConfinementError`, `ConfinementTarget`, `open_confined_write`, `resolve_confined_existing`, `resolve_confined_path`, `write_confined_file` | path confinement | Shared by `mcp-execution-skill` and `mcp-execution-server` |
+| `REDACTED_PLACEHOLDER`, `RedactedItems`, `RedactedMapValues`, `RedactedUrl`, `redact_urls_in_text` | redaction | Hand-written `Debug` discipline of the workspace |
+| module `annotations` | tool annotations | `Hint`, `AnnotationTitle`, `ToolAnnotations` |
+| module `cli` | CLI contract types | `OutputFormat`, `LogFormat`, `ExitCode` (values frozen by `NFR-COM-061`), `ServerConnectionString`, `LOG_FORMAT_ENV_VAR` |
+| module `helper_protocol` | wire constants | `HELPER_PROTOCOL_VERSION` and the line bounds, environment names and channel key (`NFR-COM-050`) |
+| module `metadata` | wire format | `METADATA_SCHEMA_VERSION` (3), `ServerMetadata`, `ToolMetadata`, `ParameterMetadata`, `ResultTypeOrigin`, `MetadataReadError`, `read_server_metadata`, `read_server_metadata_async`, file-name constants, `MAX_TOOL_COUNT`, `MAX_METADATA_FILE_BYTES` |
+| module `provenance` | persisted record | `GenerationProvenance`, `ToolDigestEntry`, `ToolDigest`, `ConfigFingerprint`; per-tool digests are #683 (`NFR-COM-056`) |
+| module `untrusted` | injection defense | `sanitize_untrusted_text`, `sanitize_untrusted_inline`, `wrap_untrusted_block`, `is_bare_identifier`, the bound constants |
+| feature `tracing-filter`, module `log_filter` | helper | `cap_rmcp_log_level` takes a `tracing-subscriber` `EnvFilter`: exposure under OD-4 |
+
+### Workspace-shared candidates (proposal)
+
+Items that exist for sibling crates and may be listed as workspace-internal under `NFR-COM-032`:
+`forbidden_chars`, `forbidden_env_names`, `forbidden_env_prefix`, `env_name_charset_pattern`,
+`env_name_charset_desc` (rendered into the generated package by `mcp-execution-codegen`), and the three
+path-confinement write primitives. The decision belongs to the #673 review of each item.
+
+### Foreign types (`NFR-COM-044`)
+
+`tracing_subscriber::EnvFilter` (feature `tracing-filter`), `chrono::DateTime<Utc>`
+(`GenerationProvenance::generated_at`), `serde_json::Error` (`MetadataReadError::Malformed`), and the `serde`
+implementations of the wire types. Outcome per OD-4.
+
+### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
+
+Required (error, kind and option enums and wire structs with public fields): `Error`, `ResourceKind`,
+`ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `HomeDirError`, `ConfinementError`, `MetadataReadError`,
+`Transport`, `OutputFormat`, `LogFormat`, `ResultTypeOrigin`, `ServerMetadata`, `ToolMetadata`,
+`ParameterMetadata`, `GenerationProvenance`, `ToolAnnotations`. Closed candidates, to be confirmed in #674:
+`Hint` (stated true, stated false, not stated) and `ConfinementTarget` (file, directory).
+
+### Owned wire formats
+
+`_meta.json` version 3 and helper protocol version 1 ([[#2. Public API Surface]] and
+[[#6. Helper Protocol and Exit Codes (as built)]]); rules in `NFR-COM-050` to `NFR-COM-056`.
+
+## 9. See Also
 
 - [[../introspector/spec]] — primary consumer of `ServerConfig`/`validate_server_config`
-- [[#7. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — per-tool digest granularity (#580), not implemented; the v3 field registry is in §2 `metadata`
+- [[#7. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — per-tool digest granularity (#683, left out of #580), not implemented; the v3 field registry is in §2 `metadata`
 - [[../cli/spec]] — consumer of `cli::{OutputFormat,ExitCode}` and the error-classification contract
 - [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]] / [[../skill/spec#8. `resolve_skill_output_path` — Path Confinement]] — the two `confinement::resolve_confined_path` consumers
 - [[../constitution]] — security principles this crate embodies workspace-wide
+- [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] — 1.0 API, wire-format, CLI and release contract
