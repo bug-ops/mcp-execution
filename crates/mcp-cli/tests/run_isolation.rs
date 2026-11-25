@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{Out, Sandbox, require_node};
+use common::{Out, Sandbox, file_url, require_node};
 
 fn prepared(test: &str) -> Option<Sandbox> {
     if !require_node(test) {
@@ -43,7 +43,7 @@ fn a_worker_thread_cannot_call_a_write_tool_under_dry_run() {
     let Some(sb) = prepared("a_worker_thread_cannot_call_a_write_tool_under_dry_run") else {
         return;
     };
-    let index = format!("file://{}/fixture/index.ts", sb.servers.display());
+    let index = file_url(&sb.servers.join("fixture").join("index.ts"));
     let body = format!(
         "import {{ Worker }} from 'node:worker_threads';\n\
          const code = `const m = await import({index:?});\n\

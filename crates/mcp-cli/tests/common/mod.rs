@@ -140,6 +140,14 @@ pub fn require_tsc(test_name: &str) -> bool {
     available
 }
 
+/// `path` as a `file://` URL, the only absolute-path form Node accepts as an ESM specifier on
+/// Windows.
+pub fn file_url(path: &Path) -> String {
+    url::Url::from_file_path(path)
+        .unwrap_or_else(|()| panic!("{} is not an absolute path", path.display()))
+        .into()
+}
+
 fn plain(path: PathBuf) -> PathBuf {
     match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
         Some(stripped) if !stripped.starts_with(r"UNC\") => PathBuf::from(stripped),

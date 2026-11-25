@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{FIXTURE_BIN, SERVER, Sandbox, require_node};
+use common::{FIXTURE_BIN, SERVER, Sandbox, file_url, require_node};
 use mcp_execution_cli::runtime::pool::{MAX_INFLIGHT_CALLS, MAX_POOLED_SERVERS};
 use serde_json::json;
 
@@ -28,9 +28,7 @@ fn bridge_import(sb: &Sandbox) -> String {
         .join(SERVER)
         .join("_runtime")
         .join("mcp-bridge.ts");
-    let url = url::Url::from_file_path(&bridge)
-        .unwrap_or_else(|()| panic!("the bridge path is not absolute"));
-    format!("import {{ callMCPTool }} from '{url}';\n")
+    format!("import {{ callMCPTool }} from '{}';\n", file_url(&bridge))
 }
 
 #[test]
