@@ -20,20 +20,49 @@ use common::{CLI_BIN, Sandbox, WATCHDOG, require_node, require_python, run_with_
 
 const DRIVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pty_driver.py");
 
-/// Reports `PGRP <own group> <terminal foreground group>`, then acts by `argv[2]`: `read` makes
-/// a child read a line from `/dev/tty`; `idle` announces itself on the terminal and waits.
-const SCRIPT: &str = "import { spawnSync } from 'node:child_process';\n\
-     import { writeFileSync } from 'node:fs';\n\
-     const ps = spawnSync('ps', ['-o', 'pgid=,tpgid=', '-p', String(process.pid)], { encoding: 'utf8' });\n\
-     console.log('PGRP ' + ps.stdout.trim().split(/\\s+/).join(' '));\n\
-     const mode = process.argv[2];\n\
-     if (mode === 'read') {\n\
-       const r = spawnSync('sh', ['-c', 'echo ready-for-input > /dev/tty; read l < /dev/tty; echo got:$l'], { encoding: 'utf8' });\n\
-       console.log(r.stdout.trim());\n\
-     } else if (mode === 'idle') {\n\
-       writeFileSync('/dev/tty', 'ready-for-signal\\n');\n\
-       setInterval(() => {}, 1000);\n\
-     }\n";
+/// Python that makes its own group the terminal's foreground group and ends. SIGTTOU is ignored
+/// first, as a job-control shell does, because the process is not in the foreground group.
+const TAKE_TERMINAL_PY: &str = r#"import os, signal; signal.signal(signal.SIGTTOU, signal.SIG_IGN); os.setpgid(0, 0); fd = os.open("/dev/tty", os.O_RDWR); os.tcsetpgrp(fd, os.getpgrp())"#;
+
+/// Like [`TAKE_TERMINAL_PY`], then reports on fd 3 and stays alive for a few seconds.
+const KEEP_TERMINAL_PY: &str = r#"import os, signal, time; signal.signal(signal.SIGTTOU, signal.SIG_IGN); os.setpgid(0, 0); fd = os.open("/dev/tty", os.O_RDWR); os.tcsetpgrp(fd, os.getpgrp()); os.write(3, b"x"); time.sleep(5)"#;
+
+/// Reports `PGRP <own group> <terminal foreground group>`, then acts by `argv[2]`:
+/// - `read`: a child reads a line from `/dev/tty`;
+/// - `idle`: announces itself on the terminal and waits;
+/// - `self-exit`: announces itself on the terminal and exits after 2 s;
+/// - `stopped-child`: ignores SIGTSTP itself while a child with inherited stdio sleeps;
+/// - `dead-group`: a child takes the terminal for its own group and exits;
+/// - `live-group`: a child takes the terminal for its own group and stays alive.
+fn script() -> String {
+    r"import { spawn, spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const ps = spawnSync('ps', ['-o', 'pgid=,tpgid=', '-p', String(process.pid)], { encoding: 'utf8' });
+console.log('PGRP ' + ps.stdout.trim().split(/\s+/).join(' '));
+const mode = process.argv[2];
+if (mode === 'read') {
+  const r = spawnSync('sh', ['-c', 'echo ready-for-input > /dev/tty; read l < /dev/tty; echo got:$l'], { encoding: 'utf8' });
+  console.log(r.stdout.trim());
+} else if (mode === 'idle') {
+  writeFileSync('/dev/tty', 'ready-for-signal\n');
+  setInterval(() => {}, 1000);
+} else if (mode === 'self-exit') {
+  writeFileSync('/dev/tty', 'ready-for-signal\n');
+  setTimeout(() => process.exit(0), 2000);
+} else if (mode === 'stopped-child') {
+  process.on('SIGTSTP', () => {});
+  spawnSync('sh', ['-c', 'echo ready-for-stop > /dev/tty; sleep 3'], { stdio: 'inherit' });
+  console.log('CHILD-DONE');
+} else if (mode === 'dead-group') {
+  spawnSync('python3', ['-c', 'TAKE_TERMINAL_PY'], { stdio: 'ignore' });
+} else if (mode === 'live-group') {
+  const child = spawn('python3', ['-c', 'KEEP_TERMINAL_PY'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe'] });
+  child.stdio[3].once('data', () => { child.stdio[3].destroy(); child.unref(); });
+}
+"
+    .replace("TAKE_TERMINAL_PY", TAKE_TERMINAL_PY)
+    .replace("KEEP_TERMINAL_PY", KEEP_TERMINAL_PY)
+}
 
 /// What `ps -o pgid=,tpgid=` reported for a process.
 #[derive(Debug, PartialEq, Eq)]
@@ -107,7 +136,7 @@ fn on_pty(sb: &Sandbox, shell_command: &str, typed: &[(&str, &str)]) -> Session 
 
 /// `run` of the test script in `mode` with the runner flags `flags`, as a shell command line.
 fn run_line(sb: &Sandbox, mode: &str, flags: &str) -> String {
-    let script = sb.script("tty.mts", SCRIPT);
+    let script = sb.script("tty.mts", &script());
     format!(
         "'{CLI_BIN}' run '{}' --servers-dir '{}' {flags} -- {mode}",
         script.display(),
@@ -189,6 +218,68 @@ fn ctrl_z_does_not_freeze_the_run_and_ctrl_c_still_cancels_it() {
 
     assert_eq!(session.runner_code, 130, "{session:?}");
     assert_shell_owns_the_terminal(&session);
+}
+
+#[test]
+fn ctrl_z_resumes_a_stopped_descendant_when_the_script_leader_ignores_sigtstp() {
+    let Some(sb) = sandbox("ctrl_z_resumes_a_stopped_descendant_when_the_script_leader_ignores")
+    else {
+        return;
+    };
+    let run = run_line(&sb, "stopped-child", "--timeout 20");
+    let session = on_pty(
+        &sb,
+        &format!("{run}; {REPORT_SHELL}"),
+        &[("ready-for-stop", "\\x1a")],
+    );
+
+    assert_eq!(session.runner_code, 0, "{session:?}");
+    assert!(session.output.contains("CHILD-DONE"), "{session:?}");
+    assert_shell_owns_the_terminal(&session);
+}
+
+#[test]
+fn ctrl_z_does_not_freeze_a_script_that_ends_by_itself() {
+    let Some(sb) = sandbox("ctrl_z_does_not_freeze_a_script_that_ends_by_itself") else {
+        return;
+    };
+    let run = run_line(&sb, "self-exit", "--timeout 20");
+    let session = on_pty(
+        &sb,
+        &format!("{run}; {REPORT_SHELL}"),
+        &[("ready-for-signal", "\\x1a")],
+    );
+
+    assert_eq!(session.runner_code, 0, "{session:?}");
+    assert_shell_owns_the_terminal(&session);
+}
+
+#[test]
+fn the_terminal_returns_to_the_runner_when_a_descendant_leaves_it_with_a_dead_group() {
+    let Some(sb) = sandbox("the_terminal_returns_to_the_runner_when_a_descendant_leaves_it") else {
+        return;
+    };
+    let run = run_line(&sb, "dead-group", "--timeout 20");
+    let session = on_pty(&sb, &format!("{run}; {REPORT_SHELL}"), &[]);
+
+    assert_eq!(session.runner_code, 0, "{session:?}");
+    assert_shell_owns_the_terminal(&session);
+}
+
+/// Guard against an over-eager restore: a live foreign group is never robbed of the terminal.
+#[test]
+fn a_live_foreign_foreground_group_keeps_the_terminal() {
+    let Some(sb) = sandbox("a_live_foreign_foreground_group_keeps_the_terminal") else {
+        return;
+    };
+    let run = run_line(&sb, "live-group", "--timeout 20");
+    let session = on_pty(&sb, &format!("{run}; {REPORT_SHELL}"), &[]);
+
+    assert_eq!(session.runner_code, 0, "{session:?}");
+    assert!(
+        !session.shell.is_foreground(),
+        "the terminal was taken from a live foreign group: {session:?}"
+    );
 }
 
 #[test]

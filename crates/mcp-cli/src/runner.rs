@@ -415,13 +415,17 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
             // above — the export this bounds is sized by what the (possibly hostile or
             // misbehaving) introspected server returned, not by CLI-caller-supplied input.
             FilesError::ResourceLimitExceeded { .. } => ExitCode::SERVER_ERROR,
+            FilesError::HomeDirectory {
+                source: HomeDirError::UnsupportedUserHome { .. },
+            } => ExitCode::INVALID_INPUT,
             FilesError::FileNotFound { .. }
             | FilesError::NotADirectory { .. }
             | FilesError::InvalidPath { .. }
             | FilesError::PathNotAbsolute { .. }
             | FilesError::InvalidPathComponent { .. }
             | FilesError::PathEscapesBase { .. }
-            | FilesError::IoError { .. } => ExitCode::ERROR,
+            | FilesError::IoError { .. }
+            | FilesError::HomeDirectory { .. } => ExitCode::ERROR,
         };
     }
 

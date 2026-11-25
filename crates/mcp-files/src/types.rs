@@ -17,6 +17,8 @@
 
 use std::fmt;
 use std::path::Path;
+
+use mcp_execution_core::HomeDirError;
 use thiserror::Error;
 
 /// Identifies which bounded resource a [`FilesError::ResourceLimitExceeded`] rejection concerns.
@@ -148,6 +150,14 @@ pub enum FilesError {
         path: String,
         /// The base directory `path` was required to resolve inside.
         base: String,
+    },
+
+    /// The export base path starts with `~` and its home directory could not be expanded.
+    #[error("cannot expand the home directory in the export base path")]
+    HomeDirectory {
+        /// The home directory failure, kept typed so callers can classify it.
+        #[source]
+        source: HomeDirError,
     },
 }
 
