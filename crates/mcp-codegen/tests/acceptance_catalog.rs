@@ -170,7 +170,7 @@ fn catalog_entries_show_declared_results_undefined_and_annotation_hints() {
         ),
     );
     deleter.annotations = Some({
-        let mut value = ToolAnnotations::default();
+        let mut value = ToolAnnotations::not_stated();
         value.read_only = Hint::StatedFalse;
         value.destructive = Hint::StatedTrue;
 

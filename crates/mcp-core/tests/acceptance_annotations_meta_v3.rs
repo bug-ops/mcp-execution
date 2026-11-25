@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 fn annotations(title: Option<&str>, read_only: Hint, destructive: Hint) -> ToolAnnotations {
     {
         let mut value = {
-            let mut value = ToolAnnotations::default();
+            let mut value = ToolAnnotations::not_stated();
             value.read_only = read_only;
             value.destructive = destructive;
             value

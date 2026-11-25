@@ -1521,7 +1521,7 @@ fn capture_annotations(
 ) -> Option<ToolAnnotations> {
     let wire = wire.unwrap_or_default();
     let captured = {
-        let mut value = ToolAnnotations::default();
+        let mut value = ToolAnnotations::not_stated();
         value.read_only = Hint::from(wire.read_only_hint);
         value.destructive = Hint::from(wire.destructive_hint);
         value.idempotent = Hint::from(wire.idempotent_hint);

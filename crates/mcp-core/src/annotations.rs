@@ -15,7 +15,7 @@
 //! ```
 //! use mcp_execution_core::annotations::{AnnotationTitle, Hint, ToolAnnotations};
 //!
-//! let mut annotations = ToolAnnotations::default();
+//! let mut annotations = ToolAnnotations::not_stated();
 //! annotations.title = AnnotationTitle::new("Delete file");
 //! annotations.read_only = Hint::StatedFalse;
 //! annotations.destructive = Hint::StatedTrue;
@@ -119,16 +119,17 @@ impl From<AnnotationTitle> for String {
 
 /// The annotations an MCP server advertised for one tool.
 ///
-/// Every field value is legal. `Default` (no title, every hint [`Hint::NotStated`]) is the
-/// starting point for building a value; the absence of annotations is still
-/// `Option::<ToolAnnotations>::None` on the carrying type. Values are advisory and untrusted.
+/// Every field value is legal and there is deliberately no `Default`: the absence of annotations
+/// is `Option::<ToolAnnotations>::None` on the carrying type, never an all-[`Hint::NotStated`]
+/// value. [`ToolAnnotations::not_stated`] is the explicit starting point for building a value.
+/// Values are advisory and untrusted.
 ///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
 ///
-/// let mut annotations = ToolAnnotations::default();
+/// let mut annotations = ToolAnnotations::not_stated();
 /// annotations.read_only = Hint::StatedTrue;
 ///
 /// let json = serde_json::to_string(&annotations).unwrap();
@@ -150,9 +151,24 @@ pub struct ToolAnnotations {
     pub open_world: Hint,
 }
 
-impl Default for ToolAnnotations {
-    /// No title and no stated hint.
-    fn default() -> Self {
+impl ToolAnnotations {
+    /// Annotations with no title and every hint [`Hint::NotStated`], the starting point for
+    /// building a value from stated hints.
+    ///
+    /// There is deliberately no `Default`: an absent annotation set is
+    /// `Option::<ToolAnnotations>::None`, which `unwrap_or_default` must not turn into a value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
+    ///
+    /// let annotations = ToolAnnotations::not_stated();
+    /// assert!(annotations.title.is_none());
+    /// assert_eq!(annotations.read_only, Hint::NotStated);
+    /// ```
+    #[must_use]
+    pub const fn not_stated() -> Self {
         Self {
             title: None,
             read_only: Hint::NotStated,

@@ -8,7 +8,10 @@
 //! ```
 //! use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 //!
-//! let file = GeneratedFile::new("tools/sendMessage.ts".to_string(), "export function sendMessage() {}".to_string());
+//! let file = GeneratedFile::new(
+//!     "tools/sendMessage.ts".to_string(),
+//!     "export function sendMessage() {}".to_string(),
+//! );
 //!
 //! let mut code = GeneratedCode::new();
 //! code.files = vec![file];

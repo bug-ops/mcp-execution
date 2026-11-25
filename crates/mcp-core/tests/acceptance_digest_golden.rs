@@ -28,7 +28,7 @@ fn tool_digest_golden_vector_without_annotations() {
 fn tool_digest_golden_vector_with_annotations_ignores_the_title() {
     let schema = json!({"type": "object", "properties": {"path": {"type": "string"}}});
     let annotations = {
-        let mut value = ToolAnnotations::default();
+        let mut value = ToolAnnotations::not_stated();
         value.read_only = Hint::StatedFalse;
         value.destructive = Hint::StatedTrue;
         value.open_world = Hint::StatedFalse;
