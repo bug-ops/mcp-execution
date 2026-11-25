@@ -329,13 +329,7 @@ mod tests {
     }
 
     fn entry<'a>(name: &'a str, schema: &'a serde_json::Value) -> ToolDigestEntry<'a> {
-        ToolDigestEntry {
-            name,
-            description: "d",
-            input_schema: schema,
-            output_schema: None,
-            annotations: None,
-        }
+        ToolDigestEntry::new(name, "d", schema)
     }
 
     #[test]

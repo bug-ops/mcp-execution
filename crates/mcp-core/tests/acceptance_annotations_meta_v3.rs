@@ -22,12 +22,10 @@ fn annotations(title: Option<&str>, read_only: Hint, destructive: Hint) -> ToolA
 }
 
 fn digest_with(schema: &Value, annotations: Option<&ToolAnnotations>) -> ToolDigest {
-    ToolDigest::compute(&[ToolDigestEntry {
-        name: "delete_file",
-        description: "Deletes a file",
-        input_schema: schema,
-        output_schema: None,
-        annotations,
+    ToolDigest::compute(&[{
+        let mut value = ToolDigestEntry::new("delete_file", "Deletes a file", schema);
+        value.annotations = annotations;
+        value
     }])
 }
 

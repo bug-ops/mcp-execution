@@ -13,13 +13,11 @@ const WITH_ANNOTATIONS: &str = "e4d7bbba68888ffabaef92b59756a94649c256cd58be2ceb
 #[test]
 fn tool_digest_golden_vector_without_annotations() {
     let schema = json!({"type": "object", "properties": {"path": {"type": "string"}}});
-    let digest = ToolDigest::compute(&[ToolDigestEntry {
-        name: "delete_file",
-        description: "Deletes a file",
-        input_schema: &schema,
-        output_schema: None,
-        annotations: None,
-    }]);
+    let digest = ToolDigest::compute(&[ToolDigestEntry::new(
+        "delete_file",
+        "Deletes a file",
+        &schema,
+    )]);
 
     assert_eq!(digest.as_str(), WITHOUT_ANNOTATIONS);
 }
@@ -36,12 +34,10 @@ fn tool_digest_golden_vector_with_annotations_ignores_the_title() {
         value.title = AnnotationTitle::new("Any title");
         value
     };
-    let digest = ToolDigest::compute(&[ToolDigestEntry {
-        name: "delete_file",
-        description: "Deletes a file",
-        input_schema: &schema,
-        output_schema: None,
-        annotations: Some(&annotations),
+    let digest = ToolDigest::compute(&[{
+        let mut value = ToolDigestEntry::new("delete_file", "Deletes a file", &schema);
+        value.annotations = Some(&annotations);
+        value
     }]);
 
     assert_eq!(digest.as_str(), WITH_ANNOTATIONS);

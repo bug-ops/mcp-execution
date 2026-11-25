@@ -155,15 +155,33 @@ impl<'a> ToolCall<'a> {
 /// ```
 /// use mcp_execution_introspector::ServerText;
 ///
-/// let text = ServerText { text: "boom".to_string(), truncated: false };
+/// let text = ServerText::new("boom".to_string(), false);
 /// assert!(!text.truncated);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ServerText {
     /// Sanitized text.
     pub text: String,
     /// Whether the original was longer than the cap.
     pub truncated: bool,
+}
+
+impl ServerText {
+    /// Creates server text from already sanitized `text` and whether it was cut.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_introspector::ServerText;
+    ///
+    /// let text = ServerText::new("boom".to_string(), false);
+    /// assert!(!text.truncated);
+    /// ```
+    #[must_use]
+    pub const fn new(text: String, truncated: bool) -> Self {
+        Self { text, truncated }
+    }
 }
 
 /// How a tool call ended, when the call itself completed.

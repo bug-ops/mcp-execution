@@ -227,10 +227,7 @@ mod tests {
 
     #[test]
     fn server_message_is_escaped_and_marked() {
-        let text = ServerText {
-            text: "x\u{1b}[2J".to_string(),
-            truncated: true,
-        };
+        let text = ServerText::new("x\u{1b}[2J".to_string(), true);
         let line = server_message(Some(&text));
         assert!(line.starts_with("; server message, truncated: \""));
         assert!(!line.contains('\u{1b}'));

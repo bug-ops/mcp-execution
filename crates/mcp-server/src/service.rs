@@ -341,8 +341,8 @@ impl GeneratorService {
         Parameters(params): Parameters<IntrospectServerParams>,
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
-        // `params.server_id` is a `ServerSlug`, so an invalid id was already rejected as invalid
-        // params when the request was deserialized.
+        // `params.server_id` is a `ServerSlug`, so an invalid id never reaches this handler:
+        // argument deserialization fails and rmcp answers with a tool result with `isError: true`.
         let server_slug = params.server_id;
         let server_id = ServerId::from(server_slug.clone());
         tracing::Span::current().record("server_id", tracing::field::display(&server_id));

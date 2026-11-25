@@ -239,7 +239,7 @@ Exit 0: no drift. Exit 5: the tool list or endpoint differs from the recorded on
 
 | Runtime | Generated tool files (`<runtime> <tool>.ts '<json>'`) | `run`, `--typecheck`, `--restrict` |
 |---------|------------------------------------------------------|-------------------------------------|
-| Node.js 22.18 and newer | Supported | Supported |
+| Node.js 22.18+ (on the 23 line, 23.6+) | Supported | Supported |
 | Bun | Supported (tested with `bun <tool>.ts '<json>'`) | Not supported: `run` starts Node.js |
 | Deno | Supported (tested with `deno run -A <tool>.ts '<json>'`) | Not supported: `run` starts Node.js |
 

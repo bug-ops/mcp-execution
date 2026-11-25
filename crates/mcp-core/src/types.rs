@@ -967,6 +967,19 @@ mod tests {
     }
 
     #[test]
+    fn test_server_slug_as_ref_and_borrow_give_the_slug_text() {
+        use std::borrow::Borrow as _;
+
+        let slug = ServerSlug::new("my-server").unwrap();
+        let as_ref: &str = slug.as_ref();
+        let borrowed: &str = slug.borrow();
+        assert_eq!(as_ref, "my-server");
+        assert_eq!(borrowed, "my-server");
+        let set = std::collections::HashSet::from([slug]);
+        assert!(set.contains("my-server"));
+    }
+
+    #[test]
     fn test_server_slug_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<ServerSlug>();

@@ -241,10 +241,7 @@ async fn call_tool_reports_a_tool_error_with_bounded_server_text() {
     assert_eq!(
         short,
         ToolCallOutcome::ToolError {
-            server_text: Some(ServerText {
-                text: "boom".into(),
-                truncated: false
-            })
+            server_text: Some(ServerText::new("boom".into(), false))
         }
     );
     let ToolCallOutcome::ToolError {

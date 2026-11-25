@@ -368,12 +368,12 @@ impl ToolInfo {
     /// ```
     #[must_use]
     pub fn digest_entry(&self) -> ToolDigestEntry<'_> {
-        ToolDigestEntry {
-            name: self.name.as_str(),
-            description: &self.description,
-            input_schema: &self.input_schema,
-            output_schema: self.output_schema.as_ref(),
-            annotations: self.annotations.as_ref(),
+        {
+            let mut value =
+                ToolDigestEntry::new(self.name.as_str(), &self.description, &self.input_schema);
+            value.output_schema = self.output_schema.as_ref();
+            value.annotations = self.annotations.as_ref();
+            value
         }
     }
 }

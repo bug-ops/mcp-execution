@@ -11,7 +11,9 @@
 
 mod common;
 
-use common::{Sandbox, WATCHDOG, require_alt_runtime, run_with_watchdog};
+use std::path::Path;
+
+use common::{ALT_RUNTIME_SKIP_MARKER, Sandbox, WATCHDOG, require_alt_runtime, run_with_watchdog};
 use serde_json::{Value, json};
 
 /// Generates the fixture package and runs its `echo.ts` with `{"a":1}` through `command`.
@@ -30,6 +32,15 @@ fn echo_through(program: &str, leading_args: &[&str]) {
         .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {:?}", out.stdout));
     assert_eq!(printed, json!({"a": 1}));
     assert_eq!(sb.fixture_log(), ["initialize", "call echo"]);
+}
+
+#[test]
+fn the_ci_ran_not_skipped_check_greps_the_skip_marker() {
+    let workflow = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/ci.yml");
+    let text = std::fs::read_to_string(workflow).unwrap();
+
+    let grep = format!("grep -q '{ALT_RUNTIME_SKIP_MARKER}' compat.log");
+    assert!(text.contains(&grep), "ci.yml must run `{grep}`");
 }
 
 #[test]

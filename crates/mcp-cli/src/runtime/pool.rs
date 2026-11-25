@@ -263,7 +263,9 @@ fn reply_of(server: &ServerId, tool: &ToolName, outcome: ToolCallOutcome) -> Cal
         ),
     };
     let (server_message, server_message_truncated) = match text {
-        Some(ServerText { text, truncated }) => (Some(text), Some(truncated)),
+        Some(ServerText {
+            text, truncated, ..
+        }) => (Some(text), Some(truncated)),
         None => (None, None),
     };
     CallReply {

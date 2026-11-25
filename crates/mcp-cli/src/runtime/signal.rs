@@ -11,12 +11,12 @@ use mcp_execution_core::cli::ExitCode;
 
 /// A signal that asked the runner to stop.
 ///
-/// On Unix a SIGINT, SIGHUP or SIGQUIT that was already ignored when the runner started (`nohup`
-/// ignores SIGHUP, a background job of a non-interactive shell ignores SIGINT and SIGQUIT) stays
-/// ignored and never produces a [`RunnerSignal`]; SIGTERM is always handled. The script is another
-/// matter: node resets
-/// an inherited SIGHUP disposition, so a foreground run on a terminal still ends when the terminal
-/// hangs up; use `setsid` or tmux for a run that must survive it.
+/// On Unix the runner does not subscribe to a SIGINT, SIGHUP or SIGQUIT that was already ignored
+/// when it started (`nohup` ignores SIGHUP, a background job of a non-interactive shell ignores
+/// SIGINT and SIGQUIT); SIGTERM is always handled. The script is another matter: node resets these
+/// inherited ignores, so on a terminal, where the script is the foreground group, Ctrl-C, Ctrl-\
+/// or a hang-up still end it and the run is reported as cancelled by that signal; use `setsid` or
+/// tmux for a run that must survive a closed terminal.
 ///
 /// On Windows, Ctrl-C and Ctrl-Break both report as [`RunnerSignal::Interrupt`].
 ///
