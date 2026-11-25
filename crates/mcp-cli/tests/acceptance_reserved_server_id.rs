@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{Sandbox, WATCHDOG, run_with_watchdog};
+use common::Sandbox;
 use serde_json::json;
 
 #[test]
@@ -40,6 +40,7 @@ fn generate_from_config_suggests_a_suffixed_name_for_a_reserved_key() {
 #[cfg(unix)]
 #[test]
 fn generate_derives_a_suffixed_id_from_a_command_named_like_a_device() {
+    use common::{WATCHDOG, run_with_watchdog};
     use std::os::unix::fs::PermissionsExt as _;
 
     let sb = Sandbox::new();
