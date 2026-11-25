@@ -102,7 +102,12 @@ fn run_generate(root: &Path, observed: &Path) -> (Output, String) {
 
 fn root() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().canonicalize().unwrap();
+    let canonical = dir.path().canonicalize().unwrap();
+    // Node cannot resolve a Windows verbatim path (`\\?\C:\...`) given as a script.
+    let path = canonical
+        .to_str()
+        .and_then(|s| s.strip_prefix(r"\\?\"))
+        .map_or_else(|| canonical.clone(), std::path::PathBuf::from);
     (dir, path)
 }
 

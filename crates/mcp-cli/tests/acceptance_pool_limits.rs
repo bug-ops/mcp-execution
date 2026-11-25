@@ -23,14 +23,14 @@ fn prepared(test: &str) -> Option<Sandbox> {
 }
 
 fn bridge_import(sb: &Sandbox) -> String {
-    format!(
-        "import {{ callMCPTool }} from '{}';\n",
-        sb.servers
-            .join(SERVER)
-            .join("_runtime")
-            .join("mcp-bridge.ts")
-            .display()
-    )
+    let bridge = sb
+        .servers
+        .join(SERVER)
+        .join("_runtime")
+        .join("mcp-bridge.ts");
+    let url = url::Url::from_file_path(&bridge)
+        .unwrap_or_else(|()| panic!("the bridge path is not absolute"));
+    format!("import {{ callMCPTool }} from '{url}';\n")
 }
 
 #[test]

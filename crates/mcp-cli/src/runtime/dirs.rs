@@ -9,6 +9,9 @@
 //! | macOS | `dirs::data_local_dir()/mcp-execution` |
 //! | Windows | `%LOCALAPPDATA%/mcp-execution` (absolute), else `dirs::data_local_dir()/mcp-execution` |
 //!
+//! The policy file lives under the config directory instead; on Windows that is an absolute
+//! `%APPDATA%`, else `dirs::config_dir()`.
+//!
 //! A missing base directory is an error, never a silent temp-dir fallback. On Unix the
 //! directories are `0700`; on Windows the profile ACL applies and no mode bits are set.
 
@@ -249,7 +252,7 @@ impl RuntimeDirs {
     /// assert!(path.ends_with("policy.json"));
     /// ```
     pub fn policy_path() -> Result<PathBuf> {
-        let base = dirs::config_dir()
+        let base = platform_config_base()
             .context("cannot determine the config directory for this platform")?;
         Ok(base.join(STATE_DIR_NAME).join(POLICY_FILE_NAME))
     }
@@ -295,6 +298,19 @@ fn platform_state_base() -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .or_else(dirs::data_local_dir)
+}
+
+#[cfg(windows)]
+fn platform_config_base() -> Option<PathBuf> {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(dirs::config_dir)
+}
+
+#[cfg(not(windows))]
+fn platform_config_base() -> Option<PathBuf> {
+    dirs::config_dir()
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
