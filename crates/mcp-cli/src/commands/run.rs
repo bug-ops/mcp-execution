@@ -56,7 +56,10 @@ pub(crate) const TEST_READY_FILE_ENV: &str = "MCP_EXECUTION_TEST_READY_FILE";
 #[cfg(feature = "test-fixtures")]
 fn announce_readiness() {
     if let Some(path) = std::env::var_os(TEST_READY_FILE_ENV)
-        && let Err(error) = std::fs::write(&path, b"")
+        && let Err(error) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
     {
         tracing::debug!("could not create the readiness file: {error}");
     }

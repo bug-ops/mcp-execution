@@ -745,8 +745,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_timed_out_tsc_takes_its_descendants_with_it() {
-        use std::assert_matches;
-
         use crate::runtime::exec::tree_test_support::{
             assert_gone_soon, recorded_pid, sleeping_grandchild,
         };

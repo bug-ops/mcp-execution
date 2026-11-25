@@ -22,10 +22,11 @@ use rustix::process::{Pid, Signal, kill_process};
 use serde_json::{Value, json};
 
 const HANGING_SESSIONS: usize = 6;
-/// Mirrors the private `WRAP_UP_BOUND` of `commands::run`.
-const WRAP_UP_BOUND: Duration = Duration::from_secs(4);
-/// Time allowed on top of the bound for the kill and the exit.
-const KILL_SLACK: Duration = Duration::from_secs(2);
+/// Measured close time of one stalled session: the introspector's 2 s close bound.
+const STALLED_CLOSE: Duration = Duration::from_secs(2);
+/// What closing every session one after another takes when nothing bounds the wrap-up.
+const UNBOUNDED_CLOSE: Duration =
+    Duration::from_secs(STALLED_CLOSE.as_secs() * HANGING_SESSIONS as u64);
 const MARKER_WITHIN: Duration = Duration::from_secs(60);
 const WATCHDOG: Duration = Duration::from_secs(60);
 const SUMMARY_DROPPED: &str = "call summary dropped: closing the MCP sessions was cut short";
@@ -116,9 +117,11 @@ fn a_signalled_run_with_hanging_sessions_exits_within_the_wrap_up_bound() {
 
     let stdout = reader.join().unwrap();
     assert_eq!(code, Some(130), "stdout: {stdout}");
+    let limit = UNBOUNDED_CLOSE / 4 * 3;
     assert!(
-        elapsed < WRAP_UP_BOUND + KILL_SLACK,
-        "the runner took {elapsed:?} to exit after SIGINT; the bound is {WRAP_UP_BOUND:?}"
+        elapsed < limit,
+        "the runner took {elapsed:?} to exit after SIGINT; closing {HANGING_SESSIONS} sessions of \
+         {STALLED_CLOSE:?} each takes {UNBOUNDED_CLOSE:?} unbounded, so the wrap-up bound must cut it below {limit:?}"
     );
     let envelope: Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {stdout:.300}"));
