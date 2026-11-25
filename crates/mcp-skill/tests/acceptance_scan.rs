@@ -105,23 +105,20 @@ async fn scan_tools_directory_rejects_a_sidecar_over_the_shared_cap() {
 }
 
 fn param(name: &str, required: bool) -> ParsedParameter {
-    ParsedParameter {
-        name: name.to_string(),
-        typescript_type: "string".to_string(),
-        required,
-        description: None,
-    }
+    ParsedParameter::new(name.to_string(), "string".to_string(), required)
 }
 
 fn tool_with_params(params: Vec<ParsedParameter>) -> ParsedToolFile {
-    ParsedToolFile {
-        name: "search".to_string(),
-        typescript_name: "search".to_string(),
-        server_id: ServerId::new("acme").unwrap(),
-        category: None,
-        keywords: vec![],
-        description: Some("Searches".to_string()),
-        parameters: params,
+    {
+        let mut value = ParsedToolFile::new(
+            "search".to_string(),
+            "search".to_string(),
+            ServerId::new("acme").unwrap(),
+            vec![],
+            params,
+        );
+        value.description = Some("Searches".to_string());
+        value
     }
 }
 

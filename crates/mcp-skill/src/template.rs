@@ -17,6 +17,7 @@ use crate::types::GenerateSkillResult;
 /// The underlying template-engine error is boxed behind `dyn Error`, so the engine's own types
 /// are not part of this crate's public API.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TemplateError {
     /// Template rendering failed.
     #[error("template rendering failed: {0}")]

@@ -8,14 +8,9 @@
 //! ```
 //! use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 //!
-//! let file = GeneratedFile {
-//!     path: "tools/sendMessage.ts".to_string(),
-//!     content: "export function sendMessage() {}".to_string(),
-//! };
+//! let file = GeneratedFile::new("tools/sendMessage.ts".to_string(), "export function sendMessage() {}".to_string());
 //!
-//! let code = GeneratedCode {
-//!     files: vec![file],
-//! };
+//! let code = { let mut value = GeneratedCode::new(); value.files = vec![file]; value };
 //!
 //! assert_eq!(code.files.len(), 1);
 //! ```
@@ -34,13 +29,12 @@ use std::collections::HashMap;
 /// ```
 /// use mcp_execution_codegen::GeneratedCode;
 ///
-/// let code = GeneratedCode {
-///     files: vec![],
-/// };
+/// let code = { let mut value = GeneratedCode::new(); value.files = vec![]; value };
 ///
 /// assert_eq!(code.file_count(), 0);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GeneratedCode {
     /// List of generated files with paths and contents
     pub files: Vec<GeneratedFile>,
@@ -81,19 +75,13 @@ impl GeneratedCode {
     /// use mcp_execution_core::Error;
     ///
     /// let mut code = GeneratedCode::new();
-    /// code.add_file(GeneratedFile {
-    ///     path: "index.ts".to_string(),
-    ///     content: "export {}".to_string(),
-    /// })
+    /// code.add_file(GeneratedFile::new("index.ts".to_string(), "export {}".to_string()))
     /// .unwrap();
     ///
     /// assert_eq!(code.file_count(), 1);
     ///
     /// let err = code
-    ///     .add_file(GeneratedFile {
-    ///         path: "index.ts".to_string(),
-    ///         content: "export const x = 1;".to_string(),
-    ///     })
+    ///     .add_file(GeneratedFile::new("index.ts".to_string(), "export const x = 1;".to_string()))
     ///     .unwrap_err();
     /// assert_matches!(err, Error::DuplicateGeneratedFilePath { .. });
     /// ```
@@ -129,10 +117,7 @@ impl GeneratedCode {
     /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
     ///
     /// let mut code = GeneratedCode::new();
-    /// code.add_file(GeneratedFile {
-    ///     path: "test.ts".to_string(),
-    ///     content: "content".to_string(),
-    /// });
+    /// code.add_file(GeneratedFile::new("test.ts".to_string(), "content".to_string()));
     ///
     /// for file in code.files() {
     ///     println!("Path: {}", file.path);
@@ -160,14 +145,12 @@ impl Default for GeneratedCode {
 /// ```
 /// use mcp_execution_codegen::GeneratedFile;
 ///
-/// let file = GeneratedFile {
-///     path: "types.ts".to_string(),
-///     content: "export type Params = {};".to_string(),
-/// };
+/// let file = GeneratedFile::new("types.ts".to_string(), "export type Params = {};".to_string());
 ///
 /// assert_eq!(file.path, "types.ts");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GeneratedFile {
     /// Relative path where the file should be written
     pub path: String,
@@ -176,6 +159,21 @@ pub struct GeneratedFile {
 }
 
 impl GeneratedFile {
+    /// Creates a file with the given relative `path` and `content`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::GeneratedFile;
+    ///
+    /// let file = GeneratedFile::new("catalog.ts".to_string(), "export {};".to_string());
+    /// assert_eq!(file.path(), "catalog.ts");
+    /// ```
+    #[must_use]
+    pub const fn new(path: String, content: String) -> Self {
+        Self { path, content }
+    }
+
     /// Returns the file path.
     ///
     /// # Examples
@@ -183,10 +181,7 @@ impl GeneratedFile {
     /// ```
     /// use mcp_execution_codegen::GeneratedFile;
     ///
-    /// let file = GeneratedFile {
-    ///     path: "test.ts".to_string(),
-    ///     content: String::new(),
-    /// };
+    /// let file = GeneratedFile::new("test.ts".to_string(), String::new());
     ///
     /// assert_eq!(file.path(), "test.ts");
     /// ```
@@ -203,10 +198,7 @@ impl GeneratedFile {
     /// ```
     /// use mcp_execution_codegen::GeneratedFile;
     ///
-    /// let file = GeneratedFile {
-    ///     path: "test.ts".to_string(),
-    ///     content: "export {}".to_string(),
-    /// };
+    /// let file = GeneratedFile::new("test.ts".to_string(), "export {}".to_string());
     ///
     /// assert_eq!(file.content(), "export {}");
     /// ```
@@ -260,17 +252,13 @@ pub struct TemplateContext {
 /// use mcp_execution_codegen::ToolDefinition;
 /// use serde_json::json;
 ///
-/// let tool = ToolDefinition {
-///     name: "send_message".to_string(),
-///     description: "Sends a message".to_string(),
-///     input_schema: json!({"type": "object"}),
-///     typescript_name: "sendMessage".to_string(),
-/// };
+/// let tool = ToolDefinition::new("send_message".to_string(), "Sends a message".to_string(), json!({"type": "object"}), "sendMessage".to_string());
 ///
 /// assert_eq!(tool.name, "send_message");
 /// assert_eq!(tool.typescript_name, "sendMessage");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolDefinition {
     /// Original tool name (`snake_case` from MCP)
     pub name: String,
@@ -280,6 +268,38 @@ pub struct ToolDefinition {
     pub input_schema: serde_json::Value,
     /// TypeScript-friendly name (camelCase)
     pub typescript_name: String,
+}
+
+impl ToolDefinition {
+    /// Creates a tool definition from its four fields.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::ToolDefinition;
+    ///
+    /// let tool = ToolDefinition::new(
+    ///     "create_issue".to_string(),
+    ///     "Create an issue".to_string(),
+    ///     serde_json::json!({"type": "object"}),
+    ///     "createIssue".to_string(),
+    /// );
+    /// assert_eq!(tool.typescript_name, "createIssue");
+    /// ```
+    #[must_use]
+    pub const fn new(
+        name: String,
+        description: String,
+        input_schema: serde_json::Value,
+        typescript_name: String,
+    ) -> Self {
+        Self {
+            name,
+            description,
+            input_schema,
+            typescript_name,
+        }
+    }
 }
 
 #[cfg(test)]

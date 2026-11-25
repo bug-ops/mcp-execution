@@ -57,15 +57,15 @@ fn test_meta_json_sidecar_survives_export() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut code = GeneratedCode::new();
-    code.add_file(GeneratedFile {
-        path: "index.ts".to_string(),
-        content: "export {};".to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "index.ts".to_string(),
+        "export {};".to_string(),
+    ))
     .unwrap();
-    code.add_file(GeneratedFile {
-        path: "_meta.json".to_string(),
-        content: r#"{"schema_version":1,"server_id":"github"}"#.to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "_meta.json".to_string(),
+        r#"{"schema_version":1,"server_id":"github"}"#.to_string(),
+    ))
     .unwrap();
 
     let vfs = FilesBuilder::from_generated_code(code, "/github")
@@ -90,10 +90,10 @@ fn test_export_github_server_structure() {
     let mut code = GeneratedCode::new();
 
     // Add index file
-    code.add_file(GeneratedFile {
-        path: "index.ts".to_string(),
-        content: "// GitHub MCP Server\nexport * from './tools';".to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "index.ts".to_string(),
+        "// GitHub MCP Server\nexport * from './tools';".to_string(),
+    ))
     .unwrap();
 
     // Simulate 30 GitHub tools
@@ -131,18 +131,18 @@ fn test_export_github_server_structure() {
     ];
 
     for tool in &tool_names {
-        code.add_file(GeneratedFile {
-            path: format!("tools/{tool}.ts"),
-            content: format!("export function {tool}(params: any) {{ return {{}}; }}"),
-        })
+        code.add_file(GeneratedFile::new(
+            format!("tools/{tool}.ts"),
+            format!("export function {tool}(params: any) {{ return {{}}; }}"),
+        ))
         .unwrap();
     }
 
     // Add manifest
-    code.add_file(GeneratedFile {
-        path: "manifest.json".to_string(),
-        content: format!(r#"{{"version": "1.0.0", "tools": {}}}"#, tool_names.len()),
-    })
+    code.add_file(GeneratedFile::new(
+        "manifest.json".to_string(),
+        format!(r#"{{"version": "1.0.0", "tools": {}}}"#, tool_names.len()),
+    ))
     .unwrap();
 
     // Export to filesystem
@@ -177,15 +177,15 @@ fn test_export_multiple_servers() {
     // Create GitHub server structure
     let github_code = {
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "createIssue.ts".to_string(),
-            content: "export function createIssue() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "createIssue.ts".to_string(),
+            "export function createIssue() {}".to_string(),
+        ))
         .unwrap();
-        code.add_file(GeneratedFile {
-            path: "getIssue.ts".to_string(),
-            content: "export function getIssue() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "getIssue.ts".to_string(),
+            "export function getIssue() {}".to_string(),
+        ))
         .unwrap();
         code
     };
@@ -193,15 +193,15 @@ fn test_export_multiple_servers() {
     // Create Slack server structure
     let slack_code = {
         let mut code = GeneratedCode::new();
-        code.add_file(GeneratedFile {
-            path: "sendMessage.ts".to_string(),
-            content: "export function sendMessage() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "sendMessage.ts".to_string(),
+            "export function sendMessage() {}".to_string(),
+        ))
         .unwrap();
-        code.add_file(GeneratedFile {
-            path: "listChannels.ts".to_string(),
-            content: "export function listChannels() {}".to_string(),
-        })
+        code.add_file(GeneratedFile::new(
+            "listChannels.ts".to_string(),
+            "export function listChannels() {}".to_string(),
+        ))
         .unwrap();
         code
     };
@@ -364,26 +364,26 @@ fn test_export_typescript_module() {
 
     let mut code = GeneratedCode::new();
 
-    code.add_file(GeneratedFile {
-        path: "index.ts".to_string(),
-        content: r"export * from './types';
+    code.add_file(GeneratedFile::new(
+        "index.ts".to_string(),
+        r"export * from './types';
 export * from './tools';"
             .to_string(),
-    })
+    ))
     .unwrap();
 
-    code.add_file(GeneratedFile {
-        path: "types/index.ts".to_string(),
-        content: "export type ToolParams = { id: number };".to_string(),
-    })
+    code.add_file(GeneratedFile::new(
+        "types/index.ts".to_string(),
+        "export type ToolParams = { id: number };".to_string(),
+    ))
     .unwrap();
 
-    code.add_file(GeneratedFile {
-        path: "tools/create.ts".to_string(),
-        content: r"import type { ToolParams } from '../types';
+    code.add_file(GeneratedFile::new(
+        "tools/create.ts".to_string(),
+        r"import type { ToolParams } from '../types';
 export function create(params: ToolParams) { return params.id; }"
             .to_string(),
-    })
+    ))
     .unwrap();
 
     let vfs = FilesBuilder::from_generated_code(code, "/module")

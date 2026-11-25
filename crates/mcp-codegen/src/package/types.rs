@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 /// assert_eq!(context.server_id, "github");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct ToolContext {
     /// MCP server identifier, sanitized for safe embedding in a `JSDoc` comment
     pub server_id: String,
@@ -102,6 +103,7 @@ pub struct ToolContext {
 /// assert_eq!(context.tool_count, 30);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct IndexContext {
     /// Server name for documentation
     pub server_name: String,
@@ -159,15 +161,12 @@ pub struct ToolSummary {
 /// ```
 /// use mcp_execution_codegen::package::ToolCategorization;
 ///
-/// let cat = ToolCategorization {
-///     category: "issues".to_string(),
-///     keywords: vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()],
-///     short_description: "Create a new issue in a repository".to_string(),
-/// };
+/// let cat = ToolCategorization::new("issues".to_string(), vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()], "Create a new issue in a repository".to_string());
 ///
 /// assert_eq!(cat.category, "issues");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolCategorization {
     /// Category for tool grouping
     pub category: String,
@@ -186,9 +185,7 @@ pub struct ToolCategorization {
 /// ```
 /// use mcp_execution_codegen::package::{CategoryInfo, ToolSummary};
 ///
-/// let category = CategoryInfo {
-///     name: "issues".to_string(),
-///     tools: vec![
+/// let category = CategoryInfo::new("issues".to_string(), vec![
 ///         ToolSummary {
 ///             typescript_name: "createIssue".to_string(),
 ///             description: "Creates a new issue".to_string(),
@@ -196,17 +193,59 @@ pub struct ToolCategorization {
 ///             keywords: Some("create,issue".to_string()),
 ///             short_description: Some("Create issue".to_string()),
 ///         },
-///     ],
-/// };
+///     ]);
 ///
 /// assert_eq!(category.name, "issues");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CategoryInfo {
     /// Category name
     pub name: String,
     /// Tools in this category
     pub tools: Vec<ToolSummary>,
+}
+
+impl ToolCategorization {
+    /// Creates a categorization from its category, keywords and short description.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::package::ToolCategorization;
+    ///
+    /// let categorization = ToolCategorization::new(
+    ///     "issues".to_string(),
+    ///     vec!["create".to_string()],
+    ///     "Create an issue".to_string(),
+    /// );
+    /// assert_eq!(categorization.category, "issues");
+    /// ```
+    #[must_use]
+    pub const fn new(category: String, keywords: Vec<String>, short_description: String) -> Self {
+        Self {
+            category,
+            keywords,
+            short_description,
+        }
+    }
+}
+
+impl CategoryInfo {
+    /// Creates a category from its name and tools.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_codegen::package::CategoryInfo;
+    ///
+    /// let category = CategoryInfo::new("issues".to_string(), vec![]);
+    /// assert!(category.tools.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn new(name: String, tools: Vec<ToolSummary>) -> Self {
+        Self { name, tools }
+    }
 }
 
 /// Context for rendering the runtime bridge template.
@@ -232,6 +271,7 @@ pub struct CategoryInfo {
 /// assert_ne!(context.identifier_pattern(), "");
 /// ```
 #[derive(Debug, Clone, Serialize)]
+#[doc(hidden)]
 pub struct BridgeContext {
     /// Helper protocol version the bridge speaks
     /// ([`mcp_execution_core::helper_protocol::HELPER_PROTOCOL_VERSION`]).

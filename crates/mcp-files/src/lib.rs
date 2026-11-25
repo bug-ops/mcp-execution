@@ -42,15 +42,9 @@
 //! use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
 //!
 //! let mut code = GeneratedCode::new();
-//! code.add_file(GeneratedFile {
-//!     path: "manifest.json".to_string(),
-//!     content: r#"{"version": "1.0"}"#.to_string(),
-//! })
+//! code.add_file(GeneratedFile::new("manifest.json".to_string(), r#"{"version": "1.0"}"#.to_string()))
 //! .unwrap();
-//! code.add_file(GeneratedFile {
-//!     path: "tools/sendMessage.ts".to_string(),
-//!     content: "export function sendMessage() {}".to_string(),
-//! })
+//! code.add_file(GeneratedFile::new("tools/sendMessage.ts".to_string(), "export function sendMessage() {}".to_string()))
 //! .unwrap();
 //!
 //! let vfs = FilesBuilder::from_generated_code(code, "/mcp-tools/servers/github")

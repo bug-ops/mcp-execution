@@ -46,6 +46,7 @@ use uuid::Uuid;
 /// assert_eq!(params.server_id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct IntrospectServerParams {
     /// Unique identifier for the server (e.g., "github", "filesystem").
     ///
@@ -103,27 +104,15 @@ pub struct IntrospectServerParams {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_core::ServerSlug;
-/// use mcp_execution_server::types::{IntrospectServerResult, IntrospectedToolSummary};
-/// use chrono::Utc;
-/// use uuid::Uuid;
+/// use mcp_execution_server::types::IntrospectServerResult;
 ///
-/// let result = IntrospectServerResult {
-///     server_id: ServerSlug::new("github").unwrap(),
-///     server_name: "GitHub MCP Server".to_string(),
-///     tools_found: 1,
-///     tools: vec![IntrospectedToolSummary {
-///         name: "create_issue".to_string(),
-///         description: "Create a new issue".to_string(),
-///         parameters: vec!["title".to_string(), "body".to_string()],
-///     }],
-///     session_id: Uuid::new_v4(),
-///     expires_at: Utc::now(),
-/// };
-///
-/// assert_eq!(result.tools_found, 1);
+/// // Produced by the server only; a client reads it from the tool response.
+/// fn render(value: &IntrospectServerResult) -> serde_json::Result<String> {
+///     serde_json::to_string(value)
+/// }
 /// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[non_exhaustive]
 pub struct IntrospectServerResult {
     /// Server identifier
     pub server_id: ServerSlug,
@@ -154,15 +143,13 @@ pub struct IntrospectServerResult {
 /// ```
 /// use mcp_execution_server::types::IntrospectedToolSummary;
 ///
-/// let summary = IntrospectedToolSummary {
-///     name: "create_issue".to_string(),
-///     description: "Create a new issue".to_string(),
-///     parameters: vec!["title".to_string(), "body".to_string()],
-/// };
-///
-/// assert_eq!(summary.parameters.len(), 2);
+/// // Produced by the server only; a client reads it from the tool response.
+/// fn render(value: &IntrospectedToolSummary) -> serde_json::Result<String> {
+///     serde_json::to_string(value)
+/// }
 /// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[non_exhaustive]
 pub struct IntrospectedToolSummary {
     /// Original tool name
     pub name: String,
@@ -183,22 +170,22 @@ pub struct IntrospectedToolSummary {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_server::types::{SaveCategorizedToolsParams, CategorizedTool};
-/// use uuid::Uuid;
+/// use mcp_execution_server::types::SaveCategorizedToolsParams;
 ///
-/// let params = SaveCategorizedToolsParams {
-///     session_id: Uuid::new_v4(),
-///     categorized_tools: vec![
-///         CategorizedTool {
-///             name: "create_issue".to_string(),
-///             category: "issues".to_string(),
-///             keywords: "create,issue,new,bug,feature".to_string(),
-///             short_description: "Create a new issue in a repository".to_string(),
-///         },
-///     ],
-/// };
+/// let params: SaveCategorizedToolsParams = serde_json::from_value(serde_json::json!({
+///     "session_id": "00000000-0000-0000-0000-000000000000",
+///     "categorized_tools": [{
+///         "name": "create_issue",
+///         "category": "issues",
+///         "keywords": "create,issue,new,bug,feature",
+///         "short_description": "Create a new issue in a repository",
+///     }],
+/// }))
+/// .unwrap();
+/// assert_eq!(params.categorized_tools.len(), 1);
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SaveCategorizedToolsParams {
     /// Session ID from `introspect_server` call
     pub session_id: Uuid,
@@ -220,6 +207,7 @@ pub struct SaveCategorizedToolsParams {
 /// - Keywords for discovery via grep/search
 /// - A concise description for file headers
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct CategorizedTool {
     /// Original tool name (must match introspected tool).
     ///
@@ -258,6 +246,38 @@ pub struct CategorizedTool {
     pub short_description: String,
 }
 
+impl CategorizedTool {
+    /// Creates a categorized tool from its four fields.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_server::types::CategorizedTool;
+    ///
+    /// let tool = CategorizedTool::new(
+    ///     "create_issue".to_string(),
+    ///     "issues".to_string(),
+    ///     "create,issue".to_string(),
+    ///     "Create an issue".to_string(),
+    /// );
+    /// assert_eq!(tool.category, "issues");
+    /// ```
+    #[must_use]
+    pub const fn new(
+        name: String,
+        category: String,
+        keywords: String,
+        short_description: String,
+    ) -> Self {
+        Self {
+            name,
+            category,
+            keywords,
+            short_description,
+        }
+    }
+}
+
 /// Result from saving categorized tools.
 ///
 /// Reports success status, number of files generated, and any errors
@@ -267,19 +287,14 @@ pub struct CategorizedTool {
 ///
 /// ```
 /// use mcp_execution_server::types::SaveCategorizedToolsResult;
-/// use std::collections::HashMap;
 ///
-/// let result = SaveCategorizedToolsResult {
-///     success: true,
-///     files_generated: 3,
-///     output_dir: "~/.claude/servers/github".to_string(),
-///     categories: HashMap::from([("issues".to_string(), 3)]),
-///     errors: vec![],
-/// };
-///
-/// assert!(result.success);
+/// // Produced by the server only; a client reads it from the tool response.
+/// fn render(value: &SaveCategorizedToolsResult) -> serde_json::Result<String> {
+///     serde_json::to_string(value)
+/// }
 /// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SaveCategorizedToolsResult {
     /// Whether generation succeeded
     pub success: bool,
@@ -305,14 +320,13 @@ pub struct SaveCategorizedToolsResult {
 /// ```
 /// use mcp_execution_server::types::ToolGenerationError;
 ///
-/// let error = ToolGenerationError {
-///     tool_name: "create_issue".to_string(),
-///     error: "invalid parameter schema".to_string(),
-/// };
-///
-/// assert_eq!(error.tool_name, "create_issue");
+/// // Produced by the server only; a client reads it from the tool response.
+/// fn render(value: &ToolGenerationError) -> serde_json::Result<String> {
+///     serde_json::to_string(value)
+/// }
 /// ```
 #[derive(Debug, Clone, Serialize, JsonSchema)]
+#[non_exhaustive]
 pub struct ToolGenerationError {
     /// Name of the tool that failed
     pub tool_name: String,
@@ -332,9 +346,11 @@ pub struct ToolGenerationError {
 /// ```
 /// use mcp_execution_server::types::ListGeneratedServersParams;
 ///
-/// let params = ListGeneratedServersParams { base_dir: None };
+/// let params: ListGeneratedServersParams = serde_json::from_value(serde_json::json!({})).unwrap();
+/// assert!(params.base_dir.is_none());
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct ListGeneratedServersParams {
     /// Base directory to scan, relative to `~/.claude/servers`
     /// (default: `~/.claude/servers` itself). Confined to that directory: an
@@ -348,21 +364,20 @@ pub struct ListGeneratedServersParams {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_server::types::{ListGeneratedServersResult, GeneratedServerInfo};
+/// use mcp_execution_server::types::ListGeneratedServersResult;
 ///
-/// let result = ListGeneratedServersResult {
-///     servers: vec![GeneratedServerInfo {
-///         id: "github".to_string(),
-///         tool_count: 12,
-///         generated_at: None,
-///         output_dir: "~/.claude/servers/github".to_string(),
+/// let result: ListGeneratedServersResult = serde_json::from_value(serde_json::json!({
+///     "servers": [{
+///         "id": "github", "tool_count": 12, "generated_at": null,
+///         "output_dir": "~/.claude/servers/github",
 ///     }],
-///     total_servers: 1,
-/// };
-///
+///     "total_servers": 1,
+/// }))
+/// .unwrap();
 /// assert_eq!(result.total_servers, 1);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct ListGeneratedServersResult {
     /// List of servers with generated files
     pub servers: Vec<GeneratedServerInfo>,
@@ -378,16 +393,15 @@ pub struct ListGeneratedServersResult {
 /// ```
 /// use mcp_execution_server::types::GeneratedServerInfo;
 ///
-/// let info = GeneratedServerInfo {
-///     id: "github".to_string(),
-///     tool_count: 12,
-///     generated_at: None,
-///     output_dir: "~/.claude/servers/github".to_string(),
-/// };
-///
+/// let info: GeneratedServerInfo = serde_json::from_value(serde_json::json!({
+///     "id": "github", "tool_count": 12, "generated_at": null,
+///     "output_dir": "~/.claude/servers/github",
+/// }))
+/// .unwrap();
 /// assert_eq!(info.id, "github");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct GeneratedServerInfo {
     /// Server identifier
     pub id: String,
@@ -432,6 +446,7 @@ pub struct GeneratedServerInfo {
 /// # }
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PendingGeneration {
     /// Server identifier
     pub server_id: ServerId,

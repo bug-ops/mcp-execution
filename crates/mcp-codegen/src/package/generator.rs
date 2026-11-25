@@ -427,11 +427,7 @@ impl PackageGenerator<'_> {
     /// let config = ServerConfig::builder().command("/path/to/github-server".to_string()).build()?;
     ///
     /// let mut categorizations = HashMap::new();
-    /// categorizations.insert("create_issue".to_string(), ToolCategorization {
-    ///     category: "issues".to_string(),
-    ///     keywords: vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()],
-    ///     short_description: "Create a new issue".to_string(),
-    /// });
+    /// categorizations.insert("create_issue".to_string(), ToolCategorization::new("issues".to_string(), vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()], "Create a new issue".to_string()));
     ///
     /// let code = generator.generate_with_categories(&info, &config, &categorizations)?;
     /// # Ok(())

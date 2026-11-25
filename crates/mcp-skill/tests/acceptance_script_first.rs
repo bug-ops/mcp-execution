@@ -17,19 +17,21 @@ use mcp_execution_core::{ServerId, ServerSlug};
 use mcp_execution_skill::{ParsedParameter, ParsedToolFile, build_skill_context, render_skill_md};
 
 fn tool(index: usize, category: &str, description: &str) -> ParsedToolFile {
-    ParsedToolFile {
-        name: format!("tool_{index:04}"),
-        typescript_name: format!("tool{index:04}"),
-        server_id: ServerId::new("acme").unwrap(),
-        category: Some(category.to_string()),
-        keywords: vec!["thing".to_string()],
-        description: Some(description.to_string()),
-        parameters: vec![ParsedParameter {
-            name: "repo".to_string(),
-            typescript_type: "string".to_string(),
-            required: true,
-            description: None,
-        }],
+    {
+        let mut value = ParsedToolFile::new(
+            format!("tool_{index:04}"),
+            format!("tool{index:04}"),
+            ServerId::new("acme").unwrap(),
+            vec!["thing".to_string()],
+            vec![ParsedParameter::new(
+                "repo".to_string(),
+                "string".to_string(),
+                true,
+            )],
+        );
+        value.category = Some(category.to_string());
+        value.description = Some(description.to_string());
+        value
     }
 }
 

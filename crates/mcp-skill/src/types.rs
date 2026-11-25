@@ -113,24 +113,16 @@ pub struct GenerateSkillParams {
 ///
 /// ```
 /// use mcp_execution_core::ServerSlug;
-/// use mcp_execution_skill::types::GenerateSkillResult;
+/// use mcp_execution_skill::build_skill_context;
 ///
-/// let result = GenerateSkillResult {
-///     server_id: ServerSlug::new("github").unwrap(),
-///     skill_name: "github-progressive".to_string(),
-///     server_description: Some("MCP server for issue operations".to_string()),
-///     categories: vec![],
-///     tool_count: 0,
-///     example_tools: vec![],
-///     generation_prompt: "Generate a SKILL.md for github...".to_string(),
-///     default_output_path_hint: "~/.claude/skills/github/SKILL.md".to_string(),
-///     warnings: vec![],
-///     use_case_hints: vec![],
-/// };
+/// let server_id = ServerSlug::new("github").unwrap();
+/// let result = build_skill_context(&server_id, &[], None, None);
 ///
 /// assert_eq!(result.server_id.as_str(), "github");
+/// assert_eq!(result.tool_count, 0);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct GenerateSkillResult {
     /// Server identifier.
     pub server_id: ServerSlug,
@@ -196,15 +188,14 @@ pub struct GenerateSkillResult {
 /// ```
 /// use mcp_execution_skill::types::SkillCategory;
 ///
-/// let category = SkillCategory {
-///     name: "issues".to_string(),
-///     display_name: "Issues".to_string(),
-///     tools: vec![],
-/// };
-///
+/// let category: SkillCategory = serde_json::from_value(serde_json::json!({
+///     "name": "issues", "display_name": "Issues", "tools": [],
+/// }))
+/// .unwrap();
 /// assert_eq!(category.display_name, "Issues");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SkillCategory {
     /// Category name (e.g., "issues", "repositories").
     pub name: String,
@@ -223,18 +214,19 @@ pub struct SkillCategory {
 /// ```
 /// use mcp_execution_skill::types::SkillTool;
 ///
-/// let tool = SkillTool {
-///     name: "create_issue".to_string(),
-///     typescript_name: "createIssue".to_string(),
-///     description: "Create a new issue".to_string(),
-///     keywords: vec!["create".to_string(), "issue".to_string()],
-///     required_params: vec!["title".to_string()],
-///     optional_params: vec!["body".to_string()],
-/// };
-///
+/// let tool: SkillTool = serde_json::from_value(serde_json::json!({
+///     "name": "create_issue",
+///     "typescript_name": "createIssue",
+///     "description": "Create a new issue",
+///     "keywords": ["create", "issue"],
+///     "required_params": ["title"],
+///     "optional_params": ["body"],
+/// }))
+/// .unwrap();
 /// assert_eq!(tool.name, "create_issue");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SkillTool {
     /// Original tool name.
     pub name: String,
@@ -262,17 +254,17 @@ pub struct SkillTool {
 /// ```
 /// use mcp_execution_skill::types::ToolExample;
 ///
-/// let example = ToolExample {
-///     tool_name: "create_issue".to_string(),
-///     description: "Create a new issue".to_string(),
-///     cli_command: "node ~/.claude/servers/github/createIssue.ts '{\"title\":\"example\"}'"
-///         .to_string(),
-///     params_json: "{\"title\": \"example\"}".to_string(),
-/// };
-///
+/// let example: ToolExample = serde_json::from_value(serde_json::json!({
+///     "tool_name": "create_issue",
+///     "description": "Create a new issue",
+///     "cli_command": "node ~/.claude/servers/github/createIssue.ts '{}'",
+///     "params_json": "{}",
+/// }))
+/// .unwrap();
 /// assert_eq!(example.tool_name, "create_issue");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct ToolExample {
     /// Tool name.
     pub tool_name: String,
@@ -347,21 +339,15 @@ pub struct SaveSkillParams {
 /// ```
 /// use mcp_execution_skill::types::{SaveSkillResult, SkillMetadata};
 ///
-/// let result = SaveSkillResult {
-///     success: true,
-///     output_path: "/home/user/.claude/skills/github/SKILL.md".to_string(),
-///     overwritten: false,
-///     metadata: SkillMetadata {
-///         name: "github-progressive".to_string(),
-///         description: "GitHub MCP skill".to_string(),
-///         section_count: 5,
-///         word_count: 320,
-///     },
-/// };
-///
+/// let metadata: SkillMetadata = serde_json::from_value(serde_json::json!({
+///     "name": "github", "description": "GitHub MCP skill", "section_count": 5, "word_count": 320,
+/// }))
+/// .unwrap();
+/// let result = SaveSkillResult::new(true, "SKILL.md".to_string(), false, metadata);
 /// assert!(result.success);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SaveSkillResult {
     /// Whether save was successful.
     pub success: bool,
@@ -376,6 +362,38 @@ pub struct SaveSkillResult {
     pub metadata: SkillMetadata,
 }
 
+impl SaveSkillResult {
+    /// Creates the outcome of saving a skill.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_skill::SaveSkillResult;
+    /// use serde_json::json;
+    ///
+    /// let metadata = serde_json::from_value(json!({
+    ///     "name": "github", "description": "d", "section_count": 1, "word_count": 3,
+    /// }))
+    /// .unwrap();
+    /// let result = SaveSkillResult::new(true, "SKILL.md".to_string(), false, metadata);
+    /// assert!(result.success);
+    /// ```
+    #[must_use]
+    pub const fn new(
+        success: bool,
+        output_path: String,
+        overwritten: bool,
+        metadata: SkillMetadata,
+    ) -> Self {
+        Self {
+            success,
+            output_path,
+            overwritten,
+            metadata,
+        }
+    }
+}
+
 /// Metadata extracted from saved skill.
 ///
 /// # Examples
@@ -383,16 +401,17 @@ pub struct SaveSkillResult {
 /// ```
 /// use mcp_execution_skill::types::SkillMetadata;
 ///
-/// let metadata = SkillMetadata {
-///     name: "github-progressive".to_string(),
-///     description: "GitHub MCP skill".to_string(),
-///     section_count: 5,
-///     word_count: 320,
-/// };
-///
+/// let metadata: SkillMetadata = serde_json::from_value(serde_json::json!({
+///     "name": "github-progressive",
+///     "description": "GitHub MCP skill",
+///     "section_count": 5,
+///     "word_count": 320,
+/// }))
+/// .unwrap();
 /// assert_eq!(metadata.name, "github-progressive");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SkillMetadata {
     /// Skill name from frontmatter.
     pub name: String,
@@ -413,6 +432,7 @@ pub struct SkillMetadata {
 
 /// Errors returned by [`SkillName::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum SkillNameError {
     /// The candidate was empty, or contained only whitespace.
     ///

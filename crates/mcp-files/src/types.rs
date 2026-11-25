@@ -49,6 +49,7 @@ use thiserror::Error;
 /// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FilesResourceKind {
     /// Number of files a single export batch would write.
     ExportFileCount,
@@ -82,6 +83,7 @@ impl fmt::Display for FilesResourceKind {
 /// assert_matches!(error, FilesError::FileNotFound { .. });
 /// ```
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum FilesError {
     /// File or directory not found at the specified path
     #[error("File not found: {path}")]
@@ -405,6 +407,7 @@ impl AsRef<Path> for FilePath {
 /// assert_eq!(file.size(), 21);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FileEntry {
     content: String,
 }

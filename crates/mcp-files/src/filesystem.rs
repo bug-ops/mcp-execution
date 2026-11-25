@@ -1076,6 +1076,7 @@ impl Default for FileSystem {
 /// let options = ExportOptions::default().with_atomic_writes(true);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ExportOptions {
     /// Use atomic writes (write to temp file, then rename)
     pub atomic: bool,

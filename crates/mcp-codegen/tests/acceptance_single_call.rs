@@ -377,11 +377,11 @@ fn run_if_main_reports_a_non_error_throw_as_call_failed() {
 fn tool_file_has_no_inline_cli_block_and_one_header() {
     let categorizations = HashMap::from([(
         "create_issue".to_string(),
-        ToolCategorization {
-            category: "issues".to_string(),
-            keywords: vec!["create".into(), "issue".into(), "new".into(), "bug".into()],
-            short_description: "Create a new issue".to_string(),
-        },
+        ToolCategorization::new(
+            "issues".to_string(),
+            vec!["create".into(), "issue".into(), "new".into(), "bug".into()],
+            "Create a new issue".to_string(),
+        ),
     )]);
     let code = PackageGenerator::new()
         .unwrap()

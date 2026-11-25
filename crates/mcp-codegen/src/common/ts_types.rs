@@ -111,6 +111,7 @@ enum TagValue {
 /// assert_eq!(converted.render(RenderStyle::Compact), "string");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RenderStyle {
     /// Multi-line with member `JSDoc`, for tool files.
     Declaration,

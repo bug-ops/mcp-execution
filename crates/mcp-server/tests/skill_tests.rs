@@ -148,23 +148,29 @@ async fn test_scan_tools_directory_integration() {
 #[tokio::test]
 async fn test_build_skill_context_integration() {
     let tools = vec![
-        ParsedToolFile {
-            name: "create_issue".to_string(),
-            typescript_name: "createIssue".to_string(),
-            server_id: ServerId::new("github").unwrap(),
-            category: Some("issues".to_string()),
-            keywords: vec!["create".to_string(), "issue".to_string()],
-            description: Some("Create a new issue".to_string()),
-            parameters: vec![],
+        {
+            let mut value = ParsedToolFile::new(
+                "create_issue".to_string(),
+                "createIssue".to_string(),
+                ServerId::new("github").unwrap(),
+                vec!["create".to_string(), "issue".to_string()],
+                vec![],
+            );
+            value.category = Some("issues".to_string());
+            value.description = Some("Create a new issue".to_string());
+            value
         },
-        ParsedToolFile {
-            name: "list_repos".to_string(),
-            typescript_name: "listRepos".to_string(),
-            server_id: ServerId::new("github").unwrap(),
-            category: Some("repos".to_string()),
-            keywords: vec!["list".to_string(), "repos".to_string()],
-            description: Some("List repositories".to_string()),
-            parameters: vec![],
+        {
+            let mut value = ParsedToolFile::new(
+                "list_repos".to_string(),
+                "listRepos".to_string(),
+                ServerId::new("github").unwrap(),
+                vec!["list".to_string(), "repos".to_string()],
+                vec![],
+            );
+            value.category = Some("repos".to_string());
+            value.description = Some("List repositories".to_string());
+            value
         },
     ];
 
@@ -293,14 +299,17 @@ async fn test_scan_directory_ignores_stray_files() {
 #[tokio::test]
 async fn test_build_skill_context_many_categories() {
     let tools: Vec<ParsedToolFile> = (0..20)
-        .map(|i| ParsedToolFile {
-            name: format!("tool_{i}"),
-            typescript_name: format!("tool{i}"),
-            server_id: ServerId::new("test").unwrap(),
-            category: Some(format!("category-{}", i % 5)), // 5 different categories
-            keywords: vec![format!("keyword{i}")],
-            description: Some(format!("Tool {i}")),
-            parameters: vec![],
+        .map(|i| {
+            let mut value = ParsedToolFile::new(
+                format!("tool_{i}"),
+                format!("tool{i}"),
+                ServerId::new("test").unwrap(),
+                vec![format!("keyword{i}")],
+                vec![],
+            );
+            value.category = Some(format!("category-{}", i % 5));
+            value.description = Some(format!("Tool {i}"));
+            value
         })
         .collect();
 

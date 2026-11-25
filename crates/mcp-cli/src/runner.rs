@@ -373,13 +373,8 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
             // misbehaving) introspected server returned, not by CLI-caller-supplied input.
             FilesError::ResourceLimitExceeded { .. } => ExitCode::SERVER_ERROR,
             FilesError::HomeDirectory { source } => classify_home_error(source),
-            FilesError::FileNotFound { .. }
-            | FilesError::NotADirectory { .. }
-            | FilesError::InvalidPath { .. }
-            | FilesError::PathNotAbsolute { .. }
-            | FilesError::InvalidPathComponent { .. }
-            | FilesError::PathEscapesBase { .. }
-            | FilesError::IoError { .. } => ExitCode::ERROR,
+            // Every other failure, including a variant added later, is a plain `ERROR`.
+            _ => ExitCode::ERROR,
         };
     }
 

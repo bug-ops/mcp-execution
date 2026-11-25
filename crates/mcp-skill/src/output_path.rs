@@ -17,6 +17,7 @@ use thiserror::Error;
 
 /// Errors from resolving and confining a skill output path to its base directory.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum OutputPathError {
     /// `server_id` failed [`mcp_execution_core::ServerSlug::new`]'s slug-format check
     /// (e.g. it is empty, too long, or contains a character other than a lowercase ASCII

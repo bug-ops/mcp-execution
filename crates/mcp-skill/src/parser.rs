@@ -65,6 +65,7 @@ use mcp_execution_core::sanitize_path_for_error;
 
 /// Errors that can occur while scanning a server directory for its `_meta.json` sidecar.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ScanError {
     /// I/O error reading the directory or sidecar file.
     #[error("I/O error: {0}")]
@@ -165,6 +166,7 @@ pub enum ScanError {
 /// Callers that only inspect `tools` would otherwise have no way to detect
 /// this drift short of tailing server-side `tracing` output.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ScanResult {
     /// Parsed tools, sorted by name.
     pub tools: Vec<ParsedToolFile>,
@@ -173,8 +175,26 @@ pub struct ScanResult {
     pub warnings: Vec<String>,
 }
 
+impl ScanResult {
+    /// Creates a scan result from the parsed tools and the warnings raised while scanning.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_skill::ScanResult;
+    ///
+    /// let result = ScanResult::new(vec![], vec![]);
+    /// assert!(result.tools.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn new(tools: Vec<ParsedToolFile>, warnings: Vec<String>) -> Self {
+        Self { tools, warnings }
+    }
+}
+
 /// Parsed metadata from a server's generated tool set.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ParsedToolFile {
     /// Original MCP tool name.
     pub name: String,
@@ -198,8 +218,47 @@ pub struct ParsedToolFile {
     pub parameters: Vec<ParsedParameter>,
 }
 
+impl ParsedToolFile {
+    /// Creates a parsed tool; `category` and `description` start as `None` and are set afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ServerId;
+    /// use mcp_execution_skill::ParsedToolFile;
+    ///
+    /// let tool = ParsedToolFile::new(
+    ///     "create_issue".to_string(),
+    ///     "createIssue".to_string(),
+    ///     ServerId::new("github").unwrap(),
+    ///     vec!["issue".to_string()],
+    ///     vec![],
+    /// );
+    /// assert!(tool.category.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        name: String,
+        typescript_name: String,
+        server_id: ServerId,
+        keywords: Vec<String>,
+        parameters: Vec<ParsedParameter>,
+    ) -> Self {
+        Self {
+            name,
+            typescript_name,
+            server_id,
+            category: None,
+            keywords,
+            description: None,
+            parameters,
+        }
+    }
+}
+
 /// A parsed parameter from a tool's metadata.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ParsedParameter {
     /// Parameter name.
     pub name: String,
@@ -212,6 +271,28 @@ pub struct ParsedParameter {
 
     /// Parameter description.
     pub description: Option<String>,
+}
+
+impl ParsedParameter {
+    /// Creates a parameter; `description` starts as `None` and is set afterwards.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_skill::ParsedParameter;
+    ///
+    /// let parameter = ParsedParameter::new("title".to_string(), "string".to_string(), true);
+    /// assert!(parameter.description.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(name: String, typescript_type: String, required: bool) -> Self {
+        Self {
+            name,
+            typescript_type,
+            required,
+            description: None,
+        }
+    }
 }
 
 impl From<mcp_execution_core::metadata::ParameterMetadata> for ParsedParameter {

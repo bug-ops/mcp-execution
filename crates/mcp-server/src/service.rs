@@ -886,13 +886,8 @@ impl GeneratorService {
                 | ScanError::StaleMetadata { .. } => {
                     McpError::invalid_params(format!("Failed to scan tools directory: {e}"), None)
                 }
-                ScanError::Io(_)
-                | ScanError::DirectoryNotFound { .. }
-                | ScanError::MetadataParse { .. }
-                | ScanError::TooManyFiles { .. }
-                | ScanError::FileTooLarge { .. } => {
-                    McpError::internal_error(format!("Failed to scan tools directory: {e}"), None)
-                }
+                // Every other failure, including a variant added later, is not the caller's.
+                _ => McpError::internal_error(format!("Failed to scan tools directory: {e}"), None),
             })?;
 
         if scan_result.tools.is_empty() {
@@ -1056,9 +1051,8 @@ impl GeneratorService {
             | OutputPathError::NotAFile { .. } => {
                 McpError::invalid_params(format!("Invalid output_path: {e}"), None)
             }
-            OutputPathError::CreateDir { .. } | OutputPathError::Io(_) => {
-                McpError::internal_error(format!("Failed to resolve output path: {e}"), None)
-            }
+            // `CreateDir`, `Io` and any variant added later are not the caller's.
+            _ => McpError::internal_error(format!("Failed to resolve output path: {e}"), None),
         })?;
 
         // The name must equal the directory the file lands in. Checked on the resolved path so
@@ -1104,12 +1098,12 @@ impl GeneratorService {
             .await
             .map_err(|e| McpError::internal_error(format!("Failed to write file: {e}"), None))?;
 
-        let result = SaveSkillResult {
-            success: true,
-            output_path: output_path.display().to_string(),
+        let result = SaveSkillResult::new(
+            true,
+            output_path.display().to_string(),
             overwritten,
             metadata,
-        };
+        );
 
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&result).map_err(|e| {
@@ -1672,11 +1666,11 @@ fn generate_with_categorization(
         .map(|(tool_name, cat_tool)| {
             (
                 tool_name.clone(),
-                ToolCategorization {
-                    category: cat_tool.category.clone(),
-                    keywords: parse_keywords(&cat_tool.keywords),
-                    short_description: cat_tool.short_description.clone(),
-                },
+                ToolCategorization::new(
+                    cat_tool.category.clone(),
+                    parse_keywords(&cat_tool.keywords),
+                    cat_tool.short_description.clone(),
+                ),
             )
         })
         .collect();

@@ -396,14 +396,16 @@ mod tests {
         use mcp_execution_core::ToolName;
         use mcp_execution_skill::scripts::{RecipeName, ToolRef, WriteIntent};
 
-        let listing = |name: &str, server: &str, tool: &str| ScriptListing {
-            name: RecipeName::new(name).unwrap(),
-            description: String::new(),
-            tools: vec![ToolRef {
-                server: ServerId::new(server).unwrap(),
-                tool: ToolName::new(tool).unwrap(),
-            }],
-            writes: WriteIntent::ReadOnly,
+        let listing = |name: &str, server: &str, tool: &str| {
+            ScriptListing::new(
+                RecipeName::new(name).unwrap(),
+                String::new(),
+                vec![ToolRef::new(
+                    ServerId::new(server).unwrap(),
+                    ToolName::new(tool).unwrap(),
+                )],
+                WriteIntent::ReadOnly,
+            )
         };
         let listings = [
             listing("hit", "s", "gone"),

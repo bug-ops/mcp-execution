@@ -24,11 +24,11 @@ fn catalog_for_hostile_descriptions() -> String {
     let categorized = tool("categorized_tool", json!({"type": "object"}), None);
     let categorizations = HashMap::from([(
         "categorized_tool".to_string(),
-        ToolCategorization {
-            category: "issues".to_string(),
-            keywords: vec!["a".into(), "b".into(), "c".into(), "d".into()],
-            short_description: format!("{HOSTILE} {}", "z".repeat(5000)),
-        },
+        ToolCategorization::new(
+            "issues".to_string(),
+            vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            format!("{HOSTILE} {}", "z".repeat(5000)),
+        ),
     )]);
     let server = server_info(vec![described, categorized]);
     let code = {
