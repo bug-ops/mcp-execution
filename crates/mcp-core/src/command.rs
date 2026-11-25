@@ -208,7 +208,7 @@ pub const MAX_URL_LEN: usize = 8 * 1024;
 ///
 /// Exposed so downstream consumers that must mirror this exact rule outside this function —
 /// currently, the generated TypeScript runtime bridge
-/// (`crates/mcp-codegen/templates/progressive/runtime-bridge.ts.hbs`) — can render their copy
+/// (`crates/mcp-codegen/templates/package/runtime-bridge.ts.hbs`) — can render their copy
 /// directly from this constant at code-generation time instead of hand-copying it, which
 /// would otherwise silently drift out of sync.
 ///
@@ -270,7 +270,7 @@ const ENV_NAME_CHARSET_DESC: &str = "[A-Za-z_][A-Za-z0-9_]*";
 /// characters `[A-Za-z0-9_]*`. Exposed so downstream consumers that must mirror this exact
 /// rule outside this function —
 /// currently, the generated TypeScript runtime bridge
-/// (`crates/mcp-codegen/templates/progressive/runtime-bridge.ts.hbs`) — can render their copy
+/// (`crates/mcp-codegen/templates/package/runtime-bridge.ts.hbs`) — can render their copy
 /// directly from this constant at code-generation time instead of hand-copying it. Closes the
 /// #467 gap where the bridge's `validateEnvName` had no charset check at all and relied
 /// entirely on `String.prototype.toUpperCase()`'s incidental Unicode case folding to catch a

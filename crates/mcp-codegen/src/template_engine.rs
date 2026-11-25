@@ -87,7 +87,7 @@ impl<'a> TemplateEngine<'a> {
         handlebars
             .register_template_string(
                 "progressive/tool",
-                include_str!("../templates/progressive/tool.ts.hbs"),
+                include_str!("../templates/package/tool.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
                 message: format!("Failed to register progressive tool template: {e}"),
@@ -98,7 +98,7 @@ impl<'a> TemplateEngine<'a> {
         handlebars
             .register_template_string(
                 "progressive/index",
-                include_str!("../templates/progressive/index.ts.hbs"),
+                include_str!("../templates/package/index.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
                 message: format!("Failed to register progressive index template: {e}"),
@@ -109,7 +109,7 @@ impl<'a> TemplateEngine<'a> {
         handlebars
             .register_template_string(
                 "progressive/runtime-bridge",
-                include_str!("../templates/progressive/runtime-bridge.ts.hbs"),
+                include_str!("../templates/package/runtime-bridge.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
                 message: format!("Failed to register progressive runtime-bridge template: {e}"),
@@ -120,7 +120,7 @@ impl<'a> TemplateEngine<'a> {
         handlebars
             .register_template_string(
                 "progressive/cli",
-                include_str!("../templates/progressive/cli.ts.hbs"),
+                include_str!("../templates/package/cli.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
                 message: format!("Failed to register progressive cli template: {e}"),

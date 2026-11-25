@@ -43,6 +43,7 @@
 
 // Core modules (always available)
 pub mod common;
+#[path = "package/mod.rs"]
 pub mod progressive;
 pub mod template_engine;
 

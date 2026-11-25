@@ -333,7 +333,7 @@ cargo bench --profile bench-fast -p mcp-execution-codegen -p mcp-execution-files
 
 ## Documentation
 
-- [Usage Guide](examples/progressive-loading-usage.md) - Complete guide
+- [Usage Guide](examples/generated-package-usage.md) - Complete guide
 - [Host Code Mode notes](examples/host-code-mode.md) - What the host documents about its own code execution mode
 - [Claude Code Integration](crates/mcp-skill) - SKILL.md generation (`mcp-execution-cli skill`)
 
