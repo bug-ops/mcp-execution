@@ -123,8 +123,7 @@ const STALE_ARTIFACT_MIN_AGE: Duration = Duration::from_mins(5);
 /// // MAX_EXPORT_FILES is a constant used internally by FileSystem
 /// let _fs = FileSystem::new();
 /// ```
-pub const MAX_EXPORT_FILES: usize =
-    mcp_execution_codegen::package::generator::MAX_GENERATED_FILES;
+pub const MAX_EXPORT_FILES: usize = mcp_execution_codegen::package::generator::MAX_GENERATED_FILES;
 
 /// Maximum total bytes across every file a single export call will write.
 ///
@@ -141,8 +140,7 @@ pub const MAX_EXPORT_FILES: usize =
 /// // MAX_EXPORT_BYTES is a constant used internally by FileSystem
 /// let _fs = FileSystem::new();
 /// ```
-pub const MAX_EXPORT_BYTES: usize =
-    mcp_execution_codegen::package::generator::MAX_GENERATED_BYTES;
+pub const MAX_EXPORT_BYTES: usize = mcp_execution_codegen::package::generator::MAX_GENERATED_BYTES;
 
 /// An in-memory virtual filesystem for MCP tool definitions.
 ///

@@ -15,12 +15,15 @@ use serde_json::json;
 #[test]
 fn tool_file_carries_tags_for_stated_hints_and_title_only() {
     let mut deleter = tool("delete_file", json!({"type": "object"}), None);
-    deleter.annotations = Some(ToolAnnotations {
-        title: AnnotationTitle::new("Delete file"),
-        read_only: Hint::StatedFalse,
-        destructive: Hint::StatedTrue,
-        idempotent: Hint::NotStated,
-        open_world: Hint::NotStated,
+    deleter.annotations = Some({
+        let mut value = ToolAnnotations::new(
+            Hint::StatedFalse,
+            Hint::StatedTrue,
+            Hint::NotStated,
+            Hint::NotStated,
+        );
+        value.title = AnnotationTitle::new("Delete file");
+        value
     });
     let plain = tool("plain_tool", json!({"type": "object"}), None);
 
@@ -53,12 +56,15 @@ fn tool_file_carries_tags_for_stated_hints_and_title_only() {
 #[test]
 fn tool_file_tags_cannot_terminate_the_doc_comment() {
     let mut hostile = tool("hostile", json!({"type": "object"}), None);
-    hostile.annotations = Some(ToolAnnotations {
-        title: AnnotationTitle::new("evil */ export const pwn = 1; /*"),
-        read_only: Hint::StatedTrue,
-        destructive: Hint::NotStated,
-        idempotent: Hint::NotStated,
-        open_world: Hint::NotStated,
+    hostile.annotations = Some({
+        let mut value = ToolAnnotations::new(
+            Hint::StatedTrue,
+            Hint::NotStated,
+            Hint::NotStated,
+            Hint::NotStated,
+        );
+        value.title = AnnotationTitle::new("evil */ export const pwn = 1; /*");
+        value
     });
 
     let code = generate(&server_info(vec![hostile]));

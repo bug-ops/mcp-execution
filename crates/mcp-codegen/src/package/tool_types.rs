@@ -207,15 +207,18 @@ impl<'a> ToolConversions<'a> {
         self.input
             .members()
             .iter()
-            .map(|member| ParameterMetadata {
-                name: member.name.clone(),
-                typescript_type: if member.type_text.len() <= STORED_TYPE_TEXT_MAX_BYTES {
-                    member.type_text.clone()
-                } else {
-                    "unknown".to_string()
-                },
-                required: member.required,
-                description: self.raw_description(&member.name),
+            .map(|member| {
+                let mut value = ParameterMetadata::new(
+                    member.name.clone(),
+                    if member.type_text.len() <= STORED_TYPE_TEXT_MAX_BYTES {
+                        member.type_text.clone()
+                    } else {
+                        "unknown".to_string()
+                    },
+                    member.required,
+                );
+                value.description = self.raw_description(&member.name);
+                value
             })
             .collect()
     }

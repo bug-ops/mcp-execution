@@ -22,25 +22,25 @@ fn sidecar(schema_version: u32, description: Option<String>) -> ServerMetadata {
         .command("docker".to_string())
         .build()
         .unwrap();
-    ServerMetadata {
+    ServerMetadata::new(
         schema_version,
-        server_id: ServerId::new("acme").unwrap(),
-        server_name: "Acme".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: vec![ToolMetadata {
-            name: ToolName::new("get_thing").unwrap(),
-            typescript_name: "getThing".to_string(),
-            category: None,
-            keywords: vec![],
-            description,
-            parameters: vec![],
-            annotations: None,
-            result_type: None,
-            result_type_origin: ResultTypeOrigin::Undeclared,
-            manifest_size_bytes: 0,
+        ServerId::new("acme").unwrap(),
+        "Acme".to_string(),
+        "1.0.0".to_string(),
+        vec![{
+            let mut value = ToolMetadata::new(
+                ToolName::new("get_thing").unwrap(),
+                "getThing".to_string(),
+                vec![],
+                vec![],
+                ResultTypeOrigin::Undeclared,
+                0,
+            );
+            value.description = description;
+            value
         }],
-        provenance: GenerationProvenance::capture(&config, &[]),
-    }
+        GenerationProvenance::capture(&config, &[]),
+    )
 }
 
 fn write_package(dir: &Path, meta: &ServerMetadata) {

@@ -1186,16 +1186,16 @@ fn build_stdio_server_config(
 /// caller supplied is invalid input. Neither message carries the offending path value.
 fn home_dir_error(error: &HomeDirError) -> McpError {
     match error {
-        HomeDirError::Unknown => McpError::internal_error(
-            format!("cannot resolve the default directory: {error}"),
-            None,
-        ),
         HomeDirError::NotAbsolute { .. } => McpError::internal_error(
             "cannot resolve the default directory: the home directory is not an absolute path",
             None,
         ),
         HomeDirError::UnsupportedUserHome { .. } => McpError::invalid_params(
             "invalid servers_dir: a '~name' path (another user's home) is not supported",
+            None,
+        ),
+        _ => McpError::internal_error(
+            format!("cannot resolve the default directory: {error}"),
             None,
         ),
     }
@@ -4697,30 +4697,25 @@ mod tests {
         // catch, routed through the `generate_skill` MCP tool this time.
         let target_dir = base_dir.join("test-server");
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
-        let meta = ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new("test-server").unwrap(),
-            server_name: "Test Server".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: vec![SidecarToolMetadata {
-                name: ToolName::new("create_issue").unwrap(),
-                typescript_name: "createIssue".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![ParameterMetadata {
-                    name: "title".to_string(),
-                    typescript_type: "string".to_string(),
-                    required: true,
-                    description: None,
-                }],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            }],
-            provenance: test_provenance(),
-        };
+        let meta = ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![SidecarToolMetadata::new(
+                ToolName::new("create_issue").unwrap(),
+                "createIssue".to_string(),
+                vec![],
+                vec![ParameterMetadata::new(
+                    "title".to_string(),
+                    "string".to_string(),
+                    true,
+                )],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            )],
+            test_provenance(),
+        );
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
             .await
@@ -4768,30 +4763,25 @@ mod tests {
 
         let target_dir = base_dir.join("test-server");
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
-        let meta = ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new("test-server").unwrap(),
-            server_name: "Test Server".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: vec![SidecarToolMetadata {
-                name: ToolName::new("create_issue").unwrap(),
-                typescript_name: "createIssue".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![ParameterMetadata {
-                    name: "title".to_string(),
-                    typescript_type: "string".to_string(),
-                    required: true,
-                    description: None,
-                }],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            }],
-            provenance: test_provenance(),
-        };
+        let meta = ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![SidecarToolMetadata::new(
+                ToolName::new("create_issue").unwrap(),
+                "createIssue".to_string(),
+                vec![],
+                vec![ParameterMetadata::new(
+                    "title".to_string(),
+                    "string".to_string(),
+                    true,
+                )],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            )],
+            test_provenance(),
+        );
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
             .await
@@ -4853,30 +4843,25 @@ mod tests {
 
         let target_dir = base_dir.join("test-server");
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
-        let meta = ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new("test-server").unwrap(),
-            server_name: "Test Server".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: vec![SidecarToolMetadata {
-                name: ToolName::new("create_issue").unwrap(),
-                typescript_name: "createIssue".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![ParameterMetadata {
-                    name: "title".to_string(),
-                    typescript_type: "string".to_string(),
-                    required: true,
-                    description: None,
-                }],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            }],
-            provenance: test_provenance(),
-        };
+        let meta = ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![SidecarToolMetadata::new(
+                ToolName::new("create_issue").unwrap(),
+                "createIssue".to_string(),
+                vec![],
+                vec![ParameterMetadata::new(
+                    "title".to_string(),
+                    "string".to_string(),
+                    true,
+                )],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            )],
+            test_provenance(),
+        );
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
             .await
@@ -4932,30 +4917,25 @@ mod tests {
 
         let target_dir = base_dir.join("test-server");
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
-        let meta = ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new("test-server").unwrap(),
-            server_name: "Test Server".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: vec![SidecarToolMetadata {
-                name: ToolName::new("create_issue").unwrap(),
-                typescript_name: "createIssue".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![ParameterMetadata {
-                    name: "title".to_string(),
-                    typescript_type: "string".to_string(),
-                    required: true,
-                    description: None,
-                }],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            }],
-            provenance: test_provenance(),
-        };
+        let meta = ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![SidecarToolMetadata::new(
+                ToolName::new("create_issue").unwrap(),
+                "createIssue".to_string(),
+                vec![],
+                vec![ParameterMetadata::new(
+                    "title".to_string(),
+                    "string".to_string(),
+                    true,
+                )],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            )],
+            test_provenance(),
+        );
         let content = serde_json::to_string_pretty(&meta).unwrap();
         tokio::fs::write(target_dir.join(METADATA_FILE_NAME), content)
             .await

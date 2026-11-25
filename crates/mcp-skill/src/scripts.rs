@@ -498,11 +498,7 @@ fn confinement_error(error: ConfinementError) -> ScriptError {
         ConfinementError::Io(source) | ConfinementError::CreateDir { source, .. } => {
             ScriptError::Io(source)
         }
-        ConfinementError::InvalidSegment { .. }
-        | ConfinementError::SegmentIsSymlink { .. }
-        | ConfinementError::Escape { .. }
-        | ConfinementError::NotADirectory { .. }
-        | ConfinementError::WrongTargetKind { .. } => ScriptError::NotConfined,
+        _ => ScriptError::NotConfined,
     }
 }
 

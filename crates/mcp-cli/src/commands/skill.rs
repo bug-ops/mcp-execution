@@ -496,30 +496,31 @@ mod tests {
     /// Also writes a matching stub `{typescript_name}.ts` file, since
     /// `scan_tools_directory` cross-checks the sidecar against files on disk.
     fn write_meta_sidecar(server_dir: &Path, server_id: &str, tool_name: &str) {
-        let meta = ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new(server_id).unwrap(),
-            server_name: server_id.to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: vec![ToolMetadata {
-                name: ToolName::new(tool_name).unwrap(),
-                typescript_name: tool_name.to_string(),
-                category: Some("testing".to_string()),
-                keywords: vec!["test".to_string()],
-                description: Some(format!("Test tool: {tool_name}")),
-                parameters: vec![ParameterMetadata {
-                    name: "input".to_string(),
-                    typescript_type: "string".to_string(),
-                    required: true,
-                    description: Some("Test input".to_string()),
-                }],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
+        let meta = ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new(server_id).unwrap(),
+            server_id.to_string(),
+            "1.0.0".to_string(),
+            vec![{
+                let mut value = ToolMetadata::new(
+                    ToolName::new(tool_name).unwrap(),
+                    tool_name.to_string(),
+                    vec!["test".to_string()],
+                    vec![{
+                        let mut value =
+                            ParameterMetadata::new("input".to_string(), "string".to_string(), true);
+                        value.description = Some("Test input".to_string());
+                        value
+                    }],
+                    mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                    0,
+                );
+                value.category = Some("testing".to_string());
+                value.description = Some(format!("Test tool: {tool_name}"));
+                value
             }],
-            provenance: test_provenance(),
-        };
+            test_provenance(),
+        );
 
         let content = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(server_dir.join(METADATA_FILE_NAME), content).unwrap();
@@ -1154,44 +1155,49 @@ mod tests {
         let server_dir = temp.path().join("github");
         std::fs::create_dir(&server_dir).unwrap();
 
-        let meta = ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new("github").unwrap(),
-            server_name: "GitHub".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: vec![
-                ToolMetadata {
-                    name: ToolName::new("create_issue").unwrap(),
-                    typescript_name: "createIssue".to_string(),
-                    category: Some("issues".to_string()),
-                    keywords: vec!["create".to_string()],
-                    description: Some("Create an issue".to_string()),
-                    parameters: vec![ParameterMetadata {
-                        name: "title".to_string(),
-                        typescript_type: "string".to_string(),
-                        required: true,
-                        description: Some("Issue title".to_string()),
-                    }],
-                    annotations: None,
-                    result_type: None,
-                    result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                    manifest_size_bytes: 0,
+        let meta = ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new("github").unwrap(),
+            "GitHub".to_string(),
+            "1.0.0".to_string(),
+            vec![
+                {
+                    let mut value = ToolMetadata::new(
+                        ToolName::new("create_issue").unwrap(),
+                        "createIssue".to_string(),
+                        vec!["create".to_string()],
+                        vec![{
+                            let mut value = ParameterMetadata::new(
+                                "title".to_string(),
+                                "string".to_string(),
+                                true,
+                            );
+                            value.description = Some("Issue title".to_string());
+                            value
+                        }],
+                        mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                        0,
+                    );
+                    value.category = Some("issues".to_string());
+                    value.description = Some("Create an issue".to_string());
+                    value
                 },
-                ToolMetadata {
-                    name: ToolName::new("list_repos").unwrap(),
-                    typescript_name: "listRepos".to_string(),
-                    category: Some("repos".to_string()),
-                    keywords: vec!["list".to_string()],
-                    description: Some("List repos".to_string()),
-                    parameters: vec![],
-                    annotations: None,
-                    result_type: None,
-                    result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                    manifest_size_bytes: 0,
+                {
+                    let mut value = ToolMetadata::new(
+                        ToolName::new("list_repos").unwrap(),
+                        "listRepos".to_string(),
+                        vec!["list".to_string()],
+                        vec![],
+                        mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                        0,
+                    );
+                    value.category = Some("repos".to_string());
+                    value.description = Some("List repos".to_string());
+                    value
                 },
             ],
-            provenance: test_provenance(),
-        };
+            test_provenance(),
+        );
         let content = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(server_dir.join(METADATA_FILE_NAME), content).unwrap();
 

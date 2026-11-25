@@ -350,6 +350,7 @@ fn scan_error(error: MetadataReadError, meta_path: &Path) -> ScanError {
         MetadataReadError::SchemaMismatch { found, expected } => {
             ScanError::UnsupportedSchema { found, expected }
         }
+        other => ScanError::Io(std::io::Error::other(other)),
     }
 }
 
@@ -847,32 +848,36 @@ mod tests {
     }
 
     fn sample_metadata(tool_count: usize) -> ServerMetadata {
-        ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: ServerId::new("github").unwrap(),
-            server_name: "GitHub".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: (0..tool_count)
-                .map(|i| ToolMetadata {
-                    name: ToolName::new(format!("tool_{i}")).unwrap(),
-                    typescript_name: format!("tool{i}"),
-                    category: Some("test".to_string()),
-                    keywords: vec!["test".to_string()],
-                    description: Some(format!("Tool {i}")),
-                    parameters: vec![ParameterMetadata {
-                        name: "param".to_string(),
-                        typescript_type: "string".to_string(),
-                        required: true,
-                        description: Some("A parameter".to_string()),
-                    }],
-                    annotations: None,
-                    result_type: None,
-                    result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                    manifest_size_bytes: 0,
+        ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            ServerId::new("github").unwrap(),
+            "GitHub".to_string(),
+            "1.0.0".to_string(),
+            (0..tool_count)
+                .map(|i| {
+                    let mut value = ToolMetadata::new(
+                        ToolName::new(format!("tool_{i}")).unwrap(),
+                        format!("tool{i}"),
+                        vec!["test".to_string()],
+                        vec![{
+                            let mut value = ParameterMetadata::new(
+                                "param".to_string(),
+                                "string".to_string(),
+                                true,
+                            );
+                            value.description = Some("A parameter".to_string());
+                            value
+                        }],
+                        mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                        0,
+                    );
+                    value.category = Some("test".to_string());
+                    value.description = Some(format!("Tool {i}"));
+                    value
                 })
                 .collect(),
-            provenance: test_provenance(),
-        }
+            test_provenance(),
+        )
     }
 
     /// Writes `_meta.json` plus a matching stub `.ts` file for each tool, since
@@ -921,30 +926,22 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let mut meta = sample_metadata(0);
         meta.tools = vec![
-            ToolMetadata {
-                name: ToolName::new("zebra").unwrap(),
-                typescript_name: "zebra".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            },
-            ToolMetadata {
-                name: ToolName::new("alpha").unwrap(),
-                typescript_name: "alpha".to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
-            },
+            ToolMetadata::new(
+                ToolName::new("zebra").unwrap(),
+                "zebra".to_string(),
+                vec![],
+                vec![],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            ),
+            ToolMetadata::new(
+                ToolName::new("alpha").unwrap(),
+                "alpha".to_string(),
+                vec![],
+                vec![],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            ),
         ];
         write_metadata(temp_dir.path(), &meta).await;
 

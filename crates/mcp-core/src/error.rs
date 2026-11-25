@@ -47,6 +47,7 @@ use thiserror::Error;
 /// assert_eq!(ResourceKind::ToolNameLength.to_string(), "tool name length");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ResourceKind {
     /// Number of tools a server reported (or that codegen would emit files for).
     ToolCount {
@@ -109,6 +110,7 @@ impl fmt::Display for ResourceKind {
 /// All errors in the system use this type, providing consistent error handling
 /// across all crates in the workspace.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// MCP server connection failed.
     ///

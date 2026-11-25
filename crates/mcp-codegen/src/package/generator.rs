@@ -970,17 +970,20 @@ impl PackageGenerator<'_> {
                 source: Some(source),
             })?;
 
-        Ok(ToolMetadata {
-            name: tool.name.clone(),
-            typescript_name,
-            category,
-            keywords,
-            description,
-            parameters: types.parameters.clone(),
-            annotations: tool.annotations.clone(),
-            result_type: types.stored_result_type.clone(),
-            result_type_origin: types.origin,
-            manifest_size_bytes,
+        Ok({
+            let mut value = ToolMetadata::new(
+                tool.name.clone(),
+                typescript_name,
+                keywords,
+                types.parameters.clone(),
+                types.origin,
+                manifest_size_bytes,
+            );
+            value.category = category;
+            value.description = description;
+            value.annotations.clone_from(&tool.annotations);
+            value.result_type.clone_from(&types.stored_result_type);
+            value
         })
     }
 
@@ -1007,14 +1010,14 @@ impl PackageGenerator<'_> {
             .collect();
         let provenance = GenerationProvenance::capture(server_config, &digest_entries);
 
-        let meta = ServerMetadata {
-            schema_version: METADATA_SCHEMA_VERSION,
-            server_id: server_info.id.clone(),
-            server_name: server_info.name.clone(),
-            server_version: server_info.version.clone(),
+        let meta = ServerMetadata::new(
+            METADATA_SCHEMA_VERSION,
+            server_info.id.clone(),
+            server_info.name.clone(),
+            server_info.version.clone(),
             tools,
             provenance,
-        };
+        );
 
         let content = serde_json::to_string(&meta).map_err(|e| Error::SerializationError {
             message: format!("failed to serialize {METADATA_FILE_NAME}"),

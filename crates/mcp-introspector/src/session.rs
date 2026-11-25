@@ -408,6 +408,7 @@ impl Introspector {
             Transport::Http { .. } | Transport::Sse { .. } => {
                 (connect_http_client(&server_id, config).await?, None, None)
             }
+            _ => return Err(Error::InvalidArgument("unsupported transport".to_string())),
         };
 
         Ok(Session {

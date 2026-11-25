@@ -608,6 +608,7 @@ impl Introspector {
             Transport::Http { .. } | Transport::Sse { .. } => {
                 discover_via_http(&server_id, config).await?
             }
+            _ => return Err(Error::InvalidArgument("unsupported transport".to_string())),
         };
 
         let info = build_server_info(&server_id, discovery.peer_meta, discovery.tools)?;
@@ -1433,14 +1434,17 @@ fn capture_annotations(
     wire: Option<rmcp::model::ToolAnnotations>,
 ) -> Option<ToolAnnotations> {
     let wire = wire.unwrap_or_default();
-    let captured = ToolAnnotations {
-        title: title
+    let captured = {
+        let mut value = ToolAnnotations::new(
+            Hint::from(wire.read_only_hint),
+            Hint::from(wire.destructive_hint),
+            Hint::from(wire.idempotent_hint),
+            Hint::from(wire.open_world_hint),
+        );
+        value.title = title
             .and_then(AnnotationTitle::new)
-            .or_else(|| wire.title.as_deref().and_then(AnnotationTitle::new)),
-        read_only: Hint::from(wire.read_only_hint),
-        destructive: Hint::from(wire.destructive_hint),
-        idempotent: Hint::from(wire.idempotent_hint),
-        open_world: Hint::from(wire.open_world_hint),
+            .or_else(|| wire.title.as_deref().and_then(AnnotationTitle::new));
+        value
     };
     let states_nothing = captured.title.is_none()
         && [

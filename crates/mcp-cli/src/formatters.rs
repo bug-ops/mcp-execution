@@ -21,7 +21,7 @@ pub fn format_output<T: Serialize>(data: &T, format: OutputFormat) -> Result<Str
     match format {
         OutputFormat::Json => json::format(data),
         OutputFormat::Text => text::format(data),
-        OutputFormat::Pretty => pretty::format(data),
+        _ => pretty::format(data),
     }
 }
 

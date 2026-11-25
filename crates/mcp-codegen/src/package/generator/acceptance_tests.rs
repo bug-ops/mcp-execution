@@ -130,12 +130,15 @@ fn adversarial_tool() -> ToolInfo {
         description: "\u{1}".repeat(MAX_TOOL_DESCRIPTION_LEN),
         input_schema: object_schema_with_properties("in", near_limit),
         output_schema: Some(object_schema_with_properties("out", near_limit)),
-        annotations: Some(ToolAnnotations {
-            title: AnnotationTitle::new(&"T".repeat(MAX_UNTRUSTED_FIELD_LEN)),
-            read_only: Hint::StatedTrue,
-            destructive: Hint::StatedFalse,
-            idempotent: Hint::StatedTrue,
-            open_world: Hint::StatedFalse,
+        annotations: Some({
+            let mut value = ToolAnnotations::new(
+                Hint::StatedTrue,
+                Hint::StatedFalse,
+                Hint::StatedTrue,
+                Hint::StatedFalse,
+            );
+            value.title = AnnotationTitle::new(&"T".repeat(MAX_UNTRUSTED_FIELD_LEN));
+            value
         }),
     }
 }

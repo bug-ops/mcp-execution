@@ -446,9 +446,7 @@ fn properties_shape(keys: &[&str]) -> Value {
 
 fn undeclared_tool_file(jsonl: &str) -> String {
     let server = server_info(vec![tool("noop", json!({"type": "object"}), None)]);
-    let generator = PackageGenerator::new()
-        .unwrap()
-        .with_observed_shapes(jsonl);
+    let generator = PackageGenerator::new().unwrap().with_observed_shapes(jsonl);
     file(&generate_with(&generator, &server), "noop.ts").to_string()
 }
 

@@ -138,6 +138,7 @@ impl From<ConfinementError> for OutputDirError {
             | ConfinementError::WrongTargetKind { path } => Self::NotADirectory { path },
             ConfinementError::CreateDir { path, source } => Self::CreateDir { path, source },
             ConfinementError::Io(source) => Self::Io(source),
+            other => Self::Io(std::io::Error::other(other)),
         }
     }
 }

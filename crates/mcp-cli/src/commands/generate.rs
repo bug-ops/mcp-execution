@@ -397,7 +397,7 @@ fn format_dry_run(result: &DryRunResult, output_format: OutputFormat) -> Result<
             format_size(result.total_size),
             result.output_path
         ),
-        OutputFormat::Pretty => {
+        _ => {
             use std::fmt::Write as _;
 
             let mut out = format!(
@@ -488,7 +488,7 @@ fn format_success(result: &GenerationResult, output_format: OutputFormat) -> Res
             result.tool_count,
             result.output_path
         ),
-        OutputFormat::Pretty => format!(
+        _ => format!(
             "✓ Successfully generated progressive loading files\n  Server: {} ({})\n  Tools: {}\n  Location: {}\n  Next step: {NPM_INSTALL_HINT}",
             escape_display(&result.server_name),
             result.server_id,

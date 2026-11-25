@@ -129,7 +129,7 @@ pub fn init_logging(
     let fmt_layer = tracing_subscriber::fmt::layer().with_writer(|| RedactingWriter(io::stderr()));
     let layer = match format {
         LogFormat::Json => fmt_layer.json().boxed(),
-        LogFormat::Text => fmt_layer.boxed(),
+        _ => fmt_layer.boxed(),
     };
 
     tracing_subscriber::registry()
@@ -398,7 +398,7 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
 const fn classify_home_error(error: &HomeDirError) -> ExitCode {
     match error {
         HomeDirError::UnsupportedUserHome { .. } => ExitCode::INVALID_INPUT,
-        HomeDirError::Unknown | HomeDirError::NotAbsolute { .. } => ExitCode::ERROR,
+        _ => ExitCode::ERROR,
     }
 }
 
@@ -423,16 +423,14 @@ fn classify_core_error(core_error: &CoreError) -> ExitCode {
         CoreError::ValidationError { .. }
         | CoreError::SecurityViolation { .. }
         | CoreError::InvalidArgument(_) => ExitCode::INVALID_INPUT,
-        // A duplicate generated-file path indicates a codegen invariant was violated (e.g. a
-        // reserved output filename not seeded into name-collision resolution), not something
-        // caused by the remote server's data or the CLI caller's own arguments.
-        CoreError::SerializationError { .. } | CoreError::DuplicateGeneratedFilePath { .. } => {
-            ExitCode::ERROR
-        }
         CoreError::ScriptGenerationError { source, .. } => source
             .as_deref()
             .and_then(|source| source.downcast_ref::<CoreError>())
             .map_or(ExitCode::ERROR, classify_core_error),
+        // Serialization failures and a duplicate generated-file path (a codegen invariant
+        // violation, not caused by the remote server's data or the caller's arguments) are
+        // `ERROR`, and so is any variant added later.
+        _ => ExitCode::ERROR,
     }
 }
 

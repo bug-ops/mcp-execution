@@ -52,6 +52,7 @@ use thiserror::Error;
 /// assert_matches!(err, ServerIdError::InvalidFormat { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ServerIdError {
     /// `id` is not a single non-empty path segment: it is empty, or contains a `..`, a path
     /// separator, or a root/prefix component.
@@ -221,6 +222,7 @@ pub const MAX_SERVER_ID_LENGTH: usize = 64;
 /// messages verbatim to end users/MCP clients, so wording here must stay actionable and
 /// consistent with every other layer that reports the same rejection.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ServerIdSlugError {
     /// The candidate was empty.
     #[error("server_id must not be empty")]
@@ -399,6 +401,7 @@ impl schemars::JsonSchema for ServerSlug {
 /// assert_matches!(err, ToolNameError::InvalidFormat { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum ToolNameError {
     /// `name` is not a single non-empty path segment: it is empty, or contains a `..`, a path
     /// separator, or a root/prefix component.

@@ -27,12 +27,15 @@ fn tool_digest_golden_vector_without_annotations() {
 #[test]
 fn tool_digest_golden_vector_with_annotations_ignores_the_title() {
     let schema = json!({"type": "object", "properties": {"path": {"type": "string"}}});
-    let annotations = ToolAnnotations {
-        title: AnnotationTitle::new("Any title"),
-        read_only: Hint::StatedFalse,
-        destructive: Hint::StatedTrue,
-        idempotent: Hint::NotStated,
-        open_world: Hint::StatedFalse,
+    let annotations = {
+        let mut value = ToolAnnotations::new(
+            Hint::StatedFalse,
+            Hint::StatedTrue,
+            Hint::NotStated,
+            Hint::StatedFalse,
+        );
+        value.title = AnnotationTitle::new("Any title");
+        value
     };
     let digest = ToolDigest::compute(&[ToolDigestEntry {
         name: "delete_file",

@@ -51,6 +51,7 @@ pub struct HomeDir(PathBuf);
 /// );
 /// ```
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum HomeDirError {
     /// The environment and the account database name no home directory.
     #[error("cannot determine the home directory")]

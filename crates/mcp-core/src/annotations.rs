@@ -15,13 +15,7 @@
 //! ```
 //! use mcp_execution_core::annotations::{AnnotationTitle, Hint, ToolAnnotations};
 //!
-//! let annotations = ToolAnnotations {
-//!     title: AnnotationTitle::new("Delete file"),
-//!     read_only: Hint::StatedFalse,
-//!     destructive: Hint::StatedTrue,
-//!     idempotent: Hint::NotStated,
-//!     open_world: Hint::from(Some(false)),
-//! };
+//! let annotations = { let mut value = ToolAnnotations::new(Hint::StatedFalse, Hint::StatedTrue, Hint::NotStated, Hint::from(Some(false))); value.title = AnnotationTitle::new("Delete file"); value };
 //!
 //! assert_eq!(annotations.destructive, Hint::StatedTrue);
 //! assert_eq!(annotations.idempotent, Hint::NotStated);
@@ -43,6 +37,8 @@ use thiserror::Error;
 /// assert_eq!(Hint::from(Some(false)), Hint::StatedFalse);
 /// assert_eq!(Hint::from(None), Hint::NotStated);
 /// ```
+///
+/// This is a closed set: adding a variant is a major change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Hint {
@@ -128,19 +124,19 @@ impl From<AnnotationTitle> for String {
 /// ```
 /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
 ///
-/// let annotations = ToolAnnotations {
-///     title: None,
-///     read_only: Hint::StatedTrue,
-///     destructive: Hint::NotStated,
-///     idempotent: Hint::NotStated,
-///     open_world: Hint::NotStated,
-/// };
+/// let annotations = ToolAnnotations::new(
+///     Hint::StatedTrue,
+///     Hint::NotStated,
+///     Hint::NotStated,
+///     Hint::NotStated,
+/// );
 ///
 /// let json = serde_json::to_string(&annotations).unwrap();
 /// let back: ToolAnnotations = serde_json::from_str(&json).unwrap();
 /// assert_eq!(back, annotations);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolAnnotations {
     /// Display title, from `Tool.title` falling back to `annotations.title`.
     pub title: Option<AnnotationTitle>,
@@ -152,6 +148,40 @@ pub struct ToolAnnotations {
     pub idempotent: Hint,
     /// `openWorldHint`: the tool interacts with an open set of external entities.
     pub open_world: Hint,
+}
+
+impl ToolAnnotations {
+    /// Creates annotations from the four hints, with no display title; set [`Self::title`]
+    /// afterwards when the server supplied one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
+    ///
+    /// let annotations = ToolAnnotations::new(
+    ///     Hint::StatedTrue,
+    ///     Hint::NotStated,
+    ///     Hint::NotStated,
+    ///     Hint::NotStated,
+    /// );
+    /// assert!(annotations.title.is_none());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        read_only: Hint,
+        destructive: Hint,
+        idempotent: Hint,
+        open_world: Hint,
+    ) -> Self {
+        Self {
+            title: None,
+            read_only,
+            destructive,
+            idempotent,
+            open_world,
+        }
+    }
 }
 
 #[cfg(test)]

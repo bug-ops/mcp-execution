@@ -169,12 +169,15 @@ fn catalog_entries_show_declared_results_undefined_and_annotation_hints() {
             json!({"type": "object", "properties": {"deleted": {"type": "boolean"}}, "required": ["deleted"]}),
         ),
     );
-    deleter.annotations = Some(ToolAnnotations {
-        title: AnnotationTitle::new("Delete file"),
-        read_only: Hint::StatedFalse,
-        destructive: Hint::StatedTrue,
-        idempotent: Hint::NotStated,
-        open_world: Hint::NotStated,
+    deleter.annotations = Some({
+        let mut value = ToolAnnotations::new(
+            Hint::StatedFalse,
+            Hint::StatedTrue,
+            Hint::NotStated,
+            Hint::NotStated,
+        );
+        value.title = AnnotationTitle::new("Delete file");
+        value
     });
     let catalog = catalog_of(vec![deleter, typical_tool("plain_tool")]);
 

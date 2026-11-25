@@ -30,41 +30,44 @@ fn test_provenance() -> GenerationProvenance {
 /// Also writes a matching stub `{typescript_name}.ts` file for each tool, since
 /// `scan_tools_directory` now cross-checks the sidecar against files on disk.
 async fn write_metadata_sidecar(dir: &std::path::Path, tool_names: &[&str]) {
-    let meta = ServerMetadata {
-        schema_version: METADATA_SCHEMA_VERSION,
-        server_id: ServerId::new("test").unwrap(),
-        server_name: "Test Server".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: tool_names
+    let meta = ServerMetadata::new(
+        METADATA_SCHEMA_VERSION,
+        ServerId::new("test").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        tool_names
             .iter()
-            .map(|name| ToolMetadata {
-                name: ToolName::new(*name).unwrap(),
-                typescript_name: to_camel_case(name),
-                category: Some("test-category".to_string()),
-                keywords: vec!["test".to_string(), (*name).to_string()],
-                description: Some(format!("Test tool: {name}")),
-                parameters: vec![
-                    ParameterMetadata {
-                        name: "required_param".to_string(),
-                        typescript_type: "string".to_string(),
-                        required: true,
-                        description: Some("A required parameter".to_string()),
-                    },
-                    ParameterMetadata {
-                        name: "optional_param".to_string(),
-                        typescript_type: "number".to_string(),
-                        required: false,
-                        description: None,
-                    },
-                ],
-                annotations: None,
-                result_type: None,
-                result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
+            .map(|name| {
+                let mut value = ToolMetadata::new(
+                    ToolName::new(*name).unwrap(),
+                    to_camel_case(name),
+                    vec!["test".to_string(), (*name).to_string()],
+                    vec![
+                        {
+                            let mut value = ParameterMetadata::new(
+                                "required_param".to_string(),
+                                "string".to_string(),
+                                true,
+                            );
+                            value.description = Some("A required parameter".to_string());
+                            value
+                        },
+                        ParameterMetadata::new(
+                            "optional_param".to_string(),
+                            "number".to_string(),
+                            false,
+                        ),
+                    ],
+                    mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                    0,
+                );
+                value.category = Some("test-category".to_string());
+                value.description = Some(format!("Test tool: {name}"));
+                value
             })
             .collect(),
-        provenance: test_provenance(),
-    };
+        test_provenance(),
+    );
 
     let content = serde_json::to_string_pretty(&meta).unwrap();
     fs::write(dir.join(METADATA_FILE_NAME), content)
@@ -436,25 +439,25 @@ async fn test_scan_directory_file_too_large() {
     )]
     let large_description = "a".repeat((MAX_FILE_SIZE as usize) + 1);
 
-    let mut meta = ServerMetadata {
-        schema_version: METADATA_SCHEMA_VERSION,
-        server_id: ServerId::new("test").unwrap(),
-        server_name: "Test Server".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: vec![ToolMetadata {
-            name: ToolName::new("large_tool").unwrap(),
-            typescript_name: "largeTool".to_string(),
-            category: None,
-            keywords: vec!["large".to_string()],
-            description: Some(String::new()),
-            parameters: vec![],
-            annotations: None,
-            result_type: None,
-            result_type_origin: mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
-            manifest_size_bytes: 0,
+    let mut meta = ServerMetadata::new(
+        METADATA_SCHEMA_VERSION,
+        ServerId::new("test").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        vec![{
+            let mut value = ToolMetadata::new(
+                ToolName::new("large_tool").unwrap(),
+                "largeTool".to_string(),
+                vec!["large".to_string()],
+                vec![],
+                mcp_execution_core::metadata::ResultTypeOrigin::Undeclared,
+                0,
+            );
+            value.description = Some(String::new());
+            value
         }],
-        provenance: test_provenance(),
-    };
+        test_provenance(),
+    );
     meta.tools[0].description = Some(large_description);
 
     let content = serde_json::to_string_pretty(&meta).unwrap();

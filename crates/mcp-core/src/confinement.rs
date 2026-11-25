@@ -36,6 +36,8 @@ use crate::untrusted::sanitize_untrusted_inline;
 /// let target = ConfinementTarget::File(OsStr::new("SKILL.md"));
 /// assert_matches!(target, ConfinementTarget::File(_));
 /// ```
+///
+/// This is a closed set: adding a variant is a major change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfinementTarget<'a> {
     /// The caller publishes the directory itself (e.g. via an atomic staged rename), so the
@@ -74,6 +76,7 @@ pub enum ConfinementTarget<'a> {
 /// assert_matches!(err, ConfinementError::InvalidSegment { .. });
 /// ```
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ConfinementError {
     /// The path segment pushed onto the base directory (e.g. a `server_id`) is empty or is not
     /// a single plain path component.

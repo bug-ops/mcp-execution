@@ -581,7 +581,7 @@ async fn main() -> Result<()> {
         .with_target(true);
     let layer = match log_format {
         LogFormat::Json => fmt_layer.json().boxed(),
-        LogFormat::Text => fmt_layer.boxed(),
+        _ => fmt_layer.boxed(),
     };
 
     tracing_subscriber::registry()

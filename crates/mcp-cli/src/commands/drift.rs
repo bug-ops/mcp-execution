@@ -271,12 +271,11 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     };
-    match format {
-        OutputFormat::Json => crate::formatters::emit(&report, format, exit),
-        OutputFormat::Text | OutputFormat::Pretty => {
-            println!("{}", report.text());
-            Ok(exit)
-        }
+    if format == OutputFormat::Json {
+        crate::formatters::emit(&report, format, exit)
+    } else {
+        println!("{}", report.text());
+        Ok(exit)
     }
 }
 

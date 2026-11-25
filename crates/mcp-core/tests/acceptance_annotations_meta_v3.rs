@@ -9,12 +9,11 @@ use mcp_execution_core::provenance::{ToolDigest, ToolDigestEntry};
 use serde_json::{Value, json};
 
 fn annotations(title: Option<&str>, read_only: Hint, destructive: Hint) -> ToolAnnotations {
-    ToolAnnotations {
-        title: title.and_then(AnnotationTitle::new),
-        read_only,
-        destructive,
-        idempotent: Hint::NotStated,
-        open_world: Hint::NotStated,
+    {
+        let mut value =
+            ToolAnnotations::new(read_only, destructive, Hint::NotStated, Hint::NotStated);
+        value.title = title.and_then(AnnotationTitle::new);
+        value
     }
 }
 

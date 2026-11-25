@@ -49,6 +49,7 @@ use std::str::FromStr;
 /// assert_eq!(format, OutputFormat::Pretty);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum OutputFormat {
     /// JSON output for machine parsing
     Json,
@@ -350,6 +351,7 @@ impl fmt::Display for ExitCode {
 /// assert_eq!(format, LogFormat::Text);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum LogFormat {
     /// Human-readable text logs.
     #[default]

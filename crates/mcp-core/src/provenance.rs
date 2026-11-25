@@ -679,6 +679,7 @@ fn hash_value_into(pre: &mut Preimage, value: &serde_json::Value) {
 /// assert_eq!(provenance.tool_digest.as_str().len(), 64);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GenerationProvenance {
     /// Wall-clock time generation completed, from the `generate` command's own clock.
     pub generated_at: DateTime<Utc>,
@@ -689,6 +690,37 @@ pub struct GenerationProvenance {
 }
 
 impl GenerationProvenance {
+    /// Creates a record from its three parts, for callers that already hold them (for example a
+    /// test fixture); a `generate` run uses [`Self::capture`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use mcp_execution_core::ServerConfig;
+    /// use mcp_execution_core::provenance::{ConfigFingerprint, GenerationProvenance, ToolDigest};
+    ///
+    /// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
+    /// let provenance = GenerationProvenance::new(
+    ///     Utc::now(),
+    ///     ConfigFingerprint::compute(&config),
+    ///     ToolDigest::compute(&[]),
+    /// );
+    /// assert!(provenance.generated_at <= Utc::now());
+    /// ```
+    #[must_use]
+    pub const fn new(
+        generated_at: DateTime<Utc>,
+        config_fingerprint: ConfigFingerprint,
+        tool_digest: ToolDigest,
+    ) -> Self {
+        Self {
+            generated_at,
+            config_fingerprint,
+            tool_digest,
+        }
+    }
+
     /// Captures provenance for a `generate` run: stamps the current time and computes both the
     /// config fingerprint and tool digest from the same inputs the run is generating from, so
     /// the digest can never drift from the emitted files.

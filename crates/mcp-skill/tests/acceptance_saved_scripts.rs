@@ -50,28 +50,26 @@ fn metadata_with(tools: &[&str]) -> ServerMetadata {
         .command("docker".to_string())
         .build()
         .unwrap();
-    ServerMetadata {
-        schema_version: METADATA_SCHEMA_VERSION,
-        server_id: ServerId::new("fixture").unwrap(),
-        server_name: "Fixture".to_string(),
-        server_version: "1.0.0".to_string(),
-        tools: tools
+    ServerMetadata::new(
+        METADATA_SCHEMA_VERSION,
+        ServerId::new("fixture").unwrap(),
+        "Fixture".to_string(),
+        "1.0.0".to_string(),
+        tools
             .iter()
-            .map(|name| ToolMetadata {
-                name: ToolName::new(*name).unwrap(),
-                typescript_name: (*name).to_string(),
-                category: None,
-                keywords: vec![],
-                description: None,
-                parameters: vec![],
-                annotations: None,
-                result_type: None,
-                result_type_origin: ResultTypeOrigin::Undeclared,
-                manifest_size_bytes: 0,
+            .map(|name| {
+                ToolMetadata::new(
+                    ToolName::new(*name).unwrap(),
+                    (*name).to_string(),
+                    vec![],
+                    vec![],
+                    ResultTypeOrigin::Undeclared,
+                    0,
+                )
             })
             .collect(),
-        provenance: GenerationProvenance::capture(&config, &[]),
-    }
+        GenerationProvenance::capture(&config, &[]),
+    )
 }
 
 #[test]
