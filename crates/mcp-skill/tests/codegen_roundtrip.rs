@@ -14,10 +14,10 @@ use mcp_execution_skill::scan_tools_directory;
 use serde_json::json;
 
 fn tool(index: usize) -> ToolInfo {
-    ToolInfo {
-        name: ToolName::new(format!("tool_{index:04}")).unwrap(),
-        description: format!("Tool number {index}"),
-        input_schema: json!({
+    ToolInfo::new(
+        ToolName::new(format!("tool_{index:04}")).unwrap(),
+        format!("Tool number {index}"),
+        json!({
             "type": "object",
             "properties": {
                 "repo": {"type": "string", "description": "Repository"},
@@ -25,23 +25,21 @@ fn tool(index: usize) -> ToolInfo {
             },
             "required": ["repo"]
         }),
-        output_schema: None,
-        annotations: None,
-    }
+    )
 }
 
 async fn generate_and_scan(tool_count: usize) -> mcp_execution_skill::ScanResult {
-    let server = ServerInfo {
-        id: ServerId::new("acme").unwrap(),
-        name: "Acme".to_string(),
-        version: "1.0.0".to_string(),
-        tools: (0..tool_count).map(tool).collect(),
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let server = ServerInfo::new(
+        ServerId::new("acme").unwrap(),
+        "Acme".to_string(),
+        "1.0.0".to_string(),
+        (0..tool_count).map(tool).collect(),
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
     let config = ServerConfig::builder()
         .command("test-command".to_string())
         .build()

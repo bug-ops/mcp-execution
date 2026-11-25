@@ -31,11 +31,7 @@ async fn call(
     };
     session
         .call_tool(
-            ToolCall {
-                tool: &tool,
-                arguments,
-                result_source: ResultSource::Content,
-            },
+            ToolCall::new(&tool, arguments, ResultSource::Content),
             CallTimeout::new(Duration::from_secs(30)).unwrap(),
         )
         .await

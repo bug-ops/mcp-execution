@@ -146,11 +146,7 @@ async fn call_within(
     let tool = ToolName::new(tool).unwrap();
     session
         .call_tool(
-            ToolCall {
-                tool: &tool,
-                arguments: Map::new(),
-                result_source: source,
-            },
+            ToolCall::new(&tool, Map::new(), source),
             CallTimeout::new(limit).unwrap(),
         )
         .await

@@ -195,7 +195,7 @@ impl DriftReport {
             ttl_seconds: hints.ttl.map(|ttl| ttl.as_secs()),
             cache_scope: hints.cache_scope.map(|scope| match scope {
                 CacheScope::Public => "public",
-                CacheScope::Private => "private",
+                _ => "private",
             }),
             notices,
         }
@@ -244,7 +244,7 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
     let (_, server_dir) = generated_location(&skill_id, from_unvalidated_config_key, servers_dir)?;
     let recorded = read_generated_metadata_async(server_dir, &skill_id).await?;
 
-    let Discovery { info, hints } = Introspector::new()
+    let Discovery { info, hints, .. } = Introspector::new()
         .discover(server_id.clone(), &config)
         .await
         .with_context(|| format!("failed to connect to server '{server_id}'"))?;
@@ -420,9 +420,10 @@ mod tests {
 
     #[test]
     fn private_scope_warns_about_credentials() {
-        let hints = ListingHints {
-            ttl: None,
-            cache_scope: Some(CacheScope::Private),
+        let hints = {
+            let mut value = ListingHints::default();
+            value.cache_scope = Some(CacheScope::Private);
+            value
         };
         let report = DriftReport::new(&DriftOutcome::NoDrift, hints, &[]);
         assert!(report.text().contains("depend on credentials"));

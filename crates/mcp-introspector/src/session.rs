@@ -106,14 +106,11 @@ impl CallTimeout {
 /// use mcp_execution_introspector::ToolCall;
 ///
 /// let tool = ToolName::new("echo").unwrap();
-/// let call = ToolCall {
-///     tool: &tool,
-///     arguments: serde_json::Map::new(),
-///     result_source: ResultSource::Content,
-/// };
+/// let call = ToolCall::new(&tool, serde_json::Map::new(), ResultSource::Content);
 /// assert_eq!(call.tool.as_str(), "echo");
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ToolCall<'a> {
     /// Tool to call.
     pub tool: &'a ToolName,
@@ -121,6 +118,34 @@ pub struct ToolCall<'a> {
     pub arguments: serde_json::Map<String, serde_json::Value>,
     /// Where the result value is read from.
     pub result_source: ResultSource,
+}
+
+impl<'a> ToolCall<'a> {
+    /// Creates a call of `tool` with `arguments`, reading the result from `result_source`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::ToolName;
+    /// use mcp_execution_core::helper_protocol::ResultSource;
+    /// use mcp_execution_introspector::ToolCall;
+    ///
+    /// let tool = ToolName::new("echo").unwrap();
+    /// let call = ToolCall::new(&tool, serde_json::Map::new(), ResultSource::Content);
+    /// assert_eq!(call.tool.as_str(), "echo");
+    /// ```
+    #[must_use]
+    pub const fn new(
+        tool: &'a ToolName,
+        arguments: serde_json::Map<String, serde_json::Value>,
+        result_source: ResultSource,
+    ) -> Self {
+        Self {
+            tool,
+            arguments,
+            result_source,
+        }
+    }
 }
 
 /// Server-supplied text, sanitized and capped.
@@ -156,6 +181,7 @@ pub struct ServerText {
 /// assert_matches!(outcome, ToolCallOutcome::Value(_));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ToolCallOutcome {
     /// The extracted result value.
     Value(serde_json::Value),
@@ -254,11 +280,7 @@ impl Session {
     ///
     /// # async fn example(session: &Session) -> Result<(), Box<dyn std::error::Error>> {
     /// let tool = ToolName::new("echo")?;
-    /// let call = ToolCall {
-    ///     tool: &tool,
-    ///     arguments: serde_json::Map::new(),
-    ///     result_source: ResultSource::Content,
-    /// };
+    /// let call = ToolCall::new(&tool, serde_json::Map::new(), ResultSource::Content);
     /// let outcome = session.call_tool(call, CallTimeout::new(Duration::from_secs(30))?).await?;
     /// println!("{outcome:?}");
     /// # Ok(())

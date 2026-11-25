@@ -9,17 +9,17 @@ use serde_json::json;
 /// Tests server info structure
 #[test]
 fn test_server_info_creation() {
-    let info = ServerInfo {
-        id: ServerId::new("test-server").unwrap(),
-        name: "Test Server".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let info = ServerInfo::new(
+        ServerId::new("test-server").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        vec![],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     assert_eq!(info.id.as_str(), "test-server");
     assert_eq!(info.name, "Test Server");
@@ -31,24 +31,26 @@ fn test_server_info_creation() {
 /// Tests tool info creation
 #[test]
 fn test_tool_info_creation() {
-    let tool = ToolInfo {
-        name: ToolName::new("send_message").unwrap(),
-        description: "Sends a message to a chat".to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "chat_id": {"type": "string"},
-                "text": {"type": "string"}
-            },
-            "required": ["chat_id", "text"]
-        }),
-        output_schema: Some(json!({
+    let tool = {
+        let mut value = ToolInfo::new(
+            ToolName::new("send_message").unwrap(),
+            "Sends a message to a chat".to_string(),
+            json!({
+                "type": "object",
+                "properties": {
+                    "chat_id": {"type": "string"},
+                    "text": {"type": "string"}
+                },
+                "required": ["chat_id", "text"]
+            }),
+        );
+        value.output_schema = Some(json!({
             "type": "object",
             "properties": {
                 "message_id": {"type": "string"}
             }
-        })),
-        annotations: None,
+        }));
+        value
     };
 
     assert_eq!(tool.name.as_str(), "send_message");
@@ -59,17 +61,17 @@ fn test_tool_info_creation() {
 /// Tests `ServerInfo` serialization
 #[test]
 fn test_server_info_serialization() {
-    let info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test Server".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        vec![],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     // Serialize to JSON
     let json = serde_json::to_string(&info).expect("Failed to serialize");
@@ -85,13 +87,11 @@ fn test_server_info_serialization() {
 /// Tests `ToolInfo` serialization
 #[test]
 fn test_tool_info_serialization() {
-    let tool = ToolInfo {
-        name: ToolName::new("test_tool").unwrap(),
-        description: "Test tool description".to_string(),
-        input_schema: json!({"type": "object"}),
-        output_schema: None,
-        annotations: None,
-    };
+    let tool = ToolInfo::new(
+        ToolName::new("test_tool").unwrap(),
+        "Test tool description".to_string(),
+        json!({"type": "object"}),
+    );
 
     // Serialize to JSON
     let json = serde_json::to_string(&tool).expect("Failed to serialize");
@@ -108,10 +108,12 @@ fn test_tool_info_serialization() {
 /// Tests `ServerCapabilities`
 #[test]
 fn test_server_capabilities() {
-    let caps = ServerCapabilities {
-        supports_tools: true,
-        supports_resources: true,
-        supports_prompts: true,
+    let caps = {
+        let mut value = ServerCapabilities::default();
+        value.supports_tools = true;
+        value.supports_resources = true;
+        value.supports_prompts = true;
+        value
     };
 
     assert!(caps.supports_tools);
@@ -140,17 +142,17 @@ fn test_introspector_is_send_sync() {
 /// Tests Debug implementation for `ServerInfo`
 #[test]
 fn test_server_info_debug() {
-    let info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test Server".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        vec![],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     let debug_str = format!("{info:?}");
     assert!(debug_str.contains("Test Server"));
@@ -160,13 +162,11 @@ fn test_server_info_debug() {
 /// Tests Debug implementation for `ToolInfo`
 #[test]
 fn test_tool_info_debug() {
-    let tool = ToolInfo {
-        name: ToolName::new("test").unwrap(),
-        description: "Description".to_string(),
-        input_schema: json!({}),
-        output_schema: None,
-        annotations: None,
-    };
+    let tool = ToolInfo::new(
+        ToolName::new("test").unwrap(),
+        "Description".to_string(),
+        json!({}),
+    );
 
     let debug_str = format!("{tool:?}");
     assert!(debug_str.contains("test"));
@@ -188,17 +188,13 @@ fn test_invalid_command_rejection() {
 /// Tests empty tool list handling
 #[test]
 fn test_empty_tool_list() {
-    let info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: false, // No tools
-            supports_resources: false,
-            supports_prompts: false,
-        },
-    };
+    let info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test".to_string(),
+        "1.0.0".to_string(),
+        vec![],
+        ServerCapabilities::default(),
+    );
 
     assert!(info.tools.is_empty());
     assert!(!info.capabilities.supports_tools);
@@ -231,12 +227,14 @@ fn test_complex_tool_schema() {
         "required": ["user", "message"]
     });
 
-    let tool = ToolInfo {
-        name: ToolName::new("complex_tool").unwrap(),
-        description: "A tool with complex schema".to_string(),
-        input_schema: complex_schema,
-        output_schema: Some(json!({"type": "boolean"})),
-        annotations: None,
+    let tool = {
+        let mut value = ToolInfo::new(
+            ToolName::new("complex_tool").unwrap(),
+            "A tool with complex schema".to_string(),
+            complex_schema,
+        );
+        value.output_schema = Some(json!({"type": "boolean"}));
+        value
     };
 
     assert_eq!(tool.name.as_str(), "complex_tool");
@@ -303,13 +301,11 @@ async fn test_discover_server_nonexistent_command() {
 /// Tests `ServerInfo` with tools containing empty descriptions
 #[test]
 fn test_tool_info_empty_description() {
-    let tool = ToolInfo {
-        name: ToolName::new("test").unwrap(),
-        description: String::new(),
-        input_schema: json!({"type": "null"}),
-        output_schema: None,
-        annotations: None,
-    };
+    let tool = ToolInfo::new(
+        ToolName::new("test").unwrap(),
+        String::new(),
+        json!({"type": "null"}),
+    );
 
     assert_eq!(tool.description, "");
     assert!(tool.output_schema.is_none());
@@ -318,10 +314,12 @@ fn test_tool_info_empty_description() {
 /// Tests `ServerInfo` with maximum capabilities
 #[test]
 fn test_server_capabilities_all_enabled() {
-    let caps = ServerCapabilities {
-        supports_tools: true,
-        supports_resources: true,
-        supports_prompts: true,
+    let caps = {
+        let mut value = ServerCapabilities::default();
+        value.supports_tools = true;
+        value.supports_resources = true;
+        value.supports_prompts = true;
+        value
     };
 
     assert!(caps.supports_tools);
@@ -332,11 +330,7 @@ fn test_server_capabilities_all_enabled() {
 /// Tests `ServerInfo` with all capabilities disabled
 #[test]
 fn test_server_capabilities_all_disabled() {
-    let caps = ServerCapabilities {
-        supports_tools: false,
-        supports_resources: false,
-        supports_prompts: false,
-    };
+    let caps = ServerCapabilities::default();
 
     assert!(!caps.supports_tools);
     assert!(!caps.supports_resources);
@@ -346,17 +340,17 @@ fn test_server_capabilities_all_disabled() {
 /// Tests `ServerInfo` clone
 #[test]
 fn test_server_info_clone() {
-    let info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test".to_string(),
+        "1.0.0".to_string(),
+        vec![],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     let cloned = info.clone();
     assert_eq!(cloned.id.as_str(), info.id.as_str());
@@ -367,13 +361,11 @@ fn test_server_info_clone() {
 /// Tests `ToolInfo` clone
 #[test]
 fn test_tool_info_clone() {
-    let tool = ToolInfo {
-        name: ToolName::new("test").unwrap(),
-        description: "Test".to_string(),
-        input_schema: json!({}),
-        output_schema: None,
-        annotations: None,
-    };
+    let tool = ToolInfo::new(
+        ToolName::new("test").unwrap(),
+        "Test".to_string(),
+        json!({}),
+    );
 
     let cloned = tool.clone();
     assert_eq!(cloned.name.as_str(), tool.name.as_str());
@@ -383,10 +375,11 @@ fn test_tool_info_clone() {
 /// Tests `ServerCapabilities` clone
 #[test]
 fn test_server_capabilities_clone() {
-    let caps = ServerCapabilities {
-        supports_tools: true,
-        supports_resources: true,
-        supports_prompts: false,
+    let caps = {
+        let mut value = ServerCapabilities::default();
+        value.supports_tools = true;
+        value.supports_resources = true;
+        value
     };
 
     let cloned = caps.clone();
@@ -399,26 +392,26 @@ fn test_server_capabilities_clone() {
 #[test]
 fn test_server_info_with_many_tools() {
     let tools: Vec<ToolInfo> = (0..100)
-        .map(|i| ToolInfo {
-            name: ToolName::new(&format!("tool_{i}")).unwrap(),
-            description: format!("Tool number {i}"),
-            input_schema: json!({"type": "object"}),
-            output_schema: None,
-            annotations: None,
+        .map(|i| {
+            ToolInfo::new(
+                ToolName::new(&format!("tool_{i}")).unwrap(),
+                format!("Tool number {i}"),
+                json!({"type": "object"}),
+            )
         })
         .collect();
 
-    let info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test".to_string(),
-        version: "1.0.0".to_string(),
+    let info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test".to_string(),
+        "1.0.0".to_string(),
         tools,
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     assert_eq!(info.tools.len(), 100);
     assert!(info.capabilities.supports_tools);
@@ -427,12 +420,14 @@ fn test_server_info_with_many_tools() {
 /// Tests `ToolInfo` with null input schema
 #[test]
 fn test_tool_info_null_schema() {
-    let tool = ToolInfo {
-        name: ToolName::new("test").unwrap(),
-        description: "Test".to_string(),
-        input_schema: json!(null),
-        output_schema: Some(json!(null)),
-        annotations: None,
+    let tool = {
+        let mut value = ToolInfo::new(
+            ToolName::new("test").unwrap(),
+            "Test".to_string(),
+            json!(null),
+        );
+        value.output_schema = Some(json!(null));
+        value
     };
 
     assert!(tool.input_schema.is_null());
@@ -442,17 +437,17 @@ fn test_tool_info_null_schema() {
 /// Tests `ServerInfo` with special characters in name
 #[test]
 fn test_server_info_special_chars() {
-    let info = ServerInfo {
-        id: ServerId::new("test-server-123").unwrap(),
-        name: "Test Server (v1.0) [beta]".to_string(),
-        version: "1.0.0-alpha.1+build.123".to_string(),
-        tools: vec![],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let info = ServerInfo::new(
+        ServerId::new("test-server-123").unwrap(),
+        "Test Server (v1.0) [beta]".to_string(),
+        "1.0.0-alpha.1+build.123".to_string(),
+        vec![],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     assert!(info.name.contains('('));
     assert!(info.version.contains('+'));
@@ -463,13 +458,7 @@ fn test_server_info_special_chars() {
 fn test_tool_info_long_description() {
     let long_desc = "a".repeat(10000);
 
-    let tool = ToolInfo {
-        name: ToolName::new("test").unwrap(),
-        description: long_desc.clone(),
-        input_schema: json!({}),
-        output_schema: None,
-        annotations: None,
-    };
+    let tool = ToolInfo::new(ToolName::new("test").unwrap(), long_desc.clone(), json!({}));
 
     assert_eq!(tool.description.len(), 10000);
     assert_eq!(tool.description, long_desc);
@@ -478,10 +467,11 @@ fn test_tool_info_long_description() {
 /// Tests `ServerCapabilities` Debug
 #[test]
 fn test_server_capabilities_debug() {
-    let caps = ServerCapabilities {
-        supports_tools: true,
-        supports_resources: false,
-        supports_prompts: true,
+    let caps = {
+        let mut value = ServerCapabilities::default();
+        value.supports_tools = true;
+        value.supports_prompts = true;
+        value
     };
 
     let debug_str = format!("{caps:?}");
@@ -517,12 +507,14 @@ fn test_tool_info_nested_schema() {
         }
     });
 
-    let tool = ToolInfo {
-        name: ToolName::new("nested").unwrap(),
-        description: "Nested schema test".to_string(),
-        input_schema: nested_schema.clone(),
-        output_schema: Some(nested_schema),
-        annotations: None,
+    let tool = {
+        let mut value = ToolInfo::new(
+            ToolName::new("nested").unwrap(),
+            "Nested schema test".to_string(),
+            nested_schema.clone(),
+        );
+        value.output_schema = Some(nested_schema);
+        value
     };
 
     assert!(tool.input_schema["properties"]["level1"].is_object());
@@ -532,25 +524,23 @@ fn test_tool_info_nested_schema() {
 /// Tests `ServerInfo` serialization with tools
 #[test]
 fn test_server_info_serialization_with_tools() {
-    let tool = ToolInfo {
-        name: ToolName::new("test_tool").unwrap(),
-        description: "Test".to_string(),
-        input_schema: json!({"type": "object"}),
-        output_schema: None,
-        annotations: None,
-    };
+    let tool = ToolInfo::new(
+        ToolName::new("test_tool").unwrap(),
+        "Test".to_string(),
+        json!({"type": "object"}),
+    );
 
-    let info = ServerInfo {
-        id: ServerId::new("test").unwrap(),
-        name: "Test Server".to_string(),
-        version: "1.0.0".to_string(),
-        tools: vec![tool],
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+    let info = ServerInfo::new(
+        ServerId::new("test").unwrap(),
+        "Test Server".to_string(),
+        "1.0.0".to_string(),
+        vec![tool],
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
 
     let json = serde_json::to_string(&info).expect("Serialization failed");
     assert!(json.contains("test_tool"));

@@ -50,11 +50,7 @@ async fn call(
     };
     session
         .call_tool(
-            ToolCall {
-                tool: &tool,
-                arguments,
-                result_source: ResultSource::Structured,
-            },
+            ToolCall::new(&tool, arguments, ResultSource::Structured),
             CallTimeout::new(limit).unwrap(),
         )
         .await

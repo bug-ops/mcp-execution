@@ -507,28 +507,26 @@ mod tests {
     use serde_json::json;
 
     fn create_mock_server_info() -> ServerInfo {
-        ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![ToolInfo {
-                name: mcp_execution_core::ToolName::new("test_tool").unwrap(),
-                description: "A test tool".to_string(),
-                input_schema: json!({
+        ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                mcp_execution_core::ToolName::new("test_tool").unwrap(),
+                "A test tool".to_string(),
+                json!({
                     "type": "object",
                     "properties": {
                         "param": {"type": "string"}
                     }
                 }),
-                output_schema: None,
-                annotations: None,
-            }],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        }
+        )
     }
 
     /// `ServerConfig` passed alongside `create_mock_server_info`'s output so `generate` can

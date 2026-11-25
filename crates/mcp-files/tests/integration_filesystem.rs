@@ -517,33 +517,33 @@ fn test_export_of_output_generated_at_the_maximum_tool_count_succeeds() {
     use serde_json::json;
 
     let tools = (0..MAX_TOOL_COUNT)
-        .map(|i| ToolInfo {
-            name: ToolName::new(format!("tool_{i:04}")).unwrap(),
-            description: format!("Tool {i}"),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "repo": {"type": "string", "description": "Repository"},
-                    "page": {"type": "integer"},
-                    "state": {"enum": ["open", "closed"]}
-                },
-                "required": ["repo"]
-            }),
-            output_schema: None,
-            annotations: None,
+        .map(|i| {
+            ToolInfo::new(
+                ToolName::new(format!("tool_{i:04}")).unwrap(),
+                format!("Tool {i}"),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "repo": {"type": "string", "description": "Repository"},
+                        "page": {"type": "integer"},
+                        "state": {"enum": ["open", "closed"]}
+                    },
+                    "required": ["repo"]
+                }),
+            )
         })
         .collect();
-    let server = ServerInfo {
-        id: ServerId::new("acme").unwrap(),
-        name: "Acme".to_string(),
-        version: "1.0.0".to_string(),
+    let server = ServerInfo::new(
+        ServerId::new("acme").unwrap(),
+        "Acme".to_string(),
+        "1.0.0".to_string(),
         tools,
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
     let config = ServerConfig::builder()
         .command("test-command".to_string())
         .build()

@@ -94,11 +94,7 @@ impl SessionPool {
             let session = self.open(&cell, &server).await?;
             let outcome = session
                 .call_tool(
-                    ToolCall {
-                        tool: &tool,
-                        arguments,
-                        result_source,
-                    },
+                    ToolCall::new(&tool, arguments, result_source),
                     self.call_timeout,
                 )
                 .await;
@@ -259,6 +255,12 @@ fn reply_of(server: &ServerId, tool: &ToolName, outcome: ToolCallOutcome) -> Cal
                 server_text,
             )
         }
+        _ => (
+            ErrorKind::RpcError,
+            CallStatus::RpcError,
+            format!("Tool execution failed: {server}.{tool}"),
+            None,
+        ),
     };
     let (server_message, server_message_truncated) = match text {
         Some(ServerText { text, truncated }) => (Some(text), Some(truncated)),

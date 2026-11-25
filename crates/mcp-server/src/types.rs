@@ -695,23 +695,21 @@ mod tests {
         use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
 
         let server_id = ServerId::new("test").unwrap();
-        let server_info = ServerInfo {
-            id: server_id.clone(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+        let server_info = ServerInfo::new(
+            server_id.clone(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                ToolName::new("test_tool").unwrap(),
+                "Test tool description".to_string(),
+                serde_json::json!({}),
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-            tools: vec![ToolInfo {
-                name: ToolName::new("test_tool").unwrap(),
-                description: "Test tool description".to_string(),
-                input_schema: serde_json::json!({}),
-                output_schema: None,
-                annotations: None,
-            }],
-        };
+        );
         let config = ServerConfig::builder()
             .command("echo".to_string())
             .build()

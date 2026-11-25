@@ -19,26 +19,26 @@ use serde_json::json;
 /// Writes the generated package of the server `server_id` (shown as `display_name`) with one
 /// empty-object-input tool per entry of `tools` below `servers/<server_id>`.
 pub fn write_package(servers: &Path, server_id: &str, display_name: &str, tools: &[&str]) {
-    let info = ServerInfo {
-        id: ServerId::new(server_id).expect("valid id"),
-        name: display_name.to_string(),
-        version: "1.0.0".to_string(),
-        tools: tools
+    let info = ServerInfo::new(
+        ServerId::new(server_id).expect("valid id"),
+        display_name.to_string(),
+        "1.0.0".to_string(),
+        tools
             .iter()
-            .map(|name| ToolInfo {
-                name: ToolName::new(*name).expect("valid tool name"),
-                description: format!("The {name} tool"),
-                input_schema: json!({"type": "object"}),
-                output_schema: None,
-                annotations: None,
+            .map(|name| {
+                ToolInfo::new(
+                    ToolName::new(*name).expect("valid tool name"),
+                    format!("The {name} tool"),
+                    json!({"type": "object"}),
+                )
             })
             .collect(),
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    };
+    );
     let config = ServerConfig::builder()
         .command("unused".to_string())
         .build()

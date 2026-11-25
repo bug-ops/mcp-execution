@@ -36,106 +36,108 @@ fn bench_config() -> ServerConfig {
 
 /// Creates a simple tool with minimal schema.
 fn create_simple_tool(index: usize) -> ToolInfo {
-    ToolInfo {
-        name: ToolName::new(format!("simple_tool_{index}")).unwrap(),
-        description: format!("Simple tool {index}"),
-        input_schema: json!({
+    ToolInfo::new(
+        ToolName::new(format!("simple_tool_{index}")).unwrap(),
+        format!("Simple tool {index}"),
+        json!({
             "type": "object",
             "properties": {
                 "id": {"type": "string"}
             },
             "required": ["id"]
         }),
-        output_schema: None,
-        annotations: None,
-    }
+    )
 }
 
 /// Creates a tool with moderate schema complexity.
 fn create_moderate_tool(index: usize) -> ToolInfo {
-    ToolInfo {
-        name: ToolName::new(format!("moderate_tool_{index}")).unwrap(),
-        description: format!("Moderate complexity tool {index}"),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "id": {"type": "string"},
-                "name": {"type": "string"},
-                "count": {"type": "number"},
-                "active": {"type": "boolean"},
-                "tags": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
-            },
-            "required": ["id", "name"]
-        }),
-        output_schema: Some(json!({
+    {
+        let mut value = ToolInfo::new(
+            ToolName::new(format!("moderate_tool_{index}")).unwrap(),
+            format!("Moderate complexity tool {index}"),
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "count": {"type": "number"},
+                    "active": {"type": "boolean"},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["id", "name"]
+            }),
+        );
+        value.output_schema = Some(json!({
             "type": "object",
             "properties": {
                 "result": {"type": "string"},
                 "code": {"type": "number"}
             }
-        })),
-        annotations: None,
+        }));
+        value
     }
 }
 
 /// Creates a tool with complex nested schema.
 fn create_complex_tool(index: usize) -> ToolInfo {
-    ToolInfo {
-        name: ToolName::new(format!("complex_tool_{index}")).unwrap(),
-        description: format!("Complex nested tool {index}"),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "id": {"type": "string"},
-                "metadata": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "priority": {"type": "number"},
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        },
-                        "attributes": {
-                            "type": "object",
-                            "properties": {
-                                "color": {"type": "string"},
-                                "size": {"type": "number"}
-                            }
-                        }
-                    }
-                },
-                "options": {
-                    "type": "array",
-                    "items": {
+    {
+        let mut value = ToolInfo::new(
+            ToolName::new(format!("complex_tool_{index}")).unwrap(),
+            format!("Complex nested tool {index}"),
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "metadata": {
                         "type": "object",
                         "properties": {
-                            "key": {"type": "string"},
-                            "value": {"type": "string"},
-                            "enabled": {"type": "boolean"}
+                            "name": {"type": "string"},
+                            "priority": {"type": "number"},
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            },
+                            "attributes": {
+                                "type": "object",
+                                "properties": {
+                                    "color": {"type": "string"},
+                                    "size": {"type": "number"}
+                                }
+                            }
                         }
-                    }
-                },
-                "config": {
-                    "type": "object",
-                    "properties": {
-                        "timeout": {"type": "number"},
-                        "retries": {"type": "number"},
-                        "fallback": {
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {
                             "type": "object",
                             "properties": {
-                                "url": {"type": "string"}
+                                "key": {"type": "string"},
+                                "value": {"type": "string"},
+                                "enabled": {"type": "boolean"}
+                            }
+                        }
+                    },
+                    "config": {
+                        "type": "object",
+                        "properties": {
+                            "timeout": {"type": "number"},
+                            "retries": {"type": "number"},
+                            "fallback": {
+                                "type": "object",
+                                "properties": {
+                                    "url": {"type": "string"}
+                                }
                             }
                         }
                     }
-                }
-            },
-            "required": ["id", "metadata"]
-        }),
-        output_schema: Some(json!({
+                },
+                "required": ["id", "metadata"]
+            }),
+        );
+        value.output_schema = Some(json!({
             "type": "object",
             "properties": {
                 "success": {"type": "boolean"},
@@ -149,8 +151,8 @@ fn create_complex_tool(index: usize) -> ToolInfo {
                     }
                 }
             }
-        })),
-        annotations: None,
+        }));
+        value
     }
 }
 
@@ -158,17 +160,17 @@ fn create_complex_tool(index: usize) -> ToolInfo {
 fn create_server_info(tool_count: usize, tool_creator: fn(usize) -> ToolInfo) -> ServerInfo {
     let tools: Vec<_> = (0..tool_count).map(tool_creator).collect();
 
-    ServerInfo {
-        id: ServerId::new(format!("bench-server-{tool_count}")).unwrap(),
-        name: format!("Benchmark Server (n={tool_count})"),
-        version: "1.0.0".to_string(),
+    ServerInfo::new(
+        ServerId::new(format!("bench-server-{tool_count}")).unwrap(),
+        format!("Benchmark Server (n={tool_count})"),
+        "1.0.0".to_string(),
         tools,
-        capabilities: ServerCapabilities {
-            supports_tools: true,
-            supports_resources: false,
-            supports_prompts: false,
+        {
+            let mut value = ServerCapabilities::default();
+            value.supports_tools = true;
+            value
         },
-    }
+    )
 }
 
 // ============================================================================

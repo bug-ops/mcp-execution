@@ -72,11 +72,7 @@ pub async fn run(args: CallArgs, _format: OutputFormat) -> Result<ExitCode> {
         .with_context(|| format!("failed to connect to server '{server_id}'"))?;
     let outcome = session
         .call_tool(
-            ToolCall {
-                tool: &tool,
-                arguments,
-                result_source: ResultSource::Structured,
-            },
+            ToolCall::new(&tool, arguments, ResultSource::Structured),
             CallTimeout::new(DEFAULT_CALL_TIMEOUT)?,
         )
         .await;
@@ -150,6 +146,12 @@ async fn report(
             eprintln!(
                 "Error: server '{server_id}' answered the call to '{tool}' with a JSON-RPC error{code}{}",
                 server_message(server_text.as_ref())
+            );
+            Ok(ExitCode::SERVER_ERROR)
+        }
+        _ => {
+            eprintln!(
+                "Error: server '{server_id}' answered the call to '{tool}' with an unrecognized outcome"
             );
             Ok(ExitCode::SERVER_ERROR)
         }

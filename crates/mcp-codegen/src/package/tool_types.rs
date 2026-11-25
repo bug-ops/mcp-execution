@@ -241,12 +241,11 @@ mod tests {
     use serde_json::json;
 
     fn tool(input: &Value, output: Option<Value>) -> ToolInfo {
-        ToolInfo {
-            name: ToolName::new("t").unwrap(),
-            description: String::new(),
-            input_schema: input.clone(),
-            output_schema: output,
-            annotations: None,
+        {
+            let mut value =
+                ToolInfo::new(ToolName::new("t").unwrap(), String::new(), input.clone());
+            value.output_schema = output;
+            value
         }
     }
 

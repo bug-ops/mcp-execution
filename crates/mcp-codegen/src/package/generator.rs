@@ -368,17 +368,7 @@ impl PackageGenerator<'_> {
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let generator = PackageGenerator::new()?;
     ///
-    /// let info = ServerInfo {
-    ///     id: ServerId::new("github").unwrap(),
-    ///     name: "GitHub".to_string(),
-    ///     version: "1.0.0".to_string(),
-    ///     tools: vec![],
-    ///     capabilities: ServerCapabilities {
-    ///         supports_tools: true,
-    ///         supports_resources: false,
-    ///         supports_prompts: false,
-    ///     },
-    /// };
+    /// let info = ServerInfo::new(ServerId::new("github").unwrap(), "GitHub".to_string(), "1.0.0".to_string(), vec![], { let mut value = ServerCapabilities::default(); value.supports_tools = true; value });
     /// let config = ServerConfig::builder().command("/path/to/github-server".to_string()).build()?;
     ///
     /// let code = generator.generate(&info, &config)?;
@@ -433,17 +423,7 @@ impl PackageGenerator<'_> {
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let generator = PackageGenerator::new()?;
     ///
-    /// let info = ServerInfo {
-    ///     id: ServerId::new("github").unwrap(),
-    ///     name: "GitHub".to_string(),
-    ///     version: "1.0.0".to_string(),
-    ///     tools: vec![],
-    ///     capabilities: ServerCapabilities {
-    ///         supports_tools: true,
-    ///         supports_resources: false,
-    ///         supports_prompts: false,
-    ///     },
-    /// };
+    /// let info = ServerInfo::new(ServerId::new("github").unwrap(), "GitHub".to_string(), "1.0.0".to_string(), vec![], { let mut value = ServerCapabilities::default(); value.supports_tools = true; value });
     /// let config = ServerConfig::builder().command("/path/to/github-server".to_string()).build()?;
     ///
     /// let mut categorizations = HashMap::new();
@@ -1323,15 +1303,15 @@ mod tests {
     use serde_json::json;
 
     fn create_test_server_info() -> ServerInfo {
-        ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![
-                ToolInfo {
-                    name: ToolName::new("create_issue").unwrap(),
-                    description: "Creates a new issue".to_string(),
-                    input_schema: json!({
+        ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![
+                ToolInfo::new(
+                    ToolName::new("create_issue").unwrap(),
+                    "Creates a new issue".to_string(),
+                    json!({
                         "type": "object",
                         "properties": {
                             "title": {
@@ -1345,13 +1325,11 @@ mod tests {
                         },
                         "required": ["title"]
                     }),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new("update_issue").unwrap(),
-                    description: "Updates an existing issue".to_string(),
-                    input_schema: json!({
+                ),
+                ToolInfo::new(
+                    ToolName::new("update_issue").unwrap(),
+                    "Updates an existing issue".to_string(),
+                    json!({
                         "type": "object",
                         "properties": {
                             "id": {
@@ -1360,16 +1338,14 @@ mod tests {
                         },
                         "required": ["id"]
                     }),
-                    output_schema: None,
-                    annotations: None,
-                },
+                ),
             ],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        }
+        )
     }
 
     fn types_for(tool: &ToolInfo) -> ToolTypes {
@@ -1680,14 +1656,14 @@ mod tests {
         assert!(raw_description.contains('\n'));
         assert!(raw_description.chars().count() > 256);
 
-        let server_info = ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![ToolInfo {
-                name: ToolName::new("send_message").unwrap(),
-                description: "Sends a message".to_string(),
-                input_schema: json!({
+        let server_info = ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                ToolName::new("send_message").unwrap(),
+                "Sends a message".to_string(),
+                json!({
                     "type": "object",
                     "properties": {
                         "notes": {
@@ -1697,15 +1673,13 @@ mod tests {
                     },
                     "required": []
                 }),
-                output_schema: None,
-                annotations: None,
-            }],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let generator = PackageGenerator::new().unwrap();
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -1750,19 +1724,17 @@ mod tests {
 
     #[test]
     fn test_create_tool_context() {
-        let tool = ToolInfo {
-            name: ToolName::new("send_message").unwrap(),
-            description: "Sends a message".to_string(),
-            input_schema: json!({
+        let tool = ToolInfo::new(
+            ToolName::new("send_message").unwrap(),
+            "Sends a message".to_string(),
+            json!({
                 "type": "object",
                 "properties": {
                     "text": {"type": "string"}
                 },
                 "required": ["text"]
             }),
-            output_schema: None,
-            annotations: None,
-        };
+        );
 
         let categorization = ToolCategorization {
             category: "messaging".to_string(),
@@ -1799,13 +1771,11 @@ mod tests {
         // The property-extraction error raised deep in `extract_property_data` is generic
         // (`Error::ValidationError`) and has no `tool` field; this wrapper attributes the
         // failure back to the specific tool being generated.
-        let tool = ToolInfo {
-            name: ToolName::new("send_message").unwrap(),
-            description: String::new(),
-            input_schema: json!({}),
-            output_schema: None,
-            annotations: None,
-        };
+        let tool = ToolInfo::new(
+            ToolName::new("send_message").unwrap(),
+            String::new(),
+            json!({}),
+        );
         let source = Error::ValidationError {
             field: "type".to_string(),
             reason: "Property type is not a string".to_string(),
@@ -1836,13 +1806,11 @@ mod tests {
         // #185's real (reachable) attribution gap: a template-render failure or an
         // output-tracking failure that happens while processing one tool out of many must
         // still name that tool, not just the (structurally unreachable) schema-extraction path.
-        let tool = ToolInfo {
-            name: ToolName::new("send_message").unwrap(),
-            description: String::new(),
-            input_schema: json!({}),
-            output_schema: None,
-            annotations: None,
-        };
+        let tool = ToolInfo::new(
+            ToolName::new("send_message").unwrap(),
+            String::new(),
+            json!({}),
+        );
 
         let render_failure = PackageGenerator::wrap_tool_generation_error(
             &tool,
@@ -1887,19 +1855,17 @@ mod tests {
     #[test]
     fn test_create_tool_context_without_categorization_falls_back_to_description() {
         let generator = PackageGenerator::new().unwrap();
-        let tool = ToolInfo {
-            name: ToolName::new("format_document").unwrap(),
-            description: "Format document with language-specific rules".to_string(),
-            input_schema: json!({
+        let tool = ToolInfo::new(
+            ToolName::new("format_document").unwrap(),
+            "Format document with language-specific rules".to_string(),
+            json!({
                 "type": "object",
                 "properties": {
                     "text": {"type": "string"}
                 },
                 "required": ["text"]
             }),
-            output_schema: None,
-            annotations: None,
-        };
+        );
 
         let context = PackageGenerator::create_tool_context(
             "test-server",
@@ -1921,10 +1887,10 @@ mod tests {
 
     #[test]
     fn test_create_tool_context_input_schema_is_sanitized() {
-        let tool = ToolInfo {
-            name: ToolName::new("send_message").unwrap(),
-            description: "Sends a message".to_string(),
-            input_schema: json!({
+        let tool = ToolInfo::new(
+            ToolName::new("send_message").unwrap(),
+            "Sends a message".to_string(),
+            json!({
                 "type": "object",
                 "description": "Schema */ injected\nnext",
                 "properties": {
@@ -1932,9 +1898,7 @@ mod tests {
                 },
                 "required": ["text"]
             }),
-            output_schema: None,
-            annotations: None,
-        };
+        );
 
         let context = PackageGenerator::create_tool_context(
             "test-server",
@@ -1972,27 +1936,25 @@ mod tests {
     #[test]
     fn test_tool_named_index_does_not_collide_with_index_ts() {
         let generator = PackageGenerator::new().unwrap();
-        let server_info = ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![ToolInfo {
-                name: ToolName::new("index").unwrap(),
-                description: "A tool literally named index".to_string(),
-                input_schema: json!({
+        let server_info = ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                ToolName::new("index").unwrap(),
+                "A tool literally named index".to_string(),
+                json!({
                     "type": "object",
                     "properties": {},
                     "required": []
                 }),
-                output_schema: None,
-                annotations: None,
-            }],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
 
@@ -2051,27 +2013,25 @@ mod tests {
     #[test]
     fn test_tool_named_index_with_different_case_is_disambiguated() {
         let generator = PackageGenerator::new().unwrap();
-        let server_info = ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![ToolInfo {
-                name: ToolName::new("Index").unwrap(),
-                description: "A tool literally named Index".to_string(),
-                input_schema: json!({
+        let server_info = ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![ToolInfo::new(
+                ToolName::new("Index").unwrap(),
+                "A tool literally named Index".to_string(),
+                json!({
                     "type": "object",
                     "properties": {},
                     "required": []
                 }),
-                output_schema: None,
-                annotations: None,
-            }],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            )],
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
 
@@ -2104,32 +2064,28 @@ mod tests {
     #[test]
     fn test_tools_named_index_and_capital_index_do_not_collide_with_each_other() {
         let generator = PackageGenerator::new().unwrap();
-        let server_info = ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![
-                ToolInfo {
-                    name: ToolName::new("Index").unwrap(),
-                    description: "Capitalized".to_string(),
-                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new("index").unwrap(),
-                    description: "Lowercase".to_string(),
-                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
-                    output_schema: None,
-                    annotations: None,
-                },
+        let server_info = ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![
+                ToolInfo::new(
+                    ToolName::new("Index").unwrap(),
+                    "Capitalized".to_string(),
+                    json!({"type": "object", "properties": {}, "required": []}),
+                ),
+                ToolInfo::new(
+                    ToolName::new("index").unwrap(),
+                    "Lowercase".to_string(),
+                    json!({"type": "object", "properties": {}, "required": []}),
+                ),
             ],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
         let typescript_names = resolve_typescript_names(&server_info.tools);
@@ -2159,32 +2115,28 @@ mod tests {
     /// their output files exactly like the `Index`/`index` case.
     #[test]
     fn test_tools_differing_only_by_case_are_disambiguated_from_each_other() {
-        let server_info = ServerInfo {
-            id: ServerId::new("test-server").unwrap(),
-            name: "Test Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: vec![
-                ToolInfo {
-                    name: ToolName::new("get_user").unwrap(),
-                    description: "snake_case".to_string(),
-                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new("GetUser").unwrap(),
-                    description: "PascalCase".to_string(),
-                    input_schema: json!({"type": "object", "properties": {}, "required": []}),
-                    output_schema: None,
-                    annotations: None,
-                },
+        let server_info = ServerInfo::new(
+            ServerId::new("test-server").unwrap(),
+            "Test Server".to_string(),
+            "1.0.0".to_string(),
+            vec![
+                ToolInfo::new(
+                    ToolName::new("get_user").unwrap(),
+                    "snake_case".to_string(),
+                    json!({"type": "object", "properties": {}, "required": []}),
+                ),
+                ToolInfo::new(
+                    ToolName::new("GetUser").unwrap(),
+                    "PascalCase".to_string(),
+                    json!({"type": "object", "properties": {}, "required": []}),
+                ),
             ],
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        };
+        );
 
         let typescript_names = resolve_typescript_names(&server_info.tools);
 
@@ -2583,31 +2535,9 @@ mod tests {
     #[test]
     fn test_resolve_typescript_names_disambiguates_collisions() {
         let tools = vec![
-            ToolInfo {
-                name: ToolName::new("foo-bar").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                name: ToolName::new("foo.bar").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                // `ToolName::new`'s Unicode-identifier allowlist (issue #433) rejects a raw
-                // space, so this uses `:` (also non-alphanumeric, also sanitized to `_` by
-                // `sanitize_ts_identifier`) as the third distinct separator that collides
-                // with the other two after sanitization.
-                name: ToolName::new("foo:bar").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
+            ToolInfo::new(ToolName::new("foo-bar").unwrap(), String::new(), json!({})),
+            ToolInfo::new(ToolName::new("foo.bar").unwrap(), String::new(), json!({})),
+            ToolInfo::new(ToolName::new("foo:bar").unwrap(), String::new(), json!({})),
         ];
 
         let resolved = resolve_typescript_names(&tools);
@@ -2631,20 +2561,16 @@ mod tests {
         // not be rejected upstream; each must still get a distinct resolved identifier
         // instead of one silently losing its slot in a raw-name-keyed map.
         let tools = vec![
-            ToolInfo {
-                name: ToolName::new("dup").unwrap(),
-                description: "First".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                name: ToolName::new("dup").unwrap(),
-                description: "Second".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
+            ToolInfo::new(
+                ToolName::new("dup").unwrap(),
+                "First".to_string(),
+                json!({}),
+            ),
+            ToolInfo::new(
+                ToolName::new("dup").unwrap(),
+                "Second".to_string(),
+                json!({}),
+            ),
         ];
 
         let resolved = resolve_typescript_names(&tools);
@@ -2655,13 +2581,7 @@ mod tests {
     #[test]
     fn test_resolve_typescript_names_disambiguates_three_way_identical_raw_names() {
         let tools: Vec<ToolInfo> = (0..3)
-            .map(|_| ToolInfo {
-                name: ToolName::new("dup").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            })
+            .map(|_| ToolInfo::new(ToolName::new("dup").unwrap(), String::new(), json!({})))
             .collect();
 
         let resolved = resolve_typescript_names(&tools);
@@ -2690,13 +2610,11 @@ mod tests {
         ];
 
         for name in reserved_tool_names {
-            let tools = vec![ToolInfo {
-                name: ToolName::new(name).unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            }];
+            let tools = vec![ToolInfo::new(
+                ToolName::new(name).unwrap(),
+                String::new(),
+                json!({}),
+            )];
 
             let resolved = resolve_typescript_names(&tools);
             let typescript_name = &resolved[0];
@@ -2715,13 +2633,7 @@ mod tests {
     #[test]
     fn test_resolve_typescript_names_reserved_word_avoids_existing_collision() {
         let tools = vec![
-            ToolInfo {
-                name: ToolName::new("class").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
+            ToolInfo::new(ToolName::new("class").unwrap(), String::new(), json!({})),
             // Must be a hyphen, not an underscore: `to_camel_case` only acts on `_` (it
             // capitalizes the following character and drops the underscore), so a raw name
             // of "class_2" would sanitize to "class2", never colliding with the "class"
@@ -2729,13 +2641,7 @@ mod tests {
             // `sanitize_ts_identifier` replaces the hyphen in "class-2" with "_" verbatim
             // (untouched by `to_camel_case`), so it genuinely sanitizes to the literal
             // identifier "class_2", producing a real collision to test against.
-            ToolInfo {
-                name: ToolName::new("class-2").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
+            ToolInfo::new(ToolName::new("class-2").unwrap(), String::new(), json!({})),
         ];
 
         let resolved = resolve_typescript_names(&tools);
@@ -2752,13 +2658,11 @@ mod tests {
         // Issue #320: JS/TS reserved words are reserved only in their exact lowercase form —
         // `Delete`, `New`, `Import` are all legal identifiers — so a tool named `Delete` must
         // not be treated as colliding with the reserved word `delete`.
-        let tools = vec![ToolInfo {
-            name: ToolName::new("Delete").unwrap(),
-            description: String::new(),
-            input_schema: json!({}),
-            output_schema: None,
-            annotations: None,
-        }];
+        let tools = vec![ToolInfo::new(
+            ToolName::new("Delete").unwrap(),
+            String::new(),
+            json!({}),
+        )];
 
         let resolved = resolve_typescript_names(&tools);
 
@@ -2767,13 +2671,11 @@ mod tests {
 
     #[test]
     fn test_resolve_typescript_names_exact_reserved_word_is_still_suffixed() {
-        let tools = vec![ToolInfo {
-            name: ToolName::new("delete").unwrap(),
-            description: String::new(),
-            input_schema: json!({}),
-            output_schema: None,
-            annotations: None,
-        }];
+        let tools = vec![ToolInfo::new(
+            ToolName::new("delete").unwrap(),
+            String::new(),
+            json!({}),
+        )];
 
         let resolved = resolve_typescript_names(&tools);
 
@@ -2790,20 +2692,8 @@ mod tests {
         // later `Delete` from keeping its unsuffixed name (or vice versa).
         let make_tools = |first: &str, second: &str| {
             vec![
-                ToolInfo {
-                    name: ToolName::new(first).unwrap(),
-                    description: String::new(),
-                    input_schema: json!({}),
-                    output_schema: None,
-                    annotations: None,
-                },
-                ToolInfo {
-                    name: ToolName::new(second).unwrap(),
-                    description: String::new(),
-                    input_schema: json!({}),
-                    output_schema: None,
-                    annotations: None,
-                },
+                ToolInfo::new(ToolName::new(first).unwrap(), String::new(), json!({})),
+                ToolInfo::new(ToolName::new(second).unwrap(), String::new(), json!({})),
             ]
         };
 
@@ -2828,13 +2718,11 @@ mod tests {
     fn test_resolve_typescript_names_collapses_non_ascii_run() {
         // Issue #192: a non-ASCII tool name used to produce one `_` per invalid character
         // (`café_menu_日本語` -> `caf_Menu___`), losing more information than necessary.
-        let tools = vec![ToolInfo {
-            name: ToolName::new("café_menu_日本語").unwrap(),
-            description: String::new(),
-            input_schema: json!({}),
-            output_schema: None,
-            annotations: None,
-        }];
+        let tools = vec![ToolInfo::new(
+            ToolName::new("café_menu_日本語").unwrap(),
+            String::new(),
+            json!({}),
+        )];
 
         let resolved = resolve_typescript_names(&tools);
 
@@ -2848,20 +2736,8 @@ mod tests {
         // for tool names rather than property names: "a-b" and "a--b" used to sanitize to
         // distinct identifiers and now both sanitize to "a_b".
         let tools = vec![
-            ToolInfo {
-                name: ToolName::new("a-b").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                name: ToolName::new("a--b").unwrap(),
-                description: String::new(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
+            ToolInfo::new(ToolName::new("a-b").unwrap(), String::new(), json!({})),
+            ToolInfo::new(ToolName::new("a--b").unwrap(), String::new(), json!({})),
         ];
 
         let resolved = resolve_typescript_names(&tools);
@@ -2873,13 +2749,11 @@ mod tests {
     fn test_generate_sanitizes_reserved_word_tool_name() {
         let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
-        server_info.tools = vec![ToolInfo {
-            name: ToolName::new("delete").unwrap(),
-            description: "Delete something".to_string(),
-            input_schema: json!({}),
-            output_schema: None,
-            annotations: None,
-        }];
+        server_info.tools = vec![ToolInfo::new(
+            ToolName::new("delete").unwrap(),
+            "Delete something".to_string(),
+            json!({}),
+        )];
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
         let tool_file = code.files.iter().find(|f| f.path == "delete_2.ts").unwrap();
@@ -2897,20 +2771,16 @@ mod tests {
         let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools = vec![
-            ToolInfo {
-                name: ToolName::new("foo-bar").unwrap(),
-                description: "First".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                name: ToolName::new("foo.bar").unwrap(),
-                description: "Second".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
+            ToolInfo::new(
+                ToolName::new("foo-bar").unwrap(),
+                "First".to_string(),
+                json!({}),
+            ),
+            ToolInfo::new(
+                ToolName::new("foo.bar").unwrap(),
+                "Second".to_string(),
+                json!({}),
+            ),
         ];
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -2949,20 +2819,16 @@ mod tests {
         let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools = vec![
-            ToolInfo {
-                name: ToolName::new("dup").unwrap(),
-                description: "First".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
-            ToolInfo {
-                name: ToolName::new("dup").unwrap(),
-                description: "Second".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                annotations: None,
-            },
+            ToolInfo::new(
+                ToolName::new("dup").unwrap(),
+                "First".to_string(),
+                json!({}),
+            ),
+            ToolInfo::new(
+                ToolName::new("dup").unwrap(),
+                "Second".to_string(),
+                json!({}),
+            ),
         ];
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -3155,25 +3021,25 @@ mod tests {
     // ── Resource-exhaustion bounds (issue #198) ──────────────────────────────
 
     fn server_info_with_tool_count(count: usize) -> ServerInfo {
-        ServerInfo {
-            id: ServerId::new("bulk-server").unwrap(),
-            name: "Bulk Server".to_string(),
-            version: "1.0.0".to_string(),
-            tools: (0..count)
-                .map(|i| ToolInfo {
-                    name: ToolName::new(format!("tool{i}")).unwrap(),
-                    description: String::new(),
-                    input_schema: json!({}),
-                    output_schema: None,
-                    annotations: None,
+        ServerInfo::new(
+            ServerId::new("bulk-server").unwrap(),
+            "Bulk Server".to_string(),
+            "1.0.0".to_string(),
+            (0..count)
+                .map(|i| {
+                    ToolInfo::new(
+                        ToolName::new(format!("tool{i}")).unwrap(),
+                        String::new(),
+                        json!({}),
+                    )
                 })
                 .collect(),
-            capabilities: ServerCapabilities {
-                supports_tools: true,
-                supports_resources: false,
-                supports_prompts: false,
+            {
+                let mut value = ServerCapabilities::default();
+                value.supports_tools = true;
+                value
             },
-        }
+        )
     }
 
     #[test]
