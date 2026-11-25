@@ -50,7 +50,7 @@ mcp-execution/
 
 ### Technology Stack
 
-- **Rust Edition**: 2024 (MSRV: 1.91)
+- **Rust Edition**: 2024 (MSRV: 1.98)
 - **MCP SDK**: rmcp (official Rust SDK); version pinned in the workspace `Cargo.toml` and `Cargo.lock`
 - **Async Runtime**: Tokio; version pinned in the workspace `Cargo.toml`
 - **Testing**: cargo-nextest, criterion
@@ -771,7 +771,7 @@ The project uses comprehensive GitHub Actions CI:
 - **Security**: cargo-deny for vulnerabilities, licenses, bans
 - **Cross-platform tests**: Linux, macOS, Windows with cargo-nextest
 - **Code coverage**: cargo-llvm-cov + codecov
-- **MSRV check**: Rust 1.91 (the `rust-version` in the workspace `Cargo.toml`)
+- **MSRV check**: Rust 1.98 (the `rust-version` in the workspace `Cargo.toml`)
 - **Benchmarks**: criterion (on main branch only)
 
 ### Dependency Management
