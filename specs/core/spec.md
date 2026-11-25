@@ -701,8 +701,7 @@ through it.
   `mcp-cli` keeps it for its runtime directories (`runtime/dirs.rs`), which are not covered by the ban.
 - **`expand_home`.** Only a first component that is exactly `~` is replaced (`~`, `~/x`, and `~\x` on Windows). A first component that starts with `~` and is not exactly `~` (`~user/x`, `~~`)
   is rejected with `UnsupportedUserHome { path }` (#647): the user database is never consulted, and its text ("a '~name' path (another user's home directory) is not supported; use '~/...' or an absolute path, or './~name' for a directory with that literal name") never echoes the path. `./~name` is returned unchanged. The CLI runner maps it to `INVALID_INPUT` for the options the CLI expands itself;
-  `mcp-files` wraps it in `FilesError::IoError` with I/O kind `InvalidInput`, and a direct call of the library API is classified by the
-  general error code (known limitation, #657). `x/~` and `.~` are returned unchanged. A path without a leading `~` never reads the home, so an absolute path works
+  `mcp-files` wraps it in the typed `FilesError::HomeDirectory { source }` (#657), which the CLI classifier maps to `INVALID_INPUT` for `UnsupportedUserHome` as well. `x/~` and `.~` are returned unchanged. A path without a leading `~` never reads the home, so an absolute path works
   when the home is unusable.
 - **`ServersDir` / `SkillsDir`.** `resolve(None)` is the default location under the home; `resolve(Some(p))` is
   `expand_home(p)`. `server()` / `skill()` join a `ServerId`, which rejects separators and `..`, so the result cannot leave

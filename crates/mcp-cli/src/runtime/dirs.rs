@@ -518,6 +518,8 @@ fn prune_dir_blocking(dir: &Path, policy: PrunePolicy, now: SystemTime) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::commands::common::test_isolation::process_per_test;
 
     #[test]
     fn absolute_base_refuses_a_relative_directory_and_names_it() {
@@ -533,6 +535,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_relative_home_is_refused_by_resolve_and_policy_path() {
+        if !process_per_test("a_relative_home_is_refused_by_resolve_and_policy_path") {
+            return;
+        }
         let _home = crate::commands::common::home_env::HomeEnv::set(Path::new("relative/home"));
 
         for (name, error) in [

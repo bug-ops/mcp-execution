@@ -302,6 +302,7 @@ fn build_tool_metadata(tool_info: &ToolInfo, detailed: bool) -> ToolDisplay {
 mod tests {
     use super::*;
     use crate::commands::common::TransportArgs;
+    use crate::commands::common::test_isolation::process_per_test;
     use mcp_execution_core::{REDACTED_PLACEHOLDER, ServerId, ToolName};
     use mcp_execution_introspector::ServerCapabilities;
     use serde_json::json;
@@ -1114,6 +1115,9 @@ mod tests {
     /// capture reflects exactly what a `--verbose` run would print to stderr.
     #[tokio::test]
     async fn test_run_verbose_log_redacts_http_header_secret() {
+        if !process_per_test("test_run_verbose_log_redacts_http_header_secret") {
+            return;
+        }
         let secret_body = "sk-verySECRETtoken1234567890";
         let header = format!("Authorization=Bearer {secret_body}");
         let capture = MessageCapture::default();
@@ -1133,6 +1137,9 @@ mod tests {
     /// through the same CLI-args -> `run` path as the HTTP case above.
     #[tokio::test]
     async fn test_run_verbose_log_redacts_stdio_env_secret() {
+        if !process_per_test("test_run_verbose_log_redacts_stdio_env_secret") {
+            return;
+        }
         let secret_body = "ghp_verySECRETtoken1234567890abcdef";
         let capture = MessageCapture::default();
         let _guard = tracing::subscriber::set_default(capture.clone());

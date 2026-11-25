@@ -1402,6 +1402,7 @@ dependencies = [
  "colored",
  "dirs",
  "futures-util",
+ "libc",
  "mcp-execution-codegen",
  "mcp-execution-core",
  "mcp-execution-files",
@@ -1421,6 +1422,7 @@ dependencies = [
  "url",
  "uuid",
  "which",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

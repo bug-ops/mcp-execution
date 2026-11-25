@@ -744,6 +744,7 @@ async fn discover_within(name: &str, config: &ServerConfig, timeout: Duration) -
 #[cfg(test)]
 mod tests {
     use super::super::common::home_env::HomeEnv;
+    use super::super::common::test_isolation::process_per_test;
     use super::*;
     use std::collections::HashMap;
 
@@ -1123,6 +1124,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_show_server_info_not_found_error_not_duplicated() {
+        if !process_per_test("test_show_server_info_not_found_error_not_duplicated") {
+            return;
+        }
         // Regression test for #164: the "not found" message from
         // `get_mcp_server` must propagate unwrapped, not get re-wrapped by
         // an equivalent, less complete `with_context` in `show_server_info`.
@@ -1143,7 +1147,7 @@ mod tests {
         )
         .unwrap();
 
-        let home_env = HomeEnv::set_async(temp.path()).await;
+        let home_env = HomeEnv::set(temp.path());
 
         let result = run(
             ServerAction::Info {
@@ -1165,15 +1169,15 @@ mod tests {
     }
 
     /// Points `HomeDir::from_env()` at `home_dir` for the duration of the
-    /// closure, serialized against other `HOME`-mutating tests via
-    /// the shared home-env lock, and restores the original value afterwards even if
+    /// closure, as the one test of this process (see
+    /// [`HomeEnv::set`]), and restores the original value afterwards even if
     /// the closure's future returns an error.
     async fn with_home_pointed_at<F, Fut, T>(home_dir: &std::path::Path, f: F) -> T
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = T>,
     {
-        let _home_env = HomeEnv::set_async(home_dir).await;
+        let _home_env = HomeEnv::set(home_dir);
         f().await
     }
 
@@ -1198,6 +1202,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_malformed_http_url_early_exit() {
+        if !process_per_test("test_validate_command_malformed_http_url_early_exit") {
+            return;
+        }
         let temp = write_test_mcp_config(
             r#"{"mcpServers": {"badhttp": {"type": "http", "url": "not-a-url"}}}"#,
         );
@@ -1217,6 +1224,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_malformed_sse_url_early_exit() {
+        if !process_per_test("test_validate_command_malformed_sse_url_early_exit") {
+            return;
+        }
         let temp = write_test_mcp_config(
             r#"{"mcpServers": {"badsse": {"type": "sse", "url": "ftp://example.com"}}}"#,
         );
@@ -1236,6 +1246,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_stdio_missing_command_early_exit() {
+        if !process_per_test("test_validate_command_stdio_missing_command_early_exit") {
+            return;
+        }
         let temp = write_test_mcp_config(
             r#"{"mcpServers": {"badstdio": {"command": "this_command_definitely_does_not_exist_12345"}}}"#,
         );
@@ -1255,6 +1268,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_well_formed_but_unreachable_http_url_fails_post_introspection() {
+        if !process_per_test(
+            "test_validate_command_well_formed_but_unreachable_http_url_fails_post_introspection",
+        ) {
+            return;
+        }
         // Well-formed per `url_well_formed` (http scheme, present host), so
         // this skips the early-exit branch and reaches real introspection,
         // which fails because nothing listens on port 1 (a privileged port
@@ -1279,6 +1297,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_scheme_failure_does_not_reach_precheck_bypass() {
+        if !process_per_test("test_validate_command_scheme_failure_does_not_reach_precheck_bypass")
+        {
+            return;
+        }
         // Regression test for #304: an entry that passes the `url_well_formed` precheck (a
         // syntactically fine https URL with a host) but fails `build_core_config`'s deeper
         // security validation (here: a zero connect timeout) must still resolve as
@@ -1304,6 +1326,11 @@ mod tests {
     #[tokio::test]
     async fn test_show_server_info_invalid_url_scheme_reports_structured_unavailable_not_raw_error()
     {
+        if !process_per_test(
+            "test_show_server_info_invalid_url_scheme_reports_structured_unavailable_not_raw_error",
+        ) {
+            return;
+        }
         // Regression test for #305: `server info` on an entry whose `url` fails scheme
         // validation must return the structured `"status": "unavailable"` `ServerInfo` output
         // through the normal `ExitCode` path, like the well-formed-but-unreachable case — not
@@ -1382,6 +1409,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_missing_config_file_reports_error() {
+        if !process_per_test("test_validate_command_missing_config_file_reports_error") {
+            return;
+        }
         // HOME points at a fresh temp dir with no `.claude/mcp.json` at all.
         let temp = tempfile::TempDir::new().unwrap();
 
@@ -1400,6 +1430,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_malformed_config_reports_error() {
+        if !process_per_test("test_validate_command_malformed_config_reports_error") {
+            return;
+        }
         let temp = write_test_mcp_config("not valid json");
 
         let result = with_home_pointed_at(temp.path(), || {
@@ -1417,6 +1450,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_command_unknown_server_name_reports_error() {
+        if !process_per_test("test_validate_command_unknown_server_name_reports_error") {
+            return;
+        }
         let temp = write_test_mcp_config(r#"{"mcpServers": {"unrelated": {"command": "node"}}}"#);
 
         let result = with_home_pointed_at(temp.path(), || {

@@ -10,7 +10,9 @@
 //! group (a background job) or has no controlling terminal, nothing changes. After a hand-over a
 //! terminal-generated SIGINT, SIGQUIT or SIGHUP reaches the script's group, not the runner (see
 //! [`terminal_cancellation`]), and so does Ctrl-Z, which `ForegroundGroup::keep_running` undoes
-//! by resuming the group, so a run cannot be suspended and freeze the terminal.
+//! by sending the group `SIGCONT` every tick, so a run cannot be suspended and freeze the
+//! terminal. Afterwards the terminal returns to the runner when the script's group, or a group
+//! that no longer has any process, holds it.
 //!
 //! A `SIGKILL` of the runner cannot restore anything: the terminal stays with the script's group,
 //! which is orphaned, and the shell may report an input/output error when it reads the terminal.
@@ -45,19 +47,21 @@ mod unix {
     use std::time::Duration;
 
     use nix::sys::signal::{SigSet, SigmaskHow, Signal, pthread_sigmask};
+    use rustix::io::Errno;
     use rustix::process::{
-        Pid, Signal as RustixSignal, WaitId, WaitIdOptions, getpgrp, kill_process_group, waitid,
+        Pid, Signal as RustixSignal, getpgrp, kill_process_group, test_kill_process_group,
     };
     use rustix::termios::{tcgetpgrp, tcsetpgrp};
 
-    /// How often a stopped script group is looked for.
+    /// How often the script group is sent `SIGCONT`.
     const STOP_POLL: Duration = Duration::from_millis(100);
 
     /// The script's process group holding the foreground of the runner's controlling terminal.
     ///
-    /// Dropping the guard gives the terminal back to the runner's group, but only while the
-    /// script's group is still the foreground group, so a terminal taken by someone else in the
-    /// meantime is left alone.
+    /// Dropping the guard gives the terminal back to the runner's group when the script's group
+    /// still holds it, or when the foreground group is neither the runner's nor the script's and
+    /// has no process left (a descendant took the terminal into its own group and died). A live
+    /// foreign group, such as the shell after a stop and `bg`, is left alone.
     #[derive(Debug)]
     pub struct ForegroundGroup {
         tty: File,
@@ -95,25 +99,20 @@ mod unix {
             Some(group)
         }
 
-        /// Never returns: resumes the script's group whenever its leader is found stopped.
+        /// Never returns: sends the script's group `SIGCONT` on every tick.
         ///
         /// Ctrl-Z stops the foreground group, and the runner, a background group by then, would
-        /// wait for a script that cannot run while the shell gets no prompt. Resuming turns
-        /// Ctrl-Z into a no-op for a running script, so Ctrl-C and the run timeout keep working.
-        /// Meant to be raced against the wait for the script.
+        /// wait for a script that cannot run while the shell gets no prompt. The leader is not
+        /// probed: a stopped member such as a descendant that ignores `SIGTSTP` in the leader
+        /// still freezes the group, and `SIGCONT` to a running process is harmless. The price is
+        /// that a member stopped on purpose is resumed within one tick. Meant to be raced against
+        /// the wait for the script.
         pub async fn keep_running(&self) -> Infallible {
             let mut tick = tokio::time::interval(STOP_POLL);
             loop {
                 tick.tick().await;
-                if self.leader_is_stopped() {
-                    self.resume();
-                }
+                self.resume();
             }
-        }
-
-        fn leader_is_stopped(&self) -> bool {
-            let options = WaitIdOptions::STOPPED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-            matches!(waitid(WaitId::Pid(self.script), options), Ok(Some(status)) if status.stopped())
         }
 
         fn resume(&self) {
@@ -125,7 +124,14 @@ mod unix {
 
     impl Drop for ForegroundGroup {
         fn drop(&mut self) {
-            if tcgetpgrp(&self.tty).ok() != Some(self.script) {
+            let Ok(foreground) = tcgetpgrp(&self.tty) else {
+                return;
+            };
+            // EPERM means alive: Darwin answers it for a zombie-only group and Linux for a live
+            // group of another user, so only ESRCH proves the group is gone.
+            let abandoned = foreground != self.runner
+                && matches!(test_kill_process_group(foreground), Err(Errno::SRCH));
+            if foreground != self.script && !abandoned {
                 return;
             }
             if let Err(error) = set_foreground(&self.tty, self.runner) {

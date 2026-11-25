@@ -415,17 +415,14 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
             // above — the export this bounds is sized by what the (possibly hostile or
             // misbehaving) introspected server returned, not by CLI-caller-supplied input.
             FilesError::ResourceLimitExceeded { .. } => ExitCode::SERVER_ERROR,
-            FilesError::HomeDirectory {
-                source: HomeDirError::UnsupportedUserHome { .. },
-            } => ExitCode::INVALID_INPUT,
+            FilesError::HomeDirectory { source } => classify_home_error(source),
             FilesError::FileNotFound { .. }
             | FilesError::NotADirectory { .. }
             | FilesError::InvalidPath { .. }
             | FilesError::PathNotAbsolute { .. }
             | FilesError::InvalidPathComponent { .. }
             | FilesError::PathEscapesBase { .. }
-            | FilesError::IoError { .. }
-            | FilesError::HomeDirectory { .. } => ExitCode::ERROR,
+            | FilesError::IoError { .. } => ExitCode::ERROR,
         };
     }
 
@@ -433,13 +430,19 @@ fn classify_exit_code(error: &anyhow::Error) -> ExitCode {
         .chain()
         .find_map(|cause| cause.downcast_ref::<HomeDirError>())
     {
-        return match home_error {
-            HomeDirError::UnsupportedUserHome { .. } => ExitCode::INVALID_INPUT,
-            HomeDirError::Unknown | HomeDirError::NotAbsolute { .. } => ExitCode::ERROR,
-        };
+        return classify_home_error(home_error);
     }
 
     ExitCode::ERROR
+}
+
+/// Classifies a [`HomeDirError`]: a `~name` path is the caller's input, the rest are environment
+/// failures.
+const fn classify_home_error(error: &HomeDirError) -> ExitCode {
+    match error {
+        HomeDirError::UnsupportedUserHome { .. } => ExitCode::INVALID_INPUT,
+        HomeDirError::Unknown | HomeDirError::NotAbsolute { .. } => ExitCode::ERROR,
+    }
 }
 
 /// Classifies a single [`CoreError`] variant.
@@ -483,6 +486,7 @@ fn classify_core_error(core_error: &CoreError) -> ExitCode {
 )]
 mod tests {
     use super::*;
+    use crate::commands::common::test_isolation::process_per_test;
     use mcp_execution_core::ResourceKind;
     use mcp_execution_core::ServerId;
     use mcp_execution_files::FilesResourceKind;
@@ -579,6 +583,20 @@ mod tests {
             classify_exit_code(&anyhow::Error::new(HomeDirError::Unknown)),
             ExitCode::ERROR
         );
+    }
+
+    #[test]
+    fn test_classify_exit_code_files_home_directory_follows_the_home_error() {
+        let user_home = anyhow::Error::new(FilesError::HomeDirectory {
+            source: HomeDirError::UnsupportedUserHome {
+                path: "~other/x".into(),
+            },
+        });
+        assert_eq!(classify_exit_code(&user_home), ExitCode::INVALID_INPUT);
+        let unknown = anyhow::Error::new(FilesError::HomeDirectory {
+            source: HomeDirError::Unknown,
+        });
+        assert_eq!(classify_exit_code(&unknown), ExitCode::ERROR);
     }
 
     #[test]
@@ -772,11 +790,9 @@ mod tests {
         assert!(report.contains("    1: root cause"));
     }
 
-    /// Serializes tests in this module that mutate `RUST_BACKTRACE`, mirroring the
-    /// `HOME_ENV_LOCK` pattern `commands::common`/`commands::server`'s tests already use for
-    /// env-var mutation: a safety net for plain `cargo test` (which shares one process across a
-    /// crate's tests), not required by the mandated `cargo nextest run` (which isolates every
-    /// test in its own process).
+    /// Serializes tests in this module that mutate `RUST_BACKTRACE`: a safety net for plain
+    /// `cargo test` (which shares one process across a crate's tests), not required by the
+    /// mandated `cargo nextest run` (which isolates every test in its own process).
     static BACKTRACE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -911,6 +927,9 @@ mod tests {
             }
         }
 
+        if !process_per_test("test_redacting_writer_wired_into_real_fmt_layer_redacts_full_event") {
+            return;
+        }
         let buf = Arc::new(Mutex::new(Vec::new()));
         let make_writer = {
             let buf = buf.clone();
@@ -961,6 +980,9 @@ mod tests {
             }
         }
 
+        if !process_per_test("test_redacting_writer_wired_into_real_json_layer_emits_valid_json") {
+            return;
+        }
         let buf = Arc::new(Mutex::new(Vec::new()));
         let make_writer = {
             let buf = buf.clone();
@@ -1037,6 +1059,9 @@ mod tests {
 
     #[test]
     fn quiet_profile_drops_rmcp_info_by_default() {
+        if !process_per_test("quiet_profile_drops_rmcp_info_by_default") {
+            return;
+        }
         let written = captured_log(log_filter(false, LogProfile::Quiet, None));
         assert!(!written.contains("rmcp info event"), "{written}");
         let standard = captured_log(log_filter(false, LogProfile::Standard, None));
@@ -1045,6 +1070,9 @@ mod tests {
 
     #[test]
     fn verbose_restores_debug_and_rmcp_info_under_the_quiet_profile() {
+        if !process_per_test("verbose_restores_debug_and_rmcp_info_under_the_quiet_profile") {
+            return;
+        }
         let written = captured_log(log_filter(true, LogProfile::Quiet, None));
         assert!(written.contains("own debug event"), "{written}");
         assert!(written.contains("rmcp info event"), "{written}");

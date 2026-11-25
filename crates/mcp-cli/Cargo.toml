@@ -41,8 +41,18 @@ test-fixtures = [
 ]
 
 [target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 nix = { workspace = true, features = ["signal"] }
 rustix = { workspace = true, features = ["process", "termios"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [dependencies]
 anyhow = { workspace = true }

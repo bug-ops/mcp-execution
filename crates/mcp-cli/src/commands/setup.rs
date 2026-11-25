@@ -446,6 +446,8 @@ async fn make_executable(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::commands::common::test_isolation::process_per_test;
 
     #[cfg(unix)]
     #[tokio::test]
@@ -659,6 +661,11 @@ mod tests {
     async fn check_files_executable_in_warns_and_continues_when_a_file_cannot_be_chmodded() {
         use std::os::unix::fs::PermissionsExt;
 
+        if !process_per_test(
+            "check_files_executable_in_warns_and_continues_when_a_file_cannot_be_chmodded",
+        ) {
+            return;
+        }
         let servers_dir = tempfile::TempDir::new().unwrap();
         let good_tool_path = servers_dir.path().join("good.ts");
         tokio::fs::write(&good_tool_path, "// tool").await.unwrap();

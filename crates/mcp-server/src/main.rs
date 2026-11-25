@@ -1571,7 +1571,7 @@ mod tests {
     }
 
     /// Serializes tests in this module that mutate `MCP_EXECUTION_LOG_FORMAT`, mirroring the
-    /// `HOME_ENV_LOCK`/`BACKTRACE_ENV_LOCK` pattern `mcp-cli`'s tests already use for
+    /// `BACKTRACE_ENV_LOCK` pattern `mcp-cli`'s tests already use for
     /// env-var mutation: a safety net for plain `cargo test` (which shares one process across a
     /// crate's tests), not required by the mandated `cargo nextest run` (which isolates every
     /// test in its own process).

@@ -557,13 +557,102 @@ fn new_pipe_name() -> String {
     format!(r"\\.\pipe\mcp-execution-{}", uuid::Uuid::new_v4().simple())
 }
 
+/// Owner-only access control for the helper pipe (#617).
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "builds a security descriptor and creates the pipe with it (#617); tokio and std expose no safe API for a custom DACL"
+)]
+mod pipe_security {
+    use std::ffi::c_void;
+    use std::io;
+    use std::ptr::null_mut;
+
+    use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+    use windows_sys::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+
+    /// Protected DACL with one allow ACE for OWNER RIGHTS (`OW`): only the owner of the pipe
+    /// (the current user) gets access, and no ACE is inherited from the default descriptor.
+    const OWNER_ONLY_SDDL: &str = "D:P(A;;GA;;;OW)";
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "SECURITY_ATTRIBUTES is 24 bytes at most"
+    )]
+    const ATTRIBUTES_LEN: u32 = size_of::<SECURITY_ATTRIBUTES>() as u32;
+
+    /// A security descriptor granting access to the creating user only, with the
+    /// `SECURITY_ATTRIBUTES` that carries it.
+    pub(super) struct OwnerOnly {
+        descriptor: PSECURITY_DESCRIPTOR,
+        attributes: SECURITY_ATTRIBUTES,
+    }
+
+    impl OwnerOnly {
+        /// Builds the descriptor from [`OWNER_ONLY_SDDL`].
+        pub(super) fn new() -> io::Result<Self> {
+            let sddl: Vec<u16> = OWNER_ONLY_SDDL.encode_utf16().chain([0]).collect();
+            let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+            // SAFETY: `sddl` is a NUL-terminated UTF-16 string that outlives the call;
+            // `descriptor` is a valid writable local and the size output is not requested.
+            let converted = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    sddl.as_ptr(),
+                    SDDL_REVISION_1,
+                    &raw mut descriptor,
+                    null_mut(),
+                )
+            };
+            if converted == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self {
+                descriptor,
+                attributes: SECURITY_ATTRIBUTES {
+                    nLength: ATTRIBUTES_LEN,
+                    lpSecurityDescriptor: descriptor,
+                    bInheritHandle: 0,
+                },
+            })
+        }
+
+        /// Creates the pipe `name` with this descriptor applied.
+        pub(super) fn create(
+            &mut self,
+            options: &ServerOptions,
+            name: &str,
+        ) -> io::Result<NamedPipeServer> {
+            let attributes: *mut c_void = (&raw mut self.attributes).cast();
+            // SAFETY: `attributes` points to a `SECURITY_ATTRIBUTES` whose descriptor is the
+            // valid, self-relative block owned by `self`; both outlive the call, which copies
+            // the descriptor into the pipe object.
+            unsafe { options.create_with_security_attributes_raw(name, attributes) }
+        }
+    }
+
+    impl Drop for OwnerOnly {
+        fn drop(&mut self) {
+            // SAFETY: `descriptor` was allocated by the successful conversion in `new` and is
+            // freed exactly once, here.
+            unsafe {
+                LocalFree(self.descriptor as HLOCAL);
+            }
+        }
+    }
+}
+
 /// Windows carrier: a single-instance pipe, rejecting remote clients, guarded by a per-run
 /// token.
 ///
-/// Residual: the pipe keeps the default security descriptor, so another local user can open
-/// the single instance first and make this run's calls fail (denial of service only; the
-/// token still blocks the hello). Restricting it to the current user needs a raw security
-/// descriptor, which means FFI and conflicts with `unsafe_code = deny`.
+/// The pipe carries an owner-only DACL (`pipe_security`), so another local user cannot open
+/// the single instance. Residual: under an elevated token the default owner is
+/// `BUILTIN\Administrators`, so an elevated administrator process can still open it;
+/// administrators are outside the threat model. Creation fails closed if the descriptor
+/// cannot be built.
 #[cfg(windows)]
 fn bind_pipe(
     pool: Arc<SessionPool>,
@@ -575,11 +664,16 @@ fn bind_pipe(
 
     let name = new_pipe_name();
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let pipe = ServerOptions::new()
-        .first_pipe_instance(true)
-        .reject_remote_clients(true)
-        .max_instances(1)
-        .create(&name)
+    let mut owner_only =
+        pipe_security::OwnerOnly::new().context("cannot build the owner-only pipe descriptor")?;
+    let pipe = owner_only
+        .create(
+            ServerOptions::new()
+                .first_pipe_instance(true)
+                .reject_remote_clients(true)
+                .max_instances(1),
+            &name,
+        )
         .context("cannot create the named pipe")?;
     let expected = token.clone();
     let task = tokio::spawn(async move {
