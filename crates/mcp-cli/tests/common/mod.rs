@@ -676,3 +676,47 @@ pub fn wait_for_exit(child: &mut Child, within: Duration, what: &str) -> Option<
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// A `node` shim that starts a long-running child without `exec` and waits for it. Dropping it
+/// kills that child, so a failing test leaves nothing behind.
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct HangingNode {
+    pid_file: PathBuf,
+}
+
+#[cfg(unix)]
+impl HangingNode {
+    /// Writes the shim as `<dir>/node`, creating `dir`.
+    pub fn install(dir: &Path) -> Self {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::create_dir_all(dir).unwrap();
+        let pid_file = dir.join("node-child.pid");
+        let shim = dir.join("node");
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\n/bin/sleep 60 &\necho $! > '{}'\nwait\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self { pid_file }
+    }
+
+    /// Waits until the shim has started and returns the pid of its child.
+    pub fn child_pid(&self) -> u32 {
+        wait_for_pid(&self.pid_file, READY_WITHIN, "node was not started")
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HangingNode {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.pid_file) {
+            send_signal("KILL", pid.trim());
+        }
+    }
+}
