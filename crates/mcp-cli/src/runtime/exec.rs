@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use mcp_execution_core::helper_protocol::{HELPER_ENV, HELPER_TOKEN_ENV, RUN_MARKER_ENV};
 use tokio::io::{AsyncRead, AsyncReadExt as _};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 
 use super::OutOfRange;
@@ -329,6 +329,78 @@ impl PipeCapture {
     }
 }
 
+impl Drop for PipeCapture {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// A spawned child that is stopped together with its descendants when the guard is killed or
+/// dropped.
+///
+/// On Unix the child leads its own process group and the whole group gets `SIGKILL`; a signal is
+/// only sent while the leader has not been reaped, so a recycled group id is never hit. Elsewhere
+/// the guard stops the direct child only.
+#[derive(Debug)]
+pub(crate) struct ProcessTree {
+    child: Child,
+    killed: bool,
+}
+
+impl ProcessTree {
+    /// Spawns `command` as the leader of a new process group (Unix) that is killed on drop.
+    pub(crate) fn spawn(command: &mut Command) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        command.process_group(0);
+        command.kill_on_drop(true);
+        Ok(Self {
+            child: command.spawn()?,
+            killed: false,
+        })
+    }
+
+    /// The leader process, for its pipes and `wait`.
+    pub(crate) const fn child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
+    /// Stops the child and, on Unix, every process left in its group. Idempotent.
+    pub(crate) fn kill(&mut self) {
+        if self.killed {
+            return;
+        }
+        self.killed = true;
+        let Some(pid) = self.child.id() else {
+            return;
+        };
+        #[cfg(unix)]
+        kill_group(pid);
+        #[cfg(not(unix))]
+        let _ = pid;
+        if let Err(error) = self.child.start_kill() {
+            tracing::debug!("could not kill the child process: {error}");
+        }
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+#[cfg(unix)]
+fn kill_group(leader: u32) {
+    use rustix::process::{Pid, Signal, kill_process_group};
+
+    let Some(group) = i32::try_from(leader).ok().and_then(Pid::from_raw) else {
+        return;
+    };
+    if let Err(error) = kill_process_group(group, Signal::KILL) {
+        tracing::debug!("could not kill the process group {leader}: {error}");
+    }
+}
+
 /// What two pipe readers captured, and whether one was abandoned at the grace.
 #[derive(Debug)]
 pub(crate) struct Drained {
@@ -460,6 +532,55 @@ pub async fn run_script_process(
     })
 }
 
+/// Unix process helpers shared by the tree-kill tests of this module and `typecheck`.
+#[cfg(all(test, unix))]
+pub(crate) mod tree_test_support {
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    use rustix::process::{Pid, test_kill_process};
+
+    /// Command running `sh` that starts a background `sleep`, records its pid in `pid_file`,
+    /// and waits.
+    pub fn sleeping_grandchild(pid_file: &Path) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 300 & echo $! > \"$1\"; wait")
+            .arg("sh")
+            .arg(pid_file);
+        command
+    }
+
+    /// Waits until `pid_file` holds a pid and returns it.
+    pub async fn recorded_pid(pid_file: &Path) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(pid) = std::fs::read_to_string(pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                return pid;
+            }
+            assert!(Instant::now() < deadline, "no pid was recorded");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn is_alive(pid: i32) -> bool {
+        Pid::from_raw(pid).is_some_and(|pid| test_kill_process(pid).is_ok())
+    }
+
+    /// Asserts that `pid` is gone within five seconds.
+    pub async fn assert_gone_soon(pid: i32) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while is_alive(pid) {
+            assert!(Instant::now() < deadline, "process {pid} is still alive");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +665,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.status, ScriptStatus::Exit(3));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_pipe_capture_aborts_its_reader() {
+        let (reader, _writer) = tokio::io::duplex(64);
+        let capture = PipeCapture::start(reader);
+        let shared = Arc::clone(&capture.capture);
+        assert_eq!(Arc::strong_count(&shared), 3);
+        drop(capture);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&shared) > 1 {
+            assert!(std::time::Instant::now() < deadline, "the reader survived");
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_a_process_tree_stops_its_descendants() {
+        use tree_test_support::{assert_gone_soon, recorded_pid, sleeping_grandchild};
+
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("grandchild.pid");
+        let mut command = sleeping_grandchild(&pid_file);
+        let tree = ProcessTree::spawn(&mut command).unwrap();
+        let grandchild = recorded_pid(&pid_file).await;
+        drop(tree);
+        assert_gone_soon(grandchild).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn killing_a_reaped_process_tree_signals_nothing() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        let mut tree = ProcessTree::spawn(&mut command).unwrap();
+        tree.child_mut().wait().await.unwrap();
+        assert!(tree.child_mut().id().is_none());
+        tree.kill();
     }
 }

@@ -6,7 +6,7 @@
 //! whether the notice says the script was "not started" or "cancelled", because a signal that
 //! arrives just before the spawn can take either path.
 //!
-//! Unix only: signals, process groups and `mcp.json` redirection (#604).
+//! Unix only: signals and process groups.
 
 #![cfg(all(feature = "test-fixtures", unix))]
 #![expect(
@@ -277,9 +277,10 @@ fn run_exits_130_on_sigint_while_stdin_is_held_open() {
         "--servers-dir",
         &sb.servers.display().to_string(),
     ]);
+    let ready = sb.ready_file(&mut cmd);
     let runner = Runner::start(cmd, true);
-    // The runner is blocked reading a script from stdin, which stays open for the whole test.
-    std::thread::sleep(Duration::from_secs(2));
+    // The runner blocks reading a script from stdin, which stays open for the whole test.
+    ready.wait();
 
     runner.signal_group("INT");
     let finished = runner.finish(Duration::from_secs(5));

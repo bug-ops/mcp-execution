@@ -25,10 +25,6 @@ fn skip(dry_run: &DryRun, tool: &str) -> bool {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn a_skipped_write_that_claims_read_only_gets_a_suggestion_and_is_still_skipped() {
     let sb = Sandbox::new();
     sb.generate();

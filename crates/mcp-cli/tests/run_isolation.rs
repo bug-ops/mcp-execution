@@ -1,10 +1,8 @@
 //! Under `run --dry-run` a bridge in a worker thread or in a child node process has no helper
 //! channel. It must refuse to call instead of starting a helper of its own, because that helper
 //! would have neither the dry-run policy nor the journal and the write would really execute.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

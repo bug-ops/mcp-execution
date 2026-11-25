@@ -2,9 +2,8 @@
 //! script the helper channel (fd 0 socketpair on Unix, named pipe on Windows), and a generated
 //! tool call travels bridge -> channel -> helper -> fixture server and back.
 //!
-//! Requires the `test-fixtures` feature and Node.js 22.18+. The tests that need a registered
-//! server read `mcp.json`, which cannot be redirected on Windows (#604); the channel test that
-//! needs no server runs on every platform, so the named pipe is covered in CI.
+//! Requires the `test-fixtures` feature and Node.js 22.18+. The tests run on every platform, so
+//! the Windows named pipe is covered in CI.
 
 #![cfg(feature = "test-fixtures")]
 #![expect(
@@ -107,10 +106,6 @@ fn helper_failure_reaches_the_script_as_a_typed_error_and_the_channel_survives()
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn concurrent_calls_share_one_server_session() {
     let Some(sb) = sandbox("concurrent_calls_share_one_server_session") else {
         return;
@@ -140,10 +135,6 @@ fn concurrent_calls_share_one_server_session() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn tool_error_and_empty_success_keep_their_shapes_through_the_helper() {
     let Some(sb) = sandbox("tool_error_and_empty_success_keep_their_shapes_through_the_helper")
     else {
@@ -173,10 +164,6 @@ fn tool_error_and_empty_success_keep_their_shapes_through_the_helper() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn a_result_just_under_the_line_bound_arrives_complete() {
     let Some(sb) = sandbox("a_result_just_under_the_line_bound_arrives_complete") else {
         return;
@@ -202,10 +189,6 @@ fn a_result_just_under_the_line_bound_arrives_complete() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn a_result_over_the_line_bound_fails_the_call_without_hanging_the_script() {
     let Some(sb) =
         sandbox("a_result_over_the_line_bound_fails_the_call_without_hanging_the_script")

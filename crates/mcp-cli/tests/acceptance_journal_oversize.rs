@@ -1,10 +1,8 @@
 //! Acceptance test of the journal status of a replaced helper response (#620, F1): a value
 //! result too large for one helper line is replaced by `call_failed` for the script, so the
 //! journal must record `failed` (not `ok`) and the size of the original response.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

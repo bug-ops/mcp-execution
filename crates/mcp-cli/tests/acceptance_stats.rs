@@ -1,11 +1,8 @@
 //! Acceptance tests of the static `stats` command (#562, ADR-562): the discovery levels with
 //! bytes and estimated tokens, "not available" for missing data, no figures for a pre-v3
 //! `_meta.json`, no "savings" label, and deterministic output.
-//!
-//! Unix only: the generated package comes from `generate --from-config`, which needs a
-//! redirected `mcp.json` (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

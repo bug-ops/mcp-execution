@@ -1494,7 +1494,9 @@ mod tests {
         // home-relative path must be tilde-sanitized, not just the URL/env/header
         // fields already covered above.
         let secret = "sk-live-secret";
-        let home = dirs::home_dir().expect("home directory must be resolvable in test environment");
+        let home = mcp_execution_core::HomeDir::from_env()
+            .expect("home directory must be resolvable in test environment");
+        let home = home.as_path();
         let server_path = home.join("tools").join("mcp-server");
 
         let cli = Cli::parse_from([

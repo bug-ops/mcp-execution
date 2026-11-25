@@ -10,9 +10,10 @@ use mcp_execution_core::metadata::{
     read_server_metadata_async,
 };
 use mcp_execution_core::{
-    Error as CoreError, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl,
-    ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
+    Error as CoreError, HomeDir, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues,
+    RedactedUrl, ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
 };
+pub use mcp_execution_core::{ServersDir, SkillsDir};
 use mcp_execution_skill::MAX_SERVER_ID_LENGTH;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -398,8 +399,19 @@ fn load_mcp_config_from(path: &Path) -> Result<McpConfig> {
 /// Returns an error if the home directory cannot be determined, the file
 /// cannot be read, or the JSON is malformed.
 pub(crate) fn load_mcp_config() -> Result<McpConfig> {
-    let home = dirs::home_dir().context("failed to get home directory")?;
-    load_mcp_config_from(&home.join(".claude").join("mcp.json"))
+    load_mcp_config_from(&mcp_config_path()?)
+}
+
+/// Path of `~/.claude/mcp.json`, the one place every command looks for the MCP configuration.
+///
+/// # Errors
+///
+/// Returns an error if the home directory is unknown or relative.
+pub(crate) fn mcp_config_path() -> Result<PathBuf> {
+    Ok(HomeDir::from_env()?
+        .as_path()
+        .join(".claude")
+        .join("mcp.json"))
 }
 
 /// Lists all servers defined in the given `mcp.json` file.
@@ -434,8 +446,7 @@ fn list_mcp_servers_from(path: &Path) -> Result<Vec<(String, McpServerEntry)>> {
 /// Returns an error if the home directory cannot be determined, or the config
 /// file exists but cannot be read or parsed.
 pub(crate) fn list_mcp_servers() -> Result<Vec<(String, McpServerEntry)>> {
-    let home = dirs::home_dir().context("failed to get home directory")?;
-    list_mcp_servers_from(&home.join(".claude").join("mcp.json"))
+    list_mcp_servers_from(&mcp_config_path()?)
 }
 
 /// Retrieves a named server from `~/.claude/mcp.json`.
@@ -1060,110 +1071,6 @@ pub(crate) fn refuse_inside_run() -> Result<()> {
     Ok(())
 }
 
-/// Default servers directory, relative to the home directory.
-const DEFAULT_SERVERS_DIR: &str = ".claude/servers";
-
-/// Default skills directory, relative to the home directory.
-const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
-
-/// Resolves a directory option against the home directory: a leading `~/` is expanded, any other
-/// path is taken literally, and `None` yields `default_relative` under the home directory.
-fn resolve_home_relative(
-    custom: Option<PathBuf>,
-    default_relative: &str,
-    home: Option<&Path>,
-) -> Result<PathBuf> {
-    let home_dir = || home.context("Could not determine home directory");
-    match custom {
-        Some(dir) => match dir.to_str().and_then(|text| text.strip_prefix("~/")) {
-            Some(rest) => Ok(home_dir()?.join(rest)),
-            None => Ok(dir),
-        },
-        None => Ok(home_dir()?.join(default_relative)),
-    }
-}
-
-/// Base directory that holds one generated TypeScript package per server.
-///
-/// Every command that reads or writes generated servers resolves its `--servers-dir` option
-/// through this type, so `~/` expansion and the default location stay identical everywhere.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::common::ServersDir;
-/// use mcp_execution_core::ServerId;
-///
-/// let dir = ServersDir::resolve(Some("/srv/servers".into())).unwrap();
-/// let server = ServerId::new("github").unwrap();
-/// assert_eq!(dir.server(&server), std::path::Path::new("/srv/servers/github"));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServersDir(PathBuf);
-
-impl ServersDir {
-    /// Resolves `custom`, expanding a leading `~/`, or the default `~/.claude/servers`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the home directory is needed and cannot be determined.
-    pub fn resolve(custom: Option<PathBuf>) -> Result<Self> {
-        resolve_home_relative(custom, DEFAULT_SERVERS_DIR, dirs::home_dir().as_deref()).map(Self)
-    }
-
-    /// Directory of the generated package of `server`.
-    #[must_use]
-    pub fn server(&self, server: &ServerId) -> PathBuf {
-        self.0.join(server.as_str())
-    }
-
-    /// The base directory itself.
-    #[must_use]
-    pub fn as_path(&self) -> &Path {
-        &self.0
-    }
-}
-
-/// Base directory that holds one skill directory per server.
-///
-/// Resolved like [`ServersDir`], with the default `~/.claude/skills`.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_cli::commands::common::SkillsDir;
-/// use mcp_execution_core::ServerId;
-///
-/// let dir = SkillsDir::resolve(Some("/srv/skills".into())).unwrap();
-/// let server = ServerId::new("github").unwrap();
-/// assert_eq!(dir.skill(&server), std::path::Path::new("/srv/skills/github"));
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillsDir(PathBuf);
-
-impl SkillsDir {
-    /// Resolves `custom`, expanding a leading `~/`, or the default `~/.claude/skills`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the home directory is needed and cannot be determined.
-    pub fn resolve(custom: Option<PathBuf>) -> Result<Self> {
-        resolve_home_relative(custom, DEFAULT_SKILLS_DIR, dirs::home_dir().as_deref()).map(Self)
-    }
-
-    /// Skill directory of `server`.
-    #[must_use]
-    pub fn skill(&self, server: &ServerId) -> PathBuf {
-        self.0.join(server.as_str())
-    }
-
-    /// The base directory itself.
-    #[must_use]
-    pub fn as_path(&self) -> &Path {
-        &self.0
-    }
-}
-
 /// Reads the `_meta.json` of the generated package in `dir` through the single core reader.
 ///
 /// A missing sidecar asks for `generate`; a schema mismatch is `InvalidArgument` (exit 2) and asks
@@ -1218,54 +1125,6 @@ fn metadata_error(error: MetadataReadError, server: &ServerId) -> anyhow::Error 
 mod tests {
     use super::*;
     use std::io::Write;
-
-    #[test]
-    fn resolve_home_relative_expands_only_a_leading_tilde_slash() {
-        let home = Path::new("/home/u");
-        let resolve = |custom: &str| {
-            resolve_home_relative(Some(PathBuf::from(custom)), "d", Some(home)).unwrap()
-        };
-
-        assert_eq!(resolve("~/x/y"), Path::new("/home/u/x/y"));
-        assert_eq!(resolve("/abs"), Path::new("/abs"));
-        assert_eq!(resolve("rel"), Path::new("rel"));
-        assert_eq!(resolve("~other/x"), Path::new("~other/x"));
-        assert_eq!(resolve("~"), Path::new("~"));
-    }
-
-    #[test]
-    fn resolve_home_relative_defaults_under_home_and_needs_one() {
-        let home = Path::new("/home/u");
-
-        assert_eq!(
-            resolve_home_relative(None, ".claude/servers", Some(home)).unwrap(),
-            Path::new("/home/u/.claude/servers")
-        );
-        assert!(resolve_home_relative(None, "d", None).is_err());
-        assert!(resolve_home_relative(Some("~/x".into()), "d", None).is_err());
-        assert_eq!(
-            resolve_home_relative(Some("/abs".into()), "d", None).unwrap(),
-            Path::new("/abs")
-        );
-    }
-
-    #[test]
-    fn servers_and_skills_dirs_join_the_server_id() {
-        let server = ServerId::new("github").unwrap();
-
-        assert_eq!(
-            ServersDir::resolve(Some("/s".into()))
-                .unwrap()
-                .server(&server),
-            Path::new("/s/github")
-        );
-        assert_eq!(
-            SkillsDir::resolve(Some("/k".into()))
-                .unwrap()
-                .skill(&server),
-            Path::new("/k/github")
-        );
-    }
 
     #[test]
     fn metadata_error_marks_a_schema_mismatch_as_invalid_input() {
@@ -2246,9 +2105,8 @@ mod tests {
         if let Err(error) = result {
             let error = error.to_string();
             assert!(
-                error.contains("failed to read MCP config")
-                    || error.contains("failed to get home directory"),
-                "Expected config read error or home dir error, got: {error}"
+                error.contains("failed to read MCP config"),
+                "Expected config read error, got: {error}"
             );
         }
     }
@@ -2618,13 +2476,11 @@ mod tests {
     /// (both downgraded to `pub(crate)`, losing their `# Examples` doctest)
     /// were previously only exercised via their `_from`/error-path siblings.
     /// This exercises the 0-arg wrappers' actual success path — resolving
-    /// `~/.claude/mcp.json` via `dirs::home_dir()` and returning a populated,
+    /// `~/.claude/mcp.json` via `HomeDir::from_env()` and returning a populated,
     /// looked-up entry — which no other test in this crate covered.
     ///
-    /// Unix-only, mirroring `server.rs`'s own `HOME`-override tests: on
-    /// Windows, `dirs::home_dir()` resolves via the `SHGetKnownFolderPath`
-    /// Win32 API, which reads the real OS user profile and ignores
-    /// environment variables entirely, so no `HOME` override can redirect it.
+    /// Unix-only, mirroring `server.rs`'s own `HOME`-override tests: the in-process env
+    /// mutation uses `unsafe` and is not set up for `USERPROFILE`.
     #[cfg(unix)]
     #[test]
     fn test_list_and_get_mcp_server_success_via_default_path() {

@@ -238,10 +238,6 @@ fn run_fails_on_a_missing_script_file_with_one_classified_line() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn run_resolves_mcp_server_imports_from_an_unrelated_cwd() {
     let Some(sb) = sandbox("run_resolves_mcp_server_imports_from_an_unrelated_cwd") else {
         return;
@@ -358,10 +354,6 @@ fn run_script_without_calls_exits_long_before_the_timeout() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn run_script_with_one_call_exits_long_before_the_timeout() {
     let Some(sb) = sandbox("run_script_with_one_call_exits_long_before_the_timeout") else {
         return;

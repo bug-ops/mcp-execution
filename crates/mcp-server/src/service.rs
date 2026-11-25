@@ -20,8 +20,8 @@ use mcp_execution_core::untrusted::{
     wrap_untrusted_block,
 };
 use mcp_execution_core::{
-    ServerConfig, ServerId, resolve_confined_existing, sanitize_path_for_error,
-    validate_server_id_slug, write_confined_file,
+    HomeDirError, ServerConfig, ServerId, ServersDir, SkillsDir, resolve_confined_existing,
+    sanitize_path_for_error, validate_server_id_slug, write_confined_file,
 };
 use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::{Introspector, ToolInfo};
@@ -181,13 +181,17 @@ impl GeneratorService {
     }
 
     /// Returns the base directory `save_skill` confines its output to.
-    fn skills_base_dir(&self) -> PathBuf {
-        self.skills_base_dir.clone().unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".claude")
-                .join("skills")
-        })
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the default needs a home directory that is unknown or
+    /// relative.
+    fn skills_base_dir(&self) -> Result<PathBuf, McpError> {
+        if let Some(dir) = &self.skills_base_dir {
+            return Ok(dir.clone());
+        }
+        let dir = SkillsDir::resolve(None).map_err(|error| home_dir_error(&error))?;
+        Ok(dir.as_path().to_path_buf())
     }
 
     /// Overrides the `save_skill` base directory. Test-only: production
@@ -201,13 +205,17 @@ impl GeneratorService {
 
     /// Returns the base directory `introspect_server` confines its
     /// `output_dir` to.
-    fn servers_base_dir(&self) -> PathBuf {
-        self.servers_base_dir.clone().unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".claude")
-                .join("servers")
-        })
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the default needs a home directory that is unknown or
+    /// relative.
+    fn servers_base_dir(&self) -> Result<PathBuf, McpError> {
+        if let Some(dir) = &self.servers_base_dir {
+            return Ok(dir.clone());
+        }
+        let dir = ServersDir::resolve(None).map_err(|error| home_dir_error(&error))?;
+        Ok(dir.as_path().to_path_buf())
     }
 
     /// Overrides the `introspect_server` base directory. Test-only:
@@ -585,7 +593,7 @@ impl GeneratorService {
         // cached, pre-resolved path would leave open for the session's full lifetime (issue
         // #216).
         let output_dir = resolve_output_dir(
-            &self.servers_base_dir(),
+            &self.servers_base_dir()?,
             pending.server_id.as_str(),
             pending.output_dir_override.as_deref(),
         )
@@ -726,7 +734,7 @@ impl GeneratorService {
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
         let base_dir = resolve_list_base_dir(
-            &self.servers_base_dir(),
+            &self.servers_base_dir()?,
             params.base_dir.as_deref().map(Path::new),
         )
         .await
@@ -856,15 +864,9 @@ impl GeneratorService {
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         tracing::Span::current().record("server_id", tracing::field::display(&params.server_id));
 
-        // Determine servers directory
-        let servers_dir = params.servers_dir.unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".claude")
-                .join("servers")
-        });
-
-        let server_dir = servers_dir.join(&params.server_id);
+        let servers_dir =
+            ServersDir::resolve(params.servers_dir).map_err(|error| home_dir_error(&error))?;
+        let server_dir = servers_dir.as_path().join(&params.server_id);
 
         // Check if server directory exists
         if !server_dir.exists() {
@@ -1060,7 +1062,7 @@ impl GeneratorService {
         // Determine and confine the output path to ~/.claude/skills/, rejecting
         // absolute overrides, `..` traversal, and symlink-based escapes (issue #184).
         let output_path = resolve_skill_output_path(
-            &self.skills_base_dir(),
+            &self.skills_base_dir()?,
             &params.server_id,
             params.output_path.as_deref(),
         )
@@ -1207,6 +1209,14 @@ fn build_stdio_server_config(
     }
 
     config_builder.build()
+}
+
+/// Maps an unusable home directory to the MCP error returned instead of writing under `./.claude`.
+fn home_dir_error(error: &HomeDirError) -> McpError {
+    McpError::internal_error(
+        format!("cannot resolve the default directory: {error}"),
+        None,
+    )
 }
 
 /// Resolves `list_generated_servers`'s `base_dir` override, confining it to `servers_base_dir`.
@@ -1688,6 +1698,14 @@ mod tests {
     use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
     use rmcp::model::ErrorCode;
     use uuid::Uuid;
+
+    #[test]
+    fn home_dir_error_is_an_internal_error_naming_the_cause() {
+        let error = home_dir_error(&HomeDirError::Unknown);
+
+        assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+        assert!(error.message.contains("home directory"));
+    }
 
     // ========================================================================
     // Helper Functions Tests
@@ -4162,7 +4180,7 @@ mod tests {
         // Resolve the exact same output_dir generate_and_export will compute internally, so the
         // sentinel is inserted under the key export_lock_for would actually look up.
         let output_dir = resolve_output_dir(
-            &service.servers_base_dir(),
+            &service.servers_base_dir().unwrap(),
             pending.server_id.as_str(),
             pending.output_dir_override.as_deref(),
         )

@@ -4,10 +4,8 @@
 //! ASSUMPTIONS: `run --save` writes under `<skills-dir>/<skill>/scripts/<name>.ts` where the
 //! skill is not pinned by the plan, so the tests look for the file anywhere below the skills
 //! directory; the script text carries its own ADR-579 header.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

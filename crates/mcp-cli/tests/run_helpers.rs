@@ -1,9 +1,7 @@
 //! The `mcp:helpers` module under `run`: `mapBounded` stops starting new items once one callback
 //! rejects, so a failing item does not trigger the calls of the items after it.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

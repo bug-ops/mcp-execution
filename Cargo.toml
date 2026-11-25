@@ -33,6 +33,7 @@ mcp-execution-skill = { path = "crates/mcp-skill", version = "0.11.0" }
 rayon = "1.12"
 regex = "1.13"
 rmcp = "3.1"
+rustix = "1.1"
 schemars = "1.2"
 serde = "1.0"
 serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize", "serialize"] }

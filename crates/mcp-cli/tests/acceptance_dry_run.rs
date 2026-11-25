@@ -5,10 +5,8 @@
 //! The policy file is `{"version": 1, "reads": ["<server>/<tool>"]}` (D19): unknown fields and any
 //! other version are rejected, and each entry is split at the first `/` and validated as a
 //! server id and a tool name.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 #![expect(
     clippy::unwrap_used,
     reason = "test, bench and example code may panic on failure"

@@ -303,10 +303,6 @@ async fn pipe_refuses_a_second_connection() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn two_concurrent_first_calls_open_one_connection() {
     if !require_node("two_concurrent_first_calls_open_one_connection") {
         return;
@@ -343,10 +339,6 @@ fn two_concurrent_first_calls_open_one_connection() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn responses_arriving_out_of_order_are_matched_by_id() {
     if !require_node("responses_arriving_out_of_order_are_matched_by_id") {
         return;
@@ -378,10 +370,6 @@ fn responses_arriving_out_of_order_are_matched_by_id() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn a_result_over_the_helper_line_bound_becomes_call_failed() {
     if !require_node("a_result_over_the_helper_line_bound_becomes_call_failed") {
         return;
@@ -410,10 +398,6 @@ fn a_result_over_the_helper_line_bound_becomes_call_failed() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn a_lost_channel_rejects_in_flight_and_later_calls() {
     if !require_node("a_lost_channel_rejects_in_flight_and_later_calls") {
         return;

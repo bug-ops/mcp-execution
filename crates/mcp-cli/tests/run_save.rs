@@ -1,9 +1,7 @@
 //! `run --save` validates everything it can before node starts: an invalid header, a name
 //! mismatch or an existing recipe exit 2 without a single tool call, and a failed run saves nothing.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

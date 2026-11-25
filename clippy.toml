@@ -1,2 +1,7 @@
 allow-expect-in-tests = true
 allow-unwrap-in-tests = true
+
+disallowed-methods = [
+    { path = "dirs::home_dir", reason = "use mcp_execution_core::HomeDir (#634, #604)" },
+    { path = "std::env::home_dir", reason = "use mcp_execution_core::HomeDir (#634, #604)" },
+]

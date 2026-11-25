@@ -49,6 +49,19 @@ use crate::runtime::signal::{RunnerSignal, Termination};
 use crate::runtime::spill::Spill;
 use crate::runtime::typecheck::{TypecheckOutcome, typecheck};
 
+/// Names the file a `test-fixtures` build creates once it is ready to read a script from stdin.
+#[cfg(feature = "test-fixtures")]
+pub(crate) const TEST_READY_FILE_ENV: &str = "MCP_EXECUTION_TEST_READY_FILE";
+
+#[cfg(feature = "test-fixtures")]
+fn announce_readiness() {
+    if let Some(path) = std::env::var_os(TEST_READY_FILE_ENV)
+        && let Err(error) = std::fs::write(&path, b"")
+    {
+        tracing::debug!("could not create the readiness file: {error}");
+    }
+}
+
 /// Largest script the runner accepts, in bytes.
 pub const MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
 
@@ -156,8 +169,15 @@ pub struct RunArgs {
 struct StreamReport {
     head: String,
     total_bytes: u64,
-    spill: Option<PathBuf>,
+    spill: Option<SpillRef>,
     notice: Option<String>,
+}
+
+/// A spill file and whether it holds the whole stream.
+#[derive(Debug, PartialEq, Eq)]
+struct SpillRef {
+    path: PathBuf,
+    complete: bool,
 }
 
 #[derive(Serialize)]
@@ -166,6 +186,7 @@ struct StreamEnvelope<'a> {
     bytes: u64,
     truncated: bool,
     spill: Option<String>,
+    spill_complete: Option<bool>,
 }
 
 impl<'a> StreamEnvelope<'a> {
@@ -174,7 +195,11 @@ impl<'a> StreamEnvelope<'a> {
             text: &report.head,
             bytes: report.total_bytes,
             truncated: report.notice.is_some(),
-            spill: report.spill.as_ref().map(|p| p.display().to_string()),
+            spill: report
+                .spill
+                .as_ref()
+                .map(|spill| spill.path.display().to_string()),
+            spill_complete: report.spill.as_ref().map(|spill| spill.complete),
         }
     }
 }
@@ -354,6 +379,8 @@ async fn prepare_script(
             }
         }
         ScriptSource::Stdin => {
+            #[cfg(feature = "test-fixtures")]
+            announce_readiness();
             let mut text = Vec::new();
             tokio::io::stdin()
                 .take(MAX_SCRIPT_BYTES + 1)
@@ -420,7 +447,10 @@ async fn report_stream(
         };
     }
     let saved = match spill.write(&captured.bytes).await {
-        Ok(file) => Some(file.path),
+        Ok(file) => Some(SpillRef {
+            complete: !captured.is_cut() && !file.truncated,
+            path: file.path,
+        }),
         Err(error) => {
             tracing::debug!("could not spill {stream}: {error:#}");
             None
@@ -431,7 +461,7 @@ async fn report_stream(
             stream,
             cut.head.len(),
             captured,
-            saved.as_deref(),
+            saved.as_ref().map(|spill| spill.path.as_path()),
         )),
         head: cut.head.to_string(),
         total_bytes: captured.total,
@@ -994,5 +1024,34 @@ mod tests {
         assert_eq!(value["script_status"], "signal 9");
         assert_eq!(value["exit_code"], 6);
         assert_eq!(value["stdout"]["truncated"], true);
+    }
+
+    #[test]
+    fn spill_complete_is_null_with_spill_and_otherwise_says_whether_the_file_is_whole() {
+        for (spill, expected) in [
+            (None, serde_json::Value::Null),
+            (
+                Some(SpillRef {
+                    path: PathBuf::from("/tmp/s"),
+                    complete: false,
+                }),
+                serde_json::Value::Bool(false),
+            ),
+            (
+                Some(SpillRef {
+                    path: PathBuf::from("/tmp/s"),
+                    complete: true,
+                }),
+                serde_json::Value::Bool(true),
+            ),
+        ] {
+            let report = StreamReport {
+                spill,
+                ..stream("out", None)
+            };
+            let value = serde_json::to_value(StreamEnvelope::of(&report)).unwrap();
+            assert_eq!(value["spill_complete"], expected);
+            assert_eq!(value["spill"].is_null(), expected.is_null());
+        }
     }
 }

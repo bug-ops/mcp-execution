@@ -54,10 +54,6 @@ fn run_list(home: &std::path::Path) -> Value {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API), so this end-to-end test cannot redirect the home directory there; tracked in #604"
-)]
 fn list_generated_servers_counts_tool_files_but_not_catalog_or_index() {
     let home = tempfile::tempdir().unwrap();
     let server_dir = home.path().join(".claude").join("servers").join("acme");

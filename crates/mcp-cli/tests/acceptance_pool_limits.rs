@@ -3,10 +3,8 @@
 //!
 //! Scripts import `callMCPTool` straight from the generated bridge so they can address server
 //! ids that have no generated package.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 
@@ -117,7 +115,9 @@ fn a_server_that_failed_to_start_is_retried_on_the_next_call() {
     let Some(sb) = prepared("a_server_that_failed_to_start_is_retried_on_the_next_call") else {
         return;
     };
-    let late = sb.root.join("late-server");
+    let late = sb
+        .root
+        .join(format!("late-server{}", std::env::consts::EXE_SUFFIX));
     sb.write_mcp_json(&json!({
         SERVER: sb.fixture_entry(),
         "late": { "command": late.display().to_string() },

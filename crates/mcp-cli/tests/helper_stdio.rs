@@ -93,10 +93,6 @@ impl Client {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn a_call_returns_its_value_by_id() {
     let sb = Sandbox::new();
     let mut client = Client::start(&sb);
@@ -111,10 +107,6 @@ fn a_call_returns_its_value_by_id() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn an_empty_success_and_a_tool_error_use_their_own_shapes() {
     let sb = Sandbox::new();
     let mut client = Client::start(&sb);
@@ -135,10 +127,6 @@ fn an_empty_success_and_a_tool_error_use_their_own_shapes() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn concurrent_first_calls_open_one_connection() {
     let sb = Sandbox::new();
     let mut client = Client::start(&sb);
@@ -169,10 +157,6 @@ fn concurrent_first_calls_open_one_connection() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn responses_may_arrive_out_of_order() {
     let sb = Sandbox::new();
     let mut client = Client::start(&sb);
@@ -192,10 +176,6 @@ fn responses_may_arrive_out_of_order() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn a_result_over_the_line_bound_becomes_call_failed() {
     let sb = Sandbox::new();
     let (_server, url) = common::spawn_http_fixture(None);
@@ -222,10 +202,6 @@ fn a_result_over_the_line_bound_becomes_call_failed() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn a_stdio_response_line_over_the_cap_fails_the_call_at_once() {
     let sb = Sandbox::new();
     let mut client = Client::start(&sb);
@@ -271,10 +247,6 @@ fn request_id_zero_is_reserved_and_closes_the_channel() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn an_unknown_server_is_a_call_failure_not_a_crash() {
     let sb = Sandbox::new();
     let mut client = Client::start(&sb);
@@ -293,10 +265,6 @@ fn an_unknown_server_is_a_call_failure_not_a_crash() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn a_call_finishing_while_a_request_arrives_in_pieces_does_not_corrupt_it() {
     let sb = Sandbox::new();
     let mut client = Client::start(&sb);

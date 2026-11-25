@@ -20,6 +20,7 @@
 use crate::filesystem::FileSystem;
 use crate::types::{FilesError, Result};
 use mcp_execution_codegen::GeneratedCode;
+use mcp_execution_core::expand_home;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -281,7 +282,7 @@ impl FilesBuilder {
         vfs.check_export_bounds()?;
 
         // Expand tilde in path
-        let base = expand_tilde(base_path.as_ref())?;
+        let base = expand_base_path(base_path.as_ref())?;
 
         fs::create_dir_all(&base).map_err(|e| FilesError::IoError {
             path: base.display().to_string(),
@@ -373,33 +374,16 @@ impl FilesBuilder {
     }
 }
 
-/// Expands tilde (~) in path to user's home directory.
+/// Expands a leading `~` in `path` through the core home resolver.
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined.
-fn expand_tilde(path: &Path) -> Result<PathBuf> {
-    let path_str = path.to_str().ok_or_else(|| FilesError::InvalidPath {
+/// Returns an error if the home directory is needed and unusable.
+fn expand_base_path(path: &Path) -> Result<PathBuf> {
+    expand_home(path).map_err(|source| FilesError::IoError {
         path: path.display().to_string(),
-    })?;
-
-    if path_str.starts_with("~/") || path_str == "~" {
-        let home = dirs::home_dir().ok_or_else(|| FilesError::IoError {
-            path: path_str.to_string(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Cannot determine home directory",
-            ),
-        })?;
-
-        if path_str == "~" {
-            Ok(home)
-        } else {
-            Ok(home.join(&path_str[2..]))
-        }
-    } else {
-        Ok(path.to_path_buf())
-    }
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, source),
+    })
 }
 
 /// Writes file content to disk atomically, creating parent directories
@@ -890,9 +874,9 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_tilde_expands_home() {
+    fn test_expand_base_path_expands_home() {
         let path = Path::new("~/test/path");
-        let expanded = expand_tilde(path).unwrap();
+        let expanded = expand_base_path(path).unwrap();
 
         // Should not contain tilde anymore
         assert!(!expanded.to_string_lossy().contains('~'));
@@ -902,17 +886,17 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_tilde_preserves_absolute() {
+    fn test_expand_base_path_preserves_absolute() {
         let path = Path::new("/absolute/path");
-        let expanded = expand_tilde(path).unwrap();
+        let expanded = expand_base_path(path).unwrap();
 
         assert_eq!(expanded, Path::new("/absolute/path"));
     }
 
     #[test]
-    fn test_expand_tilde_just_tilde() {
+    fn test_expand_base_path_just_tilde() {
         let path = Path::new("~");
-        let expanded = expand_tilde(path).unwrap();
+        let expanded = expand_base_path(path).unwrap();
 
         // Should expand to home directory
         assert!(expanded.is_absolute());

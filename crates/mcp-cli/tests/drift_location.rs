@@ -1,9 +1,7 @@
 //! `drift` finds the generated directory the way `generate` places it: `--name` and
 //! `--progressive-output` carry the same meaning in both commands (FR-045.10).
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

@@ -31,6 +31,12 @@ pub const FIXTURE_BIN: &str = env!("CARGO_BIN_EXE_fixture-tools-mcp-server");
 /// Server id the sandbox registers for the stdio fixture.
 pub const SERVER: &str = "fixture";
 
+/// Environment variable naming the file a `test-fixtures` runner creates once it blocks on stdin.
+pub const READY_FILE_ENV: &str = "MCP_EXECUTION_TEST_READY_FILE";
+
+/// Longest the tests wait for a runner to become ready.
+pub const READY_WITHIN: Duration = Duration::from_secs(60);
+
 /// Hard stop for any spawned process; a hang fails the test instead of stalling CI.
 pub const WATCHDOG: Duration = Duration::from_secs(120);
 
@@ -154,8 +160,18 @@ impl Drop for KillOnDrop {
 
 /// Starts the fixture over Streamable HTTP and returns the guard and its URL.
 pub fn spawn_http_fixture(log: Option<&Path>) -> (KillOnDrop, String) {
+    spawn_http_fixture_with_env(log, &[])
+}
+
+/// Like [`spawn_http_fixture`], with extra environment variables for the fixture process.
+pub fn spawn_http_fixture_with_env(
+    log: Option<&Path>,
+    env: &[(&str, &str)],
+) -> (KillOnDrop, String) {
     let mut cmd = Command::new(FIXTURE_BIN);
-    cmd.args(["--http", "127.0.0.1:0"]).stdout(Stdio::piped());
+    cmd.args(["--http", "127.0.0.1:0"])
+        .envs(env.iter().copied())
+        .stdout(Stdio::piped());
     if let Some(log) = log {
         cmd.env("MCP_FIXTURE_LOG", log);
     }
@@ -164,6 +180,24 @@ pub fn spawn_http_fixture(log: Option<&Path>) -> (KillOnDrop, String) {
     let mut url = String::new();
     BufReader::new(stdout).read_line(&mut url).unwrap();
     (child, url.trim().to_string())
+}
+
+/// The file a runner creates when it has armed its signal handlers and reached the stdin read.
+#[derive(Debug)]
+pub struct ReadyFile(PathBuf);
+
+impl ReadyFile {
+    /// Waits until the runner announces readiness, failing after [`READY_WITHIN`].
+    pub fn wait(&self) {
+        let deadline = Instant::now() + READY_WITHIN;
+        while !self.0.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the runner was not ready within {READY_WITHIN:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 /// An isolated home, servers directory, skills directory and fixture call log.
@@ -244,6 +278,14 @@ impl Sandbox {
             .env_remove("RUST_LIB_BACKTRACE")
             .stdin(Stdio::null());
         cmd
+    }
+
+    /// Makes `cmd` create a file when the runner is ready to read its script from stdin, and
+    /// returns that file.
+    pub fn ready_file(&self, cmd: &mut Command) -> ReadyFile {
+        let path = self.root.join("runner.ready");
+        cmd.env(READY_FILE_ENV, &path);
+        ReadyFile(path)
     }
 
     /// Runs the CLI with `args`.

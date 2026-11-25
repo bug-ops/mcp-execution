@@ -2,13 +2,15 @@
 //! run directly with `node <tool>.ts '<json>'` reaches its server through
 //! `mcp-execution-cli helper` (found via `MCP_EXECUTION_CLI`), over stdio and HTTP.
 //!
-//! Requires the `test-fixtures` feature and Node.js 22.18+. Every test needs `mcp.json`, which
-//! cannot be redirected on Windows (#604).
+//! Requires the `test-fixtures` feature and Node.js 22.18+.
 
 #![cfg(feature = "test-fixtures")]
-#![expect(
-    clippy::unwrap_used,
-    reason = "test, bench and example code may panic on failure"
+#![cfg_attr(
+    unix,
+    expect(
+        clippy::unwrap_used,
+        reason = "test, bench and example code may panic on failure"
+    )
 )]
 
 mod common;
@@ -88,10 +90,6 @@ fn single_call_reaches_a_stdio_server_through_the_spawned_helper() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn single_call_reaches_an_http_server_through_the_spawned_helper() {
     if !require_node("single_call_reaches_an_http_server_through_the_spawned_helper") {
         return;
@@ -136,10 +134,6 @@ fn single_call_tool_error_keeps_the_structured_failure_line() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn single_call_without_a_findable_binary_fails_fast_and_names_the_variable() {
     if !require_node("single_call_without_a_findable_binary_fails_fast_and_names_the_variable") {
         return;

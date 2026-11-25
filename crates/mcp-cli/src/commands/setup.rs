@@ -5,17 +5,17 @@
 //! - Verifies generated files are executable
 //! - Provides helpful error messages and suggestions
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 #[cfg(unix)]
 use mcp_execution_core::sanitize_path_for_error;
 use serde::Serialize;
 #[cfg(unix)]
 use std::path::Path;
-use std::path::PathBuf;
 
 #[cfg(unix)]
 use crate::commands::common::ServersDir;
+use crate::commands::common::mcp_config_path;
 use crate::runtime::helper::{CliBinary, discover_cli_binary};
 use crate::runtime::node::check_node_version;
 use mcp_execution_core::helper_protocol::CLI_PATH_ENV;
@@ -118,7 +118,7 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
 
     let node_version = check_node_version().await?;
 
-    let mcp_config_path = get_mcp_config_path()?;
+    let mcp_config_path = mcp_config_path()?;
     let mcp_config_found = mcp_config_path.exists();
 
     let scan = check_files_executable().await?;
@@ -443,12 +443,6 @@ async fn make_executable(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, perms).await
 }
 
-/// Gets the path to ~/.claude/mcp.json
-fn get_mcp_config_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Failed to get home directory")?;
-    Ok(home.join(".claude").join("mcp.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,8 +463,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_mcp_config_path() {
-        let path = get_mcp_config_path();
+    fn test_mcp_config_path() {
+        let path = mcp_config_path();
         assert!(path.is_ok());
 
         let path = path.unwrap();

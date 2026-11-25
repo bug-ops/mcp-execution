@@ -100,6 +100,23 @@ fn read_server_metadata_refuses_a_symlinked_sidecar_even_inside_the_directory() 
     assert!(matches!(err, MetadataReadError::Link), "{err:?}");
 }
 
+#[cfg(windows)]
+#[test]
+fn read_server_metadata_refuses_a_symlinked_sidecar_on_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("other.json");
+    std::fs::write(&real, valid_json()).unwrap();
+    let link = dir.path().join(METADATA_FILE_NAME);
+    if std::os::windows::fs::symlink_file(&real, &link).is_err() {
+        eprintln!("skipped: creating symlinks needs a privilege this account lacks");
+        return;
+    }
+
+    let err = read_server_metadata(dir.path()).unwrap_err();
+
+    assert!(matches!(err, MetadataReadError::Link), "{err:?}");
+}
+
 #[test]
 fn read_server_metadata_refuses_a_directory_named_like_the_sidecar() {
     let dir = tempfile::tempdir().unwrap();

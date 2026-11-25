@@ -3,10 +3,8 @@
 //! scripts that reference a removed tool listed by name.
 //!
 //! Drift is staged by editing the recorded `_meta.json` (the fixture's tool list is fixed).
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 #![expect(
     clippy::unwrap_used,
     reason = "test, bench and example code may panic on failure"

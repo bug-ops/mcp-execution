@@ -68,10 +68,6 @@ fn call_to_a_server_that_never_answers_exits_4_at_the_connect_timeout() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn call_with_an_unknown_config_name_fails_before_any_connection() {
     let sb = Sandbox::new();
 

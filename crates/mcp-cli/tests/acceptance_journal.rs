@@ -2,12 +2,14 @@
 //! call at failure reads as unknown, the summary appears on failure only and carries a stable
 //! digest prefix, and the journal is bounded and private.
 //!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
+//! Unix only: the file-mode and retention tests, which check permission bits and seed files
+//! through Unix-only helpers.
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 
 use common::{Out, Sandbox, require_node};
@@ -83,6 +85,7 @@ fn journal_holds_no_argument_result_or_server_text() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn journal_files_are_readable_only_by_the_user() {
     let Some(sb) = prepared("journal_files_are_readable_only_by_the_user") else {
@@ -253,6 +256,7 @@ fn journal_lines_stay_whole_json_objects_under_concurrent_calls() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn journal_retention_drops_expired_files_and_keeps_at_most_the_file_limit() {
     let Some(sb) =
