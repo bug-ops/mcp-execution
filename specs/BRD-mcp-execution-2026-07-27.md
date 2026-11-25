@@ -21,7 +21,7 @@ related:
 
 > [!abstract]
 > This BRD was **reverse-engineered from an already-built, released system**
-> (workspace version `0.8.0`, 18 tags from `v0.1.0` to `v0.8.0`), not authored
+> (workspace version `0.8.0` when this BRD was written; `0.11.0` at the 1.0 contract pass), not authored
 > before implementation. Every statement below is grounded in `README.md`,
 > `CHANGELOG.md`, `Cargo.toml` package metadata, `SECURITY.md`,
 > `CONTRIBUTING.md`, and the per-crate specs in this `specs/` package. There
@@ -628,6 +628,39 @@ shared between this BRD and the SRS for traceability.
   - *Priority*: Must
   - *Status*: implemented (#562)
 
+### 1.0 contract (target release 1.0.0)
+
+> [!warning] Target requirements, not implemented
+> Tracking issue #669 (release 1.0.0), spec issue #670, API freeze #673. All seven workspace crates are declared
+> stable 1.0 libraries (decided by the maintainer). The numbered technical requirements are in
+> [[NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]]; five points are open and are written as
+> Ask First decisions there (OD-1 to OD-5, see [[#Open Questions]]).
+
+- **FR-047**: As a developer who depends on an `mcp-execution-*` crate, or who keeps generated output and saved
+  scripts across releases, I need the public API of the seven library crates and the wire formats between them
+  (`_meta.json`, the helper protocol, the generated package's exported names) to follow a stated semver policy, so
+  that a minor or patch upgrade never breaks my build or my generated files.
+  - *Acceptance criteria*: each crate spec lists its public surface; breaking and compatible changes are
+    classified by a written rule; growable enums and option structs are `#[non_exhaustive]`; foreign types in
+    public signatures are listed with their coupling rule; each wire format has one version constant, a stated
+    compatibility window and committed fixtures; `cargo semver-checks` guards every crate.
+  - *Priority*: Must
+  - *Status*: planned (#670, #673 to #680)
+- **FR-048**: As a user and as a script author, I need the command-line contract (commands, flags, exit codes and
+  `--format json` output) and the tool schemas of the `mcp-execution` server to be stable within a major version,
+  so that my scripts, CI jobs and skills keep working.
+  - *Acceptance criteria*: the documented commands, flags, exit-code values and JSON field sets change only in a
+    major release; results go to stdout and diagnostics to stderr; human-readable formats are not promised.
+  - *Priority*: Must
+  - *Status*: planned (#670)
+- **FR-049**: As a maintainer, I need a release pipeline that proves a tag is releasable before anything is
+  published, so that a failed release never leaves a half-published version.
+  - *Acceptance criteria*: the full check set passes before any artifact is created; a publish dry-run precedes
+    the real publish; release notes come from the curated `CHANGELOG.md`; the tag, the manifests and the changelog
+    agree; a rehearsal release succeeds before 1.0.0.
+  - *Priority*: Must
+  - *Status*: planned (#669, #670)
+
 ## Non-Functional Requirements
 
 Detailed, measurable non-functional requirements are specified separately in
@@ -859,6 +892,17 @@ Questions only the maintainer can answer, raised by the planned direction:
   (#566)
 - [ ] Does the documentation check also cover unknown subcommands and flags in
   fenced blocks, or only commands that exist? (#563)
+
+Open decisions of the 1.0 contract (Ask First, with options and recommendations in
+[[NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]]):
+
+- [ ] Is the `progressive` name renamed before 1.0.0, in the Rust items, the flag and the example? (OD-1, #680)
+- [ ] What is the compatibility window of `_meta.json` and the helper protocol: exact match for the whole 1.x line,
+  "read old, write new", or a floor? (OD-2)
+- [ ] Is an MSRV raise a breaking change of the library crates, or a minor-release change? (OD-3)
+- [ ] May `rmcp` and `tracing-subscriber` types stay in public signatures, and under what version-coupling rule?
+  (OD-4, #678)
+- [ ] What is the intended public surface of the `cli` and `server` library crates? (OD-5, #675)
 
 ## Glossary
 

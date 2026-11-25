@@ -490,8 +490,8 @@ template-only rendering this command does. Refuses to overwrite an existing
 output file unless `--overwrite`.
 
 `prepare_skill_context` validates a custom `skill_name` (if any) via
-`validate_skill_name` up front, then passes it straight into
-`build_skill_context` as that function's own `custom_name: Option<&str>`
+`SkillName::new` up front, then passes it straight into
+`build_skill_context` as that function's own `custom_name: Option<&SkillName>`
 parameter — not patched onto the result afterward — so `generation_prompt`
 reflects a custom name the same way `mcp-server`'s `generate_skill` handler
 does (issues #435, #436). It also validates a custom `--output` path (if
@@ -1611,9 +1611,47 @@ Deferred or excluded:
 - #615 and #475 are out of scope and stay open.
 - `ServersDir`/`SkillsDir` moved to `mcp-execution-core` and `mcp-server` uses them (#634, #637); a bare `~` is now expanded.
 
-## 20. See Also
+## 20. 1.0 Public API Contract
+
+> [!warning] Target requirement (1.0.0)
+> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
+> `NFR-COM-046`). The listing below was derived from `crates/mcp-cli/src` at 9473243. Items marked **proposal** are
+> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-047.7 | THE SYSTEM SHALL expose from `mcp-execution-cli` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
+
+### Public surface (proposal, OD-5)
+
+Today `lib.rs` exports `actions`, `cli`, `commands`, `formatters`, `runner` and `runtime` plus `ServerAction`:
+about 25 public enums and about 109 public fields (#675). **Proposed** stable surface (option (a) of OD-5): the
+parse types `cli::{Cli, Commands}` with `ServerAction`, so a crate or test can drive command parsing in-process
+(#188), and `runner::{init_logging, execute_command, report_and_classify}`. **Proposed** `pub(crate)` or
+`#[doc(hidden)]` workspace-internal: `commands`, `formatters`, `runtime` (including the helper protocol types such
+as `ResultKind`) and the remaining `actions` types; tests that need them move into unit-test modules or use the
+hidden items. The `test-fixtures` feature is not a public feature (`NFR-COM-033`).
+
+### Binary contract
+
+The command, flag, exit-code, JSON and environment contract is `NFR-COM-060` to `NFR-COM-065`, specified in
+sections 2, 5 and 12 and in sections 16 to 19. `--progressive-output` is subject to OD-1.
+
+### Foreign types (`NFR-COM-044`)
+
+`clap::Parser` on `Cli` and `clap::Subcommand` on `Commands`; the `clap` major version is therefore coupled to this
+crate's major version (OD-4).
+
+### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
+
+If the proposal holds, only `Cli`, `Commands` and `ServerAction` are public, and `Commands` and `ServerAction` are
+`#[non_exhaustive]` (a new subcommand is a compatible change, `NFR-COM-041`). Enums that stay internal are not
+subject to the rule. The three-times-defined result concept is reduced to one (`NFR-COM-034`).
+
+## 21. See Also
 
 - [[../core/spec]] — shared config/redaction/exit-code primitives
 - [[../introspector/spec]], [[../codegen/spec]], [[../files/spec]], [[../skill/spec]] — crates this CLI drives directly, without going through [[../server/spec]]
 - [[#19. Script-First Requirements and Contracts]] — requirements of the measurement, runner, call, journal, dry run, helper, restrict, typecheck, saved-script and drift commands
 - [[../decisions/ADR-569-runtime-strategy-single-mcp-client]] — gates the one-shot call
+- [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] — 1.0 API, wire-format, CLI and release contract

@@ -49,15 +49,16 @@ related:
 ```rust
 // crate root re-exports
 pub use context::build_skill_context;
-pub use output_path::{OutputPathError, resolve_skill_output_path};
+pub use output_path::{OutputPathError, resolve_skill_output_path, skill_directory_name};
 pub use parser::{MAX_FILE_SIZE, MAX_FRONTMATTER_SIZE, MAX_TOOL_FILES,
     ParsedParameter, ParsedToolFile, ScanError, ScanResult, SkillMetadataError,
     extract_skill_metadata, scan_tools_directory};
-pub use template::{TemplateError, render_generation_prompt, render_skill_md};
+pub use template::{TemplateError, render_skill_md};
 pub use types::{GenerateSkillParams, GenerateSkillResult, MAX_SERVER_ID_LENGTH,
-    MAX_SKILL_NAME_LENGTH, MAX_USE_CASE_HINT_LENGTH, MAX_USE_CASE_HINTS, SaveSkillParams,
-    SaveSkillResult, SkillCategory, SkillMetadata, SkillNameError, SkillServerIdError, SkillTool,
-    ToolExample, validate_server_id, validate_skill_name};
+    MAX_SKILL_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH, MAX_USE_CASE_HINT_LENGTH,
+    MAX_USE_CASE_HINTS, SaveSkillParams, SaveSkillResult, SkillCategory,
+    SkillDirectoryMismatch, SkillMetadata, SkillName, SkillNameError, SkillServerIdError,
+    SkillTool, ToolExample, validate_server_id};
 
 pub use mcp_execution_core::MAX_SERVER_ID_LENGTH; // = 64, re-exported (issue #401)
 pub use mcp_execution_core::ServerIdSlugError as SkillServerIdError; // re-exported, not a separate mirror type
@@ -68,14 +69,18 @@ pub fn validate_server_id(server_id: &str) -> Result<(), SkillServerIdError>;
 pub const MAX_SKILL_NAME_LENGTH: usize = MAX_SERVER_ID_LENGTH; // 64 chars (Agent Skills `name` limit; the
 // default name is the server id, so it always fits). Counted in chars to agree with
 // GenerateSkillParams::skill_name's schemars maxLength (issue #413, S2).
-// validate_skill_name: non-blank, <= 64 chars, only [a-z0-9-] (SkillNameError::{Empty, TooLong,
-// InvalidCharacters}); GenerateSkillParams::skill_name declares the same maxLength and pattern (#582).
-pub fn validate_skill_name(name: &str) -> Result<(), SkillNameError>;
-// Rules: non-empty (or non-blank) after trim, <= 200 chars (chars().count(), not str::len()).
-// No character-set restriction (free-form human-readable label). Called by both mcp-cli's
-// `skill` command and mcp-server's `generate_skill` tool before a custom skill_name override is
-// applied (issue #413; the emptiness check is S3, added because extract_skill_metadata rejects
-// a blank name unconditionally and the length check alone would have let one through).
+pub struct SkillName(String); // validated: non-blank, <= 64 chars (chars().count(), not str::len()),
+// only [a-z0-9-] (SkillNameError::{Empty, TooLong, InvalidCharacters}); GenerateSkillParams::skill_name
+// declares the same maxLength and pattern (#582). Holding a SkillName proves the rule was checked.
+impl SkillName {
+    pub fn new(name: &str) -> Result<Self, SkillNameError>;
+    pub fn in_directory(self, directory: &str) -> Result<Self, SkillDirectoryMismatch>; // name must equal its directory
+    pub fn as_str(&self) -> &str;
+}
+// Called by both mcp-cli's `skill` command and mcp-server's `generate_skill` tool before a custom
+// skill_name override is applied (issue #413; the emptiness check is S3, added because
+// extract_skill_metadata rejects a blank name unconditionally). `validate_skill_name`, the
+// earlier free-form check (<= 200 chars, any characters), was removed without a shim (#582).
 
 pub const MAX_USE_CASE_HINT_LENGTH: usize = mcp_execution_core::untrusted::MAX_UNTRUSTED_FIELD_LEN;
 // = 500 chars, re-exported (not a new independent cap) so GenerateSkillParams::use_case_hints's
@@ -94,9 +99,8 @@ pub const MAX_FRONTMATTER_SIZE: usize = 8 * 1024; // 8 KiB, extracted YAML block
 pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError>;
 pub struct ScanResult { pub tools: Vec<ParsedToolFile>, pub warnings: Vec<String> }
 
-pub fn build_skill_context(server_id: &str, tools: &[ParsedToolFile], use_case_hints: Option<&[String]>, custom_name: Option<&str>) -> GenerateSkillResult;
+pub fn build_skill_context(server_id: &str, tools: &[ParsedToolFile], use_case_hints: Option<&[String]>, custom_name: Option<&SkillName>) -> GenerateSkillResult;
 
-pub fn render_generation_prompt(context: &GenerateSkillResult) -> Result<String, TemplateError>;
 pub fn render_skill_md(context: &GenerateSkillResult) -> Result<String, TemplateError>;
 
 pub fn extract_skill_metadata(content: &str) -> Result<SkillMetadata, SkillMetadataError>;
@@ -212,7 +216,7 @@ internally and callers patched `result.skill_name` onto the already-built
 result afterward, which is exactly the bug #436 fixed — `generation_prompt`
 had already been built by that point). Both callers (`mcp-cli`'s
 `--skill-name` flag, `generate_skill`'s `skill_name` MCP tool argument) call
-`validate_skill_name` *before* calling `build_skill_context` (issue #413);
+`SkillName::new` *before* calling `build_skill_context`, which takes the validated `Option<&SkillName>` (issue #413);
 `sanitize_untrusted_text` inside `build_skill_context` is a distinct,
 additional defense layered on top of that validation, not a substitute for
 it. The prompt's `**Skill Name**` line gets one further layer beyond the
@@ -322,17 +326,10 @@ erroring — an over-long hint list is not attacker behavior worth failing
 the whole request over, the same truncate-not-reject treatment every other
 untrusted field in this prompt gets.
 
-`render_generation_prompt` — a second, separate prompt-rendering path
-through the embedded `skill-generation.hbs` template, exported alongside
-`render_skill_md` but not called from `mcp-cli` or `mcp-server` (the
-production `generate_skill` flow returns `context.generation_prompt`, built
-by `build_generation_prompt` above, not this function's output) — had the
-same gap: `skill_name` appeared twice in the template (an example `name:`
-line and a `# {{skill_name}}` heading) via plain double-stash, with no
-sanitization. It now builds a modified render context the same way
-`render_skill_md` does, overriding `skill_name` with the
-`sanitize_untrusted_text` output, and the template renders both occurrences
-with triple-stash (issue #411, S3).
+`render_generation_prompt`, a second prompt-rendering path through the embedded `skill-generation.hbs`
+template that no production caller used, was removed together with that template in wave 2 (section 12), so
+the only prompt is `context.generation_prompt`, built by `build_generation_prompt` above (the earlier
+unsanitised `skill_name` placement in that template, issue #411 S3, went with it).
 
 ## 6. `render_skill_md` — Direct Rendering (No LLM)
 
@@ -389,8 +386,7 @@ closing `---` lose their final blank line in `granit-parser` 2.0, and no
 external consumer is guaranteed to be more lenient (#536). Output is CRLF-normalized to LF for cross-platform
 (Windows CI) consistency.
 
-The shared `HANDLEBARS` instance (both this and `render_generation_prompt`
-render through it) enables `strict_mode(true)`, matching
+The shared `HANDLEBARS` instance enables `strict_mode(true)`, matching
 `mcp_execution_codegen::TemplateEngine::new` (`specs/codegen/spec.md`, §2).
 A template referencing a field absent from the render context now hard-fails
 with `TemplateError::RenderFailed` instead of silently rendering an empty
@@ -446,11 +442,11 @@ scalar's YAML-1.2-correct trailing newline (e.g. `description: |` ending in
 [[../decisions/ADR-405-adopt-serde-saphyr]] for why this is a deliberate,
 documented behavior change from this crate's previous parser).
 
-`name` is additionally passed through `crate::types::validate_skill_name` (issue #419): the two
+`name` is additionally passed through `crate::types::SkillName::new` (issue #419): the two
 `generate` call sites (`mcp-cli`'s `skill` command, `mcp-server`'s `generate_skill` tool) already
-enforce `MAX_SKILL_NAME_LENGTH` by calling `validate_skill_name` directly on a caller-supplied
+enforce `MAX_SKILL_NAME_LENGTH` by calling `SkillName::new` directly on a caller-supplied
 override before it reaches this function, but `save_skill` writes caller-supplied `SKILL.md`
-content straight through to `extract_skill_metadata` and never calls `validate_skill_name`
+content straight through to `extract_skill_metadata` and never validates the name
 itself — so before this fix, `save_skill`'s `name` was bounded only by `MAX_FRONTMATTER_SIZE` (8
 KiB), while every other path bounded it at 200 chars. `extract_skill_metadata` is the one `pub`
 chokepoint both paths share, so the bound lives here rather than being duplicated in the
@@ -718,10 +714,10 @@ tool count or a category list (`context.rs:362-380`), which gives a host nothing
 | FR-043.8 | WHERE the host supports it THE SYSTEM MAY include the catalog when the skill loads, bounded by the named catalog byte bound owned by [[../codegen/spec]], wrapped in the untrusted-data boundary with escaping, with a static fallback; the body SHALL be complete and correct when nothing is included | may |
 | FR-043.9 | THE SYSTEM SHALL ensure that text originating from an MCP server (names, descriptions, categories, keywords, hints, catalog content) stays inert data in a rendered skill, so that the host loading the skill treats none of it as anything but text, in the deterministic render and in the prompt-then-save path, and SHALL pin each path with regression tests that use hostile fixtures | must |
 
-**Landed early (#582).** FR-043.5 and the character-set and length half of FR-043.6 are implemented: the default
-name is the server id, and `validate_skill_name` enforces 1-64 lowercase letters, digits and hyphens (also applied
-to a saved skill's frontmatter `name`). The equality of a custom name with its directory and the validated name type
-remain planned.
+**Landed (#582).** FR-043.5 and FR-043.6 are implemented: the default name is the server id, and the validated
+`SkillName` type enforces 1-64 lowercase letters, digits and hyphens (also applied to a saved skill's frontmatter
+`name`); `SkillName::in_directory` rejects a custom name that differs from its directory, and `build_skill_context`
+takes `Option<&SkillName>` (section 12). `validate_skill_name` no longer exists.
 
 **Constraints.**
 
@@ -803,7 +799,42 @@ versions, follow the YAML tooling rules); the numeric bounds; scripts that refer
 
 **Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-## 15. See Also
+## 15. 1.0 Public API Contract
+
+> [!warning] Target requirement (1.0.0)
+> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
+> `NFR-COM-046`). The listing below was derived from `crates/mcp-skill/src` at 9473243. Items marked **proposal** are
+> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-047.5 | THE SYSTEM SHALL expose from `mcp-execution-skill` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
+
+### Public surface
+
+| Item | Kind | Notes |
+|------|------|-------|
+| `build_skill_context`, `render_skill_md`, `extract_skill_metadata`, `scan_tools_directory` | skill pipeline | `build_skill_context` takes `Option<&SkillName>` |
+| `SkillName`, `SkillNameError`, `SkillDirectoryMismatch`, `validate_server_id`, `SkillServerIdError` | validated names | The server id of `NFR-COM-035` replaces the `String` ids of the parameter and result structs |
+| `GenerateSkillParams`, `GenerateSkillResult`, `SaveSkillParams`, `SaveSkillResult`, `SkillCategory`, `SkillMetadata`, `SkillTool`, `ToolExample` | tool parameter and result types | Also the schema of the `mcp-execution` server tools (`NFR-COM-066`) |
+| `resolve_skill_output_path`, `skill_directory_name`, `OutputPathError` | confinement | |
+| `ParsedParameter`, `ParsedToolFile`, `ScanError`, `ScanResult`, `SkillMetadataError`, `TemplateError` | parser and template types | |
+| module `scripts` | saved scripts | `RecipeName`, `ToolRef`, `WriteIntent`, `Overwrite`, `ScriptParameter`, `ScriptHeader`, `ScriptError`, `ScriptListing`, `MissingTool`, `CheckReport`, `parse_header`, bounds; the header is a persisted format (`NFR-COM-050`, unversioned today, OD-2) |
+| bounds | constants | `MAX_SKILL_NAME_LENGTH`, `MAX_SKILL_DESCRIPTION_LENGTH`, `MAX_USE_CASE_HINT_LENGTH`, `MAX_USE_CASE_HINTS`, `MAX_FILE_SIZE`, `MAX_FRONTMATTER_SIZE`, `MAX_TOOL_FILES`, `MAX_SERVER_ID_LENGTH` |
+
+### Foreign types (`NFR-COM-044`)
+
+`handlebars::RenderError` and `handlebars::TemplateError` inside `TemplateError`; `schemars::JsonSchema` and `serde`
+implementations on the parameter and result types.
+
+### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
+
+`#[non_exhaustive]` exists on one type today (`crates/mcp-skill/src/parser.rs`). Required on every error enum
+(`OutputPathError`, `ScriptError`, `SkillNameError`, `TemplateError`, `ScanError`, `SkillMetadataError`) and on the
+result and header structs with public fields. Closed candidates, to be confirmed in #674: `WriteIntent` and
+`Overwrite`.
+
+## 16. See Also
 
 - [[../core/spec]] — shared path-confinement and untrusted-text primitives
 - [[../server/spec]] — MCP-tool-level `generate_skill`/`save_skill` wrappers
@@ -811,3 +842,4 @@ versions, follow the YAML tooling rules); the numeric bounds; scripts that refer
 - [[#14. Script-First Requirements]] — requirements of the script-first skill (#578) and saved scripts (#579); as built in sections 12 and 13
 - [[../cli/spec]] — the script runner the skill teaches
 - [[../decisions/ADR-581-code-mode-interoperability]] — relationship to the host's code mode (proposed)
+- [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] — 1.0 API, wire-format, CLI and release contract

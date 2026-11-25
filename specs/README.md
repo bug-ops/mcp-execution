@@ -20,10 +20,10 @@ related:
 > [!abstract]
 > This is a **reverse-engineering documentation pass** over the existing
 > `mcp-execution` codebase (not a design for a new feature). Every claim
-> below was verified against the actual source in this worktree
-> (`crates/*`), not paraphrased from `CLAUDE.md`. Where `CLAUDE.md`'s
-> summary and the real code disagree, it is called out explicitly in
-> [[#Discrepancies vs CLAUDE.md]].
+> below was verified against the actual source in the workspace
+> (`crates/*`), not paraphrased from another summary. The project's engineering
+> rules hold only stable, general conventions; the facts below live here and in
+> the per-crate specs.
 >
 > Business and formal requirements documents — [[BRD-mcp-execution-2026-07-27|BRD]],
 > [[SRS-mcp-execution-2026-07-27|SRS]], [[NFR-mcp-execution-2026-07-27|NFR]] —
@@ -130,6 +130,8 @@ sections 16 to 19.
   (text search over compact catalogs).
 - Proposed: `specs/decisions/ADR-581-code-mode-interoperability.md` (#581), on how the
   project relates to the host's code mode; its investigation is deferred.
+- Proposed: `specs/decisions/ADR-670-1-0-api-wire-release-contract.md` (#670), the 1.0 API, wire-format, CLI,
+  MSRV and release contract; the stable crate set is decided, five points are open.
 
 `mcp-server` and `mcp-cli` are **parallel front doors** onto the same lower
 four crates (`introspector`/`codegen`/`files`/`skill`) — they do not depend
@@ -298,66 +300,42 @@ resolve_server_config() [cli/common.rs]     introspect_server tool [server/servi
 - **New contract, saved scripts.** `mcp-skill::scripts` owns the header format, bounds and confined
   writes; `generate` and `skill` never touch `scripts/` ([[skill/spec#13. Saved Scripts (as built)]]).
 
-## Discrepancies vs `CLAUDE.md`
+## 1.0 Contract
 
-`CLAUDE.md`'s crate table and data-flow diagram are directionally correct
-but materially incomplete/stale in the following ways (verified against
-the real source, not assumed):
+> [!warning] Target contract of release 1.0.0, not yet in force
+> Tracking issue #669, spec issue #670, API freeze #673 (sub-issues #674 to #680). The numbered requirements live
+> in [[NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]]; the decision record is
+> [[decisions/ADR-670-1-0-api-wire-release-contract]]. Until the tag, breaking changes need no shim
+> (`NFR-MNT-002`).
 
-- **Transport support is undocumented.** `CLAUDE.md`'s data-flow diagram
-  only shows a stdio subprocess path (`ServerConfig (security-validated...)
-  → Introspector::discover_server() — spawns server process`). The real
-  `Transport` enum has three variants — `Stdio`, `Http`, `Sse` — and
-  `mcp-introspector` implements a full Streamable HTTP client path
-  alongside stdio. Neither `ServerConfig`'s HTTP/SSE fields (`url`,
-  `headers`) nor the CLI's `--http`/`--sse` flags nor `mcp.json`'s
-  `"type": "http"`/`"sse"` entries are mentioned anywhere in `CLAUDE.md`.
-- **Forbidden-env-var list is stale.** `CLAUDE.md` states: *"no forbidden
-  env vars: LD_PRELOAD, LD_LIBRARY_PATH, DYLD_*, PATH"*. The actual list
-  (`mcp-core::command::FORBIDDEN_ENV_NAMES`) additionally includes
-  `LD_AUDIT`, `NODE_OPTIONS`, `BASH_ENV`, `PYTHONPATH`, `PYTHONSTARTUP`,
-  `RUBYOPT`, `PERL5OPT`, `JAVA_TOOL_OPTIONS` — an entire category
-  (interpreter-hijack vectors, not just dynamic-linker/PATH) is omitted.
-- **`mcp-execution-server`'s scope is undersold.** `CLAUDE.md` describes it
-  only as *"MCP server exposing progressive loading as MCP tools."* The
-  actual crate exposes **five** tools, not just progressive-loading
-  generation: `introspect_server`, `save_categorized_tools`,
-  `list_generated_servers`, **and** `generate_skill`/`save_skill` — the
-  latter two duplicate `mcp-cli skill`'s functionality via the MCP-tool
-  interface, letting Claude compose SKILL.md content itself rather than a
-  template-only render. `CLAUDE.md` never mentions this crate's dependency
-  on `mcp-execution-skill`.
-- **Generated file set is incomplete.** `CLAUDE.md`'s example tree shows
-  only `index.ts`, per-tool `.ts` files, and `_runtime/mcp-bridge.ts`. The
-  real generator (`ProgressiveGenerator::generate_with_categories`) also
-  always emits `catalog.ts`, `_runtime/cli.ts`, `package.json`, `tsconfig.json`, and a `_meta.json`
-  structured-metadata sidecar — the latter is load-bearing (it's the
-  contract `mcp-skill` reads instead of re-parsing TypeScript).
-  `CLAUDE.md` says nothing about the required `npm install` post-generation
-  step either, which `mcp-cli generate` itself surfaces as a hint.
-- **Resource-exhaustion (CWE-400) hardening is entirely undocumented.**
-  `CLAUDE.md` does not mention any of the tool-count/schema-size/file-
-  count/byte/session-count/session-byte/request-concurrency bounds that
-  are, by volume of doc comments and tests, the single most invested-in
-  architectural concern in this codebase (see [[constitution#V. Security]]).
-- **Prompt-injection defense (`mcp-core::untrusted`) is undocumented.**
-  Not mentioned in `CLAUDE.md` at all, despite being a dedicated module
-  used by two separate crates specifically to prevent an introspected MCP
-  server's self-reported metadata from smuggling Markdown structure or LLM
-  instructions into Claude-facing text.
-- **Atomicity/concurrency guarantees of the export path are undocumented.**
-  `CLAUDE.md`'s data flow ends at `FileSystem::export()` as if it were a
-  simple write. The real implementation is a staged-directory-then-atomic-
-  rename with an age-gated stale-artifact sweep and per-resource locking at
-  the `mcp-server` layer — deliberate engineering against a documented
-  historical data-loss race, none of which is mentioned.
+**Stable library set (decided by the maintainer).** All seven workspace crates are stable 1.x libraries released at
+one workspace version: `mcp-execution-core`, `-introspector`, `-codegen`, `-files`, `-skill`, `-server`, `-cli`
+(`NFR-COM-030`). A crate's public API is what its spec lists in the section "1.0 Public API Contract"; everything
+else is internal (`NFR-COM-031`, `NFR-COM-032`).
 
-None of these are contradictions of what `CLAUDE.md` says — they are gaps
-where the real system does materially more, or differently, than the
-summary implies. Anyone extending this project via `CLAUDE.md` alone would
-be unaware of HTTP/SSE transport, the fuller forbidden-env-var list, the
-`generate_skill`/`save_skill` tools, `_meta.json`, or any of the
-resource/prompt-injection hardening.
+| Block | Public surface and contract section | Requirement |
+|---|---|---|
+| core | [[core/spec#8. 1.0 Public API Contract]] | `FR-047.1` |
+| introspector | [[introspector/spec#12. 1.0 Public API Contract]] | `FR-047.2` |
+| codegen | [[codegen/spec#16. 1.0 Public API Contract]] | `FR-047.3` |
+| files | [[files/spec#11. 1.0 Public API Contract]] | `FR-047.4` |
+| skill | [[skill/spec#15. 1.0 Public API Contract]] | `FR-047.5` |
+| server | [[server/spec#15. 1.0 Public API Contract]] | `FR-047.6` |
+| cli | [[cli/spec#20. 1.0 Public API Contract]] | `FR-047.7` |
+
+| Topic | Requirements | Home |
+|---|---|---|
+| Stable set, public surface, one definition per concept, typed ids | `NFR-COM-030` to `NFR-COM-035` | NFR section 12.1 |
+| Semver policy: breaking and compatible changes, `#[non_exhaustive]`, foreign types, deprecation | `NFR-COM-040` to `NFR-COM-046` | NFR section 12.2 |
+| Wire formats: `_meta.json` v3, helper protocol v1, exported names, saved-script header | `NFR-COM-050` to `NFR-COM-056` | NFR section 12.3, [[core/spec]] |
+| Command-line contract: commands, flags, exit codes, JSON output, streams, environment; server tools | `NFR-COM-060` to `NFR-COM-066` | NFR section 12.4, [[cli/spec]], [[server/spec]] |
+| MSRV against semver | `NFR-COM-070` to `NFR-COM-072` | NFR section 12.5 |
+| Release pipeline and `cargo semver-checks` | `NFR-MNT-040` to `NFR-MNT-049` | NFR section 12.6 |
+
+**Open decisions (Ask First), not decided:** OD-1 rename of the `progressive` names (#680); OD-2 wire-format
+compatibility window; OD-3 MSRV against semver for libraries; OD-4 foreign types in public signatures (#678);
+OD-5 intended public surface of the `cli` and `server` libraries (#675). Options and recommendations are in
+[[NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
 
 ## See Also
 
@@ -366,4 +344,4 @@ resource/prompt-injection hardening.
 - [[cli/spec]] — CLI and the script runtime (sections 16 to 19)
 - [[BRD-mcp-execution-2026-07-27]] — business requirements (reverse-engineered)
 - [[SRS-mcp-execution-2026-07-27]] — formal functional requirements
-- [[NFR-mcp-execution-2026-07-27]] — formal non-functional/quality requirements
+- [[NFR-mcp-execution-2026-07-27]] — formal non-functional/quality requirements, including the 1.0 contract (section 12)

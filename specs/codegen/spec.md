@@ -28,9 +28,10 @@ related:
 >
 > The script-first changes #482, #565, #566, #567, #568, #570, #583, #584 and
 > #587 (parent #556) are implemented and described as built in
-> [[#13. Script-First Capabilities (implemented, #556)]]. Only the retirement
-> of the generated bridge (#575) is still planned
-> ([[#15. Bridge Retirement Requirements (#575)]]).
+> [[#13. Script-First Capabilities (implemented, #556)]]. The retirement of the
+> generated bridge (#575) is implemented too: the bridge is a thin helper-protocol
+> client, described in [[#14. Helper-Protocol Bridge (as built)]] and specified in
+> [[#15. Bridge Retirement Requirements (#575)]].
 
 ## 1. Responsibility
 
@@ -957,7 +958,44 @@ generated file.
 
 **Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
 
-## 16. See Also
+## 16. 1.0 Public API Contract
+
+> [!warning] Target requirement (1.0.0)
+> Binds from the 1.0.0 tag; policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to
+> `NFR-COM-046`). The listing below was derived from `crates/mcp-codegen/src` at 9473243. Items marked **proposal** are
+> not decisions; open decisions are written as Ask First in [[../NFR-mcp-execution-2026-07-27#12.7 Open decisions (Ask First)]].
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-047.3 | THE SYSTEM SHALL expose from `mcp-execution-codegen` only the surface listed in this section, mark `#[non_exhaustive]` every enum and growable struct not listed as closed, and keep every foreign type of its public signatures on the list below | must |
+
+### Public surface
+
+| Item | Kind | Notes |
+|------|------|-------|
+| `ProgressiveGenerator`, `TSCONFIG_JSON`, module `progressive` | generator | The name is **Open decision OD-1**; a rename changes this row, the module, `NFR-COM-060`'s `--progressive-output` flag and the example file |
+| `GeneratedCode`, `GeneratedFile` | output | The file set and the fixed-file rule ([[#15. Bridge Retirement Requirements (#575)]]) |
+| `MAX_GENERATED_FILES`, `MAX_GENERATED_BYTES`, `MAX_CATALOG_BYTES` and the catalog and observed-shape bound constants | bounds | Derived from the introspector bounds |
+| `ObservedShapes`, `CatalogEntry`, `render_catalog`, `jsdoc_tags`, `catalog_hints` | generation helpers | **Proposal:** keep `ObservedShapes`; hide the rest as workspace-internal |
+| `convert_schema`, `ConvertedType`, `RenderStyle` (module `common::ts_types`) | schema converter | One converter (#603) |
+| `ToolDefinition`, `TemplateContext`, `TemplateEngine`, `ToolContext`, `IndexContext`, `ToolSummary`, `ToolCategorization`, `CategoryInfo`, `BridgeContext` | rendering inputs | **Proposal:** the template contexts and `TemplateEngine` are rendering internals, workspace-internal unless a sibling crate needs them; `ToolCategorization` and `CategoryInfo` are used by `mcp-execution-server` and stay public |
+| `to_camel_case`, `to_pascal_case`, `sanitize_ts_identifier` (module `common::typescript`) | helpers | **Proposal:** workspace-internal |
+
+### Foreign types (`NFR-COM-044`)
+
+`serde_json::Value` in `ToolDefinition::input_schema` and `TemplateContext::metadata`; `serde` implementations.
+
+### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
+
+Required: `RenderStyle`, `ResultSource` (until it is removed in favour of the introspector's, `NFR-COM-034`),
+`GeneratedCode`, `GeneratedFile`, `ToolDefinition`, `ToolCategorization`, `CategoryInfo`.
+
+### Owned wire formats
+
+The names exported by a generated tool file and by `_runtime/mcp-bridge.ts` (`NFR-COM-050`); the writer of
+`_meta.json` (the schema is owned by `mcp-execution-core`).
+
+## 17. See Also
 
 - [[../introspector/spec]] — source of `ServerInfo`/`ToolInfo`
 - [[../files/spec]] — consumer of `GeneratedCode`
@@ -966,4 +1004,6 @@ generated file.
 - [[../core/spec]] — registry of `_meta.json` v3 fields, annotation types, provenance digest
 - [[../cli/spec]] — script runner, one-shot call and per-script helper
 - [[#13. Script-First Capabilities (implemented, #556)]] — as-built text of #482, #565, #566, #567, #568, #570, #583, #584, #587
-- [[#15. Bridge Retirement Requirements (#575)]] — the one change still planned in this block
+- [[#15. Bridge Retirement Requirements (#575)]] — requirements of the bridge retirement (implemented)
+- [[#14. Helper-Protocol Bridge (as built)]] — the thin bridge that replaced the connection code
+- [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] — 1.0 API, wire-format, CLI and release contract
