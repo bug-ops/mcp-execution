@@ -166,17 +166,20 @@ whole string, or the "key" half, may itself be the secret.
 ### Shared directories and the metadata reader (#618)
 
 ```rust
-pub struct ServersDir(PathBuf);   // resolve(Option<PathBuf>) -> Result<Self>; server(&ServerId) -> PathBuf; as_path()
-pub struct SkillsDir(PathBuf);    // same shape; skill(&ServerId) -> PathBuf
+// `ServersDir` and `SkillsDir` live in `mcp-execution-core` (`home` module) and are re-exported by `commands::common`:
+// resolve(Option<PathBuf>) -> Result<Self, HomeDirError>; server(&ServerId) / skill(&ServerId) -> PathBuf; as_path()
 pub fn read_generated_metadata(dir: &Path, server: &ServerId) -> Result<ServerMetadata>;
 pub async fn read_generated_metadata_async(dir: PathBuf, server: &ServerId) -> Result<ServerMetadata>;
 ```
 
 - `ServersDir::resolve` and `SkillsDir::resolve` are the only way a command resolves a directory option. `None` gives
-  `~/.claude/servers` or `~/.claude/skills`; `Some` gives the path unchanged, except that a leading `~/` is expanded
-  against the home directory (so `--servers-dir '~/custom'` works when the shell did not expand it). A bare `~` is not
-  expanded (it stays a relative path named `~`). Home is read through `dirs::home_dir()`; when it is needed and unknown
-  the command fails with "Could not determine home directory". `resolve_base_dir` and `read_recorded` no longer exist.
+  `~/.claude/servers` or `~/.claude/skills`; `Some` gives the path unchanged, except that a leading `~` component (`~`, `~/x`) is expanded
+  against the home directory through the core `expand_home` (so `--servers-dir '~/custom'` and `--servers-dir '~'` work
+  when the shell did not expand them; #637). `~user` is not expanded and stays a literal path. Home comes from the core
+  `HomeDir` (core spec, `home` module), never from `dirs`; when it is needed and unknown or relative the command fails
+  with the `HomeDirError` text ("cannot determine the home directory" or "the home directory '<p>' is not an absolute
+  path"). `resolve_base_dir` and `read_recorded` no longer exist. The `mcp.json` path is built by one `mcp_config_path()`
+  helper in `commands::common` (also used by `setup`).
 - Users: `generate` (`--output-dir`, `--progressive-output`), `skill` (`--servers-dir`, the default skills directory),
   `stats` (`--servers-dir`), `scripts list` and `scripts check` (`--skills-dir`; `check` also `--servers-dir`), `drift`
   (the skills directory of `scripts_using`), `run` (`--servers-dir` and the `--save` skill directory), and `setup`. `ServerId` rejects separators and `..`, so `server()` and
@@ -434,7 +437,7 @@ command.
    such a line like any malformed one). A file of any size therefore never fails the command; only an
    unreadable or missing file does (`anyhow` error "failed to read observed shapes from <path>"). The
    flag changes nothing but the result-type hint of tools without an output schema.
-5. `ServersDir::resolve(output_dir)` (section 3, replaces `resolve_base_dir`, #618) — defaults to `~/.claude/servers`; a leading `~/` is expanded.
+5. `ServersDir::resolve(output_dir)` (section 3, replaces `resolve_base_dir`, #618) — defaults to `~/.claude/servers`; a leading `~` component is expanded (a bare `~` included).
 6. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
    size, human-readable `format_size`) **without writing anything to
    disk** — the only place in this workspace that previews generated
@@ -833,18 +836,29 @@ itself.
   script was already cancelled, or a signal arrives during the wrap-up (the status then becomes `Cancelled(signal)`, exit
   130/143). Under the bound, a further signal cuts the wrap-up at once; when the bound expires or the wrap-up is cut, the
   call summary is dropped and the notice `call summary dropped: closing the MCP sessions was cut short` is added.
+  A session that does not answer its close request is abandoned after the introspector's `CLOSE_GRACE` (2 s) and its child
+  killed, so the exit after a signal is bounded by `WRAP_UP_BOUND` plus the closes already in flight (6 hanging HTTP
+  sessions took 12 s unbounded; the #636 test `acceptance_run_wrap_up` asserts exit 130 within 6 s and the notice).
+- Test hook (`test-fixtures` builds only, absent from release binaries, #638): when `MCP_EXECUTION_TEST_READY_FILE` names
+  a path, `run` writes that file after the termination handlers are armed and right before it reads a stdin script, so a
+  test waits for readiness instead of sleeping. A write error is only logged. The fixture server also honours
+  `MCP_FIXTURE_HANG_ON_CLOSE` (HTTP only: a session `DELETE` never answers).
 - Residual (documented in `run --help`): SIGKILL cannot be handled. If the runner is killed that way, the script process
-  it started can keep running. The tsc process tree is also not killed on timeout or cancel (`kill_on_drop` stops only the
-  direct child; #622 item 3 is deferred, follow-up).
+  it started can keep running. On Unix the tsc process group is killed on timeout or cancel (`ProcessTree`, #633, see
+  `--typecheck`), but signals sent to the runner's process group that the runner does not handle never reach tsc: a
+  supervisor's `kill -9 -- -<pgid>`, SIGHUP on terminal close and Ctrl-\ (SIGQUIT), so tsc can outlive the runner in those
+  cases. The descendants of the `node` script are still not killed (`run_script_process` uses `kill_on_drop` on the direct
+  child only; follow-up).
 - Trailer: `[mcp-execution <token>] script_status exit N | signal N | timed out | cancelled by SIGINT|SIGTERM`. Stdout notices (cut, drain
   abandoned, timeout) go to stdout and the stderr cut notice to stderr, all carrying the token. JSON mode prints no
   anchor and no stderr; the envelope holds `token`, `script_status`, `exit_code`, `stdout`/`stderr` (`text`, `bytes`,
-  `truncated`, `spill`) and `notices`. A spill failure degrades to a notice, never a runner failure.
+  `truncated`, `spill`, `spill_complete`) and `notices`. A spill failure degrades to a notice, never a runner failure.
 - Spill notice wording (#625): `<stream> cut at <shown> of <total> bytes; <kept> saved to <path>`, where `<kept>` is `full
   output` when the capture held every byte and `first <N> bytes` when the 8 MiB capture limit cut the stream (the file then
   holds only `N` bytes, `MAX_SPILL_FILE_BYTES` = 8388608), or the notice ends `could not be saved` when no spill file
-  could be written. `--format json` carries the same notice text in `notices`; its stream objects do not state that the
-  spill file holds only the first bytes.
+  could be written. `--format json` carries the same notice text in `notices`; its stream objects state it through
+  `spill_complete` (#635): `null` exactly when `spill` is `null`, `false` when the spill file holds fewer bytes than `bytes`
+  (the capture limit cut the stream), otherwise `true`. The field is always serialized (additive change).
 - Deviations (see the runtime plan): `ScriptStatus::TimedOut` for a runner kill; the wave-1 refusal of unwired flags
   (`reject_unwired_flags`) is gone: `--restrict`, `--typecheck` and `--save` landed in wave 2, `--dry-run` and
   `--policy` in wave 3 (section 18).
@@ -860,7 +874,7 @@ itself.
   "regenerate", nothing on stdout), a symlinked or non-regular sidecar is refused. A missing tool file or catalog is "not
   available", and the total over tool files is then also unavailable. Symlinked or non-regular files count as not
   available. Bounds: `MAX_METADATA_FILE_BYTES`, `MAX_TOOL_COUNT`. One text form for every `--format`. `--servers-dir`
-  expands a leading `~/`. All file measurement for one run happens in a single `spawn_blocking` (#621), not one hop per
+  expands a leading `~`. All file measurement for one run happens in a single `spawn_blocking` (#621), not one hop per
   tool, bounded by `MAX_TOOL_COUNT`.
 - "All tool files" excludes `index.ts` and runtime files; "one tool file" is the mean, rounded down; the output-schema
   share counts `Declared` and `Degraded`.
@@ -963,8 +977,11 @@ it.
   a stream was cut the line `tsc output exceeded 8388608 bytes; remaining diagnostics were not read` follows the bounded
   diagnostics; a `Skipped` outcome is left as is. Each distinct file named by the diagnostics is canonicalized once
   (`distinct_files`, a `HashMap`), not once per diagnostic group. A signal during the type check kills `tsc` (section 16).
-  Residual: the tsc process tree is not killed on timeout or cancel, and the capture tasks are detached rather than aborted
-  (deferred #622 item 3).
+  On Unix `tsc` runs in its own process group (`ProcessTree`, `runtime/exec.rs`, #633): on timeout or cancel the whole group
+  gets SIGKILL through `rustix::process::kill_process_group` while the leader is unreaped, so a recycled pgid is never hit,
+  and nothing is signalled after a normal exit (a descendant that outlives tsc survives). The capture tasks are aborted when
+  the `PipeCapture` is dropped, on every platform. Residual: on Windows only the direct child is killed (`kill_on_drop`; a
+  job object is a follow-up), and the unhandled-signal cases listed in section 16 leave tsc running.
 - Skipped with a `typecheck skipped: <reason>` notice after the anchor when `tsc` is not on PATH ("tsc was not found on
   PATH"), when it does not finish within 60 s, or when the environment is unresolved (below). A real problem in the
   script fails: at most `MAX_DIAGNOSTIC_LINES` 20 and `MAX_DIAGNOSTIC_BYTES` 4096, escaped, to stderr before node
@@ -1023,7 +1040,7 @@ it.
   `--servers-dir` (#619; `CheckArgs` wraps the shared `ScriptsArgs` and the option, `ScriptsAction::Check(CheckArgs)`) and
   reads `<servers-dir>/<server>/_meta.json`, default `~/.claude/servers`, through `read_generated_metadata_async`: a missing
   sidecar is exit 1, a schema-version mismatch exit 2, a symlinked sidecar refused. `--skills-dir` and `--servers-dir` expand
-  a leading `~/` (section 3).
+  a leading `~` (section 3).
 
 ### Run marker, pipe descriptor and Windows binary resolution (D25)
 
@@ -1457,7 +1474,7 @@ saved scripts therefore belong beside `SKILL.md`, and the commands that touch th
 | FR-044.16 | WHEN the check finds a problem THE SYSTEM SHALL exit non-zero with a code distinct from usage and I/O errors | must |
 | FR-044.17 | WHEN the run command is given a save option THE SYSTEM SHALL save exactly the executed text under an explicit script name and header, refuse an existing name unless overwrite is requested, and write nothing when the header or name is invalid | should |
 | FR-044.18 | THE SYSTEM SHALL NOT execute a saved script as a side effect of saving, listing or checking | must |
-| FR-044.19 | WHEN the user checks saved scripts THE SYSTEM SHALL accept `--servers-dir` for the generated servers directory, expand a leading `~/` in every directory option, and exit 2 on a `_meta.json` schema-version mismatch | must |
+| FR-044.19 | WHEN the user checks saved scripts THE SYSTEM SHALL accept `--servers-dir` for the generated servers directory, expand a leading `~` in every directory option, and exit 2 on a `_meta.json` schema-version mismatch | must |
 
 **Constraints.**
 
@@ -1524,15 +1541,14 @@ the exit code values.
 
 One change closes the issues above; their behaviour is recorded in sections 3, 10, 16, 17 and 18 and in the core, skill,
 server and codegen specs. Behaviour changes for users: a symlinked `_meta.json` is refused everywhere; a schema-version
-mismatch in `drift` and `scripts check` exits 2; a leading `~/` is expanded in every directory option; a `run` stopped by
+mismatch in `drift` and `scripts check` exits 2; a leading `~` is expanded in every directory option; a `run` stopped by
 SIGINT or SIGTERM exits 130 or 143.
 
 Deferred or excluded:
-- #622 item 3 (kill the whole `tsc` process tree on timeout or cancel) is deferred to a follow-up; items 1, 2 and 4 are
-  built (item 4 needed no change, the code already used `tokio::fs::metadata`).
+- #622 item 3 (kill the whole `tsc` process tree on timeout or cancel) was built later for Unix only (#633); the Windows
+  half is a follow-up. Items 1, 2 and 4 are built (item 4 needed no change, the code already used `tokio::fs::metadata`).
 - #615 and #475 are out of scope and stay open.
-- `mcp-server` still builds `~/.claude/{servers,skills}` inline (follow-up, P4); `ServersDir`/`SkillsDir` live in `mcp-cli`.
-- Not built: a bare `~` is not expanded (it is a relative path named `~`).
+- `ServersDir`/`SkillsDir` moved to `mcp-execution-core` and `mcp-server` uses them (#634, #637); a bare `~` is now expanded.
 
 ## 20. See Also
 

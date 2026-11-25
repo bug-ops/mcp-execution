@@ -65,8 +65,8 @@ pub struct GeneratorService {
     state: Arc<StateManager>,
     exports: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
     clock: Arc<dyn Clock>,
-    skills_base_dir: Option<PathBuf>,  // test-only override; production = ~/.claude/skills
-    servers_base_dir: Option<PathBuf>, // test-only override; production = ~/.claude/servers
+    skills_base_dir: Option<PathBuf>,  // test-only override; production = core `SkillsDir::resolve(None)` (~/.claude/skills)
+    servers_base_dir: Option<PathBuf>, // test-only override; production = core `ServersDir::resolve(None)` (~/.claude/servers)
     tool_router: ToolRouter<Self>,
 }
 impl GeneratorService { pub fn new() -> Self; } // Default too
@@ -333,12 +333,22 @@ FR-032.10), and the subdirectory's mtime as `generated_at`. `_`-prefixed
 `_` (`_1st_tool.ts`), and the runtime files live under `_runtime/`, a directory,
 so they never reach this filter (issue #598).
 
+### Default directories (#634)
+
+The production defaults come from the core `ServersDir`/`SkillsDir` resolvers (core spec, `home` module), through
+`servers_base_dir()` / `skills_base_dir()`, which return `Result<PathBuf, McpError>`. When the home directory is unknown or
+relative the tool fails with an MCP internal error `cannot resolve the default directory: <HomeDirError text>` and writes
+nothing; there is no `./.claude` fallback. Known gaps (follow-up hardening): the `NotAbsolute` text echoes the relative
+`HOME` value, and "Server directory not found" prints the expanded home path unsanitized.
+
 ### `generate_skill`
 
 Thin MCP-tool wrapper around `mcp_execution_skill::scan_tools_directory` +
 `build_skill_context`, observing cancellation via the same
 `tokio::select! { biased; ... }` pattern as `introspect_server` (the scan
-walks every tool file, so a large directory can take a while). A missing
+walks every tool file, so a large directory can take a while). `params.servers_dir` is resolved through the core
+`ServersDir::resolve`, so a leading `~` is expanded (approved deviation from the issue, user decision 2026-11-25; the tool
+only reads, and an absolute path was already accepted unconfined). A missing
 server directory or scan failure (`MissingMetadata`/`UnsupportedSchema`/
 `StaleMetadata`) is reported as `invalid_params` (caller's fault: "run
 `generate` first"), not `internal_error`. Non-fatal drift warnings from the
