@@ -584,6 +584,28 @@ impl ToolDigest {
     }
 }
 
+/// The digest of one discovered tool, recorded so a later comparison can name which tool
+/// changed on the server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ToolEntryDigest(String);
+
+impl TryFrom<String> for ToolEntryDigest {
+    type Error = DigestFormatError;
+
+    fn try_from(_value: String) -> Result<Self, Self::Error> {
+        todo!("#688")
+    }
+}
+
+impl ToolEntryDigest {
+    /// Computes the digest of a single tool entry.
+    #[must_use]
+    pub fn compute(_entry: &ToolDigestEntry<'_>) -> Self {
+        todo!("#688")
+    }
+}
+
 /// Hashes a single [`ToolDigestEntry`] into its own 32-byte digest, before the aggregate
 /// [`ToolDigest::compute`] sorts and re-hashes every entry's digest together.
 fn hash_tool_entry(entry: &ToolDigestEntry<'_>) -> [u8; 32] {

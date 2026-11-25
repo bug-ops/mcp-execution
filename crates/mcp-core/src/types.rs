@@ -241,6 +241,10 @@ pub enum ServerIdSlugError {
     /// hyphen.
     #[error("server_id must contain only lowercase letters, digits, and hyphens")]
     InvalidCharacters,
+
+    /// The candidate is a Windows reserved device name, which cannot name a directory.
+    #[error("server_id must not be a Windows reserved device name")]
+    ReservedName,
 }
 
 /// Checks the slug rule `[a-z0-9-]{1,64}`; the single place the rule lives.
