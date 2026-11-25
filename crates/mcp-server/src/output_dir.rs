@@ -311,6 +311,7 @@ pub async fn resolve_output_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -374,7 +375,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", Some(Path::new(absolute)))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::AbsolutePath { .. }));
+        assert_matches!(err, OutputDirError::AbsolutePath { .. });
         assert!(!base.path().join("my-server").exists());
     }
 
@@ -384,7 +385,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", Some(Path::new("../../etc")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::ParentTraversal { .. }));
+        assert_matches!(err, OutputDirError::ParentTraversal { .. });
         assert!(!base.path().join("my-server").exists());
     }
 
@@ -401,14 +402,14 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", Some(Path::new(r"\pwn\evil")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::Escape { .. }));
+        assert_matches!(err, OutputDirError::Escape { .. });
     }
 
     #[tokio::test]
     async fn empty_server_id_is_rejected() {
         let base = TempDir::new().unwrap();
         let err = resolve_output_dir(base.path(), "", None).await.unwrap_err();
-        assert!(matches!(err, OutputDirError::InvalidServerId { .. }));
+        assert_matches!(err, OutputDirError::InvalidServerId { .. });
     }
 
     /// When both `server_id` and `output_dir` are invalid, `InvalidServerId` must win - matching
@@ -424,7 +425,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "", Some(Path::new(absolute)))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::InvalidServerId { .. }));
+        assert_matches!(err, OutputDirError::InvalidServerId { .. });
     }
 
     #[tokio::test]
@@ -437,7 +438,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "../other-server", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::InvalidServerId { .. }));
+        assert_matches!(err, OutputDirError::InvalidServerId { .. });
     }
 
     #[tokio::test]
@@ -446,7 +447,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "a/b", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::InvalidServerId { .. }));
+        assert_matches!(err, OutputDirError::InvalidServerId { .. });
     }
 
     /// #401 regression: a `server_id` that is a valid, path-segment-safe `ServerId` but not
@@ -461,13 +462,13 @@ mod tests {
             .unwrap_err();
         // Asserts on the specific reason, not just the outer variant, so a regression that
         // rejects "My-Server" for the wrong cause (or with stale wording) is still caught.
-        assert!(matches!(
+        assert_matches!(
             err,
             OutputDirError::InvalidServerId {
                 source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
                 ..
             }
-        ));
+        );
     }
 
     /// #401 regression: same as above, for an underscore (also a valid `ServerId` character but
@@ -478,13 +479,13 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my_server", None)
             .await
             .unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             OutputDirError::InvalidServerId {
                 source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
                 ..
             }
-        ));
+        );
     }
 
     /// Issue #450: printable-but-disallowed characters (`&`, `<`, `>`) in a rejected `server_id`
@@ -560,7 +561,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::ServerDirIsSymlink { .. }));
+        assert_matches!(err, OutputDirError::ServerDirIsSymlink { .. });
     }
 
     /// #217-equivalent regression: a symlink at `server_id`'s own directory pointing at a
@@ -579,7 +580,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "server-b", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::ServerDirIsSymlink { .. }));
+        assert_matches!(err, OutputDirError::ServerDirIsSymlink { .. });
     }
 
     #[tokio::test]
@@ -593,7 +594,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::NotADirectory { .. }));
+        assert_matches!(err, OutputDirError::NotADirectory { .. });
     }
 
     #[tokio::test]
@@ -610,7 +611,7 @@ mod tests {
             .unwrap_err();
         // `canonicalize` fails with `ELOOP`, surfaced as `Io` rather than `Escape` since the
         // loop is detected before any confinement comparison is possible.
-        assert!(matches!(err, OutputDirError::Io(_)));
+        assert_matches!(err, OutputDirError::Io(_));
     }
 
     #[tokio::test]
@@ -626,7 +627,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", Some(Path::new("escape/custom")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::Escape { .. }));
+        assert_matches!(err, OutputDirError::Escape { .. });
         assert!(!outside.path().join("custom").exists());
     }
 
@@ -644,7 +645,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", Some(Path::new("custom")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::Escape { .. }));
+        assert_matches!(err, OutputDirError::Escape { .. });
         assert!(!dangling_target.exists());
     }
 
@@ -664,7 +665,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, OutputDirError::NotADirectory { .. }));
+        assert_matches!(err, OutputDirError::NotADirectory { .. });
     }
 
     #[tokio::test]
@@ -679,7 +680,7 @@ mod tests {
         let err = resolve_output_dir(base.path(), "my-server", Some(Path::new("custom")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputDirError::NotADirectory { .. }));
+        assert_matches!(err, OutputDirError::NotADirectory { .. });
     }
 
     /// A rejection partway through a multi-component `output_dir` does not roll back
@@ -716,7 +717,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, OutputDirError::Escape { .. }));
+        assert_matches!(err, OutputDirError::Escape { .. });
 
         // `kept`, created by the earlier call, is untouched by this call's rejection...
         assert!(kept_dir.is_dir());

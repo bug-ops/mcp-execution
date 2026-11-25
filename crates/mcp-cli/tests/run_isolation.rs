@@ -1,14 +1,12 @@
 //! Under `run --dry-run` a bridge in a worker thread or in a child node process has no helper
 //! channel. It must refuse to call instead of starting a helper of its own, because that helper
 //! would have neither the dry-run policy nor the journal and the write would really execute.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 
-use common::{Out, Sandbox, require_node};
+use common::{Out, Sandbox, file_url, require_node};
 
 fn prepared(test: &str) -> Option<Sandbox> {
     if !require_node(test) {
@@ -45,7 +43,7 @@ fn a_worker_thread_cannot_call_a_write_tool_under_dry_run() {
     let Some(sb) = prepared("a_worker_thread_cannot_call_a_write_tool_under_dry_run") else {
         return;
     };
-    let index = format!("file://{}/fixture/index.ts", sb.servers.display());
+    let index = file_url(&sb.servers.join("fixture").join("index.ts"));
     let body = format!(
         "import {{ Worker }} from 'node:worker_threads';\n\
          const code = `const m = await import({index:?});\n\

@@ -235,6 +235,12 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 > registries/git sources denied, only `crates.io` allowed as a dependency
 > source, and security advisories scanned (RUSTSEC/CVE) — enforced in CI
 > (`security` job, `EmbarkStudios/cargo-deny-action`).
+> Dependabot version updates for `cargo` and `github-actions` carry a 7 day
+> `cooldown` (`.github/dependabot.yml`, #644); security updates are exempt.
+> Cargo's own `registry.global-min-publish-age` is deliberately **not** set
+> (user decision 2026-11-25): it blocks `cargo update --precise` on a fresh
+> release and makes cargo 1.98, the current MSRV, warn on every command.
+> Revisit when the MSRV reaches 1.100.
 
 ## 5. Usability
 
@@ -323,7 +329,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 |----|------------|---------|
 | NFR-POR-010 | Installation methods | `cargo install mcp-execution-cli` (crates.io, recommended); pre-built release binaries (GitHub Releases, per-platform archives); build from source (`cargo install --path crates/mcp-cli`); individual library crates via `cargo add` |
 | NFR-POR-011 | Configuration management | A single JSON file, `~/.claude/mcp.json`, read directly from the filesystem, plus one narrow environment-variable exception: `MCP_EXECUTION_LOG_FORMAT` (issue #399) selects diagnostic log format (`text`/`json`) for `mcp-execution-cli` and the `mcp-execution` server binary — an operational logging-output switch, not a secrets-manager-style configuration path, with no secret-shaped value ever accepted or echoed. No other environment-variable-based or secrets-manager-based configuration path exists for this project's *own* configuration (as opposed to the *target* MCP servers it introspects, whose env vars it explicitly validates — see [[#4.1 Confidentiality]]) |
-| NFR-POR-012 | MSRV policy | Rust 1.91 minimum, enforced by a dedicated CI job (`msrv`); README states MSRV increases are treated as minor version bumps |
+| NFR-POR-012 | MSRV policy | Rust 1.98 minimum, enforced by a dedicated CI job (`msrv`); rolling policy: MSRV = stable minus two, raised in a minor release (README states it) |
 
 ## 9. Verification Matrix
 
@@ -335,7 +341,7 @@ project controls); `MAX_CONCURRENT_REQUESTS` (8, server binary);
 | NFR-SEC-021 (advisories/licenses/sources) | `cargo-deny` | CI (`security` job) | Every push/PR |
 | NFR-MNT-010–014 | `cargo nextest run`, `cargo test --doc` | CI | Every push/PR |
 | NFR-MNT-011 (coverage) | `cargo llvm-cov nextest` → Codecov upload | CI (`coverage` job, Linux only) | Every push/PR; **not gating** (`fail_ci_if_error: false`, no threshold check) |
-| NFR-POR-012 (MSRV) | `cargo check`/`build` pinned to Rust 1.91 | CI (`msrv` job) | Every push/PR |
+| NFR-POR-012 (MSRV) | `cargo check`/`build` pinned to Rust 1.98 | CI (`msrv` job) | Every push/PR |
 | NFR-PERF-030 to NFR-PERF-032, NFR-SEC-050 to NFR-SEC-055, NFR-MNT-030, NFR-COM-020, NFR-POR-020 | Planned, not yet implemented | Not applicable until the owning capability lands | Not applicable |
 
 ## 10. Open Questions

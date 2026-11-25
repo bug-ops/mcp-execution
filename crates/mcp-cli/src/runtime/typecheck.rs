@@ -19,7 +19,7 @@ use mcp_execution_core::write_confined_file;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::runtime::exec::{DRAIN_GRACE, Drained, PipeCapture, drain};
+use crate::runtime::exec::{DRAIN_GRACE, Drained, PipeCapture, ProcessTree, drain};
 use crate::runtime::path_lookup::find_on_path;
 use crate::runtime::spill::MAX_SPILL_FILE_BYTES;
 
@@ -81,10 +81,11 @@ const NODE_BUILTINS: [&str; 24] = [
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::runtime::typecheck::TypecheckOutcome;
 ///
 /// let outcome = TypecheckOutcome::Skipped { reason: "tsc not found".to_string() };
-/// assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+/// assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypecheckOutcome {
@@ -154,29 +155,51 @@ pub async fn typecheck(
         .await
         .context("cannot write the type-check configuration")?;
 
-    let mut child = Command::new(tsc)
+    let mut command = Command::new(tsc);
+    command
         .arg("-p")
         .arg(&tsconfig)
         .args(["--noEmit", "--pretty", "false"])
-        .current_dir(run_dir)
+        .current_dir(run_dir);
+    let (success, drained) = match run_tsc(command, TYPECHECK_TIMEOUT).await? {
+        TscRun::Finished { success, drained } => (success, drained),
+        TscRun::TimedOut => return Ok(skipped("tsc did not finish within 60 seconds")),
+    };
+    let origin = Origin::new(servers_dir, run_dir).await;
+    Ok(conclude(success, &drained, &origin).await)
+}
+
+/// How a `tsc` process ended.
+#[derive(Debug)]
+enum TscRun {
+    Finished { success: bool, drained: Drained },
+    TimedOut,
+}
+
+/// Runs `command` as `tsc` within `timeout`. On timeout the whole process tree is killed and
+/// the output readers are aborted; dropping this future does the same.
+async fn run_tsc(mut command: Command, timeout: Duration) -> Result<TscRun> {
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .context("cannot run tsc")?;
+        .stderr(Stdio::piped());
+    let mut tree = ProcessTree::spawn(&mut command).context("cannot run tsc")?;
+    let child = tree.child_mut();
     let stdout = child.stdout.take().context("tsc stdout was not captured")?;
     let stderr = child.stderr.take().context("tsc stderr was not captured")?;
     let out = PipeCapture::start(stdout);
     let err = PipeCapture::start(stderr);
 
-    let Ok(status) = tokio::time::timeout(TYPECHECK_TIMEOUT, child.wait()).await else {
-        return Ok(skipped("tsc did not finish within 60 seconds"));
+    let Ok(status) = tokio::time::timeout(timeout, tree.child_mut().wait()).await else {
+        tree.kill();
+        return Ok(TscRun::TimedOut);
     };
     let status = status.context("cannot wait for tsc")?;
     let drained = drain(out, err, DRAIN_GRACE).await;
-    let origin = Origin::new(servers_dir, run_dir).await;
-    Ok(conclude(status.success(), &drained, &origin).await)
+    Ok(TscRun::Finished {
+        success: status.success(),
+        drained,
+    })
 }
 
 /// Turns a finished `tsc` run into an outcome. Exit 0 is a pass even when a stream was cut; a
@@ -476,6 +499,7 @@ fn bound_diagnostics(lines: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     fn origin() -> Origin {
         Origin {
@@ -489,17 +513,17 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_in_the_generated_sdk_never_block_and_the_run_is_skipped() {
         let outcome = classify_diagnostics(SDK_IMPLICIT_ANY, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
     }
 
     #[tokio::test]
     async fn a_location_less_error_other_than_missing_node_types_is_a_real_failure() {
         let config_error = "error TS6053: File '/x/missing.ts' not found.";
         let outcome = classify_diagnostics(config_error, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Failed { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Failed { .. });
         let node_types = "error TS2688: Cannot find type definition file for 'node'.";
         let outcome = classify_diagnostics(node_types, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
     }
 
     #[tokio::test]
@@ -518,11 +542,11 @@ mod tests {
     async fn implicit_any_in_the_script_is_only_noise_while_types_are_unresolved() {
         let implicit = "s.ts(4,20): error TS7006: Parameter 'd' implicitly has an 'any' type.";
         let alone = classify_diagnostics(implicit, &origin()).await;
-        assert!(matches!(alone, TypecheckOutcome::Failed { .. }));
+        assert_matches!(alone, TypecheckOutcome::Failed { .. });
         let with_noise =
             format!("s.ts(1,1): error TS2580: Cannot find name 'process'.\n{implicit}");
         let outcome = classify_diagnostics(&with_noise, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
     }
 
     #[test]
@@ -556,10 +580,10 @@ mod tests {
             "{NODE_FS_MISSING}\ns.ts(2,1): error TS2580: Cannot find name 'process'. Do you need to \
              install type definitions for node?\n"
         );
-        assert!(matches!(
+        assert_matches!(
             classify_diagnostics(&text, &origin()).await,
             TypecheckOutcome::Skipped { .. }
-        ));
+        );
     }
 
     #[tokio::test]
@@ -578,14 +602,14 @@ mod tests {
     #[tokio::test]
     async fn a_real_type_error_fails_and_unparsable_output_fails_too() {
         let text = "s.ts(2,7): error TS2322: Type 'string' is not assignable to type 'number'.";
-        assert!(matches!(
+        assert_matches!(
             classify_diagnostics(text, &origin()).await,
             TypecheckOutcome::Failed { .. }
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             classify_diagnostics("tsc: crashed", &origin()).await,
             TypecheckOutcome::Failed { .. }
-        ));
+        );
     }
 
     #[test]
@@ -651,10 +675,10 @@ mod tests {
     async fn node_type_noise_is_hidden_next_to_a_real_error_and_skipped_alone() {
         let noise = "error TS2688: Cannot find type definition file for 'node'.\n\
                      g.ts(1,1): error TS2580: Cannot find name 'process'.";
-        assert!(matches!(
+        assert_matches!(
             classify_diagnostics(noise, &origin()).await,
             TypecheckOutcome::Skipped { .. }
-        ));
+        );
         let mixed = format!(
             "{noise}\ns.ts(2,7): error TS2322: Type 'string' is not assignable to type 'number'.\n  \
              detail line"
@@ -716,5 +740,34 @@ mod tests {
             panic!("expected a failure");
         };
         assert!(!diagnostics.contains("exceeded"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timed_out_tsc_takes_its_descendants_with_it() {
+        use crate::runtime::exec::tree_test_support::{
+            assert_gone_soon, recorded_pid, sleeping_grandchild,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("grandchild.pid");
+        let run = run_tsc(sleeping_grandchild(&pid_file), Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_matches!(run, TscRun::TimedOut);
+        assert_gone_soon(recorded_pid(&pid_file).await).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_finished_tsc_reports_its_exit_and_output() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo diagnostics; exit 2"]);
+        let run = run_tsc(command, Duration::from_secs(30)).await.unwrap();
+        let TscRun::Finished { success, drained } = run else {
+            panic!("tsc should have finished: {run:?}");
+        };
+        assert!(!success);
+        assert_eq!(drained.stdout.bytes, b"diagnostics\n");
     }
 }

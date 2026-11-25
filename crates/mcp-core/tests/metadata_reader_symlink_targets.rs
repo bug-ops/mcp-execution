@@ -11,6 +11,7 @@
     reason = "test, bench and example code may panic on failure"
 )]
 
+use std::assert_matches;
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -44,10 +45,7 @@ fn read_server_metadata_refuses_a_symlink_to_a_fifo_without_blocking() {
 
     let outcome = read_promptly(dir.path());
 
-    assert!(
-        matches!(outcome, Err(MetadataReadError::Link)),
-        "{outcome:?}"
-    );
+    assert_matches!(outcome, Err(MetadataReadError::Link), "{outcome:?}");
 }
 
 #[test]
@@ -57,10 +55,7 @@ fn read_server_metadata_refuses_a_symlink_to_a_device_without_blocking() {
 
     let outcome = read_promptly(dir.path());
 
-    assert!(
-        matches!(outcome, Err(MetadataReadError::Link)),
-        "{outcome:?}"
-    );
+    assert_matches!(outcome, Err(MetadataReadError::Link), "{outcome:?}");
 }
 
 #[test]
@@ -74,8 +69,5 @@ fn read_server_metadata_reports_a_dangling_symlink_as_a_link_not_as_missing() {
 
     let outcome = read_promptly(dir.path());
 
-    assert!(
-        matches!(outcome, Err(MetadataReadError::Link)),
-        "{outcome:?}"
-    );
+    assert_matches!(outcome, Err(MetadataReadError::Link), "{outcome:?}");
 }

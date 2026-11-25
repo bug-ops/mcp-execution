@@ -640,6 +640,7 @@ mod tests {
     use rmcp::model::NumberOrString;
     use rmcp::service::TxJsonRpcMessage;
     use rmcp::transport::async_rw::{JsonRpcMessageCodec, JsonRpcMessageCodecError};
+    use std::assert_matches;
     use std::io;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -1387,8 +1388,9 @@ mod tests {
         let notification = next_or_timeout(&mut stream)
             .await
             .expect("the notification behind the unadmitted request must still be decoded");
-        assert!(
-            matches!(notification, JsonRpcMessage::Notification(_)),
+        assert_matches!(
+            notification,
+            JsonRpcMessage::Notification(_),
             "expected a notification to bypass the request stuck waiting for a permit"
         );
     }

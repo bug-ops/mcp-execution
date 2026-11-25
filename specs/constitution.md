@@ -43,7 +43,7 @@ related:
 
 ## II. Technology Stack
 
-- Language: Rust, edition 2024, MSRV 1.91 (`Cargo.toml` `workspace.package`).
+- Language: Rust, edition 2024, MSRV 1.98 (`Cargo.toml` `workspace.package`; rolling policy: stable minus two, raised in a minor release).
 - Async runtime: `tokio` throughout.
 - MCP protocol: `rmcp` (official Rust SDK), both as client (`mcp-introspector`)
   and server (`mcp-server`).

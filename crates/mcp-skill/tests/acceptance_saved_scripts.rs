@@ -9,6 +9,7 @@
     reason = "test, bench and example code may panic on failure"
 )]
 
+use std::assert_matches;
 use std::path::Path;
 
 use mcp_execution_core::metadata::{
@@ -41,9 +42,7 @@ fn scripts_dir(skill: &Path) -> std::path::PathBuf {
 }
 
 fn files_in(dir: &Path) -> Vec<std::path::PathBuf> {
-    std::fs::read_dir(dir)
-        .map(|entries| entries.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default()
+    std::fs::read_dir(dir).map_or_default(|entries| entries.flatten().map(|e| e.path()).collect())
 }
 
 fn metadata_with(tools: &[&str]) -> ServerMetadata {
@@ -88,15 +87,16 @@ fn recipe_name_accepts_a_slug_and_rejects_separators_case_and_unbounded_length()
         ".hidden",
         "name.ts",
     ] {
-        assert!(
-            matches!(RecipeName::new(bad), Err(ScriptError::InvalidName)),
+        assert_matches!(
+            RecipeName::new(bad),
+            Err(ScriptError::InvalidName),
             "{bad:?} must be rejected"
         );
     }
-    assert!(matches!(
+    assert_matches!(
         RecipeName::new(&"a".repeat(1000)),
         Err(ScriptError::InvalidName)
-    ));
+    );
 }
 
 #[tokio::test]
@@ -128,8 +128,9 @@ async fn save_with_an_invalid_header_writes_nothing() {
     for text in bad_texts {
         let result = save(skill.path(), &recipe("triage"), &text, Overwrite::Refuse).await;
 
-        assert!(
-            matches!(result, Err(ScriptError::InvalidHeader { .. })),
+        assert_matches!(
+            result,
+            Err(ScriptError::InvalidHeader { .. }),
             "{text:?} -> {result:?}"
         );
     }
@@ -146,10 +147,7 @@ async fn save_refuses_a_header_name_that_differs_from_the_recipe_name() {
 
     let result = save(skill.path(), &recipe("file-name"), &text, Overwrite::Refuse).await;
 
-    assert!(
-        matches!(result, Err(ScriptError::InvalidHeader { .. })),
-        "{result:?}"
-    );
+    assert_matches!(result, Err(ScriptError::InvalidHeader { .. }), "{result:?}");
     assert_eq!(
         files_in(&scripts_dir(skill.path())),
         Vec::<std::path::PathBuf>::new()
@@ -167,8 +165,9 @@ async fn save_refuses_an_existing_name_unless_replace_is_requested() {
 
     let refused = save(skill.path(), &recipe("again"), &second, Overwrite::Refuse).await;
 
-    assert!(
-        matches!(refused, Err(ScriptError::AlreadyExists { .. })),
+    assert_matches!(
+        refused,
+        Err(ScriptError::AlreadyExists { .. }),
         "{refused:?}"
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
@@ -185,8 +184,9 @@ async fn save_rejects_a_script_over_the_size_bound_and_stops_at_a_script_count_b
 
     let too_large = save(skill.path(), &recipe("huge"), &huge, Overwrite::Refuse).await;
 
-    assert!(
-        matches!(too_large, Err(ScriptError::TooLarge { .. })),
+    assert_matches!(
+        too_large,
+        Err(ScriptError::TooLarge { .. }),
         "{too_large:?}"
     );
     let mut saved = 0_usize;
@@ -221,10 +221,7 @@ async fn save_rejects_a_symlinked_scripts_directory() {
 
     let result = save(skill.path(), &recipe("escape"), &text, Overwrite::Refuse).await;
 
-    assert!(
-        matches!(result, Err(ScriptError::NotConfined)),
-        "{result:?}"
-    );
+    assert_matches!(result, Err(ScriptError::NotConfined), "{result:?}");
     assert!(
         files_in(outside.path()).is_empty(),
         "nothing may land outside the skill"

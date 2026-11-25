@@ -1408,6 +1408,7 @@ dependencies = [
  "mcp-execution-introspector",
  "mcp-execution-skill",
  "rmcp",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -1440,7 +1441,6 @@ name = "mcp-execution-core"
 version = "0.11.0"
 dependencies = [
  "chrono",
- "dirs",
  "libc",
  "serde",
  "serde_json",
@@ -1460,7 +1460,6 @@ version = "0.11.0"
 dependencies = [
  "criterion",
  "dhat",
- "dirs",
  "mcp-execution-codegen",
  "mcp-execution-core",
  "mcp-execution-introspector",
@@ -1495,7 +1494,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "dirs",
  "futures-util",
  "mcp-execution-codegen",
  "mcp-execution-core",

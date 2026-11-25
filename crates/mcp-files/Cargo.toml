@@ -17,7 +17,6 @@ workspace = true
 parallel = ["dep:rayon"]
 
 [dependencies]
-dirs.workspace = true
 mcp-execution-codegen.workspace = true
 mcp-execution-core.workspace = true
 rayon = { workspace = true, optional = true }

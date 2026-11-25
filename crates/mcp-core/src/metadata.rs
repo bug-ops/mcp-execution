@@ -392,13 +392,14 @@ pub enum MetadataReadError {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::metadata::{MetadataReadError, read_server_metadata};
 ///
 /// let dir = std::env::temp_dir().join("mcp-execution-doc-absent-server");
-/// assert!(matches!(
+/// assert_matches!(
 ///     read_server_metadata(&dir),
 ///     Err(MetadataReadError::NotFound)
-/// ));
+/// );
 /// ```
 pub fn read_server_metadata(dir: &Path) -> Result<ServerMetadata, MetadataReadError> {
     let file = open_regular_sidecar(&dir.join(METADATA_FILE_NAME))?;
@@ -459,7 +460,9 @@ pub async fn read_server_metadata_async(dir: PathBuf) -> Result<ServerMetadata, 
 /// Opens `path` for reading and proves the opened file is a regular, non-symlink file.
 ///
 /// On Unix the open carries `O_NOFOLLOW | O_NONBLOCK` and the type check is an `fstat` on the
-/// opened file, so there is no window between check and open and a FIFO never blocks.
+/// opened file, so there is no window between check and open and a FIFO never blocks. On Windows
+/// the open carries `FILE_FLAG_OPEN_REPARSE_POINT` and the opened handle's attributes are checked,
+/// so every reparse point is rejected.
 fn open_regular_sidecar(path: &Path) -> Result<File, MetadataReadError> {
     let file = open_no_follow(path)?;
     if file.metadata().map_err(read_error)?.is_file() {
@@ -486,18 +489,31 @@ fn open_no_follow(path: &Path) -> Result<File, MetadataReadError> {
         })
 }
 
-// Windows has no equivalent open flag here, so the type is checked before the open; a swap
-// between the two calls is not prevented.
-#[cfg(not(unix))]
+// FILE_FLAG_OPEN_REPARSE_POINT opens a link itself instead of its target; the handle is then
+// judged by its own attributes, so there is no check-then-open window.
+#[cfg(windows)]
 fn open_no_follow(path: &Path) -> Result<File, MetadataReadError> {
-    let link_meta = std::fs::symlink_metadata(path).map_err(read_error)?;
-    if link_meta.file_type().is_symlink() {
-        return Err(MetadataReadError::Link);
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    // Lets a directory named like the sidecar open, so it is reported as `NotRegularFile`
+    // instead of an access error.
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(read_error)?;
+    let metadata = file.metadata().map_err(read_error)?;
+    if metadata.file_type().is_symlink() {
+        Err(MetadataReadError::Link)
+    } else if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        Err(MetadataReadError::NotRegularFile)
+    } else {
+        Ok(file)
     }
-    if !link_meta.is_file() {
-        return Err(MetadataReadError::NotRegularFile);
-    }
-    File::open(path).map_err(read_error)
 }
 
 fn read_error(error: io::Error) -> MetadataReadError {

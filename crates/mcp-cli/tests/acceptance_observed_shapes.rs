@@ -102,15 +102,16 @@ fn run_generate(root: &Path, observed: &Path) -> (Output, String) {
 
 fn root() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().canonicalize().unwrap();
+    let canonical = dir.path().canonicalize().unwrap();
+    // Node cannot resolve a Windows verbatim path (`\\?\C:\...`) given as a script.
+    let path = canonical
+        .to_str()
+        .and_then(|s| s.strip_prefix(r"\\?\"))
+        .map_or_else(|| canonical.clone(), std::path::PathBuf::from);
     (dir, path)
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API), so this end-to-end test cannot redirect the home directory there; tracked in #604"
-)]
 fn generate_observed_shapes_reads_the_tail_of_a_file_over_4_mib_and_keeps_the_newest_shape() {
     let name =
         "generate_observed_shapes_reads_the_tail_of_a_file_over_4_mib_and_keeps_the_newest_shape";
@@ -142,10 +143,6 @@ fn generate_observed_shapes_reads_the_tail_of_a_file_over_4_mib_and_keeps_the_ne
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API), so this end-to-end test cannot redirect the home directory there; tracked in #604"
-)]
 fn generate_observed_shapes_ignores_lines_that_lie_before_the_last_4_mib() {
     let name = "generate_observed_shapes_ignores_lines_that_lie_before_the_last_4_mib";
     if !node_available(name) {

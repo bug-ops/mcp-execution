@@ -222,6 +222,7 @@ async fn print_within_budget(text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn arguments_default_to_an_empty_object() {
@@ -244,10 +245,10 @@ mod tests {
     #[test]
     fn an_invalid_tool_name_is_invalid_input() {
         let error = parse_call(&["bad name!".to_string()]).unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             error.downcast_ref::<CoreError>(),
             Some(CoreError::InvalidArgument(_))
-        ));
+        );
     }
 
     #[test]

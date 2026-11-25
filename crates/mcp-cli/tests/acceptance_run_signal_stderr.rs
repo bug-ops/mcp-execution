@@ -7,7 +7,7 @@
 //! open and closed stderr cases are controls that already pass; the broken-pipe cases reproduce
 //! the hang.
 //!
-//! Unix only: signals, process groups and `mcp.json` redirection (#604).
+//! Unix only: signals and process groups.
 
 #![cfg(all(feature = "test-fixtures", unix))]
 #![expect(
@@ -25,8 +25,6 @@ use common::{Sandbox, require_node};
 
 /// How long a signalled runner may take to exit.
 const EXIT_WITHIN: Duration = Duration::from_secs(5);
-/// Time for the runner to install its handlers and block on the stdin read.
-const SETTLE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug)]
 enum Stderr {
@@ -52,7 +50,7 @@ impl Drop for Runner {
     }
 }
 
-fn start(sb: &Sandbox, stderr: Stderr) -> Runner {
+fn start(sb: &Sandbox, stderr: Stderr) -> (Runner, common::ReadyFile) {
     let servers = sb.servers.display().to_string();
     let mut cmd = match stderr {
         Stderr::Closed => {
@@ -63,6 +61,7 @@ fn start(sb: &Sandbox, stderr: Stderr) -> Runner {
         }
         Stderr::Open | Stderr::BrokenPipe => sb.command(),
     };
+    let ready = sb.ready_file(&mut cmd);
     cmd.args(["run", "-", "--servers-dir", &servers])
         .process_group(0)
         .stdin(Stdio::piped())
@@ -82,10 +81,13 @@ fn start(sb: &Sandbox, stderr: Stderr) -> Runner {
         Stderr::Closed => {}
     }
     let stdin = child.stdin.take().unwrap();
-    Runner {
-        child,
-        _stdin: stdin,
-    }
+    (
+        Runner {
+            child,
+            _stdin: stdin,
+        },
+        ready,
+    )
 }
 
 fn is_alive(pid: u32) -> bool {
@@ -103,8 +105,8 @@ fn assert_cancelled(test: &str, stderr: Stderr, signal: &str, expected: i32) {
         return;
     }
     let sb = Sandbox::new();
-    let mut runner = start(&sb, stderr);
-    std::thread::sleep(SETTLE);
+    let (mut runner, ready) = start(&sb, stderr);
+    ready.wait();
     let pid = runner.child.id();
 
     let status = Command::new("sh")

@@ -15,6 +15,7 @@ use mcp_execution_core::metadata::{
 use mcp_execution_core::provenance::GenerationProvenance;
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_skill::{ScanError, scan_tools_directory};
+use std::assert_matches;
 
 fn sidecar_json() -> String {
     let config = ServerConfig::builder()
@@ -58,10 +59,7 @@ async fn scan_refuses_a_symlinked_sidecar_that_stays_inside_the_directory() {
 
     let err = scan_tools_directory(dir.path()).await.unwrap_err();
 
-    assert!(
-        matches!(err, ScanError::MetadataEscapesDirectory { .. }),
-        "{err:?}"
-    );
+    assert_matches!(err, ScanError::MetadataEscapesDirectory { .. }, "{err:?}");
     assert!(err.to_string().contains("not a regular file"), "{err}");
 }
 
@@ -73,8 +71,5 @@ async fn scan_refuses_a_directory_named_like_the_sidecar() {
 
     let err = scan_tools_directory(dir.path()).await.unwrap_err();
 
-    assert!(
-        matches!(err, ScanError::MetadataEscapesDirectory { .. }),
-        "{err:?}"
-    );
+    assert_matches!(err, ScanError::MetadataEscapesDirectory { .. }, "{err:?}");
 }

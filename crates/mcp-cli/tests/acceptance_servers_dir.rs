@@ -4,10 +4,8 @@
 //!
 //! The sandbox home holds the generated package, so a literal (unexpanded) `~` path points at
 //! nothing and the command fails.
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 mod common;
 
 use common::{Sandbox, require_node, script_text};

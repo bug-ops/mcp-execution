@@ -51,10 +51,6 @@ fn helper_inside_run_exits_2_without_serving() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn call_outside_run_is_unaffected() {
     let sb = Sandbox::new();
 

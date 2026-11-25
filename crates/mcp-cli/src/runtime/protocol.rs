@@ -175,10 +175,11 @@ pub struct ErrorBody {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::runtime::protocol::ResponseBody;
 ///
 /// let body: ResponseBody = serde_json::from_str(r#"{"empty":true}"#).unwrap();
-/// assert!(matches!(body, ResponseBody::Empty { .. }));
+/// assert_matches!(body, ResponseBody::Empty { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -290,10 +291,11 @@ pub async fn read_line<R: AsyncBufRead + Unpin>(
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::runtime::protocol::{EncodedResponse, Response, ResponseBody, encode_response};
 ///
 /// let encoded = encode_response(&Response { id: 3, body: ResponseBody::Empty { empty: true } });
-/// assert!(matches!(encoded, EncodedResponse::Sent(_)));
+/// assert_matches!(encoded, EncodedResponse::Sent(_));
 /// assert_eq!(encoded.into_line(), b"{\"id\":3,\"empty\":true}\n");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]

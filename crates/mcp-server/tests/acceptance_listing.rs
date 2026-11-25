@@ -9,6 +9,7 @@
 )]
 
 use serde_json::Value;
+use std::assert_matches;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -19,7 +20,12 @@ const INITIALIZED: &str = r#"{"jsonrpc":"2.0","method":"notifications/initialize
 const LIST: &str = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_generated_servers","arguments":{}}}"#;
 
 fn run_list(home: &std::path::Path) -> Value {
+    run_list_in(home, &std::env::current_dir().expect("current dir"))
+}
+
+fn run_list_in(home: &std::path::Path, cwd: &std::path::Path) -> Value {
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-execution"))
+        .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
         .stdin(Stdio::piped())
@@ -54,10 +60,6 @@ fn run_list(home: &std::path::Path) -> Value {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API), so this end-to-end test cannot redirect the home directory there; tracked in #604"
-)]
 fn list_generated_servers_counts_tool_files_but_not_catalog_or_index() {
     let home = tempfile::tempdir().unwrap();
     let server_dir = home.path().join(".claude").join("servers").join("acme");
@@ -75,5 +77,22 @@ fn list_generated_servers_counts_tool_files_but_not_catalog_or_index() {
     assert_eq!(
         listing["servers"][0]["tool_count"], 2,
         "catalog.ts and index.ts must not be counted as tools: {listing}"
+    );
+}
+
+#[test]
+fn a_relative_home_is_an_mcp_error_and_creates_nothing_in_the_working_directory() {
+    let cwd = tempfile::tempdir().unwrap();
+
+    let response = run_list_in(std::path::Path::new("relative-home"), cwd.path());
+
+    assert_matches!(response["error"]["message"].as_str(), Some(message) if message.contains("home directory"));
+    assert!(
+        !cwd.path().join(".claude").exists(),
+        "no .claude directory may appear in the working directory"
+    );
+    assert!(
+        !cwd.path().join("relative-home").exists(),
+        "the relative home must not be created"
     );
 }

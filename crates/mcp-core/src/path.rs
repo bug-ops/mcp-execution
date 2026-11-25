@@ -41,15 +41,15 @@ use std::path::{Component, Path};
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_core::sanitize_path_for_error;
+/// use mcp_execution_core::{HomeDir, sanitize_path_for_error};
 /// use std::path::Path;
 ///
 /// // A path outside the home directory is left unchanged.
 /// assert_eq!(sanitize_path_for_error(Path::new("/tmp/x")), "/tmp/x");
 ///
 /// // A path under the home directory has it redacted to `~`.
-/// let home = dirs::home_dir().expect("home dir available in this environment");
-/// let under_home = home.join("secret-file.md");
+/// let home = HomeDir::from_env().expect("home dir available in this environment");
+/// let under_home = home.as_path().join("secret-file.md");
 /// assert_eq!(
 ///     sanitize_path_for_error(&under_home),
 ///     format!("~{}secret-file.md", std::path::MAIN_SEPARATOR),
@@ -57,9 +57,12 @@ use std::path::{Component, Path};
 /// ```
 #[must_use]
 pub fn sanitize_path_for_error(path: &Path) -> String {
-    dirs::home_dir().map_or_else(
-        || path.display().to_string(),
-        |home| strip_home_prefix(path, &home).unwrap_or_else(|| scrub_username(path, &home)),
+    crate::HomeDir::from_env().map_or_else(
+        |_| path.display().to_string(),
+        |home| {
+            let home = home.as_path();
+            strip_home_prefix(path, home).unwrap_or_else(|| scrub_username(path, home))
+        },
     )
 }
 
@@ -285,6 +288,10 @@ pub fn contains_parent_dir(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn test_home() -> std::path::PathBuf {
+        crate::HomeDir::from_env().unwrap().as_path().to_path_buf()
+    }
+
     #[test]
     fn validate_path_segment_accepts_plain_name() {
         assert!(validate_path_segment("my-server").is_some());
@@ -343,7 +350,7 @@ mod tests {
 
     #[test]
     fn sanitize_path_for_error_redacts_home_directory() {
-        let home = dirs::home_dir().unwrap();
+        let home = test_home();
         let under_home = home.join(".claude").join("skills");
         assert_eq!(
             sanitize_path_for_error(&under_home),
@@ -365,7 +372,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn sanitize_path_for_error_redacts_home_directory_with_forward_slashes() {
-        let home = dirs::home_dir().unwrap();
+        let home = test_home();
         let home_str = home.display().to_string().replace('\\', "/");
         let under_home = format!("{home_str}/secret-file.md");
         assert_eq!(
@@ -379,7 +386,7 @@ mod tests {
     #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn sanitize_path_for_error_redacts_home_directory_case_insensitively() {
-        let home = dirs::home_dir().unwrap();
+        let home = test_home();
         let flipped_case: String = home
             .display()
             .to_string()
@@ -562,7 +569,7 @@ mod tests {
     /// keeps the username out of the rendered output.
     #[test]
     fn sanitize_path_for_error_scrubs_username_when_home_is_not_a_leading_prefix() {
-        let home = dirs::home_dir().unwrap();
+        let home = test_home();
         let username = home.file_name().unwrap().to_string_lossy().into_owned();
 
         let mut mounted = std::path::PathBuf::from("mnt");
@@ -588,7 +595,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn sanitize_path_for_error_scrubs_username_from_canonicalized_home_path() {
-        let home = dirs::home_dir().unwrap();
+        let home = test_home();
         let username = home.file_name().unwrap().to_string_lossy().into_owned();
         let canonical = std::fs::canonicalize(&home).unwrap();
 

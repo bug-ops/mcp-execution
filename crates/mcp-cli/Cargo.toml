@@ -40,6 +40,9 @@ test-fixtures = [
     "rmcp/transport-streamable-http-server",
 ]
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true, optional = true }

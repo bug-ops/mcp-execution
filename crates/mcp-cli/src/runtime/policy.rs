@@ -339,6 +339,7 @@ fn marked_read_only(meta: Option<&ServerMetadata>, tool: &ToolName) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     fn ids(server: &str, tool: &str) -> (ServerId, ToolName) {
         (ServerId::new(server).unwrap(), ToolName::new(tool).unwrap())
@@ -402,10 +403,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let missing = temp.path().join("none.json");
         let error = Policy::load(Some(&missing)).await.unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             error.downcast_ref::<CoreError>(),
             Some(CoreError::InvalidArgument(_))
-        ));
+        );
 
         let big = temp.path().join("big.json");
         std::fs::write(

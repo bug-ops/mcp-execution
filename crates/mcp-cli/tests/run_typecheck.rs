@@ -1,10 +1,10 @@
 //! `run --typecheck` accepts what node runs: a `.ts` script with top-level `await`, and a
 //! correct script against a generated SDK whose own dependencies were never installed.
 //!
-//! Requires the `test-fixtures` feature, Node.js 22.18+ and `tsc`. Unix only: the SDK case needs
-//! `mcp.json`, which cannot be redirected on Windows (#604).
+//! Requires the `test-fixtures` feature, Node.js 22.18+ and `tsc`. Unix only: the relative
+//! `PATH` entry test, which plants an executable `tsc` shim as a shell script.
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 
 mod common;
 

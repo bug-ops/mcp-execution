@@ -162,7 +162,7 @@ graph LR
 - OS: Linux, macOS, Windows (README lists pre-built binaries for all three;
   `setup`'s Unix-only executable-bit step degrades gracefully — always
   reports `files_made_executable: 0` — on non-Unix).
-- Rust: edition 2024, MSRV 1.91 (CI-enforced).
+- Rust: edition 2024, MSRV 1.98 (CI-enforced, rolling stable-minus-two policy).
 - Node.js: 18+ required to execute generated output (not to build/run
   `mcp-execution` itself).
 - Network: required only for HTTP/SSE-transport target servers and for

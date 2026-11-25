@@ -10,6 +10,7 @@ use mcp_execution_core::metadata::{
 use mcp_execution_core::provenance::GenerationProvenance;
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_skill::{ParsedToolFile, ScanError, build_skill_context, scan_tools_directory};
+use std::assert_matches;
 use tempfile::TempDir;
 use tokio::fs;
 
@@ -191,7 +192,7 @@ async fn test_scan_directory_missing_metadata() {
 
     let result = scan_tools_directory(temp_dir.path()).await;
 
-    assert!(matches!(result, Err(ScanError::MissingMetadata { .. })));
+    assert_matches!(result, Err(ScanError::MissingMetadata { .. }));
 }
 
 #[tokio::test]

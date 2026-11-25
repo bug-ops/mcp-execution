@@ -3,10 +3,8 @@
 //! scripts that reference a removed tool listed by name.
 //!
 //! Drift is staged by editing the recorded `_meta.json` (the fixture's tool list is fixed).
-//!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
 
-#![cfg(all(feature = "test-fixtures", unix))]
+#![cfg(feature = "test-fixtures")]
 #![expect(
     clippy::unwrap_used,
     reason = "test, bench and example code may panic on failure"
@@ -16,6 +14,7 @@ mod common;
 
 use common::{Sandbox, script_text, snapshot};
 use serde_json::{Value, json};
+use std::assert_matches;
 
 const ECHO_DESCRIPTION: &str = "Echoes its arguments back as JSON text";
 const DIFFERENT_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -173,8 +172,9 @@ fn drift_that_cannot_complete_has_its_own_exit_code() {
 
     let out = drift(&sb);
 
-    assert!(
-        matches!(out.code, Some(1..=4)),
+    assert_matches!(
+        out.code,
+        Some(1..=4),
         "no generated directory: expected a could-not-complete code, got {:?}",
         out.code
     );

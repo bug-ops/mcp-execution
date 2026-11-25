@@ -281,6 +281,7 @@ fn reply_of(server: &ServerId, tool: &ToolName, outcome: ToolCallOutcome) -> Cal
 mod tests {
     use super::*;
     use crate::runtime::protocol::ResultKind;
+    use std::assert_matches;
     use std::time::Duration;
 
     fn pool() -> SessionPool {
@@ -302,18 +303,12 @@ mod tests {
         let pool = pool();
 
         let first = pool.call(request("no-such-server-for-pool-test")).await;
-        assert!(
-            matches!(first.body, ResponseBody::Error { .. }),
-            "{first:?}"
-        );
+        assert_matches!(first.body, ResponseBody::Error { .. }, "{first:?}");
         assert_eq!(first.status, CallStatus::Failed);
         assert!(pool.lock().is_empty());
 
         let second = pool.call(request("no-such-server-for-pool-test")).await;
-        assert!(
-            matches!(second.body, ResponseBody::Error { .. }),
-            "{second:?}"
-        );
+        assert_matches!(second.body, ResponseBody::Error { .. }, "{second:?}");
     }
 
     #[test]

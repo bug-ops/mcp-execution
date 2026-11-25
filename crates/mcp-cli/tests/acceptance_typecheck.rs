@@ -15,10 +15,6 @@ fn ready(test: &str) -> bool {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn typecheck_rejects_a_type_error_against_the_generated_sdk_before_any_call() {
     if !ready("typecheck_rejects_a_type_error_against_the_generated_sdk_before_any_call") {
         return;
@@ -47,10 +43,6 @@ fn typecheck_rejects_a_type_error_against_the_generated_sdk_before_any_call() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "mcp.json cannot be redirected on Windows; tracked in #604"
-)]
 fn typecheck_rejects_an_unknown_server_import() {
     if !ready("typecheck_rejects_an_unknown_server_import") {
         return;

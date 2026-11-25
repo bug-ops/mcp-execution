@@ -1199,6 +1199,7 @@ pub(crate) fn write_file_atomic(path: &Path, content: &str, atomic: bool) -> Res
 mod tests {
     use super::*;
     use crate::FilesBuilder;
+    use std::assert_matches;
     use tempfile::TempDir;
 
     // FileSystem core tests
@@ -1241,7 +1242,7 @@ mod tests {
     fn test_read_file_not_found() {
         let vfs = FileSystem::new();
         let result = vfs.read_file("/missing.ts");
-        assert!(matches!(result, Err(FilesError::FileNotFound { .. })));
+        assert_matches!(result, Err(FilesError::FileNotFound { .. }));
     }
 
     #[test]
@@ -1250,10 +1251,7 @@ mod tests {
         // exercises vfs_to_disk_path's own safety net directly, bypassing that primary
         // validation — it must return an error instead of panicking (#318).
         let result = FileSystem::vfs_to_disk_path("/../etc/passwd", Path::new("/base"));
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]
@@ -1300,7 +1298,7 @@ mod tests {
         vfs.add_file("/file.ts", "").unwrap();
 
         let result = vfs.list_dir("/file.ts");
-        assert!(matches!(result, Err(FilesError::NotADirectory { .. })));
+        assert_matches!(result, Err(FilesError::NotADirectory { .. }));
     }
 
     #[test]
@@ -1792,8 +1790,9 @@ mod tests {
         let result = vfs.export_to_filesystem_with_options(&escaped_target, &options);
 
         assert!(result.is_err());
-        assert!(
-            matches!(result.unwrap_err(), FilesError::PathEscapesBase { .. }),
+        assert_matches!(
+            result.unwrap_err(),
+            FilesError::PathEscapesBase { .. },
             "expected PathEscapesBase"
         );
         assert!(
@@ -1980,14 +1979,12 @@ mod tests {
 
         let result = vfs.export_to_filesystem(temp.path());
 
-        assert!(
-            matches!(
-                result,
-                Err(FilesError::ResourceLimitExceeded {
-                    resource: FilesResourceKind::ExportFileCount,
-                    ..
-                })
-            ),
+        assert_matches!(
+            result,
+            Err(FilesError::ResourceLimitExceeded {
+                resource: FilesResourceKind::ExportFileCount,
+                ..
+            }),
             "expected ResourceLimitExceeded{{resource: ExportFileCount}}, got: {result:?}"
         );
     }
@@ -2014,14 +2011,12 @@ mod tests {
 
         let result = vfs.export_to_filesystem(temp.path());
 
-        assert!(
-            matches!(
-                result,
-                Err(FilesError::ResourceLimitExceeded {
-                    resource: FilesResourceKind::ExportTotalSize,
-                    ..
-                })
-            ),
+        assert_matches!(
+            result,
+            Err(FilesError::ResourceLimitExceeded {
+                resource: FilesResourceKind::ExportTotalSize,
+                ..
+            }),
             "expected ResourceLimitExceeded{{resource: ExportTotalSize}}, got: {result:?}"
         );
     }

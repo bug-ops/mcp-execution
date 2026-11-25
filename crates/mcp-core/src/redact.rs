@@ -297,7 +297,7 @@ const fn is_scheme_char(c: char) -> bool {
 /// unescaped, exactly where this scan runs. Erring toward capturing *too
 /// much* surrounding text into the token (over-redaction) is safe; erring
 /// toward cutting a token short before its secret is not.
-fn is_token_terminator(c: char) -> bool {
+const fn is_token_terminator(c: char) -> bool {
     c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '`' | '(' | ')')
 }
 

@@ -4,12 +4,15 @@
 //!
 //! The fixture's tool list is fixed, so every failure is staged by rewriting the sidecar.
 //!
-//! Unix only: the tests need `mcp.json`, which cannot be redirected on Windows (#604).
+//! Unix only: the symlinked-sidecar tests, which create the link with a Unix API.
 
-#![cfg(all(feature = "test-fixtures", unix))]
-#![expect(
-    clippy::unwrap_used,
-    reason = "test, bench and example code may panic on failure"
+#![cfg(feature = "test-fixtures")]
+#![cfg_attr(
+    unix,
+    expect(
+        clippy::unwrap_used,
+        reason = "test, bench and example code may panic on failure"
+    )
 )]
 
 mod common;
@@ -48,11 +51,13 @@ fn scripts_check(sb: &Sandbox) -> Out {
     ])
 }
 
+#[cfg(unix)]
 fn meta_path(sb: &Sandbox) -> std::path::PathBuf {
     sb.servers.join("fixture").join("_meta.json")
 }
 
 /// Moves the real sidecar next to itself and leaves a symlink to it in its place.
+#[cfg(unix)]
 fn replace_with_symlink(sb: &Sandbox) {
     let meta = meta_path(sb);
     let real = meta.with_file_name("_meta.real.json");
@@ -60,6 +65,7 @@ fn replace_with_symlink(sb: &Sandbox) {
     std::os::unix::fs::symlink(&real, &meta).unwrap();
 }
 
+#[cfg(unix)]
 fn assert_refused(out: &Out, what: &str) {
     assert!(
         out.code.is_some_and(|code| code != 0 && code != 5),
@@ -89,6 +95,7 @@ fn scripts_check_exits_2_on_a_sidecar_schema_mismatch() {
     assert_eq!(out.code, Some(2), "stderr: {}", out.stderr);
 }
 
+#[cfg(unix)]
 #[test]
 fn drift_refuses_a_symlinked_sidecar() {
     let sb = prepared();
@@ -97,6 +104,7 @@ fn drift_refuses_a_symlinked_sidecar() {
     assert_refused(&drift(&sb), "a symlinked _meta.json");
 }
 
+#[cfg(unix)]
 #[test]
 fn scripts_check_refuses_a_symlinked_sidecar() {
     let sb = prepared();

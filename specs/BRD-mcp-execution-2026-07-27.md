@@ -756,7 +756,7 @@ evidenced. See [[NFR-mcp-execution-2026-07-27#5. Usability]].
 
 ### Technical Constraints
 
-- Rust, edition 2024, MSRV 1.91 (`Cargo.toml`, CI-enforced `msrv` job).
+- Rust, edition 2024, MSRV 1.98 (`Cargo.toml`, CI-enforced `msrv` job, rolling stable-minus-two policy).
 - `tokio` async runtime throughout; `rmcp` as the sole MCP protocol
   implementation (client and server).
 - No `unsafe` code anywhere in the workspace (`#![deny(unsafe_code)]` in

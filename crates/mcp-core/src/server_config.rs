@@ -89,6 +89,7 @@ static EMPTY_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(HashMap::new
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::{ServerConfig, Transport};
 ///
 /// let config = ServerConfig::builder()
@@ -96,7 +97,7 @@ static EMPTY_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(HashMap::new
 ///     .build()
 ///     .unwrap();
 ///
-/// assert!(matches!(config.transport(), Transport::Stdio { .. }));
+/// assert_matches!(config.transport(), Transport::Stdio { .. });
 /// ```
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "transport", rename_all = "lowercase")]
@@ -484,13 +485,14 @@ impl ServerConfig {
     /// # Examples
     ///
     /// ```
+    /// use std::assert_matches;
     /// use mcp_execution_core::{ServerConfig, Transport};
     ///
     /// let config = ServerConfig::builder()
     ///     .command("test".to_string())
     ///     .build().unwrap();
     ///
-    /// assert!(matches!(config.transport(), Transport::Stdio { .. }));
+    /// assert_matches!(config.transport(), Transport::Stdio { .. });
     /// ```
     #[must_use]
     pub const fn transport(&self) -> &Transport {
@@ -1149,6 +1151,7 @@ impl ServerConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn test_server_config_builder_minimal() {
@@ -1511,7 +1514,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(matches!(config.transport(), Transport::Http { .. }));
+        assert_matches!(config.transport(), Transport::Http { .. });
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
         assert!(config.headers().is_empty());
         assert!(config.command().is_none());
@@ -1529,7 +1532,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(matches!(config.transport(), Transport::Http { .. }));
+        assert_matches!(config.transport(), Transport::Http { .. });
         assert_eq!(config.headers().len(), 2);
         assert_eq!(
             config.headers().get("Authorization"),
@@ -1589,7 +1592,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(matches!(config.transport(), Transport::Http { .. }));
+        assert_matches!(config.transport(), Transport::Http { .. });
         assert_eq!(config.url(), Some("https://api.example.com/mcp"));
         assert_eq!(config.headers().len(), 1);
     }
@@ -1601,7 +1604,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(matches!(config.transport(), Transport::Stdio { .. }));
+        assert_matches!(config.transport(), Transport::Stdio { .. });
     }
 
     #[test]
@@ -1611,7 +1614,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(matches!(config.transport(), Transport::Sse { .. }));
+        assert_matches!(config.transport(), Transport::Sse { .. });
         assert_eq!(config.url(), Some("https://api.example.com/sse"));
         assert!(config.headers().is_empty());
         assert!(config.command().is_none());
@@ -1663,7 +1666,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert!(matches!(config.transport(), Transport::Sse { .. }));
+        assert_matches!(config.transport(), Transport::Sse { .. });
         assert_eq!(config.headers().len(), 2);
         assert_eq!(
             config.headers().get("Authorization"),
@@ -1725,9 +1728,9 @@ mod tests {
             serde_json::from_str(r#"{"transport":"sse","url":"https://api.example.com/sse"}"#)
                 .unwrap();
 
-        assert!(matches!(stdio.transport(), Transport::Stdio { .. }));
-        assert!(matches!(http.transport(), Transport::Http { .. }));
-        assert!(matches!(sse.transport(), Transport::Sse { .. }));
+        assert_matches!(stdio.transport(), Transport::Stdio { .. });
+        assert_matches!(http.transport(), Transport::Http { .. });
+        assert_matches!(sse.transport(), Transport::Sse { .. });
     }
 
     /// #313 — the enum shape makes an incomplete Http config impossible to deserialize at

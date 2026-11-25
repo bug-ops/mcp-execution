@@ -6,6 +6,9 @@
 //! - `--http [ADDR]`: serves Streamable HTTP at `/mcp` on `ADDR` (default `127.0.0.1:0`), prints
 //!   the resulting URL as the first stdout line and runs until killed.
 //!
+//! When `MCP_FIXTURE_HANG_ON_CLOSE` is set, the HTTP server never answers a session `DELETE`, so a
+//! client closing its session waits until its own close bound elapses.
+//!
 //! When `MCP_FIXTURE_LOG=<path>` is set, one line is appended per `initialize` (`initialize`) and
 //! per `tools/call` (`call <tool>`): the tool name only, never arguments.
 //!
@@ -23,6 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use axum::extract::Request;
+use axum::http::Method;
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
     InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
@@ -39,6 +46,9 @@ use tokio_util::sync::CancellationToken;
 
 /// Environment variable naming the append-only call log.
 const LOG_ENV: &str = "MCP_FIXTURE_LOG";
+
+/// Environment variable that makes the HTTP server stall every session `DELETE` forever.
+const HANG_ON_CLOSE_ENV: &str = "MCP_FIXTURE_HANG_ON_CLOSE";
 
 /// Largest payload `large` will produce, so a typo cannot exhaust memory.
 const MAX_LARGE_BYTES: usize = 32 * 1024 * 1024;
@@ -199,6 +209,13 @@ impl ServerHandler for ToolsServer {
     }
 }
 
+async fn stall_session_delete(request: Request, next: Next) -> Response {
+    if request.method() == Method::DELETE {
+        std::future::pending::<()>().await;
+    }
+    next.run(request).await
+}
+
 async fn serve_http(addr: &str) {
     let server = ToolsServer::from_env();
     let ct = CancellationToken::new();
@@ -209,7 +226,10 @@ async fn serve_http(addr: &str) {
             Arc::new(LocalSessionManager::default()),
             config,
         );
-    let router = Router::new().nest_service("/mcp", service);
+    let mut router = Router::new().nest_service("/mcp", service);
+    if std::env::var_os(HANG_ON_CLOSE_ENV).is_some() {
+        router = router.layer(middleware::from_fn(stall_session_delete));
+    }
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("fixture must bind its HTTP address");

@@ -505,8 +505,11 @@ policy suggestions) and `mcp-skill`'s scan all call it, so the rules below canno
   sidecar is refused even when its target lies inside `dir`.
 - **Open.** On Unix the file is opened with `O_NOFOLLOW | O_NONBLOCK` and the regular-file check is an `fstat` on the
   opened handle, so there is no window between check and open and a FIFO never blocks. `ELOOP` maps to `Link`; any other
-  type maps to `NotRegularFile`. Windows has no equivalent flag: the type is checked with `symlink_metadata` before the
-  open.
+  type maps to `NotRegularFile`. On Windows (#639) the sidecar is opened with `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS` and judged only by the
+  opened handle: a symlink reparse point is `Link`, any other reparse point or a directory (which opens because of backup
+  semantics) is `NotRegularFile`. There is no check-then-open window. Backup semantics bypass the DACL only for a token with
+  SeBackupPrivilege enabled (approved deviation, architect, 2026-11-25). The Windows runtime behaviour is covered by a
+  `cfg(windows)` test and Windows CI only.
 - **Size.** The size is checked from the handle, and the read is bounded by `take(MAX_METADATA_FILE_BYTES + 1)`, so a file
   that grows after the check still yields `TooLarge`.
 - **Order.** Valid JSON is parsed to a `serde_json::Value`, `schema_version` is compared first (`SchemaMismatch`, so an
@@ -673,10 +676,40 @@ every digest recorded before this change differs, which the schema-version bump 
 from the same `ServerConfig`/tool list a `generate` call is generating from, so the recorded
 digest can never drift from the emitted files — see [[../codegen/spec]].
 
+### `home` module (`src/home.rs`, #634, #637, #604)
+
+```rust
+pub struct HomeDir(PathBuf);                       // always absolute
+pub enum HomeDirError { Unknown, NotAbsolute { path: PathBuf } }   // thiserror
+pub fn expand_home(path: &Path) -> Result<PathBuf, HomeDirError>;
+pub struct ServersDir(PathBuf);                    // default ~/.claude/servers
+pub struct SkillsDir(PathBuf);                     // default ~/.claude/skills
+impl HomeDir { pub fn from_env() -> Result<Self, HomeDirError>; pub fn as_path(&self) -> &Path }
+impl ServersDir { pub fn resolve(Option<PathBuf>) -> Result<Self, HomeDirError>; pub fn server(&self, &ServerId) -> PathBuf; pub fn as_path(&self) -> &Path }
+impl SkillsDir  { pub fn resolve(Option<PathBuf>) -> Result<Self, HomeDirError>; pub fn skill(&self, &ServerId) -> PathBuf; pub fn as_path(&self) -> &Path }
+```
+
+The one place the home directory is resolved; `mcp-cli`, `mcp-server`, `mcp-files` and `sanitize_path_for_error` all go
+through it.
+
+- **Source.** `HomeDir::from_env` calls `std::env::home_dir`, which honours a non-empty `HOME` (falling back to the account
+  database) on Unix and a non-empty `USERPROFILE` (falling back to the profile directory) on Windows. The filesystem is not
+  touched. `Unknown` when no source names a home; `NotAbsolute` (whose text names the offending path) when it is relative,
+  because a relative home would make every derived path depend on the working directory.
+- **Ban.** The workspace `clippy.toml` lists `dirs::home_dir` and `std::env::home_dir` under `disallowed-methods`; the only
+  `#[expect]` is in `HomeDir::from_env`. `dirs` is no longer a dependency of `mcp-core`, `mcp-files` or `mcp-server`;
+  `mcp-cli` keeps it for its runtime directories (`runtime/dirs.rs`), which are not covered by the ban.
+- **`expand_home`.** Only a first component that is exactly `~` is replaced (`~`, `~/x`, and `~\x` on Windows). `~user/x`,
+  `~~`, `x/~` and `.~` are returned unchanged. A path without a leading `~` never reads the home, so an absolute path works
+  when the home is unusable.
+- **`ServersDir` / `SkillsDir`.** `resolve(None)` is the default location under the home; `resolve(Some(p))` is
+  `expand_home(p)`. `server()` / `skill()` join a `ServerId`, which rejects separators and `..`, so the result cannot leave
+  the base.
+
 ### `path` module (`src/path.rs`)
 
 ```rust
-pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir to "~", falls back to scrubbing bare username
+pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir (from `HomeDir::from_env`) to "~", falls back to scrubbing bare username
 pub fn validate_path_segment(segment: &str) -> Option<Component<'_>>; // single plain component, no "..", no separator
 pub fn first_disallowed_identifier_char(s: &str) -> Option<char>; // first char failing UTS #39 Identifier_Status=Allowed
 pub fn contains_parent_dir(path: &Path) -> bool; // true if any component is `..`

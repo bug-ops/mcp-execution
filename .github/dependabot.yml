@@ -8,6 +8,9 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: Etc/GMT-0
+    # Cooldown applies to version updates only; Dependabot security updates ignore it.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
@@ -32,6 +35,8 @@ updates:
       day: "monday"
       time: "10:00"
       timezone: Etc/GMT-0
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels:
       - "dependencies"

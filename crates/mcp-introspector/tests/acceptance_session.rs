@@ -14,6 +14,7 @@
     reason = "test, bench and example code may panic on failure"
 )]
 
+use std::assert_matches;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -293,8 +294,9 @@ async fn call_tool_timeout_is_an_error_and_leaves_the_session_usable() {
     .await;
     let after = call(&session, "fast", ResultSource::Content).await;
 
-    assert!(
-        matches!(timed_out, Err(Error::Timeout { .. })),
+    assert_matches!(
+        timed_out,
+        Err(Error::Timeout { .. }),
         "expected a timeout error, got {timed_out:?}"
     );
     assert_eq!(after, ToolCallOutcome::Value(Value::String("quick".into())));

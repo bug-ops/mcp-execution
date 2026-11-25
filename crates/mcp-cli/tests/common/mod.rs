@@ -31,6 +31,12 @@ pub const FIXTURE_BIN: &str = env!("CARGO_BIN_EXE_fixture-tools-mcp-server");
 /// Server id the sandbox registers for the stdio fixture.
 pub const SERVER: &str = "fixture";
 
+/// Environment variable naming the file a `test-fixtures` runner creates once it blocks on stdin.
+pub const READY_FILE_ENV: &str = "MCP_EXECUTION_TEST_READY_FILE";
+
+/// Longest the tests wait for a runner to become ready.
+pub const READY_WITHIN: Duration = Duration::from_secs(60);
+
 /// Hard stop for any spawned process; a hang fails the test instead of stalling CI.
 pub const WATCHDOG: Duration = Duration::from_secs(120);
 
@@ -134,6 +140,14 @@ pub fn require_tsc(test_name: &str) -> bool {
     available
 }
 
+/// `path` as a `file://` URL, the only absolute-path form Node accepts as an ESM specifier on
+/// Windows.
+pub fn file_url(path: &Path) -> String {
+    url::Url::from_file_path(path)
+        .unwrap_or_else(|()| panic!("{} is not an absolute path", path.display()))
+        .into()
+}
+
 fn plain(path: PathBuf) -> PathBuf {
     match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
         Some(stripped) if !stripped.starts_with(r"UNC\") => PathBuf::from(stripped),
@@ -154,8 +168,18 @@ impl Drop for KillOnDrop {
 
 /// Starts the fixture over Streamable HTTP and returns the guard and its URL.
 pub fn spawn_http_fixture(log: Option<&Path>) -> (KillOnDrop, String) {
+    spawn_http_fixture_with_env(log, &[])
+}
+
+/// Like [`spawn_http_fixture`], with extra environment variables for the fixture process.
+pub fn spawn_http_fixture_with_env(
+    log: Option<&Path>,
+    env: &[(&str, &str)],
+) -> (KillOnDrop, String) {
     let mut cmd = Command::new(FIXTURE_BIN);
-    cmd.args(["--http", "127.0.0.1:0"]).stdout(Stdio::piped());
+    cmd.args(["--http", "127.0.0.1:0"])
+        .envs(env.iter().copied())
+        .stdout(Stdio::piped());
     if let Some(log) = log {
         cmd.env("MCP_FIXTURE_LOG", log);
     }
@@ -164,6 +188,24 @@ pub fn spawn_http_fixture(log: Option<&Path>) -> (KillOnDrop, String) {
     let mut url = String::new();
     BufReader::new(stdout).read_line(&mut url).unwrap();
     (child, url.trim().to_string())
+}
+
+/// The file a runner creates when it has armed its signal handlers and reached the stdin read.
+#[derive(Debug)]
+pub struct ReadyFile(PathBuf);
+
+impl ReadyFile {
+    /// Waits until the runner announces readiness, failing after [`READY_WITHIN`].
+    pub fn wait(&self) {
+        let deadline = Instant::now() + READY_WITHIN;
+        while !self.0.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the runner was not ready within {READY_WITHIN:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 /// An isolated home, servers directory, skills directory and fixture call log.
@@ -235,6 +277,7 @@ impl Sandbox {
             .env("XDG_STATE_HOME", self.home.join("state"))
             .env("XDG_CONFIG_HOME", self.home.join("config"))
             .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("APPDATA", self.home.join("AppData").join("Roaming"))
             .env("LOCALAPPDATA", self.home.join("AppData").join("Local"))
             .env(mcp_execution_core::helper_protocol::CLI_PATH_ENV, CLI_BIN)
             .env_remove(mcp_execution_core::helper_protocol::HELPER_ENV)
@@ -244,6 +287,14 @@ impl Sandbox {
             .env_remove("RUST_LIB_BACKTRACE")
             .stdin(Stdio::null());
         cmd
+    }
+
+    /// Makes `cmd` create a file when the runner is ready to read its script from stdin, and
+    /// returns that file.
+    pub fn ready_file(&self, cmd: &mut Command) -> ReadyFile {
+        let path = self.root.join("runner.ready");
+        cmd.env(READY_FILE_ENV, &path);
+        ReadyFile(path)
     }
 
     /// Runs the CLI with `args`.
@@ -307,8 +358,7 @@ impl Sandbox {
     /// Lines the fixture appended to its call log.
     pub fn fixture_log(&self) -> Vec<String> {
         std::fs::read_to_string(&self.log)
-            .map(|s| s.lines().map(str::to_string).collect())
-            .unwrap_or_default()
+            .map_or_default(|s| s.lines().map(str::to_string).collect())
     }
 
     /// The runner's per-OS state root as seen by a CLI started with [`Sandbox::command`].
@@ -364,8 +414,7 @@ pub fn anchored(stdout: &str) -> Anchored<'_> {
     let lines: Vec<&str> = stdout.lines().collect();
     let first = lines.first().copied().unwrap_or_default();
     let token = first
-        .strip_prefix("[mcp-execution ")
-        .and_then(|rest| rest.strip_suffix("] run started"))
+        .strip_circumfix("[mcp-execution ", "] run started")
         .unwrap_or_else(|| panic!("first stdout line is not the run anchor: {stdout:?}"));
     assert!(
         token.len() >= 16,

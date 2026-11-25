@@ -32,6 +32,7 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
+use std::assert_matches;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -429,9 +430,7 @@ async fn test_connect_http_connect_timeout_fires() {
         .await;
     ct.cancel();
 
-    assert!(
-        matches!(&result, Err(Error::Timeout { operation, .. }) if operation.starts_with("connect")),
-        "expected a connect timeout, got {result:?}"
-    );
+    assert_matches!(&result, Err(Error::Timeout { operation, .. }) if operation.starts_with("connect"),
+        "expected a connect timeout, got {result:?}");
     assert!(started.elapsed() < Duration::from_secs(5));
 }

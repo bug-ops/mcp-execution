@@ -139,10 +139,6 @@ fn call_reaches_a_server_over_http() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows, so mcp.json cannot be redirected; tracked in #604"
-)]
 fn call_resolves_a_server_from_mcp_json() {
     let sb = Sandbox::new();
 

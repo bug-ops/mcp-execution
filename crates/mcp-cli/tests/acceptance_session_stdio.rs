@@ -15,6 +15,7 @@
 
 mod common;
 
+use std::assert_matches;
 use std::time::Duration;
 
 use common::FIXTURE_BIN;
@@ -94,10 +95,7 @@ async fn stdio_call_tool_classifies_value_empty_tool_error_and_rpc_error() {
             })
         }
     );
-    assert!(
-        matches!(rpc_error, ToolCallOutcome::RpcError { .. }),
-        "{rpc_error:?}"
-    );
+    assert_matches!(rpc_error, ToolCallOutcome::RpcError { .. }, "{rpc_error:?}");
     session.close().await;
 }
 
@@ -114,7 +112,7 @@ async fn stdio_call_timeout_leaves_the_session_usable() {
     .await;
     let after = call(&session, "echo", json!({"n": 2}), Duration::from_secs(10)).await;
 
-    assert!(matches!(slow, Err(Error::Timeout { .. })), "{slow:?}");
+    assert_matches!(slow, Err(Error::Timeout { .. }), "{slow:?}");
     assert_eq!(after.unwrap(), ToolCallOutcome::Value(json!({"n": 2})));
     session.close().await;
 }

@@ -10,6 +10,7 @@
     reason = "test, bench and example code may panic on failure"
 )]
 
+use std::assert_matches;
 use std::path::Path;
 
 use mcp_execution_core::metadata::{
@@ -84,7 +85,7 @@ fn read_server_metadata_reports_a_missing_sidecar_as_not_found() {
 
     let err = read_server_metadata(dir.path()).unwrap_err();
 
-    assert!(matches!(err, MetadataReadError::NotFound), "{err:?}");
+    assert_matches!(err, MetadataReadError::NotFound, "{err:?}");
 }
 
 #[cfg(unix)]
@@ -97,7 +98,24 @@ fn read_server_metadata_refuses_a_symlinked_sidecar_even_inside_the_directory() 
 
     let err = read_server_metadata(dir.path()).unwrap_err();
 
-    assert!(matches!(err, MetadataReadError::Link), "{err:?}");
+    assert_matches!(err, MetadataReadError::Link, "{err:?}");
+}
+
+#[cfg(windows)]
+#[test]
+fn read_server_metadata_refuses_a_symlinked_sidecar_on_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("other.json");
+    std::fs::write(&real, valid_json()).unwrap();
+    let link = dir.path().join(METADATA_FILE_NAME);
+    if std::os::windows::fs::symlink_file(&real, &link).is_err() {
+        eprintln!("skipped: creating symlinks needs a privilege this account lacks");
+        return;
+    }
+
+    let err = read_server_metadata(dir.path()).unwrap_err();
+
+    assert_matches!(err, MetadataReadError::Link, "{err:?}");
 }
 
 #[test]
@@ -107,7 +125,7 @@ fn read_server_metadata_refuses_a_directory_named_like_the_sidecar() {
 
     let err = read_server_metadata(dir.path()).unwrap_err();
 
-    assert!(matches!(err, MetadataReadError::NotRegularFile), "{err:?}");
+    assert_matches!(err, MetadataReadError::NotRegularFile, "{err:?}");
 }
 
 #[cfg(unix)]
@@ -130,8 +148,9 @@ fn read_server_metadata_refuses_a_fifo_without_blocking() {
 
     assert!(received.is_ok(), "the reader blocked on a FIFO");
     let outcome = received.unwrap();
-    assert!(
-        matches!(outcome, Err(MetadataReadError::NotRegularFile)),
+    assert_matches!(
+        outcome,
+        Err(MetadataReadError::NotRegularFile),
         "{outcome:?}"
     );
 }
@@ -153,10 +172,8 @@ fn read_server_metadata_accepts_exactly_the_size_cap_and_refuses_one_byte_more()
         &format!("{json}{}", " ".repeat(cap - json.len() + 1)),
     );
     let err = read_server_metadata(dir.path()).unwrap_err();
-    assert!(
-        matches!(err, MetadataReadError::TooLarge { limit, .. } if limit == MAX_METADATA_FILE_BYTES),
-        "{err:?}"
-    );
+    assert_matches!(err, MetadataReadError::TooLarge { limit, .. } if limit == MAX_METADATA_FILE_BYTES,
+        "{err:?}");
 }
 
 #[test]
@@ -166,14 +183,11 @@ fn read_server_metadata_checks_the_schema_version_before_the_typed_parse() {
 
     let err = read_server_metadata(dir.path()).unwrap_err();
 
-    assert!(
-        matches!(
+    assert_matches!(
             err,
             MetadataReadError::SchemaMismatch { found: 1, expected }
-                if expected == METADATA_SCHEMA_VERSION
-        ),
-        "{err:?}"
-    );
+                if expected == METADATA_SCHEMA_VERSION,
+        "{err:?}");
 }
 
 #[test]
@@ -188,12 +202,10 @@ fn read_server_metadata_reports_json_that_is_not_a_sidecar_as_malformed() {
     );
     let incomplete = read_server_metadata(dir.path()).unwrap_err();
 
-    assert!(
-        matches!(broken, MetadataReadError::Malformed(_)),
-        "{broken:?}"
-    );
-    assert!(
-        matches!(incomplete, MetadataReadError::Malformed(_)),
+    assert_matches!(broken, MetadataReadError::Malformed(_), "{broken:?}");
+    assert_matches!(
+        incomplete,
+        MetadataReadError::Malformed(_),
         "{incomplete:?}"
     );
 }
@@ -220,5 +232,5 @@ async fn read_server_metadata_async_matches_the_sync_reader() {
     let missing = read_server_metadata_async(dir.path().join("absent")).await;
 
     assert_eq!(ok.unwrap(), expected);
-    assert!(matches!(missing, Err(MetadataReadError::NotFound)));
+    assert_matches!(missing, Err(MetadataReadError::NotFound));
 }

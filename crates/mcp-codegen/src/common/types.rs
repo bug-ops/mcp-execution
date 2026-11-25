@@ -76,6 +76,7 @@ impl GeneratedCode {
     /// # Examples
     ///
     /// ```
+    /// use std::assert_matches;
     /// use mcp_execution_codegen::{GeneratedCode, GeneratedFile};
     /// use mcp_execution_core::Error;
     ///
@@ -94,7 +95,7 @@ impl GeneratedCode {
     ///         content: "export const x = 1;".to_string(),
     ///     })
     ///     .unwrap_err();
-    /// assert!(matches!(err, Error::DuplicateGeneratedFilePath { .. }));
+    /// assert_matches!(err, Error::DuplicateGeneratedFilePath { .. });
     /// ```
     pub fn add_file(&mut self, file: GeneratedFile) -> Result<()> {
         if self.files.iter().any(|existing| existing.path == file.path) {
@@ -284,6 +285,7 @@ pub struct ToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn test_generated_code_new() {
@@ -324,7 +326,7 @@ mod tests {
             })
             .unwrap_err();
 
-        assert!(matches!(err, Error::DuplicateGeneratedFilePath { .. }));
+        assert_matches!(err, Error::DuplicateGeneratedFilePath { .. });
         // The original file must be left untouched, not silently overwritten.
         assert_eq!(code.file_count(), 1);
         assert_eq!(code.files[0].content, "first");

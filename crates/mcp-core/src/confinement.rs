@@ -29,11 +29,12 @@ use crate::untrusted::sanitize_untrusted_inline;
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::ConfinementTarget;
 /// use std::ffi::OsStr;
 ///
 /// let target = ConfinementTarget::File(OsStr::new("SKILL.md"));
-/// assert!(matches!(target, ConfinementTarget::File(_)));
+/// assert_matches!(target, ConfinementTarget::File(_));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfinementTarget<'a> {
@@ -60,6 +61,7 @@ pub enum ConfinementTarget<'a> {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::{ConfinementError, resolve_confined_path};
 /// use std::path::Path;
 ///
@@ -69,7 +71,7 @@ pub enum ConfinementTarget<'a> {
 ///     .unwrap()
 ///     .block_on(resolve_confined_path(Path::new("/base"), "..", Path::new(""), None))
 ///     .unwrap_err();
-/// assert!(matches!(err, ConfinementError::InvalidSegment { .. }));
+/// assert_matches!(err, ConfinementError::InvalidSegment { .. });
 /// ```
 #[derive(Debug, Error)]
 pub enum ConfinementError {
@@ -614,7 +616,7 @@ pub async fn resolve_confined_existing(
     base_dir: &Path,
     relative: &Path,
 ) -> Result<PathBuf, ConfinementError> {
-    if relative.as_os_str().is_empty() {
+    if relative.is_empty() {
         return Ok(base_dir.to_path_buf());
     }
     let escapes = |path: &Path| ConfinementError::Escape {
@@ -649,6 +651,7 @@ pub async fn resolve_confined_existing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -688,7 +691,7 @@ mod tests {
             let err = resolve_confined_existing(base.path(), Path::new(bad))
                 .await
                 .unwrap_err();
-            assert!(matches!(err, ConfinementError::Escape { .. }), "{bad}");
+            assert_matches!(err, ConfinementError::Escape { .. }, "{bad}");
         }
     }
 
@@ -701,7 +704,7 @@ mod tests {
         let err = resolve_confined_existing(base.path(), Path::new("link"))
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::Escape { .. }));
+        assert_matches!(err, ConfinementError::Escape { .. });
     }
 
     #[cfg(unix)]
@@ -776,7 +779,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "", Path::new(""), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::InvalidSegment { .. }));
+        assert_matches!(err, ConfinementError::InvalidSegment { .. });
     }
 
     #[tokio::test]
@@ -785,7 +788,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "..", Path::new(""), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::InvalidSegment { .. }));
+        assert_matches!(err, ConfinementError::InvalidSegment { .. });
     }
 
     /// Issue #452: a segment rejected for containing a path separator can still carry
@@ -855,7 +858,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "a/b", Path::new(""), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::InvalidSegment { .. }));
+        assert_matches!(err, ConfinementError::InvalidSegment { .. });
     }
 
     #[tokio::test]
@@ -868,7 +871,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "my-server", Path::new(""), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::SegmentIsSymlink { .. }));
+        assert_matches!(err, ConfinementError::SegmentIsSymlink { .. });
     }
 
     #[tokio::test]
@@ -884,7 +887,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "server-b", Path::new(""), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::SegmentIsSymlink { .. }));
+        assert_matches!(err, ConfinementError::SegmentIsSymlink { .. });
     }
 
     #[tokio::test]
@@ -898,7 +901,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "my-server", Path::new(""), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::NotADirectory { .. }));
+        assert_matches!(err, ConfinementError::NotADirectory { .. });
     }
 
     #[tokio::test]
@@ -913,7 +916,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "my-server", Path::new("escape/custom"), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::Escape { .. }));
+        assert_matches!(err, ConfinementError::Escape { .. });
     }
 
     #[tokio::test]
@@ -934,7 +937,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, ConfinementError::NotADirectory { .. }));
+        assert_matches!(err, ConfinementError::NotADirectory { .. });
     }
 
     #[tokio::test]
@@ -948,7 +951,7 @@ mod tests {
         let err = resolve_confined_path(base.path(), "my-server", Path::new("a/custom"), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::Io(_)));
+        assert_matches!(err, ConfinementError::Io(_));
     }
 
     #[tokio::test]
@@ -970,7 +973,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(dir_err, ConfinementError::Escape { .. }));
+        assert_matches!(dir_err, ConfinementError::Escape { .. });
 
         let file_err = resolve_confined_path(
             base.path(),
@@ -980,7 +983,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(file_err, ConfinementError::Escape { .. }));
+        assert_matches!(file_err, ConfinementError::Escape { .. });
     }
 
     #[tokio::test]
@@ -1003,7 +1006,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(dir_err, ConfinementError::Escape { .. }));
+        assert_matches!(dir_err, ConfinementError::Escape { .. });
 
         let file_err = resolve_confined_path(
             base.path(),
@@ -1013,7 +1016,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(file_err, ConfinementError::Escape { .. }));
+        assert_matches!(file_err, ConfinementError::Escape { .. });
     }
 
     #[tokio::test]
@@ -1035,7 +1038,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(dir_err, ConfinementError::WrongTargetKind { .. }));
+        assert_matches!(dir_err, ConfinementError::WrongTargetKind { .. });
 
         // A directory where a file was expected.
         let other_server_dir = base.path().join("other-server");
@@ -1050,7 +1053,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(file_err, ConfinementError::WrongTargetKind { .. }));
+        assert_matches!(file_err, ConfinementError::WrongTargetKind { .. });
     }
 
     /// Issue #491: two callers racing to resolve the same not-yet-existing segment directory
@@ -1182,7 +1185,7 @@ mod tests {
         // Linux/macOS, but other Unix flavors (e.g. FreeBSD) surface `EMLINK` instead. The
         // load-bearing assertions are that it's an I/O failure at all, and that the write never
         // reached the symlink's target.
-        assert!(matches!(err, ConfinementError::Io(_)));
+        assert_matches!(err, ConfinementError::Io(_));
         assert!(!outside_file.exists());
     }
 
@@ -1193,6 +1196,6 @@ mod tests {
         let err = resolve_confined_path(base.path(), "my-server", Path::new(r"\pwn\evil"), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ConfinementError::Escape { .. }));
+        assert_matches!(err, ConfinementError::Escape { .. });
     }
 }

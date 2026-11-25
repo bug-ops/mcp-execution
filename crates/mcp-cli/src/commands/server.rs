@@ -833,7 +833,9 @@ mod tests {
     /// under the home directory doesn't leak the OS username into unconditional output.
     #[test]
     fn test_build_command_string_sanitizes_command_home_path() {
-        let home = dirs::home_dir().expect("home dir available in this environment");
+        let home = mcp_execution_core::HomeDir::from_env()
+            .expect("home dir available in this environment");
+        let home = home.as_path();
         let entry = McpServerEntry {
             transport: McpTransport::Stdio {
                 command: home.join("bin/mcp-server").to_string_lossy().into_owned(),
@@ -1133,11 +1135,9 @@ mod tests {
     #[cfg(unix)]
     static HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    // Unix-only: redirects `dirs::home_dir()` by mutating `HOME`, which
-    // `dirs` only consults on Unix. On Windows `dirs::home_dir()` resolves
-    // via `SHGetKnownFolderPath(FOLDERID_Profile)`, a Win32 API that reads
-    // the real OS user profile and ignores environment variables entirely
-    // — no env var override can redirect it.
+    // Unix-only: redirects `HomeDir::from_env()` by mutating `HOME`; the in-process env
+    // mutation uses `unsafe` and is not set up for `USERPROFILE` (Windows is covered by the
+    // spawned-binary acceptance tests).
     #[cfg(unix)]
     #[tokio::test]
     async fn test_show_server_info_not_found_error_not_duplicated() {
@@ -1195,7 +1195,7 @@ mod tests {
         );
     }
 
-    /// Points `dirs::home_dir()` at `home_dir` for the duration of the
+    /// Points `HomeDir::from_env()` at `home_dir` for the duration of the
     /// closure, serialized against other `HOME`-mutating tests via
     /// `HOME_ENV_LOCK`, and restores the original value afterwards even if
     /// the closure's future returns an error.

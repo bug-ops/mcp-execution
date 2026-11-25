@@ -33,6 +33,7 @@
 mod command;
 mod confinement;
 mod error;
+mod home;
 mod path;
 mod redact;
 mod server_config;
@@ -66,6 +67,9 @@ pub use command::{
     forbidden_chars, forbidden_env_names, forbidden_env_prefix, validate_server_config,
     validate_url_scheme,
 };
+
+// Re-export home-directory resolution
+pub use home::{HomeDir, HomeDirError, ServersDir, SkillsDir, expand_home};
 
 // Re-export path helpers shared by confinement checks
 pub use path::{

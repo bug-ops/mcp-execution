@@ -20,6 +20,7 @@
 use crate::filesystem::FileSystem;
 use crate::types::{FilesError, Result};
 use mcp_execution_codegen::GeneratedCode;
+use mcp_execution_core::{HomeDirError, expand_home};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -281,7 +282,7 @@ impl FilesBuilder {
         vfs.check_export_bounds()?;
 
         // Expand tilde in path
-        let base = expand_tilde(base_path.as_ref())?;
+        let base = expand_base_path(base_path.as_ref())?;
 
         fs::create_dir_all(&base).map_err(|e| FilesError::IoError {
             path: base.display().to_string(),
@@ -373,32 +374,24 @@ impl FilesBuilder {
     }
 }
 
-/// Expands tilde (~) in path to user's home directory.
+/// Expands a leading `~` in `path` through the core home resolver.
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined.
-fn expand_tilde(path: &Path) -> Result<PathBuf> {
-    let path_str = path.to_str().ok_or_else(|| FilesError::InvalidPath {
+/// Returns an error if the home directory is needed and unusable.
+fn expand_base_path(path: &Path) -> Result<PathBuf> {
+    expand_home(path).map_err(|source| FilesError::IoError {
         path: path.display().to_string(),
-    })?;
+        source: std::io::Error::new(home_error_kind(&source), source),
+    })
+}
 
-    if path_str.starts_with("~/") || path_str == "~" {
-        let home = dirs::home_dir().ok_or_else(|| FilesError::IoError {
-            path: path_str.to_string(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Cannot determine home directory",
-            ),
-        })?;
-
-        if path_str == "~" {
-            Ok(home)
-        } else {
-            Ok(home.join(&path_str[2..]))
-        }
-    } else {
-        Ok(path.to_path_buf())
+/// I/O kind that describes a home-directory failure: a relative home is invalid input, an
+/// unknown one has no better kind than `Other`.
+const fn home_error_kind(error: &HomeDirError) -> std::io::ErrorKind {
+    match error {
+        HomeDirError::NotAbsolute { .. } => std::io::ErrorKind::InvalidInput,
+        HomeDirError::Unknown => std::io::ErrorKind::Other,
     }
 }
 
@@ -439,6 +432,7 @@ mod tests {
     use super::*;
     use crate::types::FilesResourceKind;
     use mcp_execution_codegen::GeneratedFile;
+    use std::assert_matches;
     use tempfile::TempDir;
 
     #[test]
@@ -472,7 +466,7 @@ mod tests {
             .add_file("relative/path", "content")
             .build();
 
-        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
+        assert_matches!(result, Err(FilesError::PathNotAbsolute { .. }));
     }
 
     #[test]
@@ -732,7 +726,7 @@ mod tests {
             .add_file("invalid/relative", "content")
             .build_and_export(temp_dir.path());
 
-        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
+        assert_matches!(result, Err(FilesError::PathNotAbsolute { .. }));
     }
 
     #[test]
@@ -837,10 +831,7 @@ mod tests {
             .add_file("//x.ts", "malicious")
             .build_and_export(temp_dir.path());
 
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
         // Rejected during `build()`, before any group ever touches `base_path`.
         assert!(temp_dir.path().join("existing-sibling.ts").exists());
     }
@@ -853,10 +844,7 @@ mod tests {
             .add_file("/./x.ts", "content")
             .build_and_export(temp_dir.path());
 
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]
@@ -873,14 +861,12 @@ mod tests {
         let target = temp_dir.path().join("out");
         let result = builder.build_and_export(&target);
 
-        assert!(
-            matches!(
-                result,
-                Err(FilesError::ResourceLimitExceeded {
-                    resource: FilesResourceKind::ExportFileCount,
-                    ..
-                })
-            ),
+        assert_matches!(
+            result,
+            Err(FilesError::ResourceLimitExceeded {
+                resource: FilesResourceKind::ExportFileCount,
+                ..
+            }),
             "expected ResourceLimitExceeded{{resource: ExportFileCount}}, got: {result:?}"
         );
         // Rejected before any per-group publish ran, so the target directory
@@ -890,9 +876,21 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_tilde_expands_home() {
+    fn test_home_error_kind_describes_each_failure() {
+        let relative = HomeDirError::NotAbsolute {
+            path: PathBuf::from("relative"),
+        };
+        assert_eq!(home_error_kind(&relative), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            home_error_kind(&HomeDirError::Unknown),
+            std::io::ErrorKind::Other
+        );
+    }
+
+    #[test]
+    fn test_expand_base_path_expands_home() {
         let path = Path::new("~/test/path");
-        let expanded = expand_tilde(path).unwrap();
+        let expanded = expand_base_path(path).unwrap();
 
         // Should not contain tilde anymore
         assert!(!expanded.to_string_lossy().contains('~'));
@@ -902,17 +900,17 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_tilde_preserves_absolute() {
+    fn test_expand_base_path_preserves_absolute() {
         let path = Path::new("/absolute/path");
-        let expanded = expand_tilde(path).unwrap();
+        let expanded = expand_base_path(path).unwrap();
 
         assert_eq!(expanded, Path::new("/absolute/path"));
     }
 
     #[test]
-    fn test_expand_tilde_just_tilde() {
+    fn test_expand_base_path_just_tilde() {
         let path = Path::new("~");
-        let expanded = expand_tilde(path).unwrap();
+        let expanded = expand_base_path(path).unwrap();
 
         // Should expand to home directory
         assert!(expanded.is_absolute());
@@ -925,10 +923,7 @@ mod tests {
 
         let result = write_file_atomic(temp_dir.path(), "/../etc/passwd", "malicious");
 
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]

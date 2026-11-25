@@ -91,10 +91,6 @@ fn skill_dir(home: &Path, server_id: &str) -> std::path::PathBuf {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API); tracked in #604"
-)]
 fn save_skill_rejects_a_frontmatter_name_that_differs_from_the_directory() {
     let home = tempfile::tempdir().unwrap();
     let args = json!({
@@ -116,10 +112,6 @@ fn save_skill_rejects_a_frontmatter_name_that_differs_from_the_directory() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API); tracked in #604"
-)]
 fn save_skill_rejects_a_description_over_the_agent_skills_limit() {
     let home = tempfile::tempdir().unwrap();
     let args = json!({
@@ -135,10 +127,6 @@ fn save_skill_rejects_a_description_over_the_agent_skills_limit() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "dirs::home_dir() ignores HOME and USERPROFILE on Windows (known-folder API); tracked in #604"
-)]
 fn save_skill_leaves_saved_scripts_byte_identical_whether_it_rejects_or_writes() {
     let home = tempfile::tempdir().unwrap();
     let scripts = skill_dir(home.path(), "acme").join("scripts");
