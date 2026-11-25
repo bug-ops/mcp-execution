@@ -4,10 +4,12 @@
 //! typed one-line script, so the answer is about capability and not about a version number. The
 //! script runs from a private directory under the runner state root, because Bun and Deno read
 //! configuration (and Bun runs preload files) from the working directory.
+//!
+//! The bounded capture used for these probes also serves the Node.js version check.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -20,7 +22,8 @@ use super::dirs::{RunId, RuntimeDirs, create_private_file, ensure_private_dir};
 use super::exec::ProcessTree;
 use super::path_lookup::find_on_path;
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest any runtime detection command may take to answer.
+pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE_MARKER: &str = "mcp-execution-probe ";
 const MAX_PROBE_OUTPUT_BYTES: u64 = 4096;
 const MAX_VERSION_CHARS: usize = 64;
@@ -171,24 +174,66 @@ async fn probe(candidate: Alternative, program: &Path) -> Result<String> {
     command
         .args(candidate.leading_args())
         .arg(&script.0)
-        .current_dir(&dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .current_dir(&dir);
     tokio::time::timeout(PROBE_TIMEOUT, read_version(command))
         .await
         .with_context(|| format!("no answer within {} s", PROBE_TIMEOUT.as_secs()))?
 }
 
-/// Runs `command` as a process tree, so a shell shim cannot leave the real runtime running when
-/// the caller drops this future.
-async fn read_version(mut command: Command) -> Result<String> {
-    let mut tree = ProcessTree::spawn(&mut command).context("cannot start")?;
+async fn read_version(command: Command) -> Result<String> {
+    let output = capped_stdout(command).await?;
+    parse_version(&String::from_utf8_lossy(&output)).context("did not print the probe line")
+}
+
+/// Why [`capped_stdout`] has no output to give.
+#[derive(Debug)]
+pub(super) enum CaptureError {
+    /// The program could not be spawned.
+    Start(std::io::Error),
+    /// Its standard output could not be read.
+    Read(std::io::Error),
+    /// Its exit could not be awaited.
+    Wait(std::io::Error),
+    /// It exited unsuccessfully.
+    Exit(ExitStatus),
+}
+
+impl std::fmt::Display for CaptureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Start(_) => f.write_str("cannot start"),
+            Self::Read(_) => f.write_str("cannot read its output"),
+            Self::Wait(_) => f.write_str("cannot wait for it"),
+            Self::Exit(status) => write!(f, "exited with {status}"),
+        }
+    }
+}
+
+impl std::error::Error for CaptureError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Start(error) | Self::Read(error) | Self::Wait(error) => Some(error),
+            Self::Exit(_) => None,
+        }
+    }
+}
+
+/// Runs `command` as a process tree and returns at most [`MAX_PROBE_OUTPUT_BYTES`] of its stdout.
+///
+/// The tree is killed when the caller drops this future, so a shell shim cannot leave the real
+/// runtime running. There is no time limit here: the caller applies [`PROBE_TIMEOUT`]. All three
+/// standard streams are set here: stdin and stderr are null, so no undrained pipe can block it.
+pub(super) async fn capped_stdout(mut command: Command) -> Result<Vec<u8>, CaptureError> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut tree = ProcessTree::spawn(&mut command).map_err(CaptureError::Start)?;
     let stdout = tree
         .child_mut()
         .stdout
         .take()
-        .context("stdout is not piped")?;
+        .ok_or_else(|| CaptureError::Read(std::io::Error::other("stdout is not piped")))?;
     let mut output = Vec::new();
     // Concurrently: `wait` stops what the leader left behind, which may hold the pipe open, and
     // dropping the pipe at the cap stops a writer from blocking the exit.
@@ -201,10 +246,12 @@ async fn read_version(mut command: Command) -> Result<String> {
         },
         tree.wait()
     );
-    read.context("cannot read its output")?;
-    let status = status.context("cannot wait for it")?;
-    anyhow::ensure!(status.success(), "exited with {status}");
-    parse_version(&String::from_utf8_lossy(&output)).context("did not print the probe line")
+    read.map_err(CaptureError::Read)?;
+    let status = status.map_err(CaptureError::Wait)?;
+    if !status.success() {
+        return Err(CaptureError::Exit(status));
+    }
+    Ok(output)
 }
 
 fn parse_version(output: &str) -> Option<String> {
@@ -243,6 +290,32 @@ mod tests {
         for candidate in Alternative::ALL {
             assert!(candidate.script().contains(PROBE_MARKER));
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn capped_stdout_tells_start_and_exit_failures_apart_and_caps_the_output() {
+        let sh = |script: &str| {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", script]);
+            command
+        };
+
+        let missing = capped_stdout(Command::new("/nonexistent/runtime")).await;
+        assert!(
+            matches!(missing, Err(CaptureError::Start(_))),
+            "{missing:?}"
+        );
+        let failed = capped_stdout(sh("echo out; exit 3")).await;
+        assert!(
+            matches!(failed, Err(CaptureError::Exit(status)) if status.code() == Some(3)),
+            "{failed:?}"
+        );
+        // The pipe closes at the cap, so a late write must not decide the exit status.
+        let long = capped_stdout(sh("trap '' PIPE; printf '%08192d' 0; exit 0"))
+            .await
+            .unwrap();
+        assert_eq!(long.len() as u64, MAX_PROBE_OUTPUT_BYTES);
     }
 
     #[test]

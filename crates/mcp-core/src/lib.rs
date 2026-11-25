@@ -73,6 +73,9 @@ pub use path::{
     validate_path_segment,
 };
 
+#[doc(hidden)]
+pub use path::is_reserved_device_name;
+
 // Re-export the shared path-confinement walk
 pub use confinement::{
     ConfinementError, ConfinementTarget, open_confined_write, resolve_confined_existing,

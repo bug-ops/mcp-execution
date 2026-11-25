@@ -48,7 +48,7 @@ use mcp_execution_core::metadata::{
     METADATA_SCHEMA_VERSION, ServerMetadata, ToolMetadata,
 };
 use mcp_execution_core::provenance::{GenerationProvenance, ToolDigestEntry, ToolEntryDigest};
-use mcp_execution_core::{Error, Result, ServerConfig};
+use mcp_execution_core::{Error, Result, ServerConfig, is_reserved_device_name};
 use mcp_execution_introspector::{
     MAX_SERVER_NAME_LEN, MAX_SERVER_VERSION_LEN, ServerInfo, ToolInfo,
 };
@@ -1279,6 +1279,8 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &["index", "catalog", "runIfMain", "callM
 /// - JS/TS reserved words (e.g. `delete`) are checked case-*sensitively*, an exact match
 ///   against the lowercase reserved word — reserved words are only reserved in their exact
 ///   lowercase form (`Delete`, `New`, `Import` are all legal identifiers).
+/// - Windows device names (e.g. `nul`, `COM1`) are checked case-*insensitively*, because
+///   `<name>.ts` cannot be a file there.
 /// - The fixed output filenames (e.g. `index`) and previously-resolved tool names are checked
 ///   case-*insensitively* (via [`disambiguate_output_filename`]'s case-folded `used_lower`
 ///   set), because filenames collide regardless of case on a case-insensitive filesystem (macOS
@@ -1303,11 +1305,11 @@ fn resolve_typescript_names(tools: &[ToolInfo]) -> Vec<String> {
     resolved
 }
 
-/// Disambiguates `base` against reserved JS/TS words and `used_lower`, appending a numeric
-/// suffix (`_2`, `_3`, ...) — mirroring [`disambiguate_identifier`]'s suffix scheme — until a
-/// candidate is found that is neither an exact (case-sensitive) match for a
-/// [`RESERVED_WORDS`] entry nor a case-insensitive match in `used_lower`. The winning
-/// candidate's lowercased form is then reserved in `used_lower`. The returned identifier
+/// Disambiguates `base` against reserved JS/TS words, Windows device names and `used_lower`,
+/// appending a numeric suffix (`_2`, `_3`, ...) — mirroring [`disambiguate_identifier`]'s suffix
+/// scheme — until a candidate is found that is neither an exact (case-sensitive) match for a
+/// [`RESERVED_WORDS`] entry, nor a device name, nor a case-insensitive match in `used_lower`. The
+/// winning candidate's lowercased form is then reserved in `used_lower`. The returned identifier
 /// preserves `base`'s original casing; only the collision *checks* fold or preserve case (see
 /// [`resolve_typescript_names`] for why the two checks differ).
 ///
@@ -1320,8 +1322,9 @@ fn disambiguate_output_filename(base: &str, used_lower: &mut HashSet<String>) ->
     let mut candidate = base.to_string();
     let mut suffix = 2;
     loop {
-        let is_reserved_word = RESERVED_WORDS.contains(&candidate.as_str());
-        if !is_reserved_word && used_lower.insert(candidate.to_ascii_lowercase()) {
+        let is_reserved =
+            RESERVED_WORDS.contains(&candidate.as_str()) || is_reserved_device_name(&candidate);
+        if !is_reserved && used_lower.insert(candidate.to_ascii_lowercase()) {
             return candidate;
         }
         candidate = format!("{base}_{suffix}");
@@ -2750,6 +2753,17 @@ mod tests {
             delete_second[0].to_ascii_lowercase(),
             delete_second[1].to_ascii_lowercase()
         );
+    }
+
+    #[test]
+    fn test_resolve_typescript_names_device_name_suffix_pushes_a_later_literal_suffix() {
+        // A hyphen, so the second raw name sanitizes to the literal `con_2`.
+        let tools: Vec<ToolInfo> = ["con", "con-2"]
+            .into_iter()
+            .map(|name| ToolInfo::new(ToolName::new(name).unwrap(), String::new(), json!({})))
+            .collect();
+
+        assert_eq!(resolve_typescript_names(&tools), ["con_2", "con_2_2"]);
     }
 
     #[test]

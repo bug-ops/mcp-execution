@@ -9,6 +9,7 @@ use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::HomeDirError;
 use mcp_execution_core::cli::{ExitCode, LOG_FORMAT_ENV_VAR, LogFormat, OutputFormat, RmcpLogCap};
 use mcp_execution_files::FilesError;
+use tracing_subscriber::filter::{LevelFilter, ParseError, Targets};
 use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::cli::{Commands, LogProfile};
@@ -71,21 +72,29 @@ fn log_format_env_is_invalid(log_format: Option<LogFormat>) -> bool {
         && std::env::var(LOG_FORMAT_ENV_VAR).is_ok_and(|raw| LogFormat::is_invalid_env_value(&raw))
 }
 
-/// Selects the log filter: `--verbose` is `debug`, an explicit `RUST_LOG` (`env`) is honoured,
-/// otherwise the default of `profile`. Only a [`LogProfile::Quiet`] default drops `rmcp` to
-/// `warn`; every other case keeps the `rmcp=info` cap.
+/// Selects the log filter and the `rmcp` cap applied on top of it: `--verbose` is `debug`, an
+/// explicit `RUST_LOG` (`env`) is honoured, otherwise the default of `profile`. Only a
+/// [`LogProfile::Quiet`] default caps `rmcp` at `warn`; every other case caps it at `info`.
 fn log_filter(
     verbose: bool,
     profile: LogProfile,
     env: Option<EnvFilter>,
-) -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
+) -> Result<(EnvFilter, Targets), ParseError> {
     let (base, cap) = match (verbose, env, profile) {
         (true, _, _) => (EnvFilter::new("debug"), RmcpLogCap::Info),
         (false, Some(env), _) => (env, RmcpLogCap::Info),
         (false, None, LogProfile::Quiet) => (EnvFilter::new("warn"), RmcpLogCap::Warn),
         (false, None, LogProfile::Standard) => (EnvFilter::new("info"), RmcpLogCap::Info),
     };
-    Ok(base.add_directive(cap.directive().parse()?))
+    let cap = cap
+        .cap_filter_directives(&base.to_string())
+        .parse::<Targets>()?;
+    // Rebuilt because replacing the `trace` default in place would keep the max level at `trace`.
+    let cap = cap
+        .into_iter()
+        .collect::<Targets>()
+        .with_default(base.max_level_hint().unwrap_or(LevelFilter::TRACE));
+    Ok((base, cap))
 }
 
 /// Initializes logging infrastructure.
@@ -102,8 +111,8 @@ fn log_filter(
 /// or invalid environment value falls back to text with a `WARN`-level log line (never echoing
 /// the rejected raw value — see the project's log-injection hardening for this switch).
 ///
-/// Every filter carries the [`RmcpLogCap`] directive, which caps `rmcp`'s own `tracing` targets
-/// regardless of the base filter -- see that type's doc comment for why.
+/// The [`RmcpLogCap`] filter is applied on top of the base filter, which caps `rmcp`'s own
+/// `tracing` targets without raising them -- see that type's doc comment for why.
 ///
 /// # Arguments
 ///
@@ -122,7 +131,7 @@ pub fn init_logging(
     log_format: Option<LogFormat>,
     profile: LogProfile,
 ) -> Result<()> {
-    let filter = log_filter(verbose, profile, EnvFilter::try_from_default_env().ok())?;
+    let (filter, rmcp_cap) = log_filter(verbose, profile, EnvFilter::try_from_default_env().ok())?;
 
     let format = resolve_log_format(log_format);
 
@@ -134,6 +143,7 @@ pub fn init_logging(
 
     tracing_subscriber::registry()
         .with(filter)
+        .with(rmcp_cap)
         .with(layer)
         .try_init()?;
 
@@ -967,7 +977,7 @@ mod tests {
 
     /// Logs one rmcp `debug`, one own `debug` and one rmcp `info` event through `filter` and
     /// returns what a real `fmt::layer()` wrote.
-    fn captured_log(filter: EnvFilter) -> String {
+    fn captured_log((filter, rmcp_cap): (EnvFilter, Targets)) -> String {
         use std::sync::{Arc, Mutex};
 
         #[derive(Clone)]
@@ -989,11 +999,14 @@ mod tests {
             move || SharedBuf(buf.clone())
         };
 
-        let subscriber = tracing_subscriber::registry().with(filter).with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(make_writer)
-                .with_ansi(false),
-        );
+        let subscriber = tracing_subscriber::registry()
+            .with(filter)
+            .with(rmcp_cap)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(make_writer)
+                    .with_ansi(false),
+            );
 
         tracing::subscriber::with_default(subscriber, || {
             tracing::debug!(
@@ -1008,8 +1021,8 @@ mod tests {
     }
 
     #[test]
-    fn a_same_target_rmcp_debug_directive_is_replaced_by_the_cap() {
-        if !process_per_test("a_same_target_rmcp_debug_directive_is_replaced_by_the_cap") {
+    fn a_same_target_rmcp_debug_directive_is_lowered_to_the_cap() {
+        if !process_per_test("a_same_target_rmcp_debug_directive_is_lowered_to_the_cap") {
             return;
         }
         let written = captured_log(
@@ -1037,6 +1050,31 @@ mod tests {
             .unwrap(),
         );
         assert!(written.contains("raw untrusted peer line"), "{written}");
+    }
+
+    #[test]
+    fn the_cap_does_not_raise_the_max_level_hint() {
+        use tracing::Subscriber as _;
+        use tracing::level_filters::LevelFilter;
+
+        for (env, expected) in [("info", LevelFilter::INFO), ("debug", LevelFilter::DEBUG)] {
+            let (filter, rmcp_cap) =
+                log_filter(false, LogProfile::Standard, Some(EnvFilter::new(env))).unwrap();
+            let subscriber = tracing_subscriber::registry().with(filter).with(rmcp_cap);
+            assert_eq!(subscriber.max_level_hint(), Some(expected), "{env}");
+        }
+    }
+
+    #[test]
+    fn the_cap_does_not_raise_rmcp_above_the_base_filter() {
+        if !process_per_test("the_cap_does_not_raise_rmcp_above_the_base_filter") {
+            return;
+        }
+        for env in ["error", "rmcp=error", "rmcp::transport=debug"] {
+            let filter = log_filter(false, LogProfile::Standard, Some(EnvFilter::new(env)));
+            let written = captured_log(filter.unwrap());
+            assert!(!written.contains("rmcp info event"), "{env}: {written}");
+        }
     }
 
     #[test]

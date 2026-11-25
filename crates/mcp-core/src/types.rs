@@ -20,7 +20,9 @@
 //! let tool = ToolName::new("execute_code").unwrap();
 //! ```
 
-use crate::path::{first_disallowed_identifier_char, validate_path_segment};
+use crate::path::{
+    first_disallowed_identifier_char, is_reserved_device_name, validate_path_segment,
+};
 use crate::untrusted::sanitize_untrusted_inline;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -245,16 +247,6 @@ pub enum ServerIdSlugError {
     /// The candidate is a Windows reserved device name, which cannot name a directory.
     #[error("server_id must not be a Windows reserved device name")]
     ReservedName,
-}
-
-/// Whether `id` is a Windows reserved device name (`con`, `prn`, `aux`, `nul`, `com0`-`com9`,
-/// `lpt0`-`lpt9`), which cannot name a directory there.
-fn is_reserved_device_name(id: &str) -> bool {
-    matches!(id, "con" | "prn" | "aux" | "nul")
-        || id
-            .strip_prefix("com")
-            .or_else(|| id.strip_prefix("lpt"))
-            .is_some_and(|n| matches!(n.as_bytes(), [b'0'..=b'9']))
 }
 
 /// Checks the slug rule: `[a-z0-9-]{1,64}`, not a reserved device name; the single place the rule

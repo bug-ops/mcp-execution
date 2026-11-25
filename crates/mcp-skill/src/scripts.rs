@@ -19,7 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mcp_execution_core::metadata::ServerMetadata;
 use mcp_execution_core::{
-    ConfinementError, ConfinementTarget, ServerId, ToolName, resolve_confined_path,
+    ConfinementError, ConfinementTarget, ServerId, ToolName, is_reserved_device_name,
+    resolve_confined_path,
 };
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt as _;
@@ -69,12 +70,16 @@ pub struct RecipeName(String);
 
 impl RecipeName {
     /// Validates `name` (1 to [`MAX_RECIPE_NAME_LENGTH`] lowercase letters, digits and hyphens,
-    /// not starting with a hyphen) and wraps it.
+    /// not starting with a hyphen, not a Windows reserved device name) and wraps it.
+    ///
+    /// Device names (`con`, `prn`, `aux`, `nul`, `com0`-`com9`, `lpt0`-`lpt9`) are rejected on
+    /// every platform because the name becomes the file `<name>.ts`. An already saved script with
+    /// such a name is therefore skipped by [`list`] and reported by [`check`].
     ///
     /// # Errors
     ///
-    /// Returns [`ScriptError::InvalidName`] when `name` is empty, too long or has characters
-    /// outside the allowed set.
+    /// Returns [`ScriptError::InvalidName`] when `name` is empty, too long, has characters
+    /// outside the allowed set or is a device name.
     ///
     /// # Examples
     ///
@@ -83,11 +88,13 @@ impl RecipeName {
     ///
     /// assert!(RecipeName::new("triage-issues").is_ok());
     /// assert!(RecipeName::new("../escape").is_err());
+    /// assert!(RecipeName::new("nul").is_err());
     /// ```
     pub fn new(name: &str) -> Result<Self, ScriptError> {
         let valid = !name.is_empty()
             && name.len() <= MAX_RECIPE_NAME_LENGTH
             && !name.starts_with('-')
+            && !is_reserved_device_name(name)
             && name
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');

@@ -196,13 +196,14 @@ struct DriftReport {
     only_recorded: NameList,
     changed_on_server: NameList,
     scripts_using_removed_tools: NameList,
+    scripts_using_changed_tools: NameList,
     ttl_seconds: Option<u64>,
     cache_scope: Option<&'static str>,
     notices: Vec<&'static str>,
 }
 
 impl DriftReport {
-    fn new(outcome: &DriftOutcome, hints: ListingHints, scripts: &[String]) -> Self {
+    fn new(outcome: &DriftOutcome, hints: ListingHints, scripts: &AffectedScripts) -> Self {
         let (summary, added, removed, changed): (&'static str, &[String], &[String], &[String]) =
             match outcome {
                 DriftOutcome::NoDrift => (
@@ -246,7 +247,8 @@ impl DriftReport {
             only_on_server: NameList::bounded(added),
             only_recorded: NameList::bounded(removed),
             changed_on_server: NameList::bounded(changed),
-            scripts_using_removed_tools: NameList::bounded(scripts),
+            scripts_using_removed_tools: NameList::bounded(&scripts.removed),
+            scripts_using_changed_tools: NameList::bounded(&scripts.changed),
             ttl_seconds: hints.ttl.map(|ttl| ttl.as_secs()),
             cache_scope: hints.cache_scope.map(|scope| match scope {
                 CacheScope::Public => "public",
@@ -266,6 +268,8 @@ impl DriftReport {
             .lines("changed on the server since generation", &mut lines);
         self.scripts_using_removed_tools
             .lines("saved scripts using a removed tool", &mut lines);
+        self.scripts_using_changed_tools
+            .lines("saved scripts using a changed tool", &mut lines);
         lines.extend(self.notices.iter().map(ToString::to_string));
         if let Some(ttl) = self.ttl_seconds {
             lines.push(format!("server listing ttl: {ttl}s"));
@@ -315,12 +319,7 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
         &live,
     );
 
-    let scripts = match &outcome {
-        DriftOutcome::ToolsDiffer { removed, .. } if !removed.is_empty() => {
-            scripts_using(&skill_id, removed).await
-        }
-        _ => Vec::new(),
-    };
+    let scripts = scripts_using(&skill_id, &outcome).await;
     let report = DriftReport::new(&outcome, hints, &scripts);
     let exit = if outcome.is_drift() {
         ExitCode::CHECK_FAILED
@@ -335,34 +334,49 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
     }
 }
 
-/// Names of the saved scripts of `server_id` that call any of the `removed` tools.
+/// Saved scripts affected by a tool difference; a script can appear in both lists.
+#[derive(Debug, Default)]
+struct AffectedScripts {
+    removed: Vec<String>,
+    changed: Vec<String>,
+}
+
+/// Names of the saved scripts of `server_id` that call a removed or a changed tool.
 ///
 /// Best effort: a missing skill directory or unreadable scripts yield no names, since the drift
 /// verdict does not depend on them.
-async fn scripts_using(server_id: &ServerId, removed: &[String]) -> Vec<String> {
+async fn scripts_using(server_id: &ServerId, outcome: &DriftOutcome) -> AffectedScripts {
+    let DriftOutcome::ToolsDiffer {
+        removed, changed, ..
+    } = outcome
+    else {
+        return AffectedScripts::default();
+    };
+    if removed.is_empty() && changed.is_empty() {
+        return AffectedScripts::default();
+    }
     let Ok(skills) = SkillsDir::resolve(None) else {
-        return Vec::new();
+        return AffectedScripts::default();
     };
     let skill_dir = skills.skill(server_id);
     if !skill_dir.is_dir() {
-        return Vec::new();
+        return AffectedScripts::default();
     }
     scripts::list(&skill_dir)
         .await
-        .map_or_default(|listings| referencing(&listings, server_id, removed))
+        .map_or_default(|listings| AffectedScripts {
+            removed: referencing(&listings, server_id, removed),
+            changed: referencing(&listings, server_id, changed),
+        })
 }
 
-/// Names of the `listings` that call a `removed` tool of `server_id`, in listing order.
-fn referencing(
-    listings: &[ScriptListing],
-    server_id: &ServerId,
-    removed: &[String],
-) -> Vec<String> {
+/// Names of the `listings` that call any of the `tools` of `server_id`, in listing order.
+fn referencing(listings: &[ScriptListing], server_id: &ServerId, tools: &[String]) -> Vec<String> {
     listings
         .iter()
         .filter(|listing| {
             listing.tools.iter().any(|tool| {
-                tool.server == *server_id && removed.iter().any(|name| name == tool.tool.as_str())
+                tool.server == *server_id && tools.iter().any(|name| name == tool.tool.as_str())
             })
         })
         .map(|listing| listing.name.as_str().to_string())
@@ -471,7 +485,11 @@ mod tests {
                 changed: vec![],
             }
         );
-        let report = DriftReport::new(&outcome, ListingHints::default(), &[]);
+        let report = DriftReport::new(
+            &outcome,
+            ListingHints::default(),
+            &AffectedScripts::default(),
+        );
         assert!(report.text().contains("cannot be determined"));
     }
 
@@ -525,13 +543,26 @@ mod tests {
     }
 
     #[test]
+    fn script_lists_are_reported_under_their_own_headings() {
+        let scripts = AffectedScripts {
+            removed: vec!["uses-removed".to_string()],
+            changed: vec!["uses-changed".to_string()],
+        };
+        let report = DriftReport::new(&DriftOutcome::NoDrift, ListingHints::default(), &scripts);
+        assert!(report.text().contains(
+            "saved scripts using a removed tool:\n  uses-removed\n\
+             saved scripts using a changed tool:\n  uses-changed"
+        ));
+    }
+
+    #[test]
     fn private_scope_warns_about_credentials() {
         let hints = {
             let mut value = ListingHints::default();
             value.cache_scope = Some(CacheScope::Private);
             value
         };
-        let report = DriftReport::new(&DriftOutcome::NoDrift, hints, &[]);
+        let report = DriftReport::new(&DriftOutcome::NoDrift, hints, &AffectedScripts::default());
         assert!(report.text().contains("depend on credentials"));
     }
 }

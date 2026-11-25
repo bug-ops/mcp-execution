@@ -89,9 +89,11 @@ fn format_size(bytes: usize) -> String {
 ///
 /// This command performs the following steps:
 /// 1. Builds `ServerConfig` from CLI arguments or loads from ~/.claude/mcp.json
-/// 2. Introspects the MCP server to discover tools
-/// 3. Generates TypeScript files (one per tool) into a typed SDK
-/// 4. Exports VFS to `~/.claude/servers/{server-id}/` directory
+/// 2. Validates the server directory name and resolves the output location, so an unusable
+///    `--name`, config key or servers directory fails before any server process is started
+/// 3. Introspects the MCP server to discover tools
+/// 4. Generates TypeScript files (one per tool) into a typed SDK
+/// 5. Exports VFS to `~/.claude/servers/{server-id}/` directory
 ///
 /// # Arguments
 ///
@@ -112,6 +114,8 @@ fn format_size(bytes: usize) -> String {
 /// Returns an error if:
 /// - Server configuration is invalid
 /// - Server not found in mcp.json (when using --from-config)
+/// - `--name`, or the config key without one, is not a valid directory name
+/// - The servers directory cannot be resolved
 /// - Server connection fails
 /// - Tool introspection fails
 /// - Code generation fails
@@ -137,15 +141,18 @@ pub async fn run(
         matches!(source, ServerSource::Config { .. }) && name.is_none();
     let (server_id, server_config) = resolve_server_config(source)?;
 
-    let server_info = discover_server_info(server_id, &server_config, name.as_deref()).await?;
+    let override_id = name_override(name.as_deref())?;
+    let target_id = override_id.clone().unwrap_or_else(|| server_id.clone());
+    let (base_dir, output_path) =
+        generated_location(&target_id, id_from_unvalidated_config_key, output_dir)?;
+
+    let server_info = discover_server_info(server_id, &server_config, override_id).await?;
 
     if server_info.tools.is_empty() {
         warn!("Server has no tools to generate code for");
         return Ok(ExitCode::SUCCESS);
     }
 
-    let (base_dir, output_path) =
-        generated_location(&server_info.id, id_from_unvalidated_config_key, output_dir)?;
     let generated_code = generate_code(&server_info, &server_config, observed_jsonl.as_deref())?;
 
     if dry_run {
@@ -158,19 +165,16 @@ pub async fn run(
 }
 
 /// Connects to the target server, discovers its tools, and applies the
-/// `--name` override to [`ServerInfo::id`] if one was given.
+/// already validated `--name` override to [`ServerInfo::id`] if one was given.
 ///
 /// # Errors
 ///
-/// Returns an error if `name` fails [`ServerSlug::new`](mcp_execution_core::ServerSlug::new),
-/// or if the connection or tool discovery fails.
+/// Returns an error if the connection or tool discovery fails.
 async fn discover_server_info(
     server_id: ServerId,
     server_config: &ServerConfig,
-    name: Option<&str>,
+    override_id: Option<ServerId>,
 ) -> Result<ServerInfo> {
-    let override_id = name_override(name)?;
-
     info!("Connecting to MCP server: {}", server_id);
 
     let introspector = Introspector::new();
@@ -253,7 +257,7 @@ fn generate_code(
     Ok(generated_code)
 }
 
-/// Resolves `server_info.id` to a directory name, guaranteeing it is safe to
+/// Resolves `server_id` to a directory name, guaranteeing it is safe to
 /// join onto `base_dir`.
 ///
 /// This is `generate`'s own sink — the single point where the id is turned
@@ -265,7 +269,7 @@ fn generate_code(
 ///
 /// For the stdio arm (`derive_server_id_from_path_or_name`), the http/sse arm
 /// (`derive_server_id_from_url`), and `--name` (its own `ServerSlug`
-/// check in `discover_server_info`), this check is a redundant backstop:
+/// check in [`name_override`]), this check is a redundant backstop:
 /// each of those already guarantees the id is valid before it ever reaches
 /// here, so failing here for one of them would indicate a bug in that arm's
 /// own check, not in the user's input. It is **not** redundant for
@@ -279,7 +283,7 @@ fn generate_code(
 ///
 /// # Errors
 ///
-/// Returns an error if `server_info.id` fails
+/// Returns an error if `server_id` fails
 /// [`ServerSlug::new`](mcp_execution_core::ServerSlug::new). When
 /// `is_from_unvalidated_config_key` is `true`, the error names
 /// `~/.claude/mcp.json` and suggests the `--name` override (with a
@@ -905,21 +909,29 @@ mod tests {
         // identity the caller already has in mind, so it must be rejected
         // rather than silently transformed. Validation happens before any
         // connection attempt, so this never reaches the network.
-        let server_config = ServerConfig::builder()
-            .command("nonexistent-command-for-name-validation-test".to_string())
-            .build()
-            .unwrap();
-
         for bad_name in [
             "../../../../etc/passwd",
             "/etc/cron.d/evil",
             "..",
             "UPPER_CASE",
         ] {
-            let result = discover_server_info(
-                ServerId::new("placeholder").unwrap(),
-                &server_config,
-                Some(bad_name),
+            let source = ServerSource::Flags {
+                transport: TransportArgs::Stdio {
+                    command: "nonexistent-command-for-name-validation-test".to_string(),
+                    args: vec![],
+                    env: vec![],
+                    cwd: None,
+                },
+                connect_timeout_secs: None,
+                discover_timeout_secs: None,
+            };
+            let result = run(
+                source,
+                Some(bad_name.to_string()),
+                None,
+                None,
+                false,
+                OutputFormat::Json,
             )
             .await;
 

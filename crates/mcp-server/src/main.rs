@@ -48,6 +48,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::{Decoder, FramedRead, FramedWrite};
 use tokio_util::sync::PollSemaphore;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Command-line arguments for the `mcp-execution` server binary.
@@ -118,16 +119,24 @@ fn warn_on_rejected_log_format(rejected: bool) {
     }
 }
 
-/// Selects the log filter: an explicit `RUST_LOG` (`env`) is honoured, otherwise `info` with this
-/// crate at `debug`. Either way `rmcp`'s own targets are capped by [`RmcpLogCap::Info`] so a broad
-/// `debug` filter cannot echo a raw peer line.
+/// Selects the log filter and the `rmcp` cap applied on top of it: an explicit `RUST_LOG` (`env`)
+/// is honoured, otherwise `info` with this crate at `debug`. Either way [`RmcpLogCap::Info`] caps
+/// `rmcp`'s own targets, so a broad `debug` filter cannot echo a raw peer line.
 ///
 /// # Errors
 ///
-/// Returns an error if the cap directive does not parse, which `RmcpLogCap` rules out.
-fn log_filter(env: Option<EnvFilter>) -> Result<EnvFilter> {
+/// Returns an error if the cap directives do not parse.
+fn log_filter(env: Option<EnvFilter>) -> Result<(EnvFilter, Targets)> {
     let base = env.unwrap_or_else(|| EnvFilter::new("info,mcp_execution_server=debug"));
-    Ok(base.add_directive(RmcpLogCap::Info.directive().parse()?))
+    let cap = RmcpLogCap::Info
+        .cap_filter_directives(&base.to_string())
+        .parse::<Targets>()?;
+    // Rebuilt because replacing the `trace` default in place would keep the max level at `trace`.
+    let cap = cap
+        .into_iter()
+        .collect::<Targets>()
+        .with_default(base.max_level_hint().unwrap_or(LevelFilter::TRACE));
+    Ok((base, cap))
 }
 
 /// Maximum size, in bytes, of a single newline-delimited JSON-RPC request read from
@@ -596,8 +605,10 @@ async fn main() -> Result<()> {
         _ => fmt_layer.boxed(),
     };
 
+    let (filter, rmcp_cap) = log_filter(EnvFilter::try_from_default_env().ok())?;
     tracing_subscriber::registry()
-        .with(log_filter(EnvFilter::try_from_default_env().ok())?)
+        .with(filter)
+        .with(rmcp_cap)
         .with(
             // Not wrapped in `mcp-execution-cli::runner`'s URL-redacting writer (see #353):
             // this process only ever builds a stdio server config from `IntrospectServerParams`
@@ -1827,7 +1838,9 @@ mod tests {
                 .unwrap_or_else(|e| panic!("invalid JSON line: {e}\n{line}"));
         }
     }
-    fn debug_events_visible_through(filter: tracing_subscriber::EnvFilter) -> (bool, bool) {
+    fn debug_events_visible_through(
+        (filter, rmcp_cap): (tracing_subscriber::EnvFilter, super::Targets),
+    ) -> (bool, bool) {
         use std::io::Write;
         use std::sync::Mutex;
 
@@ -1849,11 +1862,14 @@ mod tests {
             let buf = buf.clone();
             move || SharedBuf(buf.clone())
         };
-        let subscriber = tracing_subscriber::registry().with(filter).with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(make_writer)
-                .with_ansi(false),
-        );
+        let subscriber = tracing_subscriber::registry()
+            .with(filter)
+            .with(rmcp_cap)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(make_writer)
+                    .with_ansi(false),
+            );
 
         tracing::subscriber::with_default(subscriber, || {
             tracing::debug!(target: "rmcp::transport::async_rw", "raw untrusted peer line");
@@ -1865,6 +1881,19 @@ mod tests {
             written.contains("raw untrusted peer line"),
             written.contains("own debug event"),
         )
+    }
+
+    #[test]
+    fn the_cap_does_not_raise_the_max_level_hint() {
+        use tracing::Subscriber as _;
+        use tracing::level_filters::LevelFilter;
+
+        for (env, expected) in [("info", LevelFilter::INFO), ("debug", LevelFilter::DEBUG)] {
+            let env = tracing_subscriber::EnvFilter::new(env);
+            let (filter, rmcp_cap) = super::log_filter(Some(env)).unwrap();
+            let subscriber = tracing_subscriber::registry().with(filter).with(rmcp_cap);
+            assert_eq!(subscriber.max_level_hint(), Some(expected));
+        }
     }
 
     #[test]

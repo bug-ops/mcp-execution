@@ -503,12 +503,15 @@ impl FromStr for LogFormat {
 /// parse-failure line of `rmcp::transport::async_rw` embeds the offending line verbatim), and
 /// both binaries talk to untrusted MCP peers. Capping the bare `rmcp` target keeps a broad
 /// `debug` filter (`--verbose`, `RUST_LOG=debug`) from streaming that text into the log (#421).
-/// A *more specific* target such as `RUST_LOG=rmcp::transport=debug` still wins over the cap,
-/// which is the escape hatch; an equally specific `RUST_LOG=rmcp=debug` is replaced by it.
+///
+/// The cap is a second filter applied on top of the user's filter, so it only ever lowers
+/// verbosity: a stricter `RUST_LOG=error` or `rmcp=error` stays in force, while a looser
+/// `rmcp=debug` is lowered to the cap. A *more specific* target such as
+/// `RUST_LOG=rmcp::transport=debug` is exempt, which is the escape hatch.
 ///
 /// The type carries no `tracing` types, so `mcp-execution-core` stays free of that dependency:
-/// each binary feeds [`directive`](Self::directive) to its own `EnvFilter`. It is
-/// workspace-internal and not part of the documented 1.0 API.
+/// each binary parses [`cap_filter_directives`](Self::cap_filter_directives) into its own
+/// filter. It is workspace-internal and not part of the documented 1.0 API.
 ///
 /// # Examples
 ///
@@ -543,6 +546,35 @@ impl RmcpLogCap {
             Self::Info => "rmcp=info",
             Self::Warn => "rmcp=warn",
         }
+    }
+
+    /// The directives of the cap filter that a binary combines (logical AND) with its base
+    /// filter, given in `base_filter` as comma-separated `tracing` directives.
+    ///
+    /// The result enables every target at `trace`, so only `rmcp` is restricted, and repeats
+    /// the `rmcp::` target directives of `base_filter` so that they stay exempt from the cap.
+    /// Directives with a span or field part are not repeated.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::RmcpLogCap;
+    ///
+    /// assert_eq!(
+    ///     RmcpLogCap::Info.cap_filter_directives("debug,rmcp::transport=debug"),
+    ///     "trace,rmcp=info,rmcp::transport=debug"
+    /// );
+    /// ```
+    #[must_use]
+    pub fn cap_filter_directives(self, base_filter: &str) -> String {
+        let exempt = base_filter.split(',').filter(|directive| {
+            directive.starts_with("rmcp::") && !directive.contains(['[', ']', '{', '}'])
+        });
+        ["trace", self.directive()]
+            .into_iter()
+            .chain(exempt)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -683,6 +715,34 @@ impl FromStr for ServerConnectionString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cap_filter_directives_repeat_only_plain_rmcp_submodule_directives() {
+        let cases = [
+            ("", "trace,rmcp=warn"),
+            ("error", "trace,rmcp=warn"),
+            (
+                "rmcp=debug,rmcpx::a=trace,other::rmcp::b=trace",
+                "trace,rmcp=warn",
+            ),
+            (
+                "rmcp::a[span]=debug,rmcp::b[{field}]=debug",
+                "trace,rmcp=warn",
+            ),
+            (
+                "rmcp::transport=debug,info,rmcp::service=off",
+                "trace,rmcp=warn,rmcp::transport=debug,rmcp::service=off",
+            ),
+        ];
+
+        for (base, expected) in cases {
+            assert_eq!(
+                RmcpLogCap::Warn.cap_filter_directives(base),
+                expected,
+                "{base}"
+            );
+        }
+    }
 
     #[test]
     fn test_exit_codes_are_distinct_and_in_range() {
