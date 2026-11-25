@@ -321,7 +321,7 @@ mcp-execution-cli completions bash
 
 ## Upgrading to 1.0
 
-Regenerate every server directory after each upgrade, because the generated bridge and the `_meta.json` schema change between releases and older output no longer parses or runs:
+Regenerate every server directory when upgrading to 1.0, because the generated bridge and the `_meta.json` schema changed in 0.x releases and older output no longer parses or runs. Within 1.x the `_meta.json` and helper protocol versions do not change; they change only in a major release.
 
 ```bash
 mcp-execution-cli generate --from-config <SERVER>

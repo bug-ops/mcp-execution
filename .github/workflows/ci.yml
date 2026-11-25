@@ -72,7 +72,9 @@ jobs:
             manifests:
               - '**/Cargo.toml'
               - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
+              - '.github/scripts/**'
               - 'LICENSE*'
               - 'crates/*/LICENSE-*'
 
@@ -412,10 +414,10 @@ jobs:
       - name: Publish dry run (workspace)
         run: cargo publish --workspace --dry-run --locked
 
-  # Semver compatibility against the last published version. The step is non-blocking
-  # (the job itself always reports success): before 1.0 a breaking change is allowed
-  # against 0.x, so this only surfaces tool or baseline failures until the 1.0.0
-  # baseline exists, when `continue-on-error` is removed.
+  # Semver compatibility against the last published version. Only the semver-checks
+  # step is non-blocking (a failed checkout still fails the job): before 1.0 a breaking
+  # change is allowed against 0.x, so this only surfaces tool or baseline failures until
+  # the 1.0.0 baseline exists, when `continue-on-error` is removed.
   semver:
     name: Semver Check
     needs: [changes]
