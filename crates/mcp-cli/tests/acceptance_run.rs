@@ -9,6 +9,7 @@
 
 mod common;
 
+use std::assert_matches;
 use std::time::Duration;
 
 use common::{Sandbox, anchored, require_node};
@@ -225,8 +226,9 @@ fn run_fails_on_a_missing_script_file_with_one_classified_line() {
 
     let out = sb.run_script(&missing, &[]);
 
-    assert!(
-        matches!(out.code, Some(1 | 2)),
+    assert_matches!(
+        out.code,
+        Some(1 | 2),
         "expected a runner failure code, got {:?}",
         out.code
     );

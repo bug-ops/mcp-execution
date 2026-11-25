@@ -1697,6 +1697,7 @@ mod tests {
     use mcp_execution_core::ToolName;
     use mcp_execution_introspector::{ServerCapabilities, ToolInfo};
     use rmcp::model::ErrorCode;
+    use std::assert_matches;
     use uuid::Uuid;
 
     #[test]
@@ -2107,10 +2108,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             config.transport(),
             mcp_execution_core::Transport::Stdio { .. }
-        ));
+        );
     }
 
     // ========================================================================

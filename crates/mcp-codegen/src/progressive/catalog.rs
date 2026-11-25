@@ -150,6 +150,7 @@ mod acceptance_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     fn entry(description: &str, hints: Option<&str>) -> CatalogEntry {
         CatalogEntry {
@@ -173,10 +174,10 @@ mod tests {
             })
             .collect();
 
-        assert!(matches!(
+        assert_matches!(
             render_catalog("acme", entries),
             Err(Error::ResourceLimitExceeded { .. })
-        ));
+        );
     }
 
     #[test]

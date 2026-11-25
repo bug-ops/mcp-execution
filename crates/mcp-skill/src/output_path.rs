@@ -320,6 +320,7 @@ pub fn skill_directory_name<'a>(server_id: &'a str, output_path: Option<&'a Path
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -357,7 +358,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::InvalidServerId { .. }));
+        assert_matches!(err, OutputPathError::InvalidServerId { .. });
         // Rejected before any filesystem work, so nothing was created inside
         // the (already-existing, since `TempDir::new` creates it) base dir.
         assert!(
@@ -386,7 +387,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "", Some(Path::new(absolute)))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::InvalidServerId { .. }));
+        assert_matches!(err, OutputPathError::InvalidServerId { .. });
     }
 
     #[tokio::test]
@@ -399,7 +400,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "../other-server", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::InvalidServerId { .. }));
+        assert_matches!(err, OutputPathError::InvalidServerId { .. });
     }
 
     #[tokio::test]
@@ -408,7 +409,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "a/b", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::InvalidServerId { .. }));
+        assert_matches!(err, OutputPathError::InvalidServerId { .. });
     }
 
     /// #401 regression: a `server_id` that is a valid, path-segment-safe `ServerId` but not
@@ -423,13 +424,13 @@ mod tests {
             .unwrap_err();
         // Asserts on the specific reason, not just the outer variant, so a regression that
         // rejects "My-Server" for the wrong cause (or with stale wording) is still caught.
-        assert!(matches!(
+        assert_matches!(
             err,
             OutputPathError::InvalidServerId {
                 source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
                 ..
             }
-        ));
+        );
     }
 
     /// #401 regression: same as above, for an underscore (also a valid `ServerId` character but
@@ -440,13 +441,13 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my_server", None)
             .await
             .unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             OutputPathError::InvalidServerId {
                 source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
                 ..
             }
-        ));
+        );
     }
 
     /// Issue #451: printable-but-disallowed characters (`&`, `<`, `>`) in a rejected `server_id`
@@ -528,7 +529,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new(absolute)))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::AbsolutePath { .. }));
+        assert_matches!(err, OutputPathError::AbsolutePath { .. });
         assert!(!base.path().join("my-server").exists());
     }
 
@@ -546,7 +547,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, OutputPathError::TildeComponent { .. }));
+        assert_matches!(err, OutputPathError::TildeComponent { .. });
         assert!(!base.path().join("my-server").exists());
     }
 
@@ -559,7 +560,7 @@ mod tests {
             resolve_skill_output_path(base.path(), "my-server", Some(Path::new("~/SKILL.md")))
                 .await
                 .unwrap_err();
-        assert!(matches!(err, OutputPathError::TildeComponent { .. }));
+        assert_matches!(err, OutputPathError::TildeComponent { .. });
     }
 
     /// FR-001 requires rejecting a `~` component anywhere in the path, not only when leading.
@@ -573,7 +574,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, OutputPathError::TildeComponent { .. }));
+        assert_matches!(err, OutputPathError::TildeComponent { .. });
     }
 
     /// A `~` character that is part of a longer segment (not a standalone path component) is not
@@ -602,7 +603,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, OutputPathError::ParentTraversal { .. }));
+        assert_matches!(err, OutputPathError::ParentTraversal { .. });
         assert!(!base.path().join("my-server").exists());
     }
 
@@ -612,7 +613,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new(".")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::InvalidPath { .. }));
+        assert_matches!(err, OutputPathError::InvalidPath { .. });
     }
 
     #[tokio::test]
@@ -621,7 +622,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::InvalidPath { .. }));
+        assert_matches!(err, OutputPathError::InvalidPath { .. });
     }
 
     // Windows path semantics differ enough from Unix (root-without-prefix
@@ -638,7 +639,7 @@ mod tests {
             resolve_skill_output_path(base.path(), "my-server", Some(Path::new(r"\pwn\evil.md")))
                 .await
                 .unwrap_err();
-        assert!(matches!(err, OutputPathError::Escape { .. }));
+        assert_matches!(err, OutputPathError::Escape { .. });
     }
 
     /// S4 regression: `base_dir/server_id` itself is a symlink to outside
@@ -658,7 +659,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::ServerIdIsSymlink { .. }));
+        assert_matches!(err, OutputPathError::ServerIdIsSymlink { .. });
         assert!(!outside.path().join("SKILL.md").exists());
     }
 
@@ -679,7 +680,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "server-b", None)
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::ServerIdIsSymlink { .. }));
+        assert_matches!(err, OutputPathError::ServerIdIsSymlink { .. });
         assert!(!base.path().join("server-a").join("SKILL.md").exists());
     }
 
@@ -702,7 +703,7 @@ mod tests {
             resolve_skill_output_path(base.path(), "my-server", Some(Path::new("escape/SKILL.md")))
                 .await
                 .unwrap_err();
-        assert!(matches!(err, OutputPathError::Escape { .. }));
+        assert_matches!(err, OutputPathError::Escape { .. });
 
         // Nothing should have been written outside the base directory.
         assert!(!outside.path().join("SKILL.md").exists());
@@ -723,7 +724,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("SKILL.md")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::Escape { .. }));
+        assert_matches!(err, OutputPathError::Escape { .. });
     }
 
     /// S1 regression guard, now running through the unified walk shared
@@ -746,7 +747,7 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("SKILL.md")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::Escape { .. }));
+        assert_matches!(err, OutputPathError::Escape { .. });
         assert!(!dangling_target.exists());
     }
 
@@ -766,7 +767,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, OutputPathError::NotADirectory { .. }));
+        assert_matches!(err, OutputPathError::NotADirectory { .. });
     }
 
     #[tokio::test]
@@ -780,6 +781,6 @@ mod tests {
         let err = resolve_skill_output_path(base.path(), "my-server", Some(Path::new("SKILL.md")))
             .await
             .unwrap_err();
-        assert!(matches!(err, OutputPathError::NotAFile { .. }));
+        assert_matches!(err, OutputPathError::NotAFile { .. });
     }
 }

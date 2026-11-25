@@ -378,6 +378,7 @@ impl StateManager {
     /// # Examples
     ///
     /// ```
+    /// use std::assert_matches;
     /// use mcp_execution_server::state::StateManager;
     /// # use mcp_execution_server::types::PendingGeneration;
     /// # use mcp_execution_core::{ServerId, ServerConfig};
@@ -391,7 +392,7 @@ impl StateManager {
     /// let rejected = state
     ///     .take_if(session_id, |_generation| Err::<(), _>("bad input"))
     ///     .await;
-    /// assert!(matches!(rejected, Some(Err("bad input"))));
+    /// assert_matches!(rejected, Some(Err("bad input")));
     /// assert!(state.get(session_id).await.is_some());
     ///
     /// // A successful validation consumes the session and hands back all three parts.
@@ -576,6 +577,7 @@ mod tests {
     use crate::types::PendingGeneration;
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use mcp_execution_introspector::ServerInfo;
+    use std::assert_matches;
 
     fn create_test_pending() -> PendingGeneration {
         create_test_pending_with_clock(&SystemClock)
@@ -804,9 +806,7 @@ mod tests {
         let result = state.store(create_test_pending()).await;
 
         assert!(result.is_err());
-        assert!(
-            matches!(result, Err(StateError::AtCapacity { limit }) if limit == MAX_PENDING_SESSIONS)
-        );
+        assert_matches!(result, Err(StateError::AtCapacity { limit }) if limit == MAX_PENDING_SESSIONS);
     }
 
     #[tokio::test]
@@ -839,9 +839,7 @@ mod tests {
         let result = state.store(create_test_pending()).await;
 
         assert!(result.is_err());
-        assert!(
-            matches!(result, Err(StateError::MemoryBudgetExceeded { limit }) if limit == MAX_TOTAL_PENDING_BYTES)
-        );
+        assert_matches!(result, Err(StateError::MemoryBudgetExceeded { limit }) if limit == MAX_TOTAL_PENDING_BYTES);
     }
 
     #[tokio::test]
@@ -921,7 +919,7 @@ mod tests {
         let first = state
             .take_if(session_id, |_generation| Err::<(), _>("bad input"))
             .await;
-        assert!(matches!(first, Some(Err("bad input"))));
+        assert_matches!(first, Some(Err("bad input")));
 
         // Session is still present, at the same accounted size, for a repeated
         // clone-free retry against the same live entry.
@@ -931,7 +929,7 @@ mod tests {
         let second = state
             .take_if(session_id, |_generation| Err::<(), _>("bad input again"))
             .await;
-        assert!(matches!(second, Some(Err("bad input again"))));
+        assert_matches!(second, Some(Err("bad input again")));
         assert!(state.get(session_id).await.is_some());
     }
 
@@ -1017,9 +1015,7 @@ mod tests {
 
         let result = state.restore(session_id, generation, size_bytes).await;
 
-        assert!(
-            matches!(result, Err(StateError::MemoryBudgetExceeded { limit }) if limit == MAX_TOTAL_PENDING_BYTES)
-        );
+        assert_matches!(result, Err(StateError::MemoryBudgetExceeded { limit }) if limit == MAX_TOTAL_PENDING_BYTES);
         // The rejected session must not have been silently inserted anyway.
         assert!(state.get(session_id).await.is_none());
     }
@@ -1044,9 +1040,7 @@ mod tests {
 
         let result = state.restore(session_id, generation, size_bytes).await;
 
-        assert!(
-            matches!(result, Err(StateError::AtCapacity { limit }) if limit == MAX_PENDING_SESSIONS)
-        );
+        assert_matches!(result, Err(StateError::AtCapacity { limit }) if limit == MAX_PENDING_SESSIONS);
         assert!(state.get(session_id).await.is_none());
     }
 

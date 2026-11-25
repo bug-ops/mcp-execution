@@ -1,4 +1,4 @@
-//! Acceptance tests of the core home resolver (#637, #634, #604): `HomeDir`, `expand_home`,
+//! Acceptance tests of the core home resolver (#637, #634): `HomeDir`, `expand_home`,
 //! `ServersDir` and `SkillsDir`.
 //!
 //! The crate forbids `unsafe`, so the process environment cannot be changed in place. Each case
@@ -14,6 +14,7 @@
     reason = "test, bench and example code may panic on failure"
 )]
 
+use std::assert_matches;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -62,10 +63,7 @@ case!(home_from_env_reads_an_absolute_home, ABS_HOME, {
 
 case!(home_from_env_rejects_a_relative_home, RELATIVE_HOME, {
     let error = HomeDir::from_env().expect_err("a relative HOME must be rejected");
-    assert!(
-        matches!(error, HomeDirError::NotAbsolute { .. }),
-        "{error:?}"
-    );
+    assert_matches!(error, HomeDirError::NotAbsolute { .. });
 });
 
 case!(expand_home_replaces_a_bare_tilde_with_home, ABS_HOME, {
@@ -113,10 +111,7 @@ case!(
     {
         for path in ["~", "~/x"] {
             let error = expand_home(Path::new(path)).expect_err("home is needed");
-            assert!(
-                matches!(error, HomeDirError::NotAbsolute { .. }),
-                "{path}: {error:?}"
-            );
+            assert_matches!(error, HomeDirError::NotAbsolute { .. }, "{path}");
         }
     }
 );
@@ -186,9 +181,6 @@ case!(dirs_fail_when_home_is_needed_and_relative, RELATIVE_HOME, {
         SkillsDir::resolve(Some("~/x".into())).expect_err("tilde needs home"),
     ];
     for error in errors {
-        assert!(
-            matches!(error, HomeDirError::NotAbsolute { .. }),
-            "{error:?}"
-        );
+        assert_matches!(error, HomeDirError::NotAbsolute { .. });
     }
 });

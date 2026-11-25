@@ -14,6 +14,7 @@ mod common;
 
 use common::{Sandbox, script_text, snapshot};
 use serde_json::{Value, json};
+use std::assert_matches;
 
 const ECHO_DESCRIPTION: &str = "Echoes its arguments back as JSON text";
 const DIFFERENT_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -171,8 +172,9 @@ fn drift_that_cannot_complete_has_its_own_exit_code() {
 
     let out = drift(&sb);
 
-    assert!(
-        matches!(out.code, Some(1..=4)),
+    assert_matches!(
+        out.code,
+        Some(1..=4),
         "no generated directory: expected a could-not-complete code, got {:?}",
         out.code
     );

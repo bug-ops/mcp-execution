@@ -14,6 +14,7 @@ use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_skill::{
     ParsedParameter, ParsedToolFile, ScanError, build_skill_context, scan_tools_directory,
 };
+use std::assert_matches;
 use std::path::Path;
 
 fn sidecar(schema_version: u32, description: Option<String>) -> ServerMetadata {
@@ -79,13 +80,13 @@ async fn scan_tools_directory_rejects_a_v2_sidecar_until_regenerated() {
         .await
         .expect_err("v2 must be rejected");
 
-    assert!(matches!(
+    assert_matches!(
         err,
         ScanError::UnsupportedSchema {
             found: 2,
             expected: 3
         }
-    ));
+    );
 }
 
 #[tokio::test]
@@ -98,10 +99,9 @@ async fn scan_tools_directory_rejects_a_sidecar_over_the_shared_cap() {
         .await
         .expect_err("oversized sidecar");
 
-    assert!(matches!(
+    assert_matches!(
         err,
-        ScanError::FileTooLarge { limit, .. } if limit == MAX_METADATA_FILE_BYTES
-    ));
+        ScanError::FileTooLarge { limit, .. } if limit == MAX_METADATA_FILE_BYTES);
 }
 
 fn param(name: &str, required: bool) -> ParsedParameter {

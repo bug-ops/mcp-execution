@@ -100,10 +100,11 @@ impl Carrier {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::runtime::helper::DryRunMode;
 /// use mcp_execution_cli::runtime::policy::Policy;
 ///
-/// assert!(matches!(DryRunMode::default(), DryRunMode::Off));
+/// assert_matches!(DryRunMode::default(), DryRunMode::Off);
 /// let _on = DryRunMode::On(Policy::default());
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -780,6 +781,7 @@ mod tests {
     use super::*;
     use crate::runtime::dirs::{RunId, RuntimeDirs};
     use crate::runtime::protocol::ResultKind;
+    use std::assert_matches;
 
     fn request(server: &str, tool: &str) -> Request {
         Request {
@@ -829,7 +831,7 @@ mod tests {
             .execute(&pool(), request("no-such-server-for-hooks", "echo"))
             .await;
 
-        assert!(matches!(encoded, EncodedResponse::Sent(_)));
+        assert_matches!(encoded, EncodedResponse::Sent(_));
         let report = hooks.report().await;
         let summary = report.journal_summary.unwrap();
         assert!(

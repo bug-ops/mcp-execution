@@ -10,6 +10,7 @@
 mod common;
 
 use common::{Sandbox, files_below, require_node, script_text, snapshot};
+use std::assert_matches;
 
 const BODY_MARKER: &str = "BODY-SECRET-MARKER-91ab";
 
@@ -250,11 +251,9 @@ fn run_save_refuses_an_existing_name_unless_overwrite_is_given() {
 
     let refused = sb.run_script(&second_path, &["--save", "again"]);
 
-    assert!(
-        matches!(refused.code, Some(c) if c != 0 && c != 101),
+    assert_matches!(refused.code, Some(c) if c != 0 && c != 101,
         "expected a classified refusal, got {:?}",
-        refused.code
-    );
+        refused.code);
     assert_eq!(
         std::fs::read_to_string(&saved(&sb, "again")[0]).unwrap(),
         first
@@ -284,11 +283,9 @@ fn run_save_writes_nothing_when_the_header_name_differs_from_the_requested_name(
 
     let out = sb.run_script(&path, &["--save", "requested-name"]);
 
-    assert!(
-        matches!(out.code, Some(c) if c != 0 && c != 101),
+    assert_matches!(out.code, Some(c) if c != 0 && c != 101,
         "expected a classified refusal, got {:?}",
-        out.code
-    );
+        out.code);
     assert!(saved(&sb, "requested-name").is_empty() && saved(&sb, "header-name").is_empty());
 }
 

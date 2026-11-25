@@ -137,13 +137,14 @@ impl fmt::Debug for Cli {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use clap::Parser;
 /// use mcp_execution_cli::cli::{Cli, Commands};
 ///
 /// // The positional `server` and `--from-config`/`--http`/`--sse` are
 /// // alternative selectors accepted by the same `server_source` group.
 /// let cli = Cli::parse_from(["mcp-execution-cli", "introspect", "github-mcp-server"]);
-/// assert!(matches!(cli.command, Commands::Introspect { .. }));
+/// assert_matches!(cli.command, Commands::Introspect { .. });
 ///
 /// let cli = Cli::parse_from([
 ///     "mcp-execution-cli",
@@ -151,7 +152,7 @@ impl fmt::Debug for Cli {
 ///     "--http",
 ///     "https://api.example.com/mcp",
 /// ]);
-/// assert!(matches!(cli.command, Commands::Introspect { .. }));
+/// assert_matches!(cli.command, Commands::Introspect { .. });
 ///
 /// // Exactly one selector is required: none set is a parse error.
 /// assert!(Cli::try_parse_from(["mcp-execution-cli", "introspect"]).is_err());
@@ -756,6 +757,7 @@ impl fmt::Debug for Commands {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use std::assert_matches;
 
     #[test]
     fn test_skill_help_states_the_skill_name_directory_rule() {
@@ -796,7 +798,7 @@ mod tests {
     #[test]
     fn test_cli_parsing_introspect() {
         let cli = Cli::parse_from(["mcp-cli", "introspect", "github"]);
-        assert!(matches!(cli.command, Commands::Introspect { .. }));
+        assert_matches!(cli.command, Commands::Introspect { .. });
     }
 
     #[test]
@@ -919,7 +921,7 @@ mod tests {
     #[test]
     fn test_cli_parsing_generate() {
         let cli = Cli::parse_from(["mcp-cli", "generate", "server"]);
-        assert!(matches!(cli.command, Commands::Generate { .. }));
+        assert_matches!(cli.command, Commands::Generate { .. });
 
         let cli = Cli::parse_from([
             "mcp-cli",
@@ -999,7 +1001,7 @@ mod tests {
     #[test]
     fn test_cli_parsing_server_list() {
         let cli = Cli::parse_from(["mcp-cli", "server", "list"]);
-        assert!(matches!(cli.command, Commands::Server { .. }));
+        assert_matches!(cli.command, Commands::Server { .. });
     }
 
     #[test]
@@ -1144,7 +1146,7 @@ mod tests {
     #[test]
     fn test_cli_parsing_completions_bash() {
         let cli = Cli::parse_from(["mcp-cli", "completions", "bash"]);
-        assert!(matches!(cli.command, Commands::Completions { .. }));
+        assert_matches!(cli.command, Commands::Completions { .. });
     }
 
     #[test]
@@ -1396,21 +1398,21 @@ mod tests {
     #[test]
     fn test_scripts_stats_drift_and_hidden_helper_parse() {
         let cli = Cli::parse_from(["mcp-execution-cli", "scripts", "check", "--server", "gh"]);
-        assert!(matches!(
+        assert_matches!(
             cli.command,
             Commands::Scripts {
                 action: crate::commands::scripts::ScriptsAction::Check(_)
             }
-        ));
+        );
         assert!(Cli::try_parse_from(["mcp-execution-cli", "stats", "../x"]).is_err());
-        assert!(matches!(
+        assert_matches!(
             Cli::parse_from(["mcp-execution-cli", "drift", "--sse", "https://e.com/s"]).command,
             Commands::Drift(_)
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             Cli::parse_from(["mcp-execution-cli", "helper"]).command,
             Commands::Helper
-        ));
+        );
         let mut command = Cli::command();
         assert!(
             command
@@ -1652,7 +1654,7 @@ mod tests {
         let cli = Cli::parse_from(["mcp-cli", "introspect", "--from-config", "github"]);
         let source = ServerSource::try_from(introspect_flags(cli)).unwrap();
 
-        assert!(matches!(source, ServerSource::Config { name } if name == "github"));
+        assert_matches!(source, ServerSource::Config { name } if name == "github");
     }
 
     #[test]

@@ -45,10 +45,11 @@ use thiserror::Error;
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::{ServerId, ServerIdError};
 ///
 /// let err = ServerId::new("../etc").unwrap_err();
-/// assert!(matches!(err, ServerIdError::InvalidFormat { .. }));
+/// assert_matches!(err, ServerIdError::InvalidFormat { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ServerIdError {
@@ -299,10 +300,11 @@ pub fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::{ToolName, ToolNameError};
 ///
 /// let err = ToolName::new("").unwrap_err();
-/// assert!(matches!(err, ToolNameError::InvalidFormat { .. }));
+/// assert_matches!(err, ToolNameError::InvalidFormat { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ToolNameError {
@@ -397,6 +399,7 @@ impl ToolName {
     /// # Examples
     ///
     /// ```
+    /// use std::assert_matches;
     /// use mcp_execution_core::{ToolName, ToolNameError};
     ///
     /// let name = ToolName::new("my_tool").unwrap();
@@ -406,11 +409,11 @@ impl ToolName {
     ///
     /// // A Unicode-Tags-block-smuggled invisible payload is rejected, not silently accepted.
     /// let err = ToolName::new("safe\u{E0001}\u{E0073}\u{E007F}").unwrap_err();
-    /// assert!(matches!(err, ToolNameError::DisallowedCharacter { .. }));
+    /// assert_matches!(err, ToolNameError::DisallowedCharacter { .. });
     ///
     /// // A single variation selector is also rejected outright, unlike in display text.
     /// let err = ToolName::new("safe\u{FE0F}").unwrap_err();
-    /// assert!(matches!(err, ToolNameError::DisallowedCharacter { .. }));
+    /// assert_matches!(err, ToolNameError::DisallowedCharacter { .. });
     /// ```
     #[inline]
     pub fn new(name: impl Into<String>) -> Result<Self, ToolNameError> {
@@ -472,6 +475,7 @@ impl fmt::Display for ToolName {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     // ServerId tests
     #[test]
@@ -502,10 +506,7 @@ mod tests {
 
     #[test]
     fn test_server_id_rejects_empty() {
-        assert!(matches!(
-            ServerId::new(""),
-            Err(ServerIdError::InvalidFormat { .. })
-        ));
+        assert_matches!(ServerId::new(""), Err(ServerIdError::InvalidFormat { .. }));
     }
 
     #[test]
@@ -547,11 +548,9 @@ mod tests {
             "evil\u{200D}server",
             "evil\u{202E}server",
         ] {
-            assert!(
-                matches!(
-                    ServerId::new(candidate),
-                    Err(ServerIdError::DisallowedCharacter { .. })
-                ),
+            assert_matches!(
+                ServerId::new(candidate),
+                Err(ServerIdError::DisallowedCharacter { .. }),
                 "{candidate:?}"
             );
         }
@@ -602,10 +601,7 @@ mod tests {
 
     #[test]
     fn test_tool_name_rejects_empty() {
-        assert!(matches!(
-            ToolName::new(""),
-            Err(ToolNameError::InvalidFormat { .. })
-        ));
+        assert_matches!(ToolName::new(""), Err(ToolNameError::InvalidFormat { .. }));
     }
 
     #[test]
@@ -654,11 +650,9 @@ mod tests {
             "evil tool",          // space
             "tool&name",          // ampersand
         ] {
-            assert!(
-                matches!(
-                    ToolName::new(candidate),
-                    Err(ToolNameError::DisallowedCharacter { .. })
-                ),
+            assert_matches!(
+                ToolName::new(candidate),
+                Err(ToolNameError::DisallowedCharacter { .. }),
                 "{candidate:?}"
             );
         }
@@ -670,13 +664,13 @@ mod tests {
     #[test]
     fn test_tool_name_disallowed_character_error_carries_code_point() {
         let err = ToolName::new("get_issue\u{200D}").unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             ToolNameError::DisallowedCharacter {
                 code_point: 0x200D,
                 ..
             }
-        ));
+        );
     }
 
     /// Issue #433: `ToolName`'s `Deserialize` must reject a ZWJ the same way direct
@@ -711,10 +705,10 @@ mod tests {
             hostile.push('\u{FE00}');
             hostile.push('\u{FE01}');
         }
-        assert!(matches!(
+        assert_matches!(
             ToolName::new(hostile),
             Err(ToolNameError::DisallowedCharacter { .. })
-        ));
+        );
     }
 
     /// Mirrors `test_server_id_deserialize_rejects_invalid_value`: `ToolName`'s `Deserialize`
@@ -937,7 +931,7 @@ mod tests {
     #[test]
     fn test_tool_name_invalid_format_error_escapes_ampersand() {
         let err = ToolName::new("a/b&c").unwrap_err();
-        assert!(matches!(err, ToolNameError::InvalidFormat { .. }));
+        assert_matches!(err, ToolNameError::InvalidFormat { .. });
         let message = err.to_string();
         assert!(message.contains("a/b&amp;c"));
         assert!(!message.contains("a/b&c"));

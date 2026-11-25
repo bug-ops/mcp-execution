@@ -819,6 +819,7 @@ pub async fn check(skill_dir: &Path, metadata: &ServerMetadata) -> CheckReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     fn header_text(extra: &str) -> String {
         format!(
@@ -897,19 +898,19 @@ mod tests {
         let name = RecipeName::new("a").unwrap();
 
         for kind in [ErrorKind::Unsupported, ErrorKind::PermissionDenied] {
-            assert!(matches!(
+            assert_matches!(
                 publish_error(Overwrite::Refuse, &name, Error::from(kind)),
                 ScriptError::HardLinksUnsupported
-            ));
-            assert!(matches!(
+            );
+            assert_matches!(
                 publish_error(Overwrite::Replace, &name, Error::from(kind)),
                 ScriptError::Io(_)
-            ));
+            );
         }
-        assert!(matches!(
+        assert_matches!(
             publish_error(Overwrite::Refuse, &name, ErrorKind::AlreadyExists.into()),
             ScriptError::AlreadyExists { .. }
-        ));
+        );
     }
 
     #[tokio::test]
@@ -919,7 +920,7 @@ mod tests {
 
         let result = save(skill.path(), &other, &header_text(""), Overwrite::Refuse).await;
 
-        assert!(matches!(result, Err(ScriptError::InvalidHeader { .. })));
+        assert_matches!(result, Err(ScriptError::InvalidHeader { .. }));
         assert!(!skill.path().join(SCRIPTS_DIR).exists());
     }
 }

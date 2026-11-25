@@ -392,13 +392,14 @@ pub enum MetadataReadError {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::metadata::{MetadataReadError, read_server_metadata};
 ///
 /// let dir = std::env::temp_dir().join("mcp-execution-doc-absent-server");
-/// assert!(matches!(
+/// assert_matches!(
 ///     read_server_metadata(&dir),
 ///     Err(MetadataReadError::NotFound)
-/// ));
+/// );
 /// ```
 pub fn read_server_metadata(dir: &Path) -> Result<ServerMetadata, MetadataReadError> {
     let file = open_regular_sidecar(&dir.join(METADATA_FILE_NAME))?;

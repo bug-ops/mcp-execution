@@ -834,6 +834,7 @@ mod tests {
     };
     use mcp_execution_core::provenance::GenerationProvenance;
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+    use std::assert_matches;
     use tempfile::TempDir;
 
     fn test_provenance() -> GenerationProvenance {
@@ -1101,7 +1102,7 @@ mod tests {
 
         let result = scan_tools_directory(temp_dir.path()).await;
 
-        assert!(matches!(result, Err(ScanError::MissingMetadata { .. })));
+        assert_matches!(result, Err(ScanError::MissingMetadata { .. }));
     }
 
     #[tokio::test]
@@ -1116,8 +1117,9 @@ mod tests {
 
         let result = scan_tools_directory(server_dir.path()).await;
 
-        assert!(
-            matches!(result, Err(ScanError::MetadataEscapesDirectory { .. })),
+        assert_matches!(
+            result,
+            Err(ScanError::MetadataEscapesDirectory { .. }),
             "{result:?}"
         );
     }
@@ -1126,10 +1128,10 @@ mod tests {
     fn test_extract_skill_metadata_name_with_invalid_characters_rejected() {
         let content = "---\nname: My Skill\ndescription: test\n---\n# Test";
 
-        assert!(matches!(
+        assert_matches!(
             extract_skill_metadata(content),
             Err(SkillMetadataError::NameInvalidCharacters)
-        ));
+        );
     }
 
     #[test]
@@ -1146,7 +1148,7 @@ mod tests {
 
         let result = scan_tools_directory(temp_dir.path()).await;
 
-        assert!(matches!(result, Err(ScanError::MetadataParse { .. })));
+        assert_matches!(result, Err(ScanError::MetadataParse { .. }));
     }
 
     /// Regression test for issue #317: `ServerMetadata.server_id`/`ToolMetadata.name` now go
@@ -1176,7 +1178,7 @@ mod tests {
 
         let result = scan_tools_directory(temp_dir.path()).await;
 
-        assert!(matches!(result, Err(ScanError::MetadataParse { .. })));
+        assert_matches!(result, Err(ScanError::MetadataParse { .. }));
     }
 
     /// Same regression as above, for `ToolMetadata.name`.
@@ -1212,7 +1214,7 @@ mod tests {
 
         let result = scan_tools_directory(temp_dir.path()).await;
 
-        assert!(matches!(result, Err(ScanError::MetadataParse { .. })));
+        assert_matches!(result, Err(ScanError::MetadataParse { .. }));
     }
 
     #[tokio::test]
@@ -1306,7 +1308,7 @@ mod tests {
     async fn test_scan_tools_directory_nonexistent() {
         let result = scan_tools_directory(Path::new("/nonexistent/path/for/testing")).await;
 
-        assert!(matches!(result, Err(ScanError::DirectoryNotFound { .. })));
+        assert_matches!(result, Err(ScanError::DirectoryNotFound { .. }));
     }
 
     #[tokio::test]
@@ -1367,10 +1369,7 @@ More content.
         let content = "# Test\n\nNo frontmatter";
 
         let result = extract_skill_metadata(content);
-        assert!(matches!(
-            result,
-            Err(SkillMetadataError::MissingFrontmatter)
-        ));
+        assert_matches!(result, Err(SkillMetadataError::MissingFrontmatter));
     }
 
     #[test]
@@ -1378,10 +1377,10 @@ More content.
         let content = "---\ndescription: test\n---\n# Test";
 
         let result = extract_skill_metadata(content);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(SkillMetadataError::MissingField { field: "name" })
-        ));
+        );
     }
 
     #[test]
@@ -1389,12 +1388,12 @@ More content.
         let content = "---\nname: test\n---\n# Test";
 
         let result = extract_skill_metadata(content);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(SkillMetadataError::MissingField {
                 field: "description"
             })
-        ));
+        );
     }
 
     #[test]
@@ -1445,10 +1444,10 @@ More content.
 
         let result = extract_skill_metadata(content);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(SkillMetadataError::MissingField { field: "name" })
-        ));
+        );
     }
 
     #[test]
@@ -1459,10 +1458,10 @@ More content.
 
         let result = extract_skill_metadata(content);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(SkillMetadataError::MissingField { field: "name" })
-        ));
+        );
     }
 
     #[test]
@@ -1476,14 +1475,13 @@ More content.
 
         let result = extract_skill_metadata(&content);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(SkillMetadataError::NameTooLong {
                 len,
                 limit
             }) if len == crate::types::MAX_SKILL_NAME_LENGTH + 1
-                && limit == crate::types::MAX_SKILL_NAME_LENGTH
-        ));
+                && limit == crate::types::MAX_SKILL_NAME_LENGTH);
     }
 
     #[test]
@@ -1611,8 +1609,9 @@ description: 'quoted text'
         let result = extract_skill_metadata(&content);
         let elapsed = start.elapsed();
 
-        assert!(
-            matches!(result, Err(SkillMetadataError::FrontmatterTooComplex)),
+        assert_matches!(
+            result,
+            Err(SkillMetadataError::FrontmatterTooComplex),
             "expected FrontmatterTooComplex: an alias bomb under a key RawFrontmatter does not \
              declare must be materialized and rejected by the Budget. got: {result:?}"
         );
@@ -1705,8 +1704,9 @@ description: 'quoted text'
         );
 
         let result = extract_skill_metadata(&content);
-        assert!(
-            matches!(result, Err(SkillMetadataError::InvalidYaml(_))),
+        assert_matches!(
+            result,
+            Err(SkillMetadataError::InvalidYaml(_)),
             "expected InvalidYaml (a type-mismatch short-circuit, not a complexity-budget \
              rejection): if this is now FrontmatterTooComplex, RawFrontmatter's field shape \
              likely changed (e.g. a buffering deserialize_with) and reopened the amplification \
@@ -1772,8 +1772,9 @@ description: 'quoted text'
         let content = "---\nbase: &a [1, 2]\nname: *a\ndescription: test\n---\n# Test";
 
         let result = extract_skill_metadata(content);
-        assert!(
-            matches!(result, Err(SkillMetadataError::InvalidYaml(_))),
+        assert_matches!(
+            result,
+            Err(SkillMetadataError::InvalidYaml(_)),
             "expected InvalidYaml for an ordinary type mismatch under an alias, not a \
              complexity-budget rejection; got: {result:?}"
         );
@@ -1796,8 +1797,9 @@ description: 'quoted text'
         );
 
         let result = extract_skill_metadata(&content);
-        assert!(
-            matches!(result, Err(SkillMetadataError::FrontmatterTooComplex)),
+        assert_matches!(
+            result,
+            Err(SkillMetadataError::FrontmatterTooComplex),
             "expected FrontmatterTooComplex for nesting past max_depth: 64, got: {result:?}"
         );
     }
@@ -1878,13 +1880,13 @@ description: 'quoted text'
             extract_skill_metadata(&format!("---\nname: a\ndescription: {at_limit}\n---\n"))
                 .is_ok()
         );
-        assert!(matches!(
+        assert_matches!(
             extract_skill_metadata(&format!("---\nname: a\ndescription: {over_limit}\n---\n")),
             Err(SkillMetadataError::DescriptionTooLong {
                 len: 1025,
                 limit: 1024
             })
-        ));
+        );
     }
 
     #[test]
@@ -1928,11 +1930,9 @@ base: &defaults
 ";
 
         let result = extract_skill_metadata(content);
-        assert!(
-            matches!(
-                result,
-                Err(SkillMetadataError::MissingField { field: "name" })
-            ),
+        assert_matches!(
+            result,
+            Err(SkillMetadataError::MissingField { field: "name" }),
             "merge key must not inject `name` from the anchored map, got: {result:?}"
         );
     }
@@ -1945,8 +1945,9 @@ base: &defaults
         let content = "---\nname: test-skill\nname: other-name\ndescription: test\n---\n# Test";
 
         let result = extract_skill_metadata(content);
-        assert!(
-            matches!(result, Err(SkillMetadataError::InvalidYaml(_))),
+        assert_matches!(
+            result,
+            Err(SkillMetadataError::InvalidYaml(_)),
             "expected InvalidYaml for a duplicate key, got: {result:?}"
         );
     }

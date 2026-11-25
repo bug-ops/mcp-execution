@@ -35,11 +35,12 @@ const MAX_NAME_CHARS: usize = 128;
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use clap::Parser;
 /// use mcp_execution_cli::cli::{Cli, Commands};
 ///
 /// let cli = Cli::parse_from(["mcp-execution-cli", "drift", "--from-config", "github"]);
-/// assert!(matches!(cli.command, Commands::Drift(_)));
+/// assert_matches!(cli.command, Commands::Drift(_));
 /// ```
 #[derive(Debug, Args)]
 pub struct DriftArgs {

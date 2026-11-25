@@ -70,10 +70,11 @@ pub const MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::commands::run::ScriptSource;
 ///
 /// assert_eq!("-".parse::<ScriptSource>().unwrap(), ScriptSource::Stdin);
-/// assert!(matches!("a.ts".parse::<ScriptSource>().unwrap(), ScriptSource::File(_)));
+/// assert_matches!("a.ts".parse::<ScriptSource>().unwrap(), ScriptSource::File(_));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptSource {

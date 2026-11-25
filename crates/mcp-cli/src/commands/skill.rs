@@ -500,6 +500,7 @@ mod tests {
     };
     use mcp_execution_core::provenance::GenerationProvenance;
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
+    use std::assert_matches;
     use tempfile::TempDir;
 
     fn test_provenance() -> GenerationProvenance {
@@ -570,10 +571,10 @@ mod tests {
         // Regression test for #195/S3: a path traversal attempt is a
         // malicious/invalid argument, so it must carry a `CoreError` that
         // `runner::classify_exit_code` maps to `ExitCode::INVALID_INPUT`.
-        assert!(matches!(
+        assert_matches!(
             err.downcast_ref::<CoreError>(),
             Some(CoreError::SecurityViolation { .. })
-        ));
+        );
     }
 
     #[test]
@@ -668,10 +669,10 @@ mod tests {
         // Regression test for #195/S3: an invalid `server` id is a
         // CLI-argument mistake, so it must carry a `CoreError` that
         // `runner::classify_exit_code` maps to `ExitCode::INVALID_INPUT`.
-        assert!(matches!(
+        assert_matches!(
             err.downcast_ref::<CoreError>(),
             Some(CoreError::InvalidArgument(_))
-        ));
+        );
     }
 
     #[tokio::test]

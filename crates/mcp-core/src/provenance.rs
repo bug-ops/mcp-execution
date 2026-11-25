@@ -155,10 +155,11 @@ fn hex_encode(bytes: [u8; 32]) -> String {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_core::provenance::{ConfigFingerprint, DigestFormatError};
 ///
 /// let err = ConfigFingerprint::try_from("not-a-digest".to_string()).unwrap_err();
-/// assert!(matches!(err, DigestFormatError { .. }));
+/// assert_matches!(err, DigestFormatError { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid digest {value:?}: must be exactly 64 lowercase hex characters")]

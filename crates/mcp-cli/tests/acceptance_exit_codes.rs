@@ -11,6 +11,7 @@
 
 mod common;
 
+use std::assert_matches;
 use std::net::TcpListener;
 use std::time::Duration;
 
@@ -73,8 +74,9 @@ fn call_with_an_unknown_config_name_fails_before_any_connection() {
 
     let out = sb.cli(&["call", "--from-config", "no-such-server", "--", "echo"]);
 
-    assert!(
-        matches!(out.code, Some(1 | 2)),
+    assert_matches!(
+        out.code,
+        Some(1 | 2),
         "expected a classified error, got {:?}",
         out.code
     );
@@ -131,8 +133,9 @@ fn run_with_a_servers_dir_that_does_not_exist_never_crashes() {
 
     let out = sb.cli(&["run", &script_arg, "--servers-dir", &nowhere]);
 
-    assert!(
-        matches!(out.code, Some(1 | 2 | 6)),
+    assert_matches!(
+        out.code,
+        Some(1 | 2 | 6),
         "expected a classified failure, got {:?} (stdout: {} stderr: {})",
         out.code,
         out.stdout,

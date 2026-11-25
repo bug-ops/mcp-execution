@@ -60,6 +60,7 @@ pub struct McpConfig {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::commands::common::McpTransport;
 /// use std::collections::HashMap;
 ///
@@ -67,7 +68,7 @@ pub struct McpConfig {
 ///     url: "https://api.example.com/mcp".to_string(),
 ///     headers: HashMap::new(),
 /// };
-/// assert!(matches!(transport, McpTransport::Http { .. }));
+/// assert_matches!(transport, McpTransport::Http { .. });
 /// ```
 ///
 /// Debug output redacts header/env values (keeping keys), `args` wholesale,
@@ -691,6 +692,7 @@ fn parse_key_value(s: &str, kind: &str) -> Result<(String, String)> {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::commands::common::TransportArgs;
 ///
 /// let transport = TransportArgs::Stdio {
@@ -699,7 +701,7 @@ fn parse_key_value(s: &str, kind: &str) -> Result<(String, String)> {
 ///     env: vec![],
 ///     cwd: None,
 /// };
-/// assert!(matches!(transport, TransportArgs::Stdio { .. }));
+/// assert_matches!(transport, TransportArgs::Stdio { .. });
 /// ```
 ///
 /// Debug output redacts `env`/`headers` entries wholesale, not just a value
@@ -883,6 +885,7 @@ pub(crate) fn build_server_config(
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::commands::common::{ServerSource, TransportArgs};
 ///
 /// let source = ServerSource::Flags {
@@ -896,7 +899,7 @@ pub(crate) fn build_server_config(
 ///     discover_timeout_secs: None,
 /// };
 ///
-/// assert!(matches!(source, ServerSource::Flags { .. }));
+/// assert_matches!(source, ServerSource::Flags { .. });
 /// ```
 ///
 /// Debug output redacts via [`TransportArgs`]'s own redacting `Debug` impl:
@@ -1124,6 +1127,7 @@ fn metadata_error(error: MetadataReadError, server: &ServerId) -> anyhow::Error 
 )]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use std::io::Write;
 
     #[test]
@@ -1138,10 +1142,9 @@ mod tests {
             &server,
         );
 
-        assert!(matches!(
+        assert_matches!(
             error.downcast_ref::<CoreError>(),
-            Some(CoreError::InvalidArgument(message)) if message.contains("regenerate")
-        ));
+            Some(CoreError::InvalidArgument(message)) if message.contains("regenerate"));
     }
 
     /// Creates a temporary mcp.json file for testing.
@@ -1317,18 +1320,18 @@ mod tests {
         let config = load_mcp_config_from(file.path()).unwrap();
         assert_eq!(config.mcp_servers.len(), 3);
 
-        assert!(matches!(
+        assert_matches!(
             config.mcp_servers["local"].transport,
             McpTransport::Stdio { .. }
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             config.mcp_servers["remote-http"].transport,
             McpTransport::Http { .. }
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             config.mcp_servers["remote-sse"].transport,
             McpTransport::Sse { .. }
-        ));
+        );
     }
 
     #[test]
@@ -1338,10 +1341,10 @@ mod tests {
         let file = create_test_config(json);
 
         let config = load_mcp_config_from(file.path()).unwrap();
-        assert!(matches!(
+        assert_matches!(
             config.mcp_servers["remote"].transport,
             McpTransport::Http { .. }
-        ));
+        );
     }
 
     #[test]
@@ -1396,10 +1399,10 @@ mod tests {
         let file = create_test_config(json);
 
         let config = load_mcp_config_from(file.path()).unwrap();
-        assert!(matches!(
+        assert_matches!(
             config.mcp_servers["github"].transport,
             McpTransport::Stdio { .. }
-        ));
+        );
     }
 
     #[test]
@@ -1807,10 +1810,10 @@ mod tests {
         );
 
         let err = result.unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err.downcast_ref::<CoreError>(),
             Some(CoreError::InvalidArgument(_))
-        ));
+        );
     }
 
     #[test]
@@ -2127,10 +2130,9 @@ mod tests {
         let servers = list_mcp_servers_from(file.path()).unwrap();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].0, "github");
-        assert!(matches!(
+        assert_matches!(
             servers[0].1.transport,
-            McpTransport::Stdio { ref command, .. } if command == "node"
-        ));
+            McpTransport::Stdio { ref command, .. } if command == "node");
     }
 
     #[test]
@@ -2520,10 +2522,9 @@ mod tests {
         let (id, _config, entry) =
             get_result.expect("get_mcp_server must find the configured server");
         assert_eq!(id.as_str(), "github");
-        assert!(matches!(
+        assert_matches!(
             entry.transport,
-            McpTransport::Stdio { ref command, .. } if command == "node"
-        ));
+            McpTransport::Stdio { ref command, .. } if command == "node");
     }
 
     /// Regression test for #311 review S4: `get_mcp_server` must accept a

@@ -70,13 +70,14 @@ impl fmt::Display for FilesResourceKind {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_files::FilesError;
 ///
 /// let error = FilesError::FileNotFound {
 ///     path: "/missing.txt".to_string(),
 /// };
 ///
-/// assert!(matches!(error, FilesError::FileNotFound { .. }));
+/// assert_matches!(error, FilesError::FileNotFound { .. });
 /// ```
 #[derive(Error, Debug)]
 pub enum FilesError {
@@ -463,6 +464,7 @@ pub type Result<T> = std::result::Result<T, FilesError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn test_resource_limit_exceeded_display_export_file_count() {
@@ -499,16 +501,13 @@ mod tests {
     #[test]
     fn test_vfs_path_new_relative_fails() {
         let result = FilePath::new("relative/path");
-        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
+        assert_matches!(result, Err(FilesError::PathNotAbsolute { .. }));
     }
 
     #[test]
     fn test_vfs_path_new_parent_dir_fails() {
         let result = FilePath::new("/parent/../escape");
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]
@@ -518,28 +517,19 @@ mod tests {
         // `base.join("")` resolve to `base` itself downstream, letting a
         // single-file "group" swap the shared base directory.
         let result = FilePath::new("//x.ts");
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]
     fn test_vfs_path_new_dot_component_fails() {
         let result = FilePath::new("/./x.ts");
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]
     fn test_vfs_path_new_trailing_slash_fails() {
         let result = FilePath::new("/github/");
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]

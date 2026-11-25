@@ -29,6 +29,7 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
+use std::assert_matches;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -250,8 +251,9 @@ async fn test_discover_server_stdio_bails_early_once_accumulated_tool_count_exce
             actual,
             limit,
         } => {
-            assert!(
-                matches!(resource, ResourceKind::ToolCount { .. }),
+            assert_matches!(
+                resource,
+                ResourceKind::ToolCount { .. },
                 "expected a tool-count resource limit, got resource={resource:?}"
             );
             assert_eq!(

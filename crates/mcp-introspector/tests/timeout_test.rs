@@ -15,6 +15,7 @@
 
 use mcp_execution_core::{Error, ServerConfig, ServerId};
 use mcp_execution_introspector::Introspector;
+use std::assert_matches;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -180,8 +181,9 @@ async fn test_discover_server_connect_timeout_kills_child_process() {
         .unwrap();
 
     let result = introspector.discover_server(server_id, &config).await;
-    assert!(
-        matches!(result, Err(Error::Timeout { .. })),
+    assert_matches!(
+        result,
+        Err(Error::Timeout { .. }),
         "expected Error::Timeout, got {result:?}"
     );
 
@@ -218,8 +220,9 @@ async fn test_discover_server_discover_timeout_kills_child_process() {
         .unwrap();
 
     let result = introspector.discover_server(server_id, &config).await;
-    assert!(
-        matches!(result, Err(Error::Timeout { .. })),
+    assert_matches!(
+        result,
+        Err(Error::Timeout { .. }),
         "expected Error::Timeout, got {result:?}"
     );
 

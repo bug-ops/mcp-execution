@@ -1604,6 +1604,7 @@ mod tests {
 
     mod bounded_response_stream_tests {
         use super::*;
+        use std::assert_matches;
         use std::io;
         use std::pin::Pin;
         use std::sync::Arc;
@@ -2177,8 +2178,9 @@ mod tests {
                 },
             );
 
-            assert!(
-                matches!(result, Ok(Some(Ok(_)))),
+            assert_matches!(
+                result,
+                Ok(Some(Ok(_))),
                 "a message must be delivered from the same `drive` call, not deferred to \
                  the next poll, when the prior decode step consumed bytes without \
                  producing an item"
@@ -2202,8 +2204,9 @@ mod tests {
                 |_buf| Ok(None),
             );
 
-            assert!(
-                matches!(result, Ok(None)),
+            assert_matches!(
+                result,
+                Ok(None),
                 "drive must not loop forever when decode_step makes no progress at all"
             );
         }

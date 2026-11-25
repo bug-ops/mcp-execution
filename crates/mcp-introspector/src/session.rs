@@ -165,10 +165,11 @@ pub struct ServerText {
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_introspector::ToolCallOutcome;
 ///
 /// let outcome = ToolCallOutcome::Value(serde_json::json!({"ok": true}));
-/// assert!(matches!(outcome, ToolCallOutcome::Value(_)));
+/// assert_matches!(outcome, ToolCallOutcome::Value(_));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCallOutcome {

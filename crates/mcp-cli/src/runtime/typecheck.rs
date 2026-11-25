@@ -81,10 +81,11 @@ const NODE_BUILTINS: [&str; 24] = [
 /// # Examples
 ///
 /// ```
+/// use std::assert_matches;
 /// use mcp_execution_cli::runtime::typecheck::TypecheckOutcome;
 ///
 /// let outcome = TypecheckOutcome::Skipped { reason: "tsc not found".to_string() };
-/// assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+/// assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypecheckOutcome {
@@ -498,6 +499,7 @@ fn bound_diagnostics(lines: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     fn origin() -> Origin {
         Origin {
@@ -511,17 +513,17 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_in_the_generated_sdk_never_block_and_the_run_is_skipped() {
         let outcome = classify_diagnostics(SDK_IMPLICIT_ANY, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
     }
 
     #[tokio::test]
     async fn a_location_less_error_other_than_missing_node_types_is_a_real_failure() {
         let config_error = "error TS6053: File '/x/missing.ts' not found.";
         let outcome = classify_diagnostics(config_error, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Failed { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Failed { .. });
         let node_types = "error TS2688: Cannot find type definition file for 'node'.";
         let outcome = classify_diagnostics(node_types, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
     }
 
     #[tokio::test]
@@ -540,11 +542,11 @@ mod tests {
     async fn implicit_any_in_the_script_is_only_noise_while_types_are_unresolved() {
         let implicit = "s.ts(4,20): error TS7006: Parameter 'd' implicitly has an 'any' type.";
         let alone = classify_diagnostics(implicit, &origin()).await;
-        assert!(matches!(alone, TypecheckOutcome::Failed { .. }));
+        assert_matches!(alone, TypecheckOutcome::Failed { .. });
         let with_noise =
             format!("s.ts(1,1): error TS2580: Cannot find name 'process'.\n{implicit}");
         let outcome = classify_diagnostics(&with_noise, &origin()).await;
-        assert!(matches!(outcome, TypecheckOutcome::Skipped { .. }));
+        assert_matches!(outcome, TypecheckOutcome::Skipped { .. });
     }
 
     #[test]
@@ -578,10 +580,10 @@ mod tests {
             "{NODE_FS_MISSING}\ns.ts(2,1): error TS2580: Cannot find name 'process'. Do you need to \
              install type definitions for node?\n"
         );
-        assert!(matches!(
+        assert_matches!(
             classify_diagnostics(&text, &origin()).await,
             TypecheckOutcome::Skipped { .. }
-        ));
+        );
     }
 
     #[tokio::test]
@@ -600,14 +602,14 @@ mod tests {
     #[tokio::test]
     async fn a_real_type_error_fails_and_unparsable_output_fails_too() {
         let text = "s.ts(2,7): error TS2322: Type 'string' is not assignable to type 'number'.";
-        assert!(matches!(
+        assert_matches!(
             classify_diagnostics(text, &origin()).await,
             TypecheckOutcome::Failed { .. }
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             classify_diagnostics("tsc: crashed", &origin()).await,
             TypecheckOutcome::Failed { .. }
-        ));
+        );
     }
 
     #[test]
@@ -673,10 +675,10 @@ mod tests {
     async fn node_type_noise_is_hidden_next_to_a_real_error_and_skipped_alone() {
         let noise = "error TS2688: Cannot find type definition file for 'node'.\n\
                      g.ts(1,1): error TS2580: Cannot find name 'process'.";
-        assert!(matches!(
+        assert_matches!(
             classify_diagnostics(noise, &origin()).await,
             TypecheckOutcome::Skipped { .. }
-        ));
+        );
         let mixed = format!(
             "{noise}\ns.ts(2,7): error TS2322: Type 'string' is not assignable to type 'number'.\n  \
              detail line"

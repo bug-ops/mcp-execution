@@ -423,6 +423,7 @@ mod tests {
     use super::*;
     use crate::types::FilesResourceKind;
     use mcp_execution_codegen::GeneratedFile;
+    use std::assert_matches;
     use tempfile::TempDir;
 
     #[test]
@@ -456,7 +457,7 @@ mod tests {
             .add_file("relative/path", "content")
             .build();
 
-        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
+        assert_matches!(result, Err(FilesError::PathNotAbsolute { .. }));
     }
 
     #[test]
@@ -716,7 +717,7 @@ mod tests {
             .add_file("invalid/relative", "content")
             .build_and_export(temp_dir.path());
 
-        assert!(matches!(result, Err(FilesError::PathNotAbsolute { .. })));
+        assert_matches!(result, Err(FilesError::PathNotAbsolute { .. }));
     }
 
     #[test]
@@ -821,10 +822,7 @@ mod tests {
             .add_file("//x.ts", "malicious")
             .build_and_export(temp_dir.path());
 
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
         // Rejected during `build()`, before any group ever touches `base_path`.
         assert!(temp_dir.path().join("existing-sibling.ts").exists());
     }
@@ -837,10 +835,7 @@ mod tests {
             .add_file("/./x.ts", "content")
             .build_and_export(temp_dir.path());
 
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]
@@ -857,14 +852,12 @@ mod tests {
         let target = temp_dir.path().join("out");
         let result = builder.build_and_export(&target);
 
-        assert!(
-            matches!(
-                result,
-                Err(FilesError::ResourceLimitExceeded {
-                    resource: FilesResourceKind::ExportFileCount,
-                    ..
-                })
-            ),
+        assert_matches!(
+            result,
+            Err(FilesError::ResourceLimitExceeded {
+                resource: FilesResourceKind::ExportFileCount,
+                ..
+            }),
             "expected ResourceLimitExceeded{{resource: ExportFileCount}}, got: {result:?}"
         );
         // Rejected before any per-group publish ran, so the target directory
@@ -909,10 +902,7 @@ mod tests {
 
         let result = write_file_atomic(temp_dir.path(), "/../etc/passwd", "malicious");
 
-        assert!(matches!(
-            result,
-            Err(FilesError::InvalidPathComponent { .. })
-        ));
+        assert_matches!(result, Err(FilesError::InvalidPathComponent { .. }));
     }
 
     #[test]
