@@ -31,9 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: `drift` compares the live tool list with the metadata recorded at generation and exits 5 on a difference; issue #580 (#631)
 - **Decisions**: ADR-588 keeps Claude Code the only host target, ADR-589 adds no search or execute tool to `mcp-execution-server`, ADR-590 adds no connections that persist across runs, ADR-591 adds no ranked catalog search; issues #588, #589, #590, #591 close by these records (#631)
 - **Documentation**: README, usage guide, examples and crate READMEs cover the catalog, `call`, `run`, saved scripts, `stats`, `drift` and the privilege level, with measured figures; issue #613 (#631)
-- **`mcp-execution-cli`**: `run --format json` stream objects carry `spill_complete`, `false` when the spill file holds only the first bytes; issue #635 (#TBD)
-- **`mcp-execution-core`**: `HomeDir`, `HomeDirError`, `expand_home`, `ServersDir` and `SkillsDir` resolve the home, servers and skills directories in one place; issues #634, #637 (#TBD)
-- **Workspace**: a 7 day cooldown for Dependabot version updates; the cargo publish-age key is not set because it blocks `cargo update --precise`; issue #644 (#TBD)
+- **`mcp-execution-cli`**: `run --format json` stream objects carry `spill_complete`, `false` when the spill file holds only the first bytes; issue #635 (#654)
+- **`mcp-execution-core`**: `HomeDir`, `HomeDirError`, `expand_home`, `ServersDir` and `SkillsDir` resolve the home, servers and skills directories in one place; issues #634, #637 (#654)
+- **Workspace**: a 7 day cooldown for Dependabot version updates; the cargo publish-age key is not set because it blocks `cargo update --precise`; issue #644 (#654)
 
 ### Breaking
 
@@ -60,9 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-core`**: `ResourceKind` gains the variant `ResponseLine`, which breaks exhaustive matches on the public enum (#575, #631)
 - **`mcp-execution-cli`**: `runner::init_logging` takes a third `LogProfile` argument (#574, #631)
 - **`mcp-execution-cli`**: `drift` takes `--name` and `--progressive-output` like `generate`, and `setup` also checks for the helper binary (`SetupResult.helper_binary` in JSON output) (#580, #631)
-- **Workspace**: the MSRV is Rust 1.98 and follows a rolling stable-minus-two policy; issue #641 (#TBD)
-- **`mcp-execution-core`**: `ServersDir` and `SkillsDir` move from `mcp-execution-cli` to `mcp-execution-core`, a bare `~` expands to the home directory, a relative or unknown home is an error instead of a `./.claude` fallback, and `generate_skill` expands `~` in `servers_dir`; issues #634, #637 (#TBD)
-- **Tests**: variant assertions use `assert_matches!`, so a failure prints the value; issue #642 (#TBD)
+- **Workspace**: the MSRV is Rust 1.98 and follows a rolling stable-minus-two policy; issue #641 (#654)
+- **`mcp-execution-core`**: `ServersDir` and `SkillsDir` move from `mcp-execution-cli` to `mcp-execution-core`, a bare `~` expands to the home directory, a relative or unknown home is an error instead of a `./.claude` fallback, and `generate_skill` expands `~` in `servers_dir`; issues #634, #637 (#654)
+- **Tests**: variant assertions use `assert_matches!`, so a failure prints the value; issue #642 (#654)
 
 ### Changed
 
@@ -80,9 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workspace**: `unsafe_code`, `unwrap_used` and `expect_used` are denied workspace-wide and local builds deny warnings (#614)
 - **`mcp-execution-codegen`**: handshake server name and version are truncated before storage; nested unions are flattened in typed index signatures (#614)
 - **`mcp-execution-skill`**: a custom skill name that differs from the skill directory is rejected with a clear error instead of written unchecked; issue #612 (#631)
-- **`mcp-execution-core`, `mcp-execution-cli`, `mcp-execution-server`**: the home directory is read from `USERPROFILE` on Windows, so tests can redirect it and the 34 tests ignored for that reason run on Windows CI; issue #604 (#TBD)
-- **Tests**: the docs check runs TypeScript imports through `run` and parses every `mcp-execution-cli` command of the user-facing docs against a generated fixture package; issue #609 (#TBD)
-- **Tests**: signal tests wait for a readiness file instead of a fixed sleep, and a test shows `run` ends within the wrap-up bound against hanging servers; issues #636, #638 (#TBD)
+- **`mcp-execution-core`, `mcp-execution-cli`, `mcp-execution-server`**: the home directory is read from `USERPROFILE` on Windows, so tests can redirect it and the 34 tests ignored for that reason run on Windows CI; issue #604 (#654)
+- **Tests**: the docs check runs TypeScript imports through `run` and parses every `mcp-execution-cli` command of the user-facing docs against a generated fixture package; issue #609 (#654)
+- **Tests**: signal tests wait for a readiness file instead of a fixed sleep, and a test shows `run` ends within the wrap-up bound against hanging servers; issues #636, #638 (#654)
 
 ### Fixed
 
@@ -95,10 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-server`**: the listing counts tool files whose name starts with an underscore (#614)
 - **`mcp-execution-skill`**: skill scan accepts up to 1000 tools like generation, and a metadata symlink escape has its own error (#614)
 - **`mcp-execution-cli`**: `setup` skips and warns about an entry it cannot inspect instead of aborting the walk (#614)
-- **`mcp-execution-cli`**: on Unix `run --typecheck` stops the whole `tsc` process tree when the type check times out or the run is cancelled; Windows keeps the old behavior; issue #633 (#TBD)
-- **`mcp-execution-core`**: on Windows the `_meta.json` reader opens the file without following reparse points and checks the opened handle; issue #639 (#TBD)
-- **`mcp-execution-server`**: a missing home directory is an MCP error instead of writes under `./.claude`; issue #634 (#TBD)
-- **`mcp-execution-cli`**: a bare `~` in a directory option expands to the home directory instead of creating a literal `~` directory; issue #637 (#TBD)
+- **`mcp-execution-cli`**: on Unix `run --typecheck` stops the whole `tsc` process tree when the type check times out or the run is cancelled; Windows keeps the old behavior; issue #633 (#654)
+- **`mcp-execution-core`**: on Windows the `_meta.json` reader opens the file without following reparse points and checks the opened handle; issue #639 (#654)
+- **`mcp-execution-server`**: a missing home directory is an MCP error instead of writes under `./.claude`; issue #634 (#654)
+- **`mcp-execution-cli`**: a bare `~` in a directory option expands to the home directory instead of creating a literal `~` directory; issue #637 (#654)
 
 ### Security
 
