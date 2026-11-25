@@ -816,8 +816,7 @@ impl<'a> Converter<'a> {
         let required: Vec<&str> = object
             .get("required")
             .and_then(Value::as_array)
-            .map(|names| names.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
+            .map_or_default(|names| names.iter().filter_map(Value::as_str).collect());
         let mut properties = Vec::new();
         let mut omitted_key = false;
         let mut truncated = false;

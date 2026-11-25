@@ -307,8 +307,7 @@ impl Sandbox {
     /// Lines the fixture appended to its call log.
     pub fn fixture_log(&self) -> Vec<String> {
         std::fs::read_to_string(&self.log)
-            .map(|s| s.lines().map(str::to_string).collect())
-            .unwrap_or_default()
+            .map_or_default(|s| s.lines().map(str::to_string).collect())
     }
 
     /// The runner's per-OS state root as seen by a CLI started with [`Sandbox::command`].
@@ -364,8 +363,7 @@ pub fn anchored(stdout: &str) -> Anchored<'_> {
     let lines: Vec<&str> = stdout.lines().collect();
     let first = lines.first().copied().unwrap_or_default();
     let token = first
-        .strip_prefix("[mcp-execution ")
-        .and_then(|rest| rest.strip_suffix("] run started"))
+        .strip_circumfix("[mcp-execution ", "] run started")
         .unwrap_or_else(|| panic!("first stdout line is not the run anchor: {stdout:?}"));
     assert!(
         token.len() >= 16,

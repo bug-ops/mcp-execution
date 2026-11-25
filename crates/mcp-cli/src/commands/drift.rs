@@ -352,8 +352,7 @@ async fn scripts_using(server_id: &ServerId, removed: &[String]) -> Vec<String> 
     }
     scripts::list(&skill_dir)
         .await
-        .map(|listings| referencing(&listings, server_id, removed))
-        .unwrap_or_default()
+        .map_or_default(|listings| referencing(&listings, server_id, removed))
 }
 
 /// Names of the `listings` that call a `removed` tool of `server_id`, in listing order.

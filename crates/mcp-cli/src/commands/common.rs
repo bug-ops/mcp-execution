@@ -1015,10 +1015,9 @@ fn derive_server_id_from_url(url: &str) -> ServerId {
     // guarantee above for inputs like `https://user:pass@evil.com:99999/x`
     // (a mistyped port is a realistic `Url::parse` failure, not just an
     // adversarial one).
-    let host_and_path = Url::parse(url)
-        .ok()
-        .map(|parsed| format!("{}{}", parsed.host_str().unwrap_or_default(), parsed.path()))
-        .unwrap_or_default();
+    let host_and_path = Url::parse(url).ok().map_or_default(|parsed| {
+        format!("{}{}", parsed.host_str().unwrap_or_default(), parsed.path())
+    });
 
     slugify(&host_and_path)
 }

@@ -1545,8 +1545,7 @@ fn extract_parameter_names(schema: &serde_json::Value) -> Vec<String> {
     schema
         .get("properties")
         .and_then(|p| p.as_object())
-        .map(|props| props.keys().cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|props| props.keys().cloned().collect())
 }
 
 /// Builds an [`McpError`] using the JSON-RPC 2.0 "Server error" range (`-32000` to `-32099`,

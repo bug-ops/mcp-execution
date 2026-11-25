@@ -421,7 +421,7 @@ fn split_union(ty: &str) -> Vec<&str> {
 
 /// The inside of a type wrapped in one pair of parentheses, such as `('a' | 'b')`.
 fn unwrap_parens(ty: &str) -> Option<&str> {
-    let inner = ty.strip_prefix('(')?.strip_suffix(')')?;
+    let inner = ty.strip_circumfix('(', ')')?;
     let mut wrapped = true;
     scan_type_text(ty, |index, _, depth| {
         if index > 0 && index < ty.len() - 1 && depth == 0 {
@@ -435,9 +435,8 @@ fn unwrap_parens(ty: &str) -> Option<&str> {
 /// command: unchanged by sanitization and free of quotes, backslashes and the empty string.
 fn safe_string_literal(ty: &str) -> Option<&str> {
     let text = ty
-        .strip_prefix('\'')
-        .and_then(|t| t.strip_suffix('\''))
-        .or_else(|| ty.strip_prefix('"').and_then(|t| t.strip_suffix('"')))?;
+        .strip_circumfix('\'', '\'')
+        .or_else(|| ty.strip_circumfix('"', '"'))?;
     let plain = !text.is_empty()
         && !text.contains(['\\', '\'', '"'])
         && sanitize_untrusted_text(text, MAX_UNTRUSTED_FIELD_LEN) == text;
@@ -483,7 +482,7 @@ fn example_value_at(ts_type: &str, depth: usize) -> serde_json::Value {
     if let Some(item) = ty.strip_suffix("[]") {
         return Value::Array(vec![example_value_at(item, next)]);
     }
-    if let Some(item) = ty.strip_prefix("Array<").and_then(|t| t.strip_suffix('>')) {
+    if let Some(item) = ty.strip_circumfix("Array<", '>') {
         return Value::Array(vec![example_value_at(item, next)]);
     }
 

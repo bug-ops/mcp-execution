@@ -614,7 +614,7 @@ pub async fn resolve_confined_existing(
     base_dir: &Path,
     relative: &Path,
 ) -> Result<PathBuf, ConfinementError> {
-    if relative.as_os_str().is_empty() {
+    if relative.is_empty() {
         return Ok(base_dir.to_path_buf());
     }
     let escapes = |path: &Path| ConfinementError::Escape {

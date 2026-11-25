@@ -41,9 +41,7 @@ fn scripts_dir(skill: &Path) -> std::path::PathBuf {
 }
 
 fn files_in(dir: &Path) -> Vec<std::path::PathBuf> {
-    std::fs::read_dir(dir)
-        .map(|entries| entries.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default()
+    std::fs::read_dir(dir).map_or_default(|entries| entries.flatten().map(|e| e.path()).collect())
 }
 
 fn metadata_with(tools: &[&str]) -> ServerMetadata {
