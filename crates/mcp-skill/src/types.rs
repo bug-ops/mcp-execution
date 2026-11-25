@@ -72,6 +72,7 @@ pub const MAX_USE_CASE_HINTS: usize = 20;
 /// assert_eq!(params.server_id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct GenerateSkillParams {
     /// Server identifier (e.g., "github").
     ///
@@ -298,6 +299,7 @@ pub struct ToolExample {
 /// assert_eq!(params.server_id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct SaveSkillParams {
     /// Server identifier.
     ///

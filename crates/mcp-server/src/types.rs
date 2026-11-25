@@ -246,38 +246,6 @@ pub struct CategorizedTool {
     pub short_description: String,
 }
 
-impl CategorizedTool {
-    /// Creates a categorized tool from its four fields.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_server::types::CategorizedTool;
-    ///
-    /// let tool = CategorizedTool::new(
-    ///     "create_issue".to_string(),
-    ///     "issues".to_string(),
-    ///     "create,issue".to_string(),
-    ///     "Create an issue".to_string(),
-    /// );
-    /// assert_eq!(tool.category, "issues");
-    /// ```
-    #[must_use]
-    pub const fn new(
-        name: String,
-        category: String,
-        keywords: String,
-        short_description: String,
-    ) -> Self {
-        Self {
-            name,
-            category,
-            keywords,
-            short_description,
-        }
-    }
-}
-
 /// Result from saving categorized tools.
 ///
 /// Reports success status, number of files generated, and any errors

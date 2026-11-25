@@ -16,12 +16,10 @@ use serde_json::json;
 fn tool_file_carries_tags_for_stated_hints_and_title_only() {
     let mut deleter = tool("delete_file", json!({"type": "object"}), None);
     deleter.annotations = Some({
-        let mut value = ToolAnnotations::new(
-            Hint::StatedFalse,
-            Hint::StatedTrue,
-            Hint::NotStated,
-            Hint::NotStated,
-        );
+        let mut value = ToolAnnotations::default();
+        value.read_only = Hint::StatedFalse;
+        value.destructive = Hint::StatedTrue;
+
         value.title = AnnotationTitle::new("Delete file");
         value
     });
@@ -57,12 +55,9 @@ fn tool_file_carries_tags_for_stated_hints_and_title_only() {
 fn tool_file_tags_cannot_terminate_the_doc_comment() {
     let mut hostile = tool("hostile", json!({"type": "object"}), None);
     hostile.annotations = Some({
-        let mut value = ToolAnnotations::new(
-            Hint::StatedTrue,
-            Hint::NotStated,
-            Hint::NotStated,
-            Hint::NotStated,
-        );
+        let mut value = ToolAnnotations::default();
+        value.read_only = Hint::StatedTrue;
+
         value.title = AnnotationTitle::new("evil */ export const pwn = 1; /*");
         value
     });

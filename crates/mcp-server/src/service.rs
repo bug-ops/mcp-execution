@@ -4563,12 +4563,7 @@ mod tests {
     async fn test_generate_skill_server_directory_not_found() {
         let service = GeneratorService::new();
 
-        let params = GenerateSkillParams {
-            server_id: ServerSlug::new("nonexistent-server").unwrap(),
-            skill_name: None,
-            use_case_hints: None,
-            servers_dir: Some(PathBuf::from("/nonexistent/path")),
-        };
+        let params = serde_json::from_value::<GenerateSkillParams>(serde_json::json!({"server_id": ServerSlug::new("nonexistent-server").unwrap(), "servers_dir": Some(PathBuf::from("/nonexistent/path"))})).unwrap();
 
         let result = service
             .generate_skill(Parameters(params), CancellationToken::new())
@@ -4599,12 +4594,7 @@ mod tests {
         let ct = CancellationToken::new();
         ct.cancel();
 
-        let params = GenerateSkillParams {
-            server_id: ServerSlug::new("test-server").unwrap(),
-            skill_name: None,
-            use_case_hints: None,
-            servers_dir: Some(base_dir),
-        };
+        let params = serde_json::from_value::<GenerateSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test-server").unwrap(), "servers_dir": Some(base_dir)})).unwrap();
 
         let result = service.generate_skill(Parameters(params), ct).await;
 
@@ -4625,12 +4615,7 @@ mod tests {
         let target_dir = base_dir.join("test-server");
         tokio::fs::create_dir_all(&target_dir).await.unwrap();
 
-        let params = GenerateSkillParams {
-            server_id: ServerSlug::new("test-server").unwrap(),
-            skill_name: None,
-            use_case_hints: None,
-            servers_dir: Some(base_dir),
-        };
+        let params = serde_json::from_value::<GenerateSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test-server").unwrap(), "servers_dir": Some(base_dir)})).unwrap();
 
         let result = service
             .generate_skill(Parameters(params), CancellationToken::new())
@@ -4689,12 +4674,7 @@ mod tests {
             .unwrap();
         // Deliberately do not write `createIssue.ts`.
 
-        let params = GenerateSkillParams {
-            server_id: ServerSlug::new("test-server").unwrap(),
-            skill_name: None,
-            use_case_hints: None,
-            servers_dir: Some(base_dir),
-        };
+        let params = serde_json::from_value::<GenerateSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test-server").unwrap(), "servers_dir": Some(base_dir)})).unwrap();
 
         let result = service
             .generate_skill(Parameters(params), CancellationToken::new())
@@ -4761,12 +4741,7 @@ mod tests {
             .await
             .unwrap();
 
-        let params = GenerateSkillParams {
-            server_id: ServerSlug::new("test-server").unwrap(),
-            skill_name: None,
-            use_case_hints: None,
-            servers_dir: Some(base_dir),
-        };
+        let params = serde_json::from_value::<GenerateSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test-server").unwrap(), "servers_dir": Some(base_dir)})).unwrap();
 
         let result = service
             .generate_skill(Parameters(params), CancellationToken::new())
@@ -4837,12 +4812,7 @@ mod tests {
             .await
             .unwrap();
 
-        let params = GenerateSkillParams {
-            server_id: ServerSlug::new("test-server").unwrap(),
-            skill_name: Some("a".repeat(mcp_execution_skill::MAX_SKILL_NAME_LENGTH + 1)),
-            use_case_hints: None,
-            servers_dir: Some(base_dir),
-        };
+        let params = serde_json::from_value::<GenerateSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test-server").unwrap(), "skill_name": Some("a".repeat(mcp_execution_skill::MAX_SKILL_NAME_LENGTH + 1)), "servers_dir": Some(base_dir)})).unwrap();
 
         let result = service
             .generate_skill(Parameters(params), CancellationToken::new())
@@ -4911,11 +4881,8 @@ mod tests {
             .await
             .unwrap();
 
-        let params = |skill_name: &str| GenerateSkillParams {
-            server_id: ServerSlug::new("test-server").unwrap(),
-            skill_name: Some(skill_name.to_string()),
-            use_case_hints: None,
-            servers_dir: Some(base_dir.clone()),
+        let params = |skill_name: &str| {
+            serde_json::from_value::<GenerateSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test-server").unwrap(), "skill_name": Some(skill_name.to_string()), "servers_dir": Some(base_dir.clone())})).unwrap()
         };
 
         // FR-043.6: the skill is written to `test-server/`, so any other name is refused.
@@ -4964,12 +4931,7 @@ mod tests {
         let ct = CancellationToken::new();
         ct.cancel();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("cancel-test").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: None,
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("cancel-test").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "overwrite": false})).unwrap();
 
         let result = service.save_skill(Parameters(params), ct).await;
 
@@ -5004,12 +4966,7 @@ mod tests {
         let service =
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("my-server").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from("~/.claude/skills/my-server/SKILL.md")),
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("my-server").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "output_path": Some(PathBuf::from("~/.claude/skills/my-server/SKILL.md")), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5029,12 +4986,7 @@ mod tests {
     async fn test_save_skill_missing_yaml_frontmatter() {
         let service = GeneratorService::new();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "# Test Skill\n\nNo YAML frontmatter here.".to_string(),
-            output_path: None,
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "# Test Skill\n\nNo YAML frontmatter here.".to_string(), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5050,12 +5002,7 @@ mod tests {
     async fn test_save_skill_invalid_frontmatter_no_name() {
         let service = GeneratorService::new();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\ndescription: test\n---\n# Test".to_string(),
-            output_path: None,
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\ndescription: test\n---\n# Test".to_string(), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5071,12 +5018,7 @@ mod tests {
     async fn test_save_skill_invalid_frontmatter_no_description() {
         let service = GeneratorService::new();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test-skill\n---\n# Test".to_string(),
-            output_path: None,
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test-skill\n---\n# Test".to_string(), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5104,12 +5046,7 @@ mod tests {
             .await
             .unwrap();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from("SKILL.md")),
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "output_path": Some(PathBuf::from("SKILL.md")), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5138,12 +5075,7 @@ mod tests {
             .await
             .unwrap();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: test skill\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from("SKILL.md")),
-            overwrite: true,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: test skill\n---\n# Test".to_string(), "output_path": Some(PathBuf::from("SKILL.md")), "overwrite": true})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5169,12 +5101,7 @@ mod tests {
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
         let output_path = temp_dir.path().join("test").join("nested").join("SKILL.md");
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: nested\ndescription: A test skill\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
-            output_path: Some(PathBuf::from("nested/SKILL.md")),
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: nested\ndescription: A test skill\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(), "output_path": Some(PathBuf::from("nested/SKILL.md")), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5209,12 +5136,7 @@ mod tests {
         let service =
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: \"GitHub: issues and CI\"\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(),
-            output_path: None,
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: \"GitHub: issues and CI\"\n---\n\n# Test Skill\n\n## Section 1\n\nContent here.".to_string(), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5239,12 +5161,7 @@ mod tests {
         let service =
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: None,
-            overwrite: false,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "overwrite": false})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5280,12 +5197,7 @@ mod tests {
         } else {
             "/etc/passwd"
         };
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from(absolute)),
-            overwrite: true,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "output_path": Some(PathBuf::from(absolute)), "overwrite": true})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5307,12 +5219,7 @@ mod tests {
         let service =
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from("../../../etc/passwd")),
-            overwrite: true,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "output_path": Some(PathBuf::from("../../../etc/passwd")), "overwrite": true})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5342,12 +5249,7 @@ mod tests {
         tokio::fs::create_dir_all(&server_dir).await.unwrap();
         std::os::unix::fs::symlink(outside_dir.path(), server_dir.join("escape")).unwrap();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from("escape/SKILL.md")),
-            overwrite: true,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "output_path": Some(PathBuf::from("escape/SKILL.md")), "overwrite": true})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5374,12 +5276,7 @@ mod tests {
         tokio::fs::create_dir_all(&server_dir).await.unwrap();
         std::os::unix::fs::symlink(&dangling_target, server_dir.join("SKILL.md")).unwrap();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("test").unwrap(),
-            content: "---\nname: test\ndescription: test\n---\n# Test".to_string(),
-            output_path: Some(PathBuf::from("SKILL.md")),
-            overwrite: true,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("test").unwrap(), "content": "---\nname: test\ndescription: test\n---\n# Test".to_string(), "output_path": Some(PathBuf::from("SKILL.md")), "overwrite": true})).unwrap();
 
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
@@ -5400,12 +5297,7 @@ mod tests {
             GeneratorService::new().with_skills_base_dir_for_test(temp_dir.path().to_path_buf());
 
         for server_id in ["server-a", "server-b"] {
-            let params = SaveSkillParams {
-                server_id: ServerSlug::new(server_id).unwrap(),
-                content: format!("---\nname: {server_id}\ndescription: test\n---\n# Test"),
-                output_path: None,
-                overwrite: false,
-            };
+            let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new(server_id).unwrap(), "content": format!("---\nname: {server_id}\ndescription: test\n---\n# Test"), "overwrite": false})).unwrap();
             let result = service
                 .save_skill(Parameters(params), CancellationToken::new())
                 .await;
@@ -5418,12 +5310,7 @@ mod tests {
         // Genuine negative case: server-b must not be able to reach into
         // server-a's directory via output_path, and server-a's file must
         // come out of the attempt untouched.
-        let cross_server_params = SaveSkillParams {
-            server_id: ServerSlug::new("server-b").unwrap(),
-            content: "---\nname: hijack\ndescription: hijack\n---\n# Hijack".to_string(),
-            output_path: Some(PathBuf::from("../server-a/SKILL.md")),
-            overwrite: true,
-        };
+        let cross_server_params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("server-b").unwrap(), "content": "---\nname: hijack\ndescription: hijack\n---\n# Hijack".to_string(), "output_path": Some(PathBuf::from("../server-a/SKILL.md")), "overwrite": true})).unwrap();
         let cross_server_result = service
             .save_skill(Parameters(cross_server_params), CancellationToken::new())
             .await;
@@ -5472,12 +5359,7 @@ mod tests {
         )
         .unwrap();
 
-        let params = SaveSkillParams {
-            server_id: ServerSlug::new("server-b").unwrap(),
-            content: "---\nname: hijack\ndescription: hijack\n---\n# Hijack".to_string(),
-            output_path: None,
-            overwrite: true,
-        };
+        let params = serde_json::from_value::<SaveSkillParams>(serde_json::json!({"server_id": ServerSlug::new("server-b").unwrap(), "content": "---\nname: hijack\ndescription: hijack\n---\n# Hijack".to_string(), "overwrite": true})).unwrap();
         let result = service
             .save_skill(Parameters(params), CancellationToken::new())
             .await;

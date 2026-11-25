@@ -213,7 +213,15 @@ const HTTP_MAX_SSE_EVENT_SIZE: usize = 16 * 1024 * 1024;
 /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
 /// use mcp_execution_core::ServerId;
 ///
-/// let info = ServerInfo::new(ServerId::new("example").unwrap(), "Example Server".to_string(), "1.0.0".to_string(), vec![], { let mut value = ServerCapabilities::default(); value.supports_tools = true; value });
+/// let mut capabilities = ServerCapabilities::default();
+/// capabilities.supports_tools = true;
+/// let info = ServerInfo::new(
+///     ServerId::new("example").unwrap(),
+///     "Example Server".to_string(),
+///     "1.0.0".to_string(),
+///     vec![],
+///     capabilities,
+/// );
 ///
 /// assert_eq!(info.name, "Example Server");
 /// ```
@@ -243,14 +251,18 @@ pub struct ServerInfo {
 /// use mcp_execution_core::ToolName;
 /// use serde_json::json;
 ///
-/// let tool = ToolInfo::new(ToolName::new("send_message").unwrap(), "Sends a message to a chat".to_string(), json!({
+/// let tool = ToolInfo::new(
+///     ToolName::new("send_message").unwrap(),
+///     "Sends a message".to_string(),
+///     json!({
 ///         "type": "object",
 ///         "properties": {
 ///             "chat_id": {"type": "string"},
 ///             "text": {"type": "string"}
 ///         },
 ///         "required": ["chat_id", "text"]
-///     }));
+///     }),
+/// );
 ///
 /// assert_eq!(tool.name.as_str(), "send_message");
 /// ```
@@ -346,7 +358,11 @@ impl ToolInfo {
     /// use mcp_execution_introspector::ToolInfo;
     /// use serde_json::json;
     ///
-    /// let tool = ToolInfo::new(ToolName::new("send_message").unwrap(), "Sends a message".to_string(), json!({"type": "object"}));
+    /// let tool = ToolInfo::new(
+    ///     ToolName::new("send_message").unwrap(),
+    ///     "Sends a message".to_string(),
+    ///     json!({"type": "object"}),
+    /// );
     ///
     /// assert_eq!(tool.digest_entry().name, "send_message");
     /// ```
@@ -484,7 +500,9 @@ impl Discovery {
 /// ```
 /// use mcp_execution_introspector::ServerCapabilities;
 ///
-/// let caps = { let mut value = ServerCapabilities::default(); value.supports_tools = true; value.supports_resources = true; value };
+/// let mut caps = ServerCapabilities::default();
+/// caps.supports_tools = true;
+/// caps.supports_resources = true;
 ///
 /// assert!(caps.supports_tools);
 /// assert!(!caps.supports_prompts);
@@ -1503,12 +1521,12 @@ fn capture_annotations(
 ) -> Option<ToolAnnotations> {
     let wire = wire.unwrap_or_default();
     let captured = {
-        let mut value = ToolAnnotations::new(
-            Hint::from(wire.read_only_hint),
-            Hint::from(wire.destructive_hint),
-            Hint::from(wire.idempotent_hint),
-            Hint::from(wire.open_world_hint),
-        );
+        let mut value = ToolAnnotations::default();
+        value.read_only = Hint::from(wire.read_only_hint);
+        value.destructive = Hint::from(wire.destructive_hint);
+        value.idempotent = Hint::from(wire.idempotent_hint);
+        value.open_world = Hint::from(wire.open_world_hint);
+
         value.title = title
             .and_then(AnnotationTitle::new)
             .or_else(|| wire.title.as_deref().and_then(AnnotationTitle::new));

@@ -326,7 +326,12 @@ pub enum ScriptError {
 /// ```
 /// use mcp_execution_skill::scripts::{RecipeName, ScriptListing, WriteIntent};
 ///
-/// let listing = ScriptListing::new(RecipeName::new("a").unwrap(), String::new(), vec![], WriteIntent::ReadOnly);
+/// let listing = ScriptListing::new(
+///     RecipeName::new("a").unwrap(),
+///     String::new(),
+///     vec![],
+///     WriteIntent::ReadOnly,
+/// );
 /// assert_eq!(listing.writes, WriteIntent::ReadOnly);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]

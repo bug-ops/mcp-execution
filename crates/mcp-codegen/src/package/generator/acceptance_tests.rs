@@ -131,12 +131,12 @@ fn adversarial_tool() -> ToolInfo {
         );
         value.output_schema = Some(object_schema_with_properties("out", near_limit));
         value.annotations = Some({
-            let mut value = ToolAnnotations::new(
-                Hint::StatedTrue,
-                Hint::StatedFalse,
-                Hint::StatedTrue,
-                Hint::StatedFalse,
-            );
+            let mut value = ToolAnnotations::default();
+            value.read_only = Hint::StatedTrue;
+            value.destructive = Hint::StatedFalse;
+            value.idempotent = Hint::StatedTrue;
+            value.open_world = Hint::StatedFalse;
+
             value.title = AnnotationTitle::new(&"T".repeat(MAX_UNTRUSTED_FIELD_LEN));
             value
         });

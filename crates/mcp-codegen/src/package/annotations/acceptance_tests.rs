@@ -11,7 +11,12 @@ fn annotations(
     open_world: Hint,
 ) -> ToolAnnotations {
     {
-        let mut value = ToolAnnotations::new(read_only, destructive, idempotent, open_world);
+        let mut value = ToolAnnotations::default();
+        value.read_only = read_only;
+        value.destructive = destructive;
+        value.idempotent = idempotent;
+        value.open_world = open_world;
+
         value.title = title.and_then(AnnotationTitle::new);
         value
     }

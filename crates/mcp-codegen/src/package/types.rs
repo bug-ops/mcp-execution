@@ -161,7 +161,11 @@ pub struct ToolSummary {
 /// ```
 /// use mcp_execution_codegen::package::ToolCategorization;
 ///
-/// let cat = ToolCategorization::new("issues".to_string(), vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()], "Create a new issue in a repository".to_string());
+/// let cat = ToolCategorization::new(
+///     "issues".to_string(),
+///     vec!["create".to_string(), "issue".to_string(), "new".to_string(), "bug".to_string()],
+///     "Create a new issue in a repository".to_string(),
+/// );
 ///
 /// assert_eq!(cat.category, "issues");
 /// ```

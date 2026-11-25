@@ -367,9 +367,9 @@ pub enum Commands {
         detailed: bool,
     },
 
-    /// Generate Claude Code skill file from progressive loading tools.
+    /// Generate Claude Code skill file from a generated server package.
     ///
-    /// Scans generated progressive loading TypeScript files and creates
+    /// Scans the generated TypeScript files and creates
     /// an instruction skill (SKILL.md) for Claude Code integration.
     ///
     /// # Note
@@ -435,10 +435,10 @@ pub enum Commands {
         overwrite: bool,
     },
 
-    /// Generate progressive loading code from MCP server.
+    /// Generate a typed TypeScript package from an MCP server.
     ///
     /// Introspects an MCP server and generates TypeScript files
-    /// for progressive tool loading.
+    /// one per tool.
     ///
     /// # Configuration Modes
     ///
@@ -477,7 +477,7 @@ pub enum Commands {
         #[arg(long)]
         name: Option<String>,
 
-        /// Custom output directory for progressive loading files
+        /// Custom base directory for generated server packages
         /// (default: ~/.claude/servers/)
         #[arg(long)]
         servers_dir: Option<PathBuf>,

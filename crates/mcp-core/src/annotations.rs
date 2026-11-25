@@ -15,7 +15,11 @@
 //! ```
 //! use mcp_execution_core::annotations::{AnnotationTitle, Hint, ToolAnnotations};
 //!
-//! let annotations = { let mut value = ToolAnnotations::new(Hint::StatedFalse, Hint::StatedTrue, Hint::NotStated, Hint::from(Some(false))); value.title = AnnotationTitle::new("Delete file"); value };
+//! let mut annotations = ToolAnnotations::default();
+//! annotations.title = AnnotationTitle::new("Delete file");
+//! annotations.read_only = Hint::StatedFalse;
+//! annotations.destructive = Hint::StatedTrue;
+//! annotations.open_world = Hint::from(Some(false));
 //!
 //! assert_eq!(annotations.destructive, Hint::StatedTrue);
 //! assert_eq!(annotations.idempotent, Hint::NotStated);
@@ -115,21 +119,17 @@ impl From<AnnotationTitle> for String {
 
 /// The annotations an MCP server advertised for one tool.
 ///
-/// Every field value is legal and there is deliberately no `Default`: the absence of
-/// annotations is `Option::<ToolAnnotations>::None` on the carrying type, never an
-/// all-[`Hint::NotStated`] value. Values are advisory and untrusted.
+/// Every field value is legal. `Default` (no title, every hint [`Hint::NotStated`]) is the
+/// starting point for building a value; the absence of annotations is still
+/// `Option::<ToolAnnotations>::None` on the carrying type. Values are advisory and untrusted.
 ///
 /// # Examples
 ///
 /// ```
 /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
 ///
-/// let annotations = ToolAnnotations::new(
-///     Hint::StatedTrue,
-///     Hint::NotStated,
-///     Hint::NotStated,
-///     Hint::NotStated,
-/// );
+/// let mut annotations = ToolAnnotations::default();
+/// annotations.read_only = Hint::StatedTrue;
 ///
 /// let json = serde_json::to_string(&annotations).unwrap();
 /// let back: ToolAnnotations = serde_json::from_str(&json).unwrap();
@@ -150,36 +150,15 @@ pub struct ToolAnnotations {
     pub open_world: Hint,
 }
 
-impl ToolAnnotations {
-    /// Creates annotations from the four hints, with no display title; set [`Self::title`]
-    /// afterwards when the server supplied one.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_core::annotations::{Hint, ToolAnnotations};
-    ///
-    /// let annotations = ToolAnnotations::new(
-    ///     Hint::StatedTrue,
-    ///     Hint::NotStated,
-    ///     Hint::NotStated,
-    ///     Hint::NotStated,
-    /// );
-    /// assert!(annotations.title.is_none());
-    /// ```
-    #[must_use]
-    pub const fn new(
-        read_only: Hint,
-        destructive: Hint,
-        idempotent: Hint,
-        open_world: Hint,
-    ) -> Self {
+impl Default for ToolAnnotations {
+    /// No title and no stated hint.
+    fn default() -> Self {
         Self {
             title: None,
-            read_only,
-            destructive,
-            idempotent,
-            open_world,
+            read_only: Hint::NotStated,
+            destructive: Hint::NotStated,
+            idempotent: Hint::NotStated,
+            open_world: Hint::NotStated,
         }
     }
 }

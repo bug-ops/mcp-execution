@@ -21,7 +21,24 @@
 //!
 //! let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
 //!
-//! let meta = ServerMetadata::new(METADATA_SCHEMA_VERSION, ServerId::new("github").unwrap(), "GitHub".to_string(), "1.0.0".to_string(), vec![{ let mut value = ToolMetadata::new(ToolName::new("create_issue").unwrap(), "createIssue".to_string(), vec!["create".to_string(), "issue".to_string()], vec![], ResultTypeOrigin::Undeclared, 0); value.category = Some("issues".to_string()); value.description = Some("Creates a new issue".to_string()); value }], GenerationProvenance::capture(&config, &[]));
+//! let mut tool = ToolMetadata::new(
+//!     ToolName::new("create_issue").unwrap(),
+//!     "createIssue".to_string(),
+//!     vec!["create".to_string(), "issue".to_string()],
+//!     vec![],
+//!     ResultTypeOrigin::Undeclared,
+//!     0,
+//! );
+//! tool.category = Some("issues".to_string());
+//! tool.description = Some("Creates a new issue".to_string());
+//! let meta = ServerMetadata::new(
+//!     METADATA_SCHEMA_VERSION,
+//!     ServerId::new("github").unwrap(),
+//!     "GitHub".to_string(),
+//!     "1.0.0".to_string(),
+//!     vec![tool],
+//!     GenerationProvenance::capture(&config, &[]),
+//! );
 //!
 //! let json = serde_json::to_string(&meta).unwrap();
 //! let round_tripped: ServerMetadata = serde_json::from_str(&json).unwrap();
@@ -156,7 +173,14 @@ pub const MAX_METADATA_FILE_BYTES: u64 = 1024 * 1024;
 ///
 /// let config = ServerConfig::builder().command("docker".to_string()).build().unwrap();
 ///
-/// let meta = ServerMetadata::new(METADATA_SCHEMA_VERSION, ServerId::new("github").unwrap(), "GitHub".to_string(), "1.0.0".to_string(), vec![], GenerationProvenance::capture(&config, &[]));
+/// let meta = ServerMetadata::new(
+///     METADATA_SCHEMA_VERSION,
+///     ServerId::new("github").unwrap(),
+///     "GitHub".to_string(),
+///     "1.0.0".to_string(),
+///     vec![],
+///     GenerationProvenance::capture(&config, &[]),
+/// );
 ///
 /// assert_eq!(meta.tools.len(), 0);
 /// ```
@@ -313,7 +337,16 @@ impl ServerMetadata {
 /// use mcp_execution_core::metadata::{ResultTypeOrigin, ToolMetadata};
 /// use mcp_execution_core::ToolName;
 ///
-/// let tool = { let mut value = ToolMetadata::new(ToolName::new("create_issue").unwrap(), "createIssue".to_string(), vec!["create".to_string(), "issue".to_string()], vec![], ResultTypeOrigin::Undeclared, 0); value.category = Some("issues".to_string()); value.description = Some("Creates a new issue".to_string()); value };
+/// let mut tool = ToolMetadata::new(
+///     ToolName::new("create_issue").unwrap(),
+///     "createIssue".to_string(),
+///     vec!["create".to_string(), "issue".to_string()],
+///     vec![],
+///     ResultTypeOrigin::Undeclared,
+///     0,
+/// );
+/// tool.category = Some("issues".to_string());
+/// tool.description = Some("Creates a new issue".to_string());
 ///
 /// assert_eq!(tool.name.as_str(), "create_issue");
 /// ```
@@ -388,7 +421,8 @@ pub enum ResultTypeOrigin {
 /// ```
 /// use mcp_execution_core::metadata::ParameterMetadata;
 ///
-/// let param = { let mut value = ParameterMetadata::new("title".to_string(), "string".to_string(), true); value.description = Some("Issue title".to_string()); value };
+/// let mut param = ParameterMetadata::new("title".to_string(), "string".to_string(), true);
+/// param.description = Some("Issue title".to_string());
 ///
 /// assert!(param.required);
 /// ```

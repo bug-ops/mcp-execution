@@ -75,15 +75,6 @@
 //! $ cat ~/.claude/servers/github/createIssue.ts
 //! // TypeScript code for createIssue tool
 //! ```
-//!
-//! # Feature Flag
-//!
-//! This module is only available when the `progressive` feature is enabled:
-//!
-//! ```toml
-//! [dependencies]
-//! mcp-codegen = { version = "0.1", features = ["progressive"] }
-//! ```
 
 mod annotations;
 mod catalog;

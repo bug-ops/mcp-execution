@@ -489,7 +489,7 @@ fn format_success(result: &GenerationResult, output_format: OutputFormat) -> Res
             result.output_path
         ),
         _ => format!(
-            "✓ Successfully generated progressive loading files\n  Server: {} ({})\n  Tools: {}\n  Location: {}\n  Next step: {NPM_INSTALL_HINT}",
+            "✓ Successfully generated the TypeScript package\n  Server: {} ({})\n  Tools: {}\n  Location: {}\n  Next step: {NPM_INSTALL_HINT}",
             escape_display(&result.server_name),
             result.server_id,
             result.tool_count,

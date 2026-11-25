@@ -422,12 +422,13 @@ fn test_pending_generation_has_correct_timeout() {
 
 #[test]
 fn test_categorized_tool_serialization_roundtrip() {
-    let tool = CategorizedTool::new(
-        "test_tool".to_string(),
-        "testing".to_string(),
-        "test,tool,demo".to_string(),
-        "A test tool".to_string(),
-    );
+    let tool: CategorizedTool = serde_json::from_value(serde_json::json!({
+        "name": "test_tool",
+        "category": "testing",
+        "keywords": "test,tool,demo",
+        "short_description": "A test tool",
+    }))
+    .unwrap();
 
     let json = serde_json::to_string(&tool).unwrap();
     let deserialized: CategorizedTool = serde_json::from_str(&json).unwrap();

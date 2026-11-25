@@ -10,7 +10,8 @@
 //!
 //! let file = GeneratedFile::new("tools/sendMessage.ts".to_string(), "export function sendMessage() {}".to_string());
 //!
-//! let code = { let mut value = GeneratedCode::new(); value.files = vec![file]; value };
+//! let mut code = GeneratedCode::new();
+//! code.files = vec![file];
 //!
 //! assert_eq!(code.files.len(), 1);
 //! ```
@@ -29,7 +30,8 @@ use std::collections::HashMap;
 /// ```
 /// use mcp_execution_codegen::GeneratedCode;
 ///
-/// let code = { let mut value = GeneratedCode::new(); value.files = vec![]; value };
+/// let mut code = GeneratedCode::new();
+/// code.files = vec![];
 ///
 /// assert_eq!(code.file_count(), 0);
 /// ```
@@ -252,7 +254,12 @@ pub struct TemplateContext {
 /// use mcp_execution_codegen::ToolDefinition;
 /// use serde_json::json;
 ///
-/// let tool = ToolDefinition::new("send_message".to_string(), "Sends a message".to_string(), json!({"type": "object"}), "sendMessage".to_string());
+/// let tool = ToolDefinition::new(
+///     "send_message".to_string(),
+///     "Sends a message".to_string(),
+///     json!({"type": "object"}),
+///     "sendMessage".to_string(),
+/// );
 ///
 /// assert_eq!(tool.name, "send_message");
 /// assert_eq!(tool.typescript_name, "sendMessage");
