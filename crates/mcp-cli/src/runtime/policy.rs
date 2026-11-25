@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use super::dirs::RuntimeDirs;
 use super::journal::ArgsDigest;
-use crate::commands::drift::read_recorded;
+use crate::commands::common::read_generated_metadata;
 
 /// Largest policy file, in bytes.
 pub const MAX_POLICY_FILE_BYTES: u64 = 64 * 1024;
@@ -290,7 +290,11 @@ impl DryRun {
                 .digest
                 .map_or_else(String::new, |d| format!(" args={}", d.prefix()));
             let meta = recorded.entry(write.server.clone()).or_insert_with(|| {
-                read_recorded(&self.servers_dir.join(write.server.as_str())).ok()
+                read_generated_metadata(
+                    &self.servers_dir.join(write.server.as_str()),
+                    &write.server,
+                )
+                .ok()
             });
             let suggestion = if marked_read_only(meta.as_ref(), &write.tool) {
                 format!(

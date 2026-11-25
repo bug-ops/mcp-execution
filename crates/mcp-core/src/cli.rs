@@ -208,6 +208,28 @@ impl ExitCode {
     /// ```
     pub const SCRIPT_FAILED: Self = Self(6);
 
+    /// The runner was stopped by SIGINT (exit code 130, `128 + 2`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::INTERRUPTED.as_i32(), 130);
+    /// ```
+    pub const INTERRUPTED: Self = Self(130);
+
+    /// The runner was stopped by SIGTERM (exit code 143, `128 + 15`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::cli::ExitCode;
+    ///
+    /// assert_eq!(ExitCode::TERMINATED.as_i32(), 143);
+    /// ```
+    pub const TERMINATED: Self = Self(143);
+
     /// Creates an exit code from an integer value.
     ///
     /// Returns `None` if `code` falls outside `0..=255`. This is not a universal OS-level

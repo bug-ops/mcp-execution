@@ -14,7 +14,7 @@
 
 use mcp_execution_core::metadata::{
     CATALOG_FILE_NAME, INDEX_FILE_NAME, MAX_METADATA_FILE_BYTES, MAX_TOOL_COUNT,
-    METADATA_FILE_NAME, METADATA_SCHEMA_VERSION, ServerMetadata,
+    METADATA_FILE_NAME, MetadataReadError, read_server_metadata_async,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -83,11 +83,12 @@ pub enum ScanError {
         path: String,
     },
 
-    /// The `_meta.json` sidecar resolves outside the server directory (a symlink escape).
+    /// The `_meta.json` sidecar is not a regular file inside the server directory: a symlink, a
+    /// FIFO or a directory.
     ///
-    /// Distinct from [`ScanError::MissingMetadata`] so that a fail-closed path-confinement
-    /// rejection is never mistaken for a server that simply has not been generated yet.
-    #[error("metadata sidecar resolves outside the server directory: {path}")]
+    /// Distinct from [`ScanError::MissingMetadata`] so that a fail-closed rejection is never
+    /// mistaken for a server that simply has not been generated yet.
+    #[error("metadata sidecar is not a regular file inside the server directory: {path}")]
     MetadataEscapesDirectory {
         /// Sanitized path of the sidecar file as it was looked up (not its symlink target).
         path: String,
@@ -153,19 +154,6 @@ pub enum ScanError {
         /// Sanitized path of the sidecar that references `tool`.
         sidecar_path: String,
     },
-}
-
-/// Minimal shape used to read a sidecar's `schema_version` before attempting a typed
-/// [`ServerMetadata`] parse.
-///
-/// A genuine `schema_version: 1` document has no `provenance` key at all, so parsing it
-/// directly as [`ServerMetadata`] would fail with a generic "missing field `provenance`"
-/// [`ScanError::MetadataParse`] before [`ScanError::UnsupportedSchema`] — the error this probe
-/// exists to produce — ever gets a chance to fire. `#[derive(Deserialize)]` ignores unknown
-/// fields by default, so this probe succeeds against both a v1 and a v2 document.
-#[derive(Deserialize)]
-struct SchemaVersionProbe {
-    schema_version: u32,
 }
 
 /// Result of [`scan_tools_directory`]: the parsed tools plus any non-fatal
@@ -316,58 +304,12 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
 
     let meta_path = canonical_base.join(METADATA_FILE_NAME);
 
-    // SECURITY: Canonicalize the sidecar path and validate it stays within the base
-    // directory, preventing path traversal via a symlinked `_meta.json`.
-    let canonical_meta = match tokio::fs::canonicalize(&meta_path).await {
-        Ok(path) if path.starts_with(&canonical_base) => path,
-        Ok(_) => {
-            return Err(ScanError::MetadataEscapesDirectory {
-                path: sanitize_path_for_error(&meta_path),
-            });
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ScanError::MissingMetadata {
-                path: sanitize_path_for_error(&meta_path),
-            });
-        }
-        Err(err) => return Err(ScanError::Io(err)),
-    };
-
-    let file_metadata = tokio::fs::metadata(&canonical_meta).await?;
-    if file_metadata.len() > MAX_FILE_SIZE {
-        return Err(ScanError::FileTooLarge {
-            path: sanitize_path_for_error(&meta_path),
-            size: file_metadata.len(),
-            limit: MAX_FILE_SIZE,
-        });
-    }
-
-    let content = tokio::fs::read_to_string(&canonical_meta).await?;
-
-    // `schema_version` is checked from a minimal probe *before* the typed `ServerMetadata`
-    // parse below, not after: a genuine `schema_version: 1` sidecar has no `provenance` key at
-    // all, so a typed parse against the current (v2) shape would fail first with a generic
-    // "missing field `provenance`" `MetadataParse`, and `UnsupportedSchema` — the error this
-    // check exists to produce — could never fire. A bare `#[derive(Deserialize)]` probe ignores
-    // unknown fields by default, so it succeeds against both v1 and v2 documents alike.
-    let probe: SchemaVersionProbe =
-        serde_json::from_str(&content).map_err(|source| ScanError::MetadataParse {
-            path: sanitize_path_for_error(&meta_path),
-            source,
-        })?;
-
-    if probe.schema_version != METADATA_SCHEMA_VERSION {
-        return Err(ScanError::UnsupportedSchema {
-            found: probe.schema_version,
-            expected: METADATA_SCHEMA_VERSION,
-        });
-    }
-
-    let meta: ServerMetadata =
-        serde_json::from_str(&content).map_err(|source| ScanError::MetadataParse {
-            path: sanitize_path_for_error(&meta_path),
-            source,
-        })?;
+    // SECURITY: the core reader opens the sidecar without following a final symlink, requires
+    // the opened file to be regular (on Unix, never blocking on a FIFO), and enforces the size
+    // cap and the current schema version.
+    let meta = read_server_metadata_async(canonical_base.clone())
+        .await
+        .map_err(|error| scan_error(error, &meta_path))?;
 
     if meta.tools.len() > MAX_TOOL_FILES {
         return Err(ScanError::TooManyFiles {
@@ -389,6 +331,25 @@ pub async fn scan_tools_directory(dir: &Path) -> Result<ScanResult, ScanError> {
     tools.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(ScanResult { tools, warnings })
+}
+
+/// Maps a core reader refusal to the scan error that names it, keeping the variants callers match.
+fn scan_error(error: MetadataReadError, meta_path: &Path) -> ScanError {
+    let path = sanitize_path_for_error(meta_path);
+    match error {
+        MetadataReadError::NotFound => ScanError::MissingMetadata { path },
+        MetadataReadError::Link | MetadataReadError::NotRegularFile => {
+            ScanError::MetadataEscapesDirectory { path }
+        }
+        MetadataReadError::TooLarge { size, limit } => {
+            ScanError::FileTooLarge { path, size, limit }
+        }
+        MetadataReadError::Unreadable(source) => ScanError::Io(source),
+        MetadataReadError::Malformed(source) => ScanError::MetadataParse { path, source },
+        MetadataReadError::SchemaMismatch { found, expected } => {
+            ScanError::UnsupportedSchema { found, expected }
+        }
+    }
 }
 
 /// Cross-checks sidecar tool entries against the `.ts` files actually
@@ -868,7 +829,9 @@ pub fn extract_skill_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_execution_core::metadata::{ParameterMetadata, ToolMetadata};
+    use mcp_execution_core::metadata::{
+        METADATA_SCHEMA_VERSION, ParameterMetadata, ServerMetadata, ToolMetadata,
+    };
     use mcp_execution_core::provenance::GenerationProvenance;
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use tempfile::TempDir;

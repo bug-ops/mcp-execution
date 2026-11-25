@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
-use mcp_execution_core::{Error as CoreError, ResourceKind, ServerId};
+use mcp_execution_core::{Error as CoreError, ResourceKind, ServerId, ToolName};
 use mcp_execution_introspector::{
     CallTimeout, Introspector, ServerText, Session, ToolCall, ToolCallOutcome,
 };
@@ -76,33 +76,40 @@ impl SessionPool {
     /// ```no_run
     /// # use mcp_execution_cli::runtime::pool::SessionPool;
     /// # use mcp_execution_cli::runtime::protocol::Request;
-    /// # async fn example(pool: &SessionPool, request: &Request) {
+    /// # async fn example(pool: &SessionPool, request: Request) {
     /// let reply = pool.call(request).await;
     /// println!("{:?}", reply.status);
     /// # }
     /// ```
-    pub async fn call(&self, request: &Request) -> CallReply {
+    pub async fn call(&self, request: Request) -> CallReply {
+        let Request {
+            server,
+            tool,
+            arguments,
+            result: result_kind,
+            ..
+        } = request;
         let result = async {
-            let cell = self.cell_for(&request.server)?;
-            let session = self.open(&cell, &request.server).await?;
+            let cell = self.cell_for(&server)?;
+            let session = self.open(&cell, &server).await?;
             let outcome = session
                 .call_tool(
                     ToolCall {
-                        tool: &request.tool,
-                        arguments: request.arguments.clone(),
-                        result_source: request.result.into(),
+                        tool: &tool,
+                        arguments,
+                        result_source: result_kind.into(),
                     },
                     self.call_timeout,
                 )
                 .await;
             if session.is_poisoned() {
-                self.evict_if_current(&request.server, &cell);
+                self.evict_if_current(&server, &cell);
             }
             outcome
         }
         .await;
         match result {
-            Ok(outcome) => reply_of(request, outcome),
+            Ok(outcome) => reply_of(&server, &tool, outcome),
             Err(error) => failure_reply(&error),
         }
     }
@@ -223,7 +230,7 @@ pub struct CallReply {
     pub status: CallStatus,
 }
 
-fn reply_of(request: &Request, outcome: ToolCallOutcome) -> CallReply {
+fn reply_of(server: &ServerId, tool: &ToolName, outcome: ToolCallOutcome) -> CallReply {
     let (kind, status, message, text) = match outcome {
         ToolCallOutcome::Value(value) => {
             return CallReply {
@@ -240,7 +247,7 @@ fn reply_of(request: &Request, outcome: ToolCallOutcome) -> CallReply {
         ToolCallOutcome::ToolError { server_text } => (
             ErrorKind::ToolError,
             CallStatus::ToolError,
-            format!("Tool returned error: {}.{}", request.server, request.tool),
+            format!("Tool returned error: {server}.{tool}"),
             server_text,
         ),
         ToolCallOutcome::RpcError { code, server_text } => {
@@ -248,10 +255,7 @@ fn reply_of(request: &Request, outcome: ToolCallOutcome) -> CallReply {
             (
                 ErrorKind::RpcError,
                 CallStatus::RpcError,
-                format!(
-                    "Tool execution failed: {}.{}{code}",
-                    request.server, request.tool
-                ),
+                format!("Tool execution failed: {server}.{tool}{code}"),
                 server_text,
             )
         }
@@ -296,9 +300,8 @@ mod tests {
     #[tokio::test]
     async fn a_failed_open_leaves_no_entry_so_the_next_call_retries() {
         let pool = pool();
-        let request = request("no-such-server-for-pool-test");
 
-        let first = pool.call(&request).await;
+        let first = pool.call(request("no-such-server-for-pool-test")).await;
         assert!(
             matches!(first.body, ResponseBody::Error { .. }),
             "{first:?}"
@@ -306,7 +309,7 @@ mod tests {
         assert_eq!(first.status, CallStatus::Failed);
         assert!(pool.lock().is_empty());
 
-        let second = pool.call(&request).await;
+        let second = pool.call(request("no-such-server-for-pool-test")).await;
         assert!(
             matches!(second.body, ResponseBody::Error { .. }),
             "{second:?}"

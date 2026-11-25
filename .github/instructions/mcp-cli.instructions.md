@@ -4,184 +4,38 @@ applyTo: "crates/mcp-cli/**/*.rs"
 
 # Copilot Instructions: mcp-cli
 
-This crate is the **command-line interface** for MCP Execution. It is the **ONLY crate** in the workspace that can use `anyhow` for error handling.
+This crate is the **command-line interface** for MCP Execution. It is the **only crate** in the workspace that uses `anyhow` for error handling.
+
+## Layout
+
+- `src/main.rs` - parses `Cli`, initializes logging, runs `runner::execute_command`, exits with its `ExitCode`
+- `src/cli.rs` - the `clap` derive definitions (`Cli`, `Commands`) and their help text
+- `src/runner.rs` - logging setup and command dispatch
+- `src/commands/` - one module per subcommand
+- `src/formatters.rs` - the shared output formatting (`format_output`, `emit`)
+
+The subcommand list changes; read `src/cli.rs` for the current set instead of relying on a copy here.
 
 ## Error Handling - CRITICAL
 
-**Use `anyhow::Result` and `anyhow::Context`**:
-
-```rust
-use anyhow::{Context, Result, bail};
-
-fn load_config(path: &str) -> Result<Config> {
-    let content = std::fs::read_to_string(path)
-        .context("failed to read config file")?;
-
-    let config: Config = toml::from_str(&content)
-        .context("failed to parse config")?;
-
-    if config.port == 0 {
-        bail!("port cannot be zero");
-    }
-
-    Ok(config)
-}
-```
-
-**DO NOT use `thiserror` in this crate** - it's for libraries only.
+Use `anyhow::Result` with `.context(...)` on fallible calls and `bail!` for early failures. Do not use `thiserror` in this crate. Make errors descriptive and actionable for end users.
 
 ## CLI Patterns
 
-### Command Structure
-
-The CLI uses `clap` with derive macros:
-
-```rust
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-#[command(name = "mcp-cli")]
-#[command(about = "MCP Code Execution CLI")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-
-    #[arg(long, global = true)]
-    verbose: bool,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Introspect an MCP server
-    Introspect {
-        /// Server command to execute
-        server: String,
-
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
-
-    /// Generate code from server tools
-    Generate {
-        /// Server to generate from
-        server: String,
-
-        #[arg(long, short)]
-        output: PathBuf,
-    },
-}
-```
-
-### Output Formatting
-
-Use the formatters module for consistent output:
-
-```rust
-use crate::formatters::{format_server_info, format_table};
-use colored::Colorize;
-
-println!("{}", "Success!".green().bold());
-println!("{}", format_server_info(&info));
-```
-
-### Error Display
-
-Application errors should be user-friendly:
-
-```rust
-fn main() -> Result<()> {
-    if let Err(e) = run() {
-        eprintln!("{} {}", "Error:".red().bold(), e);
-
-        // Show cause chain
-        let mut source = e.source();
-        while let Some(cause) = source {
-            eprintln!("  {} {}", "Caused by:".yellow(), cause);
-            source = cause.source();
-        }
-
-        std::process::exit(1);
-    }
-    Ok(())
-}
-```
+- Define arguments with `clap` derive macros in `src/cli.rs`; add a subcommand there and a module in `src/commands/`.
+- Route output through `src/formatters.rs` rather than printing ad hoc, so server-controlled text is escaped in one place.
+- `--format` is typed as `OutputFormat` from `mcp-execution-core`; do not re-parse it from strings.
+- Use the shared `ExitCode` from `mcp-execution-core` for process exit status.
 
 ## Library Dependencies
 
-When using library crates from this workspace:
-
-```rust
-// ✅ GOOD: Library crates return their own Result types
-use mcp_execution_core::{ServerConfig, ServerId};
-use mcp_execution_introspector::{Introspector, ServerInfo};
-
-async fn discover(id: ServerId, config: &ServerConfig) -> Result<ServerInfo> {
-    let mut introspector = Introspector::new();
-    introspector
-        .discover_server(id, config)
-        .await
-        .context("failed to introspect MCP server")
-}
-```
-
-The `.context()` method converts library errors into `anyhow::Error` automatically.
-
-## Async Main
-
-Use Tokio for async main:
-
-```rust
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Setup tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
-    let cli = Cli::parse();
-
-    match cli.command {
-        Commands::Introspect { server, output } => {
-            commands::introspect(&server, output).await?;
-        }
-        Commands::Generate { server, output } => {
-            commands::generate(&server, output).await?;
-        }
-    }
-
-    Ok(())
-}
-```
+Library crates return their own typed errors; convert them to `anyhow` with `.context(...)` at the boundary. Build servers from a validated `ServerConfig`, never from a raw command string.
 
 ## Testing
 
-Tests in CLI crate can also use `anyhow::Result`:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use anyhow::Result;
-
-    #[test]
-    fn test_parse_args() -> Result<()> {
-        let cli = Cli::parse_from(&["mcp-cli", "introspect", "server"]);
-        match cli.command {
-            Commands::Introspect { server, .. } => {
-                assert_eq!(server, "server");
-            }
-            _ => bail!("expected Introspect command"),
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_async_operation() -> Result<()> {
-        // Async test with anyhow::Result
-        Ok(())
-    }
-}
-```
+- Unit tests live in the same file under `#[cfg(test)]`; integration tests in `crates/mcp-cli/tests/`.
+- Async tests use `#[tokio::test]`.
+- Tests may return `anyhow::Result`.
 
 ## Key Differences from Library Crates
 
@@ -190,13 +44,4 @@ mod tests {
 | Error type | `anyhow::Error` | `thiserror::Error` |
 | Result alias | `anyhow::Result<T>` | `crate::Result<T>` |
 | Error creation | `bail!()`, `.context()` | Custom enum variants |
-| Dependencies | Can depend on all other crates | Follow dependency graph |
 | Panics | Acceptable in main.rs | Never in library code |
-
-## Summary
-
-- **Always use `anyhow`** for error handling
-- Focus on **user experience** in output formatting
-- Use **`.context()`** to add context when calling library functions
-- Make errors **descriptive and actionable** for end users
-- This is the **entry point** - it orchestrates all other crates

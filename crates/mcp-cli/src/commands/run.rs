@@ -8,12 +8,15 @@
 //! and saves it as a recipe after a successful run (`--save`).
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args;
+use futures_util::FutureExt as _;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_core::{
     Error as CoreError, ServerId, sanitize_path_for_error, write_confined_file,
@@ -26,8 +29,7 @@ use mcp_execution_skill::scripts::{
 use serde::Serialize;
 use tokio::io::AsyncReadExt as _;
 
-use super::common::refuse_inside_run;
-use super::generate::resolve_base_dir;
+use super::common::{ServersDir, SkillsDir, refuse_inside_run};
 use crate::formatters::format_output;
 use crate::runtime::budget::OutputBudget;
 use crate::runtime::dirs::{RunId, RuntimeDirs, ensure_private_dir};
@@ -43,6 +45,7 @@ use crate::runtime::node::check_node_version;
 use crate::runtime::notice::RunToken;
 use crate::runtime::policy::Policy;
 use crate::runtime::restrict::permission_args;
+use crate::runtime::signal::{RunnerSignal, Termination};
 use crate::runtime::spill::Spill;
 use crate::runtime::typecheck::{TypecheckOutcome, typecheck};
 
@@ -239,12 +242,7 @@ async fn plan_save(args: &RunArgs, script: &PreparedScript) -> Result<Option<Sav
     let server: &ServerId = header
         .server()
         .ok_or_else(|| invalid("header lists no tools; cannot choose a skill directory"))?;
-    // Mirrors `skill`'s default skills directory.
-    let skill_dir = dirs::home_dir()
-        .context("cannot determine the home directory")?
-        .join(".claude")
-        .join("skills")
-        .join(server.as_str());
+    let skill_dir = SkillsDir::resolve(None)?.skill(server);
     // Pre-checks only, so a long run is not wasted; `save` checks again.
     let scripts_dir = skill_dir.join("scripts");
     let exists = scripts_dir.join(format!("{}.ts", name.as_str())).exists();
@@ -394,13 +392,13 @@ fn spill_notice(stream: &str, shown: usize, captured: &Captured, spill: Option<&
         || "could not be saved".to_string(),
         |path| format!("saved to {}", path.display()),
     );
-    let limit = if captured.is_cut() {
-        " (capture limit reached)"
+    let kept = if captured.is_cut() {
+        format!("first {} bytes", captured.bytes.len())
     } else {
-        ""
+        "full output".to_string()
     };
     format!(
-        "{stream} cut at {shown} of {} bytes; full output {saved}{limit}",
+        "{stream} cut at {shown} of {} bytes; {kept} {saved}",
         captured.total
     )
 }
@@ -446,6 +444,7 @@ const fn exit_code_of(status: ScriptStatus) -> ExitCode {
         ScriptStatus::Exit(0) => ExitCode::SUCCESS,
         ScriptStatus::Exit(_) | ScriptStatus::Signal(_) => ExitCode::SCRIPT_FAILED,
         ScriptStatus::TimedOut => ExitCode::TIMEOUT,
+        ScriptStatus::Cancelled(signal) => signal.exit_code(),
     }
 }
 
@@ -543,8 +542,9 @@ async fn remove_scratch(dir: &Path) {
 ///
 /// # Errors
 ///
-/// Returns an error for runner failures (input, node missing or too old, I/O); a failing script
-/// or a timeout is reported through the exit code instead.
+/// Returns an error for runner failures (input, node missing or too old, I/O); a failing script,
+/// a timeout or a cancellation by SIGINT or SIGTERM (exit 130 or 143) is reported through the
+/// exit code instead.
 ///
 /// # Examples
 ///
@@ -564,16 +564,135 @@ async fn remove_scratch(dir: &Path) {
 /// ```
 pub async fn run(args: RunArgs, format: OutputFormat) -> Result<ExitCode> {
     refuse_inside_run()?;
-    let servers_dir = resolve_base_dir(args.servers_dir.clone())?;
+    let mut termination = Termination::install();
+    let servers_dir = ServersDir::resolve(args.servers_dir.clone())?;
     let dirs = RuntimeDirs::resolve()?;
     let run_id = RunId::new();
-    let script = prepare_script(&args, &dirs, &run_id).await?;
+    // An uncancellable stdin read must not outlive a signal: returning `Ok` lets `main` exit.
+    let script = tokio::select! {
+        biased;
+        signal = termination.recv() => {
+            remove_scratch(&dirs.run_dir(&run_id)).await;
+            return Ok(cancelled_exit(signal, "the script was not read"));
+        }
+        prepared = prepare_script(&args, &dirs, &run_id) => prepared?,
+    };
 
-    let result = execute(&args, format, &servers_dir, &dirs, &script, &run_id).await;
+    let result = execute(
+        &args,
+        format,
+        servers_dir.as_path(),
+        &dirs,
+        &script,
+        &run_id,
+        &mut termination,
+    )
+    .await;
     if script.scratch {
         remove_scratch(&script.run_dir).await;
     }
     result
+}
+
+/// Saves the script when a save was planned and the run succeeded; returns the run's exit code.
+async fn save_if_planned(save_plan: Option<SavePlan>, report: &mut RunReport) -> ExitCode {
+    let exit_code = exit_code_of(report.status);
+    let Some(plan) = save_plan else {
+        return exit_code;
+    };
+    if exit_code != ExitCode::SUCCESS {
+        report
+            .notices
+            .push("not saved: script did not succeed".to_string());
+        return exit_code;
+    }
+    match save(&plan.skill_dir, &plan.name, &plan.text, plan.overwrite).await {
+        Ok(path) => {
+            report
+                .notices
+                .push(format!("saved script {}", path.display()));
+            exit_code
+        }
+        Err(error) => {
+            report
+                .notices
+                .push(format!("script succeeded; save failed: {error}"));
+            ExitCode::ERROR
+        }
+    }
+}
+
+/// Reports a cancellation and returns its exit code.
+///
+/// A failed stderr write is only logged: a cancel path must always end in `Ok(exit code)`, or the
+/// runtime would wait for the uncancellable stdin read instead of exiting.
+fn cancelled_exit(signal: RunnerSignal, note: &str) -> ExitCode {
+    if let Err(error) = write_all(
+        &format!("run cancelled by {signal}; {note}\n"),
+        std::io::stderr(),
+    ) {
+        tracing::debug!("could not write the cancel notice: {error:#}");
+    }
+    signal.exit_code()
+}
+
+/// Longest the runner spends closing the helper and its sessions after the script ended.
+const WRAP_UP_BOUND: Duration = Duration::from_secs(4);
+
+/// Waits for `finish` (closing the helper and its sessions).
+///
+/// A run that was not cancelled waits for it without a bound. Once a signal has arrived, whether
+/// before (the script was cancelled) or during the wrap-up (the run becomes a cancelled one), the
+/// wrap-up gets `bound`, and a further signal cuts it short; the call summary is then dropped.
+async fn wrap_up(
+    finish: impl Future<Output = RunCallReport>,
+    termination: &mut Termination,
+    outcome: &mut Result<ProcessOutcome>,
+    notices: &mut Vec<String>,
+    bound: Duration,
+) -> RunCallReport {
+    let mut finish = std::pin::pin!(finish);
+    if !matches!(outcome, Ok(outcome) if matches!(outcome.status, ScriptStatus::Cancelled(_))) {
+        tokio::select! {
+            biased;
+            signal = termination.recv() => {
+                if let Ok(outcome) = outcome {
+                    outcome.status = ScriptStatus::Cancelled(signal);
+                }
+            }
+            report = &mut finish => return report,
+        }
+    }
+    tokio::select! {
+        biased;
+        _ = termination.recv() => {}
+        finished = tokio::time::timeout(bound, &mut finish) => {
+            if let Ok(report) = finished {
+                return report;
+            }
+        }
+    }
+    notices.push("call summary dropped: closing the MCP sessions was cut short".to_string());
+    RunCallReport::default()
+}
+
+/// Prints the finished run's report. After a cancellation a write error (e.g. a closed pipe) is
+/// only logged, so the cancel exit code is never lost.
+fn emit_report(report: &RunReport, exit_code: ExitCode, format: OutputFormat) -> Result<()> {
+    let written = if format == OutputFormat::Json {
+        render_json(report, exit_code)
+            .and_then(|json| write_all(&format!("{json}\n"), std::io::stdout()))
+    } else {
+        let (stdout, stderr) = render_text(report);
+        write_all(&stdout, std::io::stdout()).and_then(|()| write_all(&stderr, std::io::stderr()))
+    };
+    match (written, report.status) {
+        (Err(error), ScriptStatus::Cancelled(_)) => {
+            tracing::debug!("could not write the cancelled run's report: {error:#}");
+            Ok(())
+        }
+        (written, _) => written,
+    }
 }
 
 async fn execute(
@@ -583,6 +702,7 @@ async fn execute(
     dirs: &RuntimeDirs,
     script: &PreparedScript,
     run_id: &RunId,
+    termination: &mut Termination,
 ) -> Result<ExitCode> {
     let save_plan = plan_save(args, script).await?;
     let node_args = if args.restrict {
@@ -603,7 +723,14 @@ async fn execute(
 
     let mut notices = Vec::new();
     if args.typecheck {
-        match typecheck(&script.path, servers_dir, &script.run_dir).await? {
+        let checked = tokio::select! {
+            biased;
+            signal = termination.recv() => {
+                return Ok(cancelled_exit(signal, "the script was not started"));
+            }
+            checked = typecheck(&script.path, servers_dir, &script.run_dir) => checked?,
+        };
+        match checked {
             TypecheckOutcome::Passed => {}
             TypecheckOutcome::Skipped { reason } => {
                 notices.push(format!("typecheck skipped: {reason}"));
@@ -614,6 +741,10 @@ async fn execute(
                 return Ok(ExitCode::INVALID_INPUT);
             }
         }
+    }
+
+    if let Some(signal) = termination.recv().now_or_never() {
+        return Ok(cancelled_exit(signal, "the script was not started"));
     }
 
     let token = RunToken::generate();
@@ -635,8 +766,15 @@ async fn execute(
         dry_run: policy.map_or(DryRunMode::Off, DryRunMode::On),
     };
     let (helper, mut endpoint) = HelperServer::bind(Carrier::native(), helper_config)?;
-    let outcome = run_script_process(&spec, Some(&mut endpoint)).await;
-    let call_report = helper.finish().await;
+    let mut outcome = run_script_process(&spec, Some(&mut endpoint), termination.recv()).await;
+    let call_report = wrap_up(
+        helper.finish(),
+        termination,
+        &mut outcome,
+        &mut notices,
+        WRAP_UP_BOUND,
+    )
+    .await;
     let mut report = build_report(
         token,
         outcome?,
@@ -647,36 +785,8 @@ async fn execute(
     )
     .await;
 
-    let mut exit_code = exit_code_of(report.status);
-    if let Some(plan) = save_plan {
-        if exit_code == ExitCode::SUCCESS {
-            match save(&plan.skill_dir, &plan.name, &plan.text, plan.overwrite).await {
-                Ok(path) => report
-                    .notices
-                    .push(format!("saved script {}", path.display())),
-                Err(error) => {
-                    report
-                        .notices
-                        .push(format!("script succeeded; save failed: {error}"));
-                    exit_code = ExitCode::ERROR;
-                }
-            }
-        } else {
-            report
-                .notices
-                .push("not saved: script did not succeed".to_string());
-        }
-    }
-    if format == OutputFormat::Json {
-        write_all(
-            &format!("{}\n", render_json(&report, exit_code)?),
-            std::io::stdout(),
-        )?;
-    } else {
-        let (stdout, stderr) = render_text(&report);
-        write_all(&stdout, std::io::stdout())?;
-        write_all(&stderr, std::io::stderr())?;
-    }
+    let exit_code = save_if_planned(save_plan, &mut report).await;
+    emit_report(&report, exit_code, format)?;
     Ok(exit_code)
 }
 
@@ -701,6 +811,118 @@ mod tests {
             stderr: stream("err\n", Some("stderr cut")),
             notices: vec!["extra".to_string()],
         }
+    }
+
+    fn finished_outcome(status: ScriptStatus) -> ProcessOutcome {
+        ProcessOutcome {
+            status,
+            stdout: Captured::default(),
+            stderr: Captured::default(),
+            drain_abandoned: false,
+        }
+    }
+
+    async fn slow_report(delay: Duration) -> RunCallReport {
+        tokio::time::sleep(delay).await;
+        RunCallReport {
+            journal_summary: Some("summary".to_string()),
+            dry_run_report: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_that_was_not_cancelled_waits_for_a_slow_wrap_up() {
+        let mut termination = Termination::install();
+        let mut outcome = Ok(finished_outcome(ScriptStatus::Exit(0)));
+        let mut notices = Vec::new();
+        let report = wrap_up(
+            slow_report(Duration::from_millis(150)),
+            &mut termination,
+            &mut outcome,
+            &mut notices,
+            Duration::from_millis(20),
+        )
+        .await;
+        assert_eq!(report.journal_summary.as_deref(), Some("summary"));
+        assert_eq!(notices, Vec::<String>::new());
+        assert_eq!(outcome.unwrap().status, ScriptStatus::Exit(0));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_signal_during_the_wrap_up_cancels_the_run_and_a_second_one_cuts_it() {
+        use crate::runtime::signal::raise_sigterm;
+
+        let mut termination = Termination::install();
+        let mut outcome = Ok(finished_outcome(ScriptStatus::Exit(0)));
+        let mut notices = Vec::new();
+        raise_sigterm();
+        // Signals coalesce, so the second one is raised only after the first was consumed.
+        let second = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            raise_sigterm();
+        });
+        let report = tokio::time::timeout(
+            Duration::from_secs(10),
+            wrap_up(
+                slow_report(Duration::from_secs(30)),
+                &mut termination,
+                &mut outcome,
+                &mut notices,
+                Duration::from_secs(30),
+            ),
+        )
+        .await
+        .expect("the second signal must cut the wrap-up short");
+        second.await.unwrap();
+        assert_eq!(report, RunCallReport::default());
+        assert_eq!(notices.len(), 1);
+        assert_eq!(
+            outcome.unwrap().status,
+            ScriptStatus::Cancelled(RunnerSignal::Terminate)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_bounds_a_slow_wrap_up_and_drops_the_summary() {
+        let mut termination = Termination::install();
+        let cancelled = ScriptStatus::Cancelled(RunnerSignal::Interrupt);
+        let mut outcome = Ok(finished_outcome(cancelled));
+        let mut notices = Vec::new();
+        let report = wrap_up(
+            slow_report(Duration::from_secs(30)),
+            &mut termination,
+            &mut outcome,
+            &mut notices,
+            Duration::from_millis(50),
+        )
+        .await;
+        assert_eq!(report, RunCallReport::default());
+        assert_eq!(notices.len(), 1);
+        assert_eq!(outcome.unwrap().status, cancelled);
+    }
+
+    #[test]
+    fn spill_notice_says_first_bytes_only_when_the_capture_was_cut() {
+        let cut = Captured {
+            bytes: vec![0; 10],
+            total: 25,
+        };
+        let notice = spill_notice("stdout", 4, &cut, Some(Path::new("/tmp/s")));
+        assert_eq!(
+            notice,
+            "stdout cut at 4 of 25 bytes; first 10 bytes saved to /tmp/s"
+        );
+
+        let whole = Captured {
+            bytes: vec![0; 10],
+            total: 10,
+        };
+        let notice = spill_notice("stderr", 4, &whole, None);
+        assert_eq!(
+            notice,
+            "stderr cut at 4 of 10 bytes; full output could not be saved"
+        );
     }
 
     #[test]
@@ -737,6 +959,14 @@ mod tests {
             ExitCode::SCRIPT_FAILED
         );
         assert_eq!(exit_code_of(ScriptStatus::TimedOut), ExitCode::TIMEOUT);
+        assert_eq!(
+            exit_code_of(ScriptStatus::Cancelled(RunnerSignal::Interrupt)),
+            ExitCode::INTERRUPTED
+        );
+        assert_eq!(
+            exit_code_of(ScriptStatus::Cancelled(RunnerSignal::Terminate)),
+            ExitCode::TERMINATED
+        );
     }
 
     #[test]

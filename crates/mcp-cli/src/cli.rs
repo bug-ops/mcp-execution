@@ -620,6 +620,13 @@ pub enum Commands {
     ///
     /// Output: the default text output wraps the script's output in runner lines and is not
     /// meant for pipelines; use `--format json` for one machine-readable document.
+    ///
+    /// Signals: SIGINT and SIGTERM stop the script and any running type check and exit 130 or
+    /// 143 (Ctrl-C and Ctrl-Break report as SIGINT on Windows). SIGKILL cannot be handled: if the
+    /// runner is killed that way, the script process it started can keep running. Once a
+    /// signal arrived, closing the MCP sessions is bounded to about 4 seconds, and a further
+    /// signal cuts it short; the run then exits 130 or 143 without the call summary. A run that
+    /// was not signalled always waits for the sessions to close.
     Run(RunArgs),
 
     /// Call one tool of one server and print its result within the output budget.

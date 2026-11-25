@@ -22,18 +22,17 @@ use mcp_execution_core::helper_protocol::{
 };
 use mcp_execution_introspector::CallTimeout;
 use serde::Deserialize;
-use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, AsyncWriteExt as _, BufReader};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 
-use super::journal::{CallStatus, Journal, canonical_args};
+use super::journal::{CallStatus, Journal, canonical_map};
 use super::path_lookup::find_on_path;
 use super::policy::{DryRun, Policy};
 use super::pool::{CallReply, MAX_INFLIGHT_CALLS, SessionPool};
 use super::protocol::{
-    ErrorBody, ErrorKind, Hello, HelloReply, Line, Request, Response, ResponseBody,
-    encode_response, read_line,
+    EncodedResponse, ErrorBody, ErrorKind, Hello, HelloReply, Line, Request, Response,
+    ResponseBody, encode_response, read_line,
 };
 
 /// Upper bound of the per-call timeout. `run` passes the smaller of its run timeout and this
@@ -46,13 +45,17 @@ const FINISH_GRACE: Duration = Duration::from_secs(2);
 /// Longest accepted hello line.
 const MAX_HELLO_BYTES: usize = 4096;
 
+/// Read buffer of the channel; a request line may be a few MiB, so the default 8 KiB would
+/// take hundreds of reads for one.
+const READ_BUFFER_BYTES: usize = 64 * 1024;
+
 /// Finished responses waiting for the writer.
 const RESPONSE_QUEUE: usize = 64;
 
 /// A response queued for the writer; the permit of the call that produced it is released only
 /// once the line is written, so a script that never reads its socket cannot make the runner
 /// accumulate work.
-type Outgoing = (Response, Option<OwnedSemaphorePermit>);
+type Outgoing = (Vec<u8>, Option<OwnedSemaphorePermit>);
 
 /// How the channel reaches the script process.
 ///
@@ -266,6 +269,13 @@ fn is_executable_file(path: &std::path::Path) -> bool {
     }
 }
 
+/// Encodes a call's body as the response to request `id`; the flag tells whether it carried a
+/// value, the only body whose size the journal records.
+fn encode_reply(id: u64, body: ResponseBody) -> (EncodedResponse, bool) {
+    let is_value = matches!(body, ResponseBody::Value { .. });
+    (encode_response(&Response { id, body }), is_value)
+}
+
 /// Per-call hooks of a run: journal entries around every call and the dry-run decision.
 #[derive(Debug, Default)]
 pub(crate) struct CallHooks {
@@ -290,16 +300,17 @@ impl CallHooks {
         }
     }
 
-    /// Makes one call through `pool`, journaling it and skipping writes under a dry run.
-    async fn execute(&self, pool: &SessionPool, request: &Request) -> ResponseBody {
+    /// Makes one call through `pool`, journaling it and skipping writes under a dry run, and
+    /// returns the encoded response line.
+    async fn execute(&self, pool: &SessionPool, request: Request) -> EncodedResponse {
+        let id = request.id;
         if self.journal.is_none() && self.dry_run.is_none() {
-            return pool.call(request).await.body;
+            return encode_reply(id, pool.call(request).await.body).0;
         }
-        let arguments = Value::Object(request.arguments.clone());
         let (digest, size) = self.journal.as_ref().map_or_else(
-            || (None, canonical_args(&arguments).len()),
+            || (None, canonical_map(&request.arguments).len()),
             |journal| {
-                let (digest, size) = journal.digest(&arguments);
+                let (digest, size) = journal.digest(&request.arguments);
                 (Some(digest), size)
             },
         );
@@ -330,16 +341,18 @@ impl CallHooks {
         } else {
             pool.call(request).await
         };
+        let (encoded, is_value) = encode_reply(id, reply.body);
         if let (Some(journal), Some(token)) = (&self.journal, token) {
-            let result_bytes = match &reply.body {
-                ResponseBody::Value { value } => {
-                    serde_json::to_string(value).map_or(0, |s| s.len())
+            let (status, result_bytes) = match &encoded {
+                EncodedResponse::Sent(line) if is_value => (reply.status, line.len()),
+                EncodedResponse::Sent(_) => (reply.status, 0),
+                EncodedResponse::Replaced { original_bytes, .. } => {
+                    (CallStatus::Failed, *original_bytes)
                 }
-                _ => 0,
             };
-            journal.end(token, reply.status, started.elapsed(), result_bytes);
+            journal.end(token, status, started.elapsed(), result_bytes);
         }
-        reply.body
+        encoded
     }
 
     async fn report(&self) -> RunCallReport {
@@ -626,7 +639,7 @@ where
     R: AsyncRead + Unpin + Send,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let mut reader = BufReader::new(reader);
+    let mut reader = BufReader::with_capacity(READ_BUFFER_BYTES, reader);
     tokio::pin!(stop);
     tokio::select! {
         biased;
@@ -675,12 +688,8 @@ where
         };
         let (pool, hooks, responses) = (Arc::clone(&pool), Arc::clone(&hooks), responses.clone());
         calls.spawn(async move {
-            let body = hooks.execute(&pool, &request).await;
-            let response = Response {
-                id: request.id,
-                body,
-            };
-            if responses.send((response, Some(permit))).await.is_err() {
+            let line = hooks.execute(&pool, request).await.into_line();
+            if responses.send((line, Some(permit))).await.is_err() {
                 tracing::debug!("helper channel closed before a response was sent");
             }
         });
@@ -740,14 +749,17 @@ async fn reject(responses: &mpsc::Sender<Outgoing>, id: u64, message: &str) {
             },
         },
     };
-    if responses.send((response, None)).await.is_err() {
+    if responses
+        .send((encode_response(&response).into_line(), None))
+        .await
+        .is_err()
+    {
         tracing::debug!("helper channel closed before a rejection was sent");
     }
 }
 
 async fn write_loop<W: AsyncWrite + Unpin>(mut writer: W, mut queued: mpsc::Receiver<Outgoing>) {
-    while let Some((response, permit)) = queued.recv().await {
-        let line = encode_response(&response);
+    while let Some((line, permit)) = queued.recv().await {
         if let Err(error) = writer.write_all(&line).await {
             tracing::debug!(%error, "helper channel write failed");
             return;
@@ -791,14 +803,12 @@ mod tests {
             std::path::Path::new("/nonexistent"),
         );
 
-        let body = hooks
-            .execute(&pool(), &request("no-such-server-for-hooks", "create_item"))
-            .await;
+        let line = hooks
+            .execute(&pool(), request("no-such-server-for-hooks", "create_item"))
+            .await
+            .into_line();
 
-        let ResponseBody::Error { error } = body else {
-            panic!("expected an error body");
-        };
-        assert_eq!(error.kind, ErrorKind::WriteSkipped);
+        assert!(String::from_utf8(line).unwrap().contains("write_skipped"));
         let report = hooks.report().await;
         assert!(report.dry_run_report.unwrap().contains("create_item"));
         assert_eq!(report.journal_summary, None);
@@ -815,11 +825,11 @@ mod tests {
             std::path::Path::new("/nonexistent"),
         );
 
-        let body = hooks
-            .execute(&pool(), &request("no-such-server-for-hooks", "echo"))
+        let encoded = hooks
+            .execute(&pool(), request("no-such-server-for-hooks", "echo"))
             .await;
 
-        assert!(matches!(body, ResponseBody::Error { .. }));
+        assert!(matches!(encoded, EncodedResponse::Sent(_)));
         let report = hooks.report().await;
         let summary = report.journal_summary.unwrap();
         assert!(

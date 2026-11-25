@@ -58,10 +58,10 @@ fn spill_file_is_capped_at_eight_mebibytes_and_the_run_still_succeeds() {
         .max()
         .expect("a spill file");
     assert_eq!(largest, MAX_SPILL_FILE_BYTES as u64);
-    let lower = out.stdout.to_lowercase();
     assert!(
-        lower.contains("truncat") || lower.contains("limit reached"),
-        "the notice must say the spill was cut: {}",
+        out.stdout
+            .contains(&format!("first {MAX_SPILL_FILE_BYTES} bytes saved to")),
+        "the notice must say the spill holds only the first bytes: {}",
         out.stdout
     );
 }
