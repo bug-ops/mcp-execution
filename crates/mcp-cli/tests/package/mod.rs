@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use mcp_execution_codegen::ProgressiveGenerator;
+use mcp_execution_codegen::PackageGenerator;
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
@@ -43,7 +43,7 @@ pub fn write_package(servers: &Path, server_id: &str, display_name: &str, tools:
         .command("unused".to_string())
         .build()
         .expect("valid config");
-    let code = ProgressiveGenerator::new()
+    let code = PackageGenerator::new()
         .expect("generator")
         .generate(&info, &config)
         .expect("generate");

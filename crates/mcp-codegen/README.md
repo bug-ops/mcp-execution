@@ -22,7 +22,7 @@ cargo add mcp-execution-codegen
 ### SDK Generation
 
 ```rust
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_introspector::Introspector;
 use mcp_execution_core::{ServerId, ServerConfig};
 
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let info = introspector.discover_server(server_id, &config).await?;
 
     // 2. Generate the SDK files
-    let generator = ProgressiveGenerator::new()?;
+    let generator = PackageGenerator::new()?;
     let code = generator.generate(&info, &config)?;
 
     println!("Generated {} files", code.file_count());

@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```no_run
-//! use mcp_execution_codegen::progressive::ProgressiveGenerator;
+//! use mcp_execution_codegen::package::PackageGenerator;
 //! use mcp_execution_introspector::{Introspector, ServerInfo};
 //! use mcp_execution_core::{ServerId, ServerConfig};
 //!
@@ -16,7 +16,7 @@
 //! let config = ServerConfig::builder().command("/path/to/server".to_string()).build()?;
 //! let info = introspector.discover_server(server_id, &config).await?;
 //!
-//! let generator = ProgressiveGenerator::new()?;
+//! let generator = PackageGenerator::new()?;
 //! let code = generator.generate(&info, &config)?;
 //!
 //! // Generated files:
@@ -32,13 +32,13 @@
 
 use crate::common::types::{GeneratedCode, GeneratedFile};
 use crate::common::typescript::{sanitize_jsdoc, sanitize_ts_identifier, to_camel_case};
-use crate::progressive::annotations::{catalog_hints, jsdoc_tags};
-use crate::progressive::catalog::{
+use crate::package::annotations::{catalog_hints, jsdoc_tags};
+use crate::package::catalog::{
     CATALOG_DESCRIPTION_CHARS, CATALOG_ENTRY_MAX_BYTES, CatalogEntry, render_catalog,
 };
-use crate::progressive::observed::ObservedShapes;
-use crate::progressive::tool_types::{DegradeStage, ToolConversions, ToolTypes};
-use crate::progressive::types::{
+use crate::package::observed::ObservedShapes;
+use crate::package::tool_types::{DegradeStage, ToolConversions, ToolTypes};
+use crate::package::types::{
     BridgeContext, CategoryInfo, IndexContext, ToolCategorization, ToolContext, ToolSummary,
 };
 use crate::template_engine::TemplateEngine;
@@ -74,7 +74,7 @@ const FIXED_FILE_COUNT: usize = 7;
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::generator::MAX_GENERATED_FILES;
+/// use mcp_execution_codegen::package::generator::MAX_GENERATED_FILES;
 ///
 /// assert!(MAX_GENERATED_FILES > 0);
 /// ```
@@ -179,7 +179,7 @@ const _: () = assert!(
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::generator::MAX_GENERATED_BYTES;
+/// use mcp_execution_codegen::package::generator::MAX_GENERATED_BYTES;
 ///
 /// assert!(MAX_GENERATED_BYTES > 0);
 /// ```
@@ -271,17 +271,17 @@ pub const TSCONFIG_JSON: &str = r#"{
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ProgressiveGenerator;
+/// use mcp_execution_codegen::package::PackageGenerator;
 ///
-/// let generator = ProgressiveGenerator::new().unwrap();
+/// let generator = PackageGenerator::new().unwrap();
 /// ```
 #[derive(Debug)]
-pub struct ProgressiveGenerator<'a> {
+pub struct PackageGenerator<'a> {
     engine: TemplateEngine<'a>,
     observed: ObservedShapes,
 }
 
-impl ProgressiveGenerator<'_> {
+impl PackageGenerator<'_> {
     /// Creates a new progressive generator.
     ///
     /// Initializes the template engine and registers all progressive
@@ -295,9 +295,9 @@ impl ProgressiveGenerator<'_> {
     /// # Examples
     ///
     /// ```
-    /// use mcp_execution_codegen::progressive::ProgressiveGenerator;
+    /// use mcp_execution_codegen::package::PackageGenerator;
     ///
-    /// let generator = ProgressiveGenerator::new().unwrap();
+    /// let generator = PackageGenerator::new().unwrap();
     /// ```
     pub fn new() -> Result<Self> {
         let engine = TemplateEngine::new()?;
@@ -321,9 +321,9 @@ impl ProgressiveGenerator<'_> {
     /// # Examples
     ///
     /// ```
-    /// use mcp_execution_codegen::progressive::ProgressiveGenerator;
+    /// use mcp_execution_codegen::package::PackageGenerator;
     ///
-    /// let generator = ProgressiveGenerator::new().unwrap().with_observed_shapes("");
+    /// let generator = PackageGenerator::new().unwrap().with_observed_shapes("");
     /// ```
     #[must_use]
     pub fn with_observed_shapes(mut self, jsonl: &str) -> Self {
@@ -361,12 +361,12 @@ impl ProgressiveGenerator<'_> {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_execution_codegen::progressive::ProgressiveGenerator;
+    /// use mcp_execution_codegen::package::PackageGenerator;
     /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
     /// use mcp_execution_core::{ServerConfig, ServerId};
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let generator = ProgressiveGenerator::new()?;
+    /// let generator = PackageGenerator::new()?;
     ///
     /// let info = ServerInfo {
     ///     id: ServerId::new("github").unwrap(),
@@ -425,13 +425,13 @@ impl ProgressiveGenerator<'_> {
     /// # Examples
     ///
     /// ```no_run
-    /// use mcp_execution_codegen::progressive::{ProgressiveGenerator, ToolCategorization};
+    /// use mcp_execution_codegen::package::{PackageGenerator, ToolCategorization};
     /// use mcp_execution_introspector::{ServerInfo, ServerCapabilities};
     /// use mcp_execution_core::{ServerConfig, ServerId};
     /// use std::collections::HashMap;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let generator = ProgressiveGenerator::new()?;
+    /// let generator = PackageGenerator::new()?;
     ///
     /// let info = ServerInfo {
     ///     id: ServerId::new("github").unwrap(),
@@ -614,7 +614,7 @@ impl ProgressiveGenerator<'_> {
             );
             let code = self
                 .engine
-                .render("progressive/tool", &context)
+                .render("package/tool", &context)
                 .map_err(|source| {
                     Self::wrap_tool_generation_error(tool, "render tool template", source)
                 })?;
@@ -692,7 +692,7 @@ impl ProgressiveGenerator<'_> {
     ) -> Result<()> {
         let index_context =
             Self::create_index_context(server_info, Some(categorizations), typescript_names);
-        let index_code = self.engine.render("progressive/index", &index_context)?;
+        let index_code = self.engine.render("package/index", &index_context)?;
 
         add_tracked(
             code,
@@ -740,7 +740,7 @@ impl ProgressiveGenerator<'_> {
         let bridge_context = BridgeContext::default();
         let bridge_code = self
             .engine
-            .render("progressive/runtime-bridge", &bridge_context)?;
+            .render("package/runtime-bridge", &bridge_context)?;
 
         add_tracked(
             code,
@@ -758,7 +758,7 @@ impl ProgressiveGenerator<'_> {
             total_bytes,
             GeneratedFile {
                 path: "_runtime/cli.ts".to_string(),
-                content: self.engine.render("progressive/cli", &())?,
+                content: self.engine.render("package/cli", &())?,
             },
         )?;
 
@@ -1041,7 +1041,7 @@ impl ProgressiveGenerator<'_> {
 /// Cheaply rejects an oversized `server_info.tools` list before any per-tool template
 /// rendering happens (denial-of-service protection, CWE-400).
 ///
-/// A caller reaching [`ProgressiveGenerator::generate`]/`generate_with_categories` through
+/// A caller reaching [`PackageGenerator::generate`]/`generate_with_categories` through
 /// `mcp_execution_introspector::Introspector::discover_server` already has its tool count
 /// bounded upstream, but this crate's generator functions are public API and can be called
 /// directly with a hand-built `ServerInfo`, so this check is not purely redundant.
@@ -1230,7 +1230,7 @@ const RESERVED_WORDS: &[&str] = &[
     "yield",
 ];
 
-/// Output filenames (without extension) that [`ProgressiveGenerator`] itself always emits
+/// Output filenames (without extension) that [`PackageGenerator`] itself always emits
 /// alongside per-tool files, regardless of the introspected tool list. Seeded into
 /// [`resolve_typescript_names`]'s case-insensitive `used_lower` collision set (unlike
 /// [`RESERVED_WORDS`], which is checked case-sensitively — see that function's docs for why the
@@ -1387,7 +1387,7 @@ mod tests {
         let mut server_info = create_test_server_info();
         server_info.tools.clear();
 
-        let code = ProgressiveGenerator::new()
+        let code = PackageGenerator::new()
             .unwrap()
             .generate(&server_info, &test_config())
             .unwrap();
@@ -1410,7 +1410,7 @@ mod tests {
 
         assert_eq!(names[0], "runIfMain_2");
         assert_ne!(names[1], "callMCPTool");
-        let code = ProgressiveGenerator::new()
+        let code = PackageGenerator::new()
             .unwrap()
             .generate(&server_info, &test_config())
             .unwrap();
@@ -1418,14 +1418,14 @@ mod tests {
     }
 
     #[test]
-    fn test_progressive_generator_new() {
-        let generator = ProgressiveGenerator::new();
+    fn test_package_generator_new() {
+        let generator = PackageGenerator::new();
         assert!(generator.is_ok());
     }
 
     #[test]
     fn test_generate_progressive_files() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -1460,7 +1460,7 @@ mod tests {
     /// produced before the delegation.
     #[test]
     fn test_generate_index_ts_has_no_category_grouping() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -1481,7 +1481,7 @@ mod tests {
     /// `tsc --noEmit` fails under TS 7 without this even with `@types/node` installed.
     #[test]
     fn test_generate_tsconfig_json_allows_ts_extension_imports() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -1507,7 +1507,7 @@ mod tests {
     /// declared devDependency, a consumer running `tsc --noEmit` "out of the box" still fails.
     #[test]
     fn test_generate_package_json_declares_types_node_dev_dependency() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -1532,7 +1532,7 @@ mod tests {
         // Issue #141 regression: the old regex-based skill parser could not recover
         // parameter descriptions from generated TypeScript at all. The `_meta.json`
         // sidecar must carry them through faithfully.
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
@@ -1565,7 +1565,7 @@ mod tests {
     /// `generated_at` is allowed to differ between them.
     #[test]
     fn test_generate_meta_json_provenance_is_stable_across_runs() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
         let config = test_config();
 
@@ -1624,7 +1624,7 @@ mod tests {
 
     #[test]
     fn test_generate_with_categories_meta_json_includes_categorization() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
         let mut categorizations = HashMap::new();
@@ -1704,7 +1704,7 @@ mod tests {
             },
         };
 
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let code = generator.generate(&server_info, &test_config()).unwrap();
 
         // The sidecar carries the raw, untruncated, unescaped, non-flattened description.
@@ -1770,7 +1770,7 @@ mod tests {
             ],
             short_description: "Send a message".to_string(),
         };
-        let context = ProgressiveGenerator::create_tool_context(
+        let context = PackageGenerator::create_tool_context(
             "test-server",
             &tool,
             Some(&categorization),
@@ -1808,11 +1808,8 @@ mod tests {
             reason: "Property type is not a string".to_string(),
         };
 
-        let wrapped = ProgressiveGenerator::wrap_tool_generation_error(
-            &tool,
-            "extract property schema",
-            source,
-        );
+        let wrapped =
+            PackageGenerator::wrap_tool_generation_error(&tool, "extract property schema", source);
 
         match wrapped {
             Error::ScriptGenerationError {
@@ -1844,7 +1841,7 @@ mod tests {
             annotations: None,
         };
 
-        let render_failure = ProgressiveGenerator::wrap_tool_generation_error(
+        let render_failure = PackageGenerator::wrap_tool_generation_error(
             &tool,
             "render tool template",
             Error::SerializationError {
@@ -1854,7 +1851,7 @@ mod tests {
         );
         assert!(render_failure.is_script_generation_error());
 
-        let tracking_failure = ProgressiveGenerator::wrap_tool_generation_error(
+        let tracking_failure = PackageGenerator::wrap_tool_generation_error(
             &tool,
             "track generated tool file",
             Error::ResourceLimitExceeded {
@@ -1886,7 +1883,7 @@ mod tests {
 
     #[test]
     fn test_create_tool_context_without_categorization_falls_back_to_description() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let tool = ToolInfo {
             name: ToolName::new("format_document").unwrap(),
             description: "Format document with language-specific rules".to_string(),
@@ -1901,7 +1898,7 @@ mod tests {
             annotations: None,
         };
 
-        let context = ProgressiveGenerator::create_tool_context(
+        let context = PackageGenerator::create_tool_context(
             "test-server",
             &tool,
             None,
@@ -1915,10 +1912,7 @@ mod tests {
         );
 
         // The header JSDoc must emit @description even without LLM categorization.
-        let rendered = generator
-            .engine
-            .render("progressive/tool", &context)
-            .unwrap();
+        let rendered = generator.engine.render("package/tool", &context).unwrap();
         assert!(rendered.contains("@description Format document with language-specific rules"));
     }
 
@@ -1939,7 +1933,7 @@ mod tests {
             annotations: None,
         };
 
-        let context = ProgressiveGenerator::create_tool_context(
+        let context = PackageGenerator::create_tool_context(
             "test-server",
             &tool,
             None,
@@ -1958,8 +1952,7 @@ mod tests {
         let server_info = create_test_server_info();
         let typescript_names = resolve_typescript_names(&server_info.tools);
 
-        let context =
-            ProgressiveGenerator::create_index_context(&server_info, None, &typescript_names);
+        let context = PackageGenerator::create_index_context(&server_info, None, &typescript_names);
 
         assert_eq!(context.server_name, "Test Server");
         assert_eq!(context.server_version, "1.0.0");
@@ -1975,7 +1968,7 @@ mod tests {
     /// disambiguated (`index_2`) exactly like a JS/TS reserved-word collision would.
     #[test]
     fn test_tool_named_index_does_not_collide_with_index_ts() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = ServerInfo {
             id: ServerId::new("test-server").unwrap(),
             name: "Test Server".to_string(),
@@ -2054,7 +2047,7 @@ mod tests {
     /// is, via `disambiguate_output_filename`'s case-insensitive collision check.
     #[test]
     fn test_tool_named_index_with_different_case_is_disambiguated() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = ServerInfo {
             id: ServerId::new("test-server").unwrap(),
             name: "Test Server".to_string(),
@@ -2107,7 +2100,7 @@ mod tests {
     /// other, since `Index_2`/`index_2` would themselves collide case-insensitively.
     #[test]
     fn test_tools_named_index_and_capital_index_do_not_collide_with_each_other() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = ServerInfo {
             id: ServerId::new("test-server").unwrap(),
             name: "Test Server".to_string(),
@@ -2202,7 +2195,7 @@ mod tests {
 
     #[test]
     fn test_generate_disambiguates_colliding_top_level_params() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools[0].input_schema = json!({
             "type": "object",
@@ -2241,7 +2234,7 @@ mod tests {
 
     #[test]
     fn test_generate_sanitizes_property_name_injection() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools[0].input_schema = json!({
             "type": "object",
@@ -2300,7 +2293,7 @@ mod tests {
 
     #[test]
     fn test_generate_with_categories_sanitizes_unicode_line_terminator_in_category() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 
         let mut categorizations = HashMap::new();
@@ -2496,7 +2489,7 @@ mod tests {
         // `sanitize_ts_string_literal` must escape to keep `name_literal` from breaking out
         // of the single-quoted string literal passed to `callMCPTool`.
         let raw_name = "create_issue's_evil_twin";
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools[0].name = ToolName::new(raw_name).unwrap();
 
@@ -2545,7 +2538,7 @@ mod tests {
     /// `ToolName` on every platform `Path`'s separator rules run on, e.g. Windows).
     #[test]
     fn test_generate_never_leaves_an_unterminated_call_site_literal_near_the_escape_cap() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         let hostile_name = format!("a{}", "'".repeat(250));
         server_info.tools[0].name = ToolName::new(hostile_name).unwrap();
@@ -2875,7 +2868,7 @@ mod tests {
 
     #[test]
     fn test_generate_sanitizes_reserved_word_tool_name() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools = vec![ToolInfo {
             name: ToolName::new("delete").unwrap(),
@@ -2898,7 +2891,7 @@ mod tests {
 
     #[test]
     fn test_generate_disambiguates_colliding_tool_names() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools = vec![
             ToolInfo {
@@ -2950,7 +2943,7 @@ mod tests {
         // An MCP server reporting two tools with the exact same raw `name` is invalid per
         // spec but is not currently rejected upstream; generation must not let the second
         // tool silently overwrite the first tool's file.
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools = vec![
             ToolInfo {
@@ -3023,7 +3016,7 @@ mod tests {
             MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV,
         };
 
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let code = generator
             .generate(&create_test_server_info(), &test_config())
             .unwrap();
@@ -3053,7 +3046,7 @@ mod tests {
         // Issue #204 regression: Handlebars' default HTML-escaping corrupted benign
         // punctuation (apostrophes, ampersands, comparison operators) in JSDoc comments,
         // turning e.g. `don't` into `don&#x27;t` or `a < b` into `a &lt; b`.
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools[0].description =
             "Compares values: a < b && b > c, or use \"quotes\" & don't forget 'em".to_string();
@@ -3082,7 +3075,7 @@ mod tests {
 
     #[test]
     fn test_generate_sanitizes_jsdoc_injection() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.name = "Evil */ injection".to_string();
         server_info.version = "1.0\n<script>".to_string();
@@ -3103,7 +3096,7 @@ mod tests {
 
     #[test]
     fn test_generate_sanitizes_schema_and_category_jsdoc_injection() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let mut server_info = create_test_server_info();
         server_info.tools[0].input_schema = json!({
             "type": "object",
@@ -3183,7 +3176,7 @@ mod tests {
     #[test]
     fn test_generate_rejects_tool_count_that_would_exceed_max_generated_files() {
         let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT + 1);
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
 
         let result = generator.generate(&server_info, &test_config());
 
@@ -3194,7 +3187,7 @@ mod tests {
     #[test]
     fn test_generate_accepts_tool_count_at_exact_max_generated_files() {
         let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT);
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
 
         let code = generator.generate(&server_info, &test_config()).unwrap();
 
@@ -3204,7 +3197,7 @@ mod tests {
     #[test]
     fn test_generate_with_categories_rejects_tool_count_that_would_exceed_max_generated_files() {
         let server_info = server_info_with_tool_count(MAX_GENERATED_FILES - FIXED_FILE_COUNT + 1);
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
 
         let result =
             generator.generate_with_categories(&server_info, &test_config(), &HashMap::new());

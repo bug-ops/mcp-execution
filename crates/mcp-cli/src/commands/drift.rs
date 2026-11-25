@@ -41,10 +41,10 @@ pub struct DriftArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Base directory of the generated files (same as `generate --progressive-output`;
+    /// Base directory of the generated files (same as `generate --servers-dir`;
     /// default: ~/.claude/servers/)
     #[arg(long)]
-    pub progressive_output: Option<PathBuf>,
+    pub servers_dir: Option<PathBuf>,
 }
 
 /// Result of comparing a live server with the recorded generation provenance.
@@ -233,7 +233,7 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
     let DriftArgs {
         flags,
         name,
-        progressive_output,
+        servers_dir,
     } = args;
     let override_id = name_override(name.as_deref())?;
     let source = ServerSource::try_from(flags)?;
@@ -241,8 +241,7 @@ pub async fn run(args: DriftArgs, format: OutputFormat) -> Result<ExitCode> {
         matches!(source, ServerSource::Config { .. }) && override_id.is_none();
     let (server_id, config) = resolve_server_config(source)?;
     let skill_id = override_id.unwrap_or_else(|| server_id.clone());
-    let (_, server_dir) =
-        generated_location(&skill_id, from_unvalidated_config_key, progressive_output)?;
+    let (_, server_dir) = generated_location(&skill_id, from_unvalidated_config_key, servers_dir)?;
     let recorded = read_generated_metadata_async(server_dir, &skill_id).await?;
 
     let Discovery { info, hints } = Introspector::new()

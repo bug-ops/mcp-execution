@@ -3,7 +3,7 @@
 //! Defines data structures used during progressive code generation,
 //! where each tool is generated as a separate file.
 
-use crate::progressive::observed::{
+use crate::package::observed::{
     OBSERVED_SHAPE_MAX_DEPTH, OBSERVED_SHAPE_MAX_KEY_LEN, OBSERVED_SHAPE_MAX_KEYS,
     OBSERVED_SHAPE_MAX_LINE_BYTES,
 };
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ToolContext;
+/// use mcp_execution_codegen::package::ToolContext;
 /// use mcp_execution_core::helper_protocol::ResultSource;
 ///
 /// let context = ToolContext {
@@ -74,7 +74,7 @@ pub struct ToolContext {
     pub category: Option<String>,
     /// Optional keywords for discovery via grep/search
     pub keywords: Option<String>,
-    /// Short description for header comment. Always populated: `ProgressiveGenerator`'s only
+    /// Short description for header comment. Always populated: `PackageGenerator`'s only
     /// constructor falls back to `description` when no categorization short description is
     /// available, so `None` is not a state this type can represent.
     pub short_description: String,
@@ -89,7 +89,7 @@ pub struct ToolContext {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::IndexContext;
+/// use mcp_execution_codegen::package::IndexContext;
 ///
 /// let context = IndexContext {
 ///     server_name: "GitHub".to_string(),
@@ -124,7 +124,7 @@ pub struct IndexContext {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ToolSummary;
+/// use mcp_execution_codegen::package::ToolSummary;
 ///
 /// let summary = ToolSummary {
 ///     typescript_name: "createIssue".to_string(),
@@ -157,7 +157,7 @@ pub struct ToolSummary {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::ToolCategorization;
+/// use mcp_execution_codegen::package::ToolCategorization;
 ///
 /// let cat = ToolCategorization {
 ///     category: "issues".to_string(),
@@ -184,7 +184,7 @@ pub struct ToolCategorization {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::{CategoryInfo, ToolSummary};
+/// use mcp_execution_codegen::package::{CategoryInfo, ToolSummary};
 ///
 /// let category = CategoryInfo {
 ///     name: "issues".to_string(),
@@ -224,7 +224,7 @@ pub struct CategoryInfo {
 /// # Examples
 ///
 /// ```
-/// use mcp_execution_codegen::progressive::BridgeContext;
+/// use mcp_execution_codegen::package::BridgeContext;
 ///
 /// let context = BridgeContext::default();
 /// assert_eq!(context.helper_protocol_version, 1);
@@ -274,7 +274,7 @@ impl BridgeContext {
     /// # Examples
     ///
     /// ```
-    /// use mcp_execution_codegen::progressive::BridgeContext;
+    /// use mcp_execution_codegen::package::BridgeContext;
     ///
     /// assert!(!BridgeContext::default().identifier_pattern().is_empty());
     /// ```
@@ -299,7 +299,7 @@ impl Default for BridgeContext {
             observed_shape_max_keys: OBSERVED_SHAPE_MAX_KEYS,
             observed_shape_max_key_len: OBSERVED_SHAPE_MAX_KEY_LEN,
             observed_shape_max_line_bytes: OBSERVED_SHAPE_MAX_LINE_BYTES,
-            identifier_pattern: crate::progressive::generator::sanitize_ts_string_literal(
+            identifier_pattern: crate::package::generator::sanitize_ts_string_literal(
                 BARE_IDENTIFIER_PATTERN,
             ),
         }

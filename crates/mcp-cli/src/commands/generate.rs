@@ -12,7 +12,7 @@ use super::common::{
 use crate::formatters::escape_display;
 use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
 use mcp_execution_core::{ServerConfig, ServerId, ServerSlug};
 use mcp_execution_files::{ExportOptions, FilesBuilder};
@@ -239,7 +239,7 @@ fn generate_code(
     server_config: &ServerConfig,
     observed_jsonl: Option<&str>,
 ) -> Result<GeneratedCode> {
-    let mut generator = ProgressiveGenerator::new().context("failed to create code generator")?;
+    let mut generator = PackageGenerator::new().context("failed to create code generator")?;
     if let Some(jsonl) = observed_jsonl {
         generator = generator.with_observed_shapes(jsonl);
     }
@@ -671,14 +671,14 @@ mod tests {
     }
 
     #[test]
-    fn test_progressive_generator_creation() {
-        let generator = ProgressiveGenerator::new();
+    fn test_package_generator_creation() {
+        let generator = PackageGenerator::new();
         assert!(generator.is_ok());
     }
 
     #[test]
-    fn test_progressive_code_generation() {
-        let generator = ProgressiveGenerator::new().unwrap();
+    fn test_package_code_generation() {
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
 
         let result = generator.generate(&server_info, &create_mock_server_config());
@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_dry_run_collects_file_metadata() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
         let generated_code = generator
             .generate(&server_info, &create_mock_server_config())
@@ -811,7 +811,7 @@ mod tests {
     fn test_dry_run_does_not_write_files() {
         use std::path::Path;
 
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
         let generated_code = generator
             .generate(&server_info, &create_mock_server_config())
@@ -1021,7 +1021,7 @@ mod tests {
         std::fs::create_dir_all(&base_dir).unwrap();
         let escape_target = temp.path().join("escaped");
 
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
         let server_info = create_mock_server_info();
         let generated_code = generator
             .generate(&server_info, &create_mock_server_config())

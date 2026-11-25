@@ -6,7 +6,7 @@
 
 use crate::common::ts_types::{ConvertedType, RenderStyle, convert_schema};
 use crate::common::typescript::sanitize_jsdoc;
-use crate::progressive::generator::STORED_TYPE_TEXT_MAX_BYTES;
+use crate::package::generator::STORED_TYPE_TEXT_MAX_BYTES;
 use mcp_execution_core::helper_protocol::ResultSource;
 use mcp_execution_core::metadata::{ParameterMetadata, ResultTypeOrigin};
 use mcp_execution_introspector::ToolInfo;

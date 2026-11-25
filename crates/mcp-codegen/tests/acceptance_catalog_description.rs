@@ -10,8 +10,8 @@
 mod acceptance_support;
 
 use acceptance_support::{file, server_info, tool};
-use mcp_execution_codegen::ProgressiveGenerator;
-use mcp_execution_codegen::progressive::ToolCategorization;
+use mcp_execution_codegen::PackageGenerator;
+use mcp_execution_codegen::package::ToolCategorization;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -36,7 +36,7 @@ fn catalog_for_hostile_descriptions() -> String {
             .command("test-command".to_string())
             .build()
             .unwrap();
-        ProgressiveGenerator::new()
+        PackageGenerator::new()
             .unwrap()
             .generate_with_categories(&server, &config, &categorizations)
             .expect("generation succeeds")

@@ -468,12 +468,12 @@ mod tests {
 ```rust
 // tests/integration_test.rs
 
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 
 #[test]
 fn test_generator_constructs() {
     // Setup and execute
-    let generator = ProgressiveGenerator::new();
+    let generator = PackageGenerator::new();
 
     // Verify
     assert!(generator.is_ok());

@@ -15,7 +15,7 @@ mod support;
 
 use std::process::Command;
 
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_core::helper_protocol::{
     CLI_PATH_ENV, HELPER_ENV, HELPER_TOKEN_ENV, MAX_HELPER_LINE_BYTES, RUN_MARKER_ENV,
 };
@@ -23,7 +23,7 @@ use serde_json::Value;
 use support::{BridgeHarness, create_test_server_info, run_bridge_harness_in, test_config};
 
 fn rendered_bridge() -> String {
-    let code = ProgressiveGenerator::new()
+    let code = PackageGenerator::new()
         .expect("Failed to create generator")
         .generate(&create_test_server_info(), &test_config())
         .expect("Failed to generate code");

@@ -16,7 +16,7 @@
 )]
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::json;
@@ -182,7 +182,7 @@ fn bench_full_generation_scaling(c: &mut Criterion) {
     for count in [1, 10, 50, 100, 500, 1000] {
         let server_info = create_server_info(count, create_moderate_tool);
         let config = bench_config();
-        let generator = ProgressiveGenerator::new().expect("Generator should initialize");
+        let generator = PackageGenerator::new().expect("Generator should initialize");
 
         group.throughput(Throughput::Elements(count as u64));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _count| {
@@ -210,7 +210,7 @@ fn bench_schema_complexity(c: &mut Criterion) {
     for (name, tool_creator) in complexities {
         let server_info = create_server_info(tool_count, tool_creator);
         let config = bench_config();
-        let generator = ProgressiveGenerator::new().expect("Generator should initialize");
+        let generator = PackageGenerator::new().expect("Generator should initialize");
 
         group.throughput(Throughput::Elements(tool_count as u64));
         group.bench_with_input(BenchmarkId::from_parameter(name), name, |b, _| {
@@ -228,7 +228,7 @@ fn bench_schema_complexity(c: &mut Criterion) {
 fn bench_generator_initialization(c: &mut Criterion) {
     c.bench_function("generator_initialization", |b| {
         b.iter(|| {
-            let generator = ProgressiveGenerator::new();
+            let generator = PackageGenerator::new();
             assert!(generator.is_ok());
             black_box(generator)
         });
@@ -305,7 +305,7 @@ fn bench_memory_patterns(c: &mut Criterion) {
     // Single generation with measurements
     let server_info = create_server_info(100, create_moderate_tool);
     let config = bench_config();
-    let generator = ProgressiveGenerator::new().expect("Generator should initialize");
+    let generator = PackageGenerator::new().expect("Generator should initialize");
 
     group.bench_function("generate_100_tools", |b| {
         b.iter(|| {

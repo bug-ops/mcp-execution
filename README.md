@@ -233,7 +233,19 @@ mcp-execution-cli scripts check --server github
 mcp-execution-cli drift --from-config github
 ```
 
-Exit 0: no drift. Exit 5: the tool list or endpoint differs from the recorded one. When the server was generated under another name or into another directory, pass the same `--name` and `--progressive-output` you gave `generate`.
+Exit 0: no drift. Exit 5: the tool list or endpoint differs from the recorded one. When the server was generated under another name or into another directory, pass the same `--name` and `--servers-dir` you gave `generate`.
+
+### Supported Runtimes
+
+| Runtime | Generated tool files (`<runtime> <tool>.ts '<json>'`) | `run`, `--typecheck`, `--restrict` |
+|---------|------------------------------------------------------|-------------------------------------|
+| Node.js 22.18 and newer | Supported | Supported |
+| Bun | Supported (tested with `bun <tool>.ts '<json>'`) | Not supported: `run` starts Node.js |
+| Deno | Supported (tested with `deno run -A <tool>.ts '<json>'`) | Not supported: `run` starts Node.js |
+
+The Bun and Deno rows are exercised by `acceptance_runtime_compat` against the fixture server; CI fails when either runtime is missing from its job because it sets `MCP_EXECUTION_REQUIRE_ALT_RUNTIMES=1`. Without that variable the tests skip a missing runtime. `setup` checks only the Node.js version.
+
+- **Node.js below 22.18:** run a tool file through a TypeScript loader, for example `npx tsx <tool>.ts '<json>'`; `run`, `typecheck` and `--restrict` still need Node.js 22.18 or newer.
 
 ## Key Features
 

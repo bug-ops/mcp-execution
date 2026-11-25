@@ -94,7 +94,7 @@ fn info(tools: Vec<ToolInfo>) -> ServerInfo {
 }
 
 fn generate(server: &ServerInfo) -> GeneratedCode {
-    ProgressiveGenerator::new()
+    PackageGenerator::new()
         .unwrap()
         .generate(server, &config())
         .expect("generation succeeds")

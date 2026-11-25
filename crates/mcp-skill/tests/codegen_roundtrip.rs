@@ -6,7 +6,7 @@
     reason = "test, bench and example code may panic on failure"
 )]
 
-use mcp_execution_codegen::ProgressiveGenerator;
+use mcp_execution_codegen::PackageGenerator;
 use mcp_execution_core::metadata::MAX_TOOL_COUNT;
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
@@ -46,7 +46,7 @@ async fn generate_and_scan(tool_count: usize) -> mcp_execution_skill::ScanResult
         .command("test-command".to_string())
         .build()
         .unwrap();
-    let code = ProgressiveGenerator::new()
+    let code = PackageGenerator::new()
         .unwrap()
         .generate(&server, &config)
         .expect("generation succeeds");

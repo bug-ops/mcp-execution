@@ -13,7 +13,7 @@ use crate::types::{
     IntrospectedToolSummary, ListGeneratedServersParams, ListGeneratedServersResult,
     PendingGeneration, SaveCategorizedToolsParams, SaveCategorizedToolsResult,
 };
-use mcp_execution_codegen::progressive::ProgressiveGenerator;
+use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_core::metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME};
 use mcp_execution_core::untrusted::{
     MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_inline, sanitize_untrusted_text,
@@ -605,7 +605,7 @@ impl GeneratorService {
         })?;
 
         // Generate code with categorization
-        let generator = ProgressiveGenerator::new().map_err(|e| {
+        let generator = PackageGenerator::new().map_err(|e| {
             McpError::internal_error(
                 format!("Failed to create generator: {}", describe_with_causes(&e)),
                 None,
@@ -1640,7 +1640,7 @@ fn session_lost_after_restore_failure(
 ///
 /// A bare `{err}` interpolation only shows the top-level `Display`, which for a wrapping
 /// variant like `Error::ScriptGenerationError` never repeats its `#[source]` (see
-/// `ProgressiveGenerator::wrap_tool_generation_error`) — so building an `McpError` message with
+/// `PackageGenerator::wrap_tool_generation_error`) — so building an `McpError` message with
 /// `{err}` alone silently drops the underlying cause from what the MCP client sees. Walking the
 /// chain here keeps that diagnostic detail on the primary interface most callers hit first.
 fn describe_with_causes(err: &(dyn std::error::Error + 'static)) -> String {
@@ -1659,12 +1659,12 @@ fn describe_with_causes(err: &(dyn std::error::Error + 'static)) -> String {
 /// Converts the categorization map to the format expected by the generator
 /// and calls `generate_with_categories`.
 fn generate_with_categorization(
-    generator: &ProgressiveGenerator,
+    generator: &PackageGenerator,
     server_info: &mcp_execution_introspector::ServerInfo,
     server_config: &mcp_execution_core::ServerConfig,
     categorization: &HashMap<String, &CategorizedTool>,
 ) -> mcp_execution_core::Result<mcp_execution_codegen::GeneratedCode> {
-    use mcp_execution_codegen::progressive::ToolCategorization;
+    use mcp_execution_codegen::package::ToolCategorization;
 
     // Convert CategorizedTool map to ToolCategorization map
     let categorizations: HashMap<String, ToolCategorization> = categorization
@@ -1963,7 +1963,7 @@ mod tests {
 
     #[test]
     fn test_generate_with_categorization() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
 
         let server_info = mcp_execution_introspector::ServerInfo {
             id: ServerId::new("test").unwrap(),
@@ -2012,7 +2012,7 @@ mod tests {
 
     #[test]
     fn test_generate_with_categorization_multiple_tools() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
 
         let server_info = mcp_execution_introspector::ServerInfo {
             id: ServerId::new("test").unwrap(),
@@ -2070,7 +2070,7 @@ mod tests {
 
     #[test]
     fn test_generate_with_categorization_empty_tools() {
-        let generator = ProgressiveGenerator::new().unwrap();
+        let generator = PackageGenerator::new().unwrap();
 
         let server_id = ServerId::new("test").unwrap();
         let server_info = mcp_execution_introspector::ServerInfo {
@@ -3325,7 +3325,7 @@ mod tests {
     /// entry keyed by the *display* form Claude was shown, and the categorization it carries
     /// must reach the generated output keyed by the tool's RAW name. A prior version built the
     /// codegen categorization map keyed by the echoed display name, which desynced from
-    /// `ProgressiveGenerator`'s raw-name lookup for any tool name containing a control
+    /// `PackageGenerator`'s raw-name lookup for any tool name containing a control
     /// character, line terminator, or `&`/`<`/`>`.
     ///
     /// Originally five near-identical tests, one per historically distinct raw/display

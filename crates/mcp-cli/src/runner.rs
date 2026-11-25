@@ -209,7 +209,7 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
         Commands::Generate {
             flags,
             name,
-            progressive_output,
+            servers_dir,
             observed_shapes,
             dry_run,
         } => {
@@ -217,7 +217,7 @@ async fn dispatch(command: Commands, output_format: OutputFormat) -> Result<Exit
             commands::generate::run(
                 source,
                 name,
-                progressive_output,
+                servers_dir,
                 observed_shapes,
                 dry_run,
                 output_format,
@@ -573,7 +573,7 @@ mod tests {
     }
 
     /// `ScriptGenerationError` wraps its cause via `source` (see
-    /// `ProgressiveGenerator::wrap_tool_generation_error`) precisely so this recursion can
+    /// `PackageGenerator::wrap_tool_generation_error`) precisely so this recursion can
     /// still find the original classification instead of collapsing every wrapped cause to the
     /// generic exit code.
     #[test]

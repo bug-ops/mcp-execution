@@ -16,8 +16,8 @@ use acceptance_support::{
     REPLY_ECHO_ARGUMENTS, REPLY_TEXT_JSON_OK, Run, canonical_tempdir, file, generate, run_node,
     server_info, tool, write_home, write_package,
 };
-use mcp_execution_codegen::ProgressiveGenerator;
-use mcp_execution_codegen::progressive::ToolCategorization;
+use mcp_execution_codegen::PackageGenerator;
+use mcp_execution_codegen::package::ToolCategorization;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -383,7 +383,7 @@ fn tool_file_has_no_inline_cli_block_and_one_header() {
             short_description: "Create a new issue".to_string(),
         },
     )]);
-    let code = ProgressiveGenerator::new()
+    let code = PackageGenerator::new()
         .unwrap()
         .generate_with_categories(&create_test_server_info(), &test_config(), &categorizations)
         .unwrap();
@@ -436,7 +436,7 @@ fn cli_module_is_identical_across_servers_and_static() {
 
 #[test]
 fn average_tool_file_is_at_most_half_of_the_master_baseline() {
-    let code = ProgressiveGenerator::new()
+    let code = PackageGenerator::new()
         .unwrap()
         .generate(&create_test_server_info(), &test_config())
         .unwrap();

@@ -8,7 +8,7 @@
     reason = "shared by several test crates; each uses a subset"
 )]
 
-use mcp_execution_codegen::{GeneratedCode, ProgressiveGenerator};
+use mcp_execution_codegen::{GeneratedCode, PackageGenerator};
 use mcp_execution_core::{ServerConfig, ServerId, ToolName};
 use mcp_execution_introspector::{ServerCapabilities, ServerInfo, ToolInfo};
 use serde_json::Value;
@@ -82,11 +82,11 @@ pub fn server_info(tools: Vec<ToolInfo>) -> ServerInfo {
 
 /// Generates the package for `server` with the default generator.
 pub fn generate(server: &ServerInfo) -> GeneratedCode {
-    generate_with(&ProgressiveGenerator::new().expect("generator"), server)
+    generate_with(&PackageGenerator::new().expect("generator"), server)
 }
 
 /// Generates the package for `server` with `generator`.
-pub fn generate_with(generator: &ProgressiveGenerator<'_>, server: &ServerInfo) -> GeneratedCode {
+pub fn generate_with(generator: &PackageGenerator<'_>, server: &ServerInfo) -> GeneratedCode {
     let config = ServerConfig::builder()
         .command("test-command".to_string())
         .build()

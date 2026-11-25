@@ -318,13 +318,7 @@ impl Sandbox {
     /// Generates the package of the `mcp.json` server `name` into the sandbox servers directory.
     pub fn generate_server(&self, name: &str) {
         let servers = self.servers.display().to_string();
-        let out = self.cli(&[
-            "generate",
-            "--from-config",
-            name,
-            "--progressive-output",
-            &servers,
-        ]);
+        let out = self.cli(&["generate", "--from-config", name, "--servers-dir", &servers]);
         assert_eq!(out.code, Some(0), "generate failed: {}", out.stderr);
         assert!(self.servers.join(name).join("index.ts").is_file());
     }

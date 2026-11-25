@@ -480,7 +480,7 @@ pub enum Commands {
         /// Custom output directory for progressive loading files
         /// (default: ~/.claude/servers/)
         #[arg(long)]
-        progressive_output: Option<PathBuf>,
+        servers_dir: Option<PathBuf>,
 
         /// Result shapes recorded by a past run of the generated tools
         ///
@@ -664,14 +664,14 @@ impl fmt::Debug for Commands {
             Self::Generate {
                 flags,
                 name,
-                progressive_output,
+                servers_dir,
                 observed_shapes,
                 dry_run,
             } => f
                 .debug_struct("Generate")
                 .field("flags", flags)
                 .field("name", name)
-                .field("progressive_output", progressive_output)
+                .field("servers_dir", servers_dir)
                 .field("observed_shapes", observed_shapes)
                 .field("dry_run", dry_run)
                 .finish(),
@@ -864,14 +864,11 @@ mod tests {
             "mcp-cli",
             "generate",
             "server",
-            "--progressive-output",
+            "--servers-dir",
             "/tmp/output",
         ]);
-        if let Commands::Generate {
-            progressive_output, ..
-        } = cli.command
-        {
-            assert_eq!(progressive_output, Some(PathBuf::from("/tmp/output")));
+        if let Commands::Generate { servers_dir, .. } = cli.command {
+            assert_eq!(servers_dir, Some(PathBuf::from("/tmp/output")));
         } else {
             panic!("Expected Generate command");
         }

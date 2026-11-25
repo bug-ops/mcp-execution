@@ -511,7 +511,7 @@ mod windows_tests {
 /// (`MAX_EXPORT_FILES`, `MAX_EXPORT_BYTES`) and reach the disk intact.
 #[test]
 fn test_export_of_output_generated_at_the_maximum_tool_count_succeeds() {
-    use mcp_execution_codegen::ProgressiveGenerator;
+    use mcp_execution_codegen::PackageGenerator;
     use mcp_execution_core::{ServerConfig, ServerId, ToolName};
     use mcp_execution_introspector::{MAX_TOOL_COUNT, ServerCapabilities, ServerInfo, ToolInfo};
     use serde_json::json;
@@ -548,7 +548,7 @@ fn test_export_of_output_generated_at_the_maximum_tool_count_succeeds() {
         .command("test-command".to_string())
         .build()
         .unwrap();
-    let code = ProgressiveGenerator::new()
+    let code = PackageGenerator::new()
         .unwrap()
         .generate(&server, &config)
         .expect("generation at the maximum tool count succeeds");

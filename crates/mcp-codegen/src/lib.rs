@@ -15,11 +15,11 @@
 //! # Example
 //!
 //! ```no_run
-//! use mcp_execution_codegen::progressive::ProgressiveGenerator;
+//! use mcp_execution_codegen::package::PackageGenerator;
 //! use mcp_execution_introspector::ServerInfo;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let generator = ProgressiveGenerator::new()?;
+//! let generator = PackageGenerator::new()?;
 //! // generator.generate(&server_info, &server_config)?;
 //! # Ok(())
 //! # }
@@ -43,11 +43,10 @@
 
 // Core modules (always available)
 pub mod common;
-#[path = "package/mod.rs"]
-pub mod progressive;
+pub mod package;
 pub mod template_engine;
 
 // Re-export main types
 pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
-pub use progressive::{ProgressiveGenerator, TSCONFIG_JSON};
+pub use package::{PackageGenerator, TSCONFIG_JSON};
 pub use template_engine::TemplateEngine;

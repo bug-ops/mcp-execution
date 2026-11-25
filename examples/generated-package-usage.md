@@ -21,6 +21,8 @@ Only text a model reads costs context. Importing a module when a script runs put
 
 Generated files are TypeScript that Node.js runs directly, which needs Node.js 22.18.0 or newer (on the 23 line, 23.6.0 or newer). Run `mcp-execution-cli setup` to check the installed version.
 
+- Node.js below 22.18: run a tool file through a TypeScript loader, e.g. `npx tsx <tool>.ts '<json>'`; `run`, `typecheck` and `--restrict` still need Node.js 22.18+.
+
 ## Quick Start
 
 ### 1. Generate the SDK
@@ -299,7 +301,7 @@ The scenario harness in `crates/mcp-cli/tests/context_cost_harness.rs` runs offl
 
 With this script the single `run` is smaller from K = 5. These figures do not prove more than that: the script is fixed, not written by a model, so the cost of writing it is not counted; the server is the in-repo fixture only; tokens are an estimate (bytes/4), not a real count; turn overhead and prompt caching are not modelled. The harness prints the same statement under its table. It shows where a fixed script stops costing more, not what a model session costs.
 
-`drift` connects to the live server, compares its tool list and endpoint with the metadata recorded at generation, and writes nothing. Exit 0 means no drift and exit 5 means they differ. If you generated with `--name` or `--progressive-output`, pass the same flags to `drift`.
+`drift` connects to the live server, compares its tool list and endpoint with the metadata recorded at generation, and writes nothing. Exit 0 means no drift and exit 5 means they differ. If you generated with `--name` or `--servers-dir`, pass the same flags to `drift`.
 
 ## Regenerate After Upgrading
 
@@ -460,7 +462,7 @@ Options:
 - `--name <NAME>` - Custom directory name (default: server command)
 - `--arg <ARG>` - Server command argument (repeatable)
 - `--env <KEY=VALUE>` - Environment variable (repeatable)
-- `--progressive-output <DIR>` - Custom output directory
+- `--servers-dir <DIR>` - Custom output directory
 - `--from-config <NAME>` - Load the server from `~/.claude/mcp.json`
 - `--dry-run` - Preview the files without writing them
 
@@ -472,7 +474,7 @@ Options:
 | `run [SCRIPT\|-] [flags] [-- ARGS]` | Run a script with bounded output (`--timeout`, `--max-output`, `--max-stderr`, `--typecheck`, `--dry-run`, `--policy`, `--restrict`, `--save`, `--overwrite`) |
 | `scripts list\|check --server ID` | List saved scripts by signature; check them against the live tools (exit 5 on problems) |
 | `stats SERVER_ID` | Bytes and estimated tokens per level of a generated server |
-| `drift <server flags>` | Compare the live tool list with the recorded one (exit 5 on drift; `--name`, `--progressive-output` as for `generate`) |
+| `drift <server flags>` | Compare the live tool list with the recorded one (exit 5 on drift; `--name`, `--servers-dir` as for `generate`) |
 | `introspect`, `skill`, `server`, `setup`, `completions` | Inspect a server, write a skill, list configured servers, check the environment, shell completions |
 
 ### Examples
@@ -494,7 +496,7 @@ mcp-execution-cli generate npx \
 # Custom output directory
 mcp-execution-cli generate docker \
   --arg=... \
-  --progressive-output=/tmp/my-tools
+  --servers-dir=/tmp/my-tools
 ```
 
 ## Architecture

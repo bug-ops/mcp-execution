@@ -8,10 +8,10 @@ This crate generates TypeScript from MCP tool schemas using Handlebars templates
 
 ## Layout
 
-- `progressive/` - `ProgressiveGenerator` and the generated-file model
+- `package/` - `PackageGenerator` and the generated-file model
 - `common/` - shared types and the JSON Schema to TypeScript converter (`common::ts_types::convert_schema`)
 - `template_engine.rs` - `TemplateEngine`, a thin Handlebars wrapper
-- `templates/progressive/*.hbs` - the TypeScript templates
+- `templates/package/*.hbs` - the TypeScript templates
 
 ## Error Handling
 

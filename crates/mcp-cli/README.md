@@ -113,7 +113,7 @@ mcp-execution-cli generate <SERVER> [OPTIONS]
 - `--connect-timeout-secs <SECS>`: Connection timeout (1-600s; conflicts with `--from-config`)
 - `--discover-timeout-secs <SECS>`: Tool discovery timeout (1-600s; conflicts with `--from-config`)
 - `--name <NAME>`: Custom server name for output directory
-- `--progressive-output <PATH>`: Custom output directory
+- `--servers-dir <PATH>`: Custom output directory
 - `--dry-run`: Preview files that would be generated without writing to disk
 - `--format <FORMAT>`: Output format (json, text, pretty)
 - `--log-format <FORMAT>`: Diagnostic log format (text, json); falls back to
@@ -209,7 +209,7 @@ Compare a live server's tool list with the metadata recorded at generation:
 mcp-execution-cli drift --from-config github
 ```
 
-Takes the server flags of `generate` plus `--name` and `--progressive-output` (pass the same values you gave `generate`). Exit 0: no drift. Exit 5: the lists differ. Writes nothing.
+Takes the server flags of `generate` plus `--name` and `--servers-dir` (pass the same values you gave `generate`). Exit 0: no drift. Exit 5: the lists differ. Writes nothing.
 
 ### `introspect`
 

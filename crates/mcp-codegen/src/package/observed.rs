@@ -3,7 +3,7 @@
 //!
 //! The bridge's opt-in recorder and the Rust reader of its output must apply identical limits.
 //! Every limit is defined once here and rendered into the bridge through
-//! [`BridgeContext`](crate::progressive::BridgeContext), so the TypeScript side copies no
+//! [`BridgeContext`](crate::package::BridgeContext), so the TypeScript side copies no
 //! number by hand. The reader treats the file as untrusted: a line that breaks any rule is
 //! skipped whole.
 

@@ -11,7 +11,7 @@
 //!
 //! let engine = TemplateEngine::new().unwrap();
 //! let context = json!({"name": "test"});
-//! // let result = engine.render("progressive/tool", &context).unwrap();
+//! // let result = engine.render("package/tool", &context).unwrap();
 //! ```
 
 use handlebars::Handlebars;
@@ -67,13 +67,13 @@ impl<'a> TemplateEngine<'a> {
         // Handlebars HTML-escapes `{{var}}` by default (`&`, `<`, `>`, `"`, `'`),
         // which corrupts the TypeScript/JSDoc source this engine generates. Injection
         // safety is instead enforced upstream by `sanitize_jsdoc` and
-        // `sanitize_ts_string_literal` (see `progressive/generator.rs`), which run
+        // `sanitize_ts_string_literal` (see `package/generator.rs`), which run
         // before rendering and strip the sequences that actually matter (`*/`,
         // unescaped quotes, newlines).
         handlebars.register_escape_fn(handlebars::no_escape);
 
         // Register progressive loading templates
-        Self::register_progressive_templates(&mut handlebars)?;
+        Self::register_package_templates(&mut handlebars)?;
 
         Ok(Self { handlebars })
     }
@@ -82,11 +82,11 @@ impl<'a> TemplateEngine<'a> {
     ///
     /// Registers templates for progressive loading pattern where each tool
     /// is a separate file.
-    fn register_progressive_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
+    fn register_package_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
         // Tool template: generates a single tool function (progressive loading)
         handlebars
             .register_template_string(
-                "progressive/tool",
+                "package/tool",
                 include_str!("../templates/package/tool.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
@@ -97,7 +97,7 @@ impl<'a> TemplateEngine<'a> {
         // Index template: generates index.ts with re-exports (progressive loading)
         handlebars
             .register_template_string(
-                "progressive/index",
+                "package/index",
                 include_str!("../templates/package/index.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
@@ -108,7 +108,7 @@ impl<'a> TemplateEngine<'a> {
         // Runtime bridge template: generates runtime helper for MCP calls
         handlebars
             .register_template_string(
-                "progressive/runtime-bridge",
+                "package/runtime-bridge",
                 include_str!("../templates/package/runtime-bridge.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
@@ -119,7 +119,7 @@ impl<'a> TemplateEngine<'a> {
         // CLI template: generates the single-call entry point shared by every tool file
         handlebars
             .register_template_string(
-                "progressive/cli",
+                "package/cli",
                 include_str!("../templates/package/cli.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
@@ -148,7 +148,7 @@ impl<'a> TemplateEngine<'a> {
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let engine = TemplateEngine::new()?;
     /// let context = json!({"name": "test", "description": "A test tool"});
-    /// let result = engine.render("progressive/tool", &context)?;
+    /// let result = engine.render("package/tool", &context)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_progressive_templates() {
+    fn test_render_package_templates() {
         let engine = TemplateEngine::new().unwrap();
 
         // Test progressive/tool template
@@ -230,7 +230,7 @@ mod tests {
             "annotation_tags": []
         });
 
-        let result = engine.render("progressive/tool", &tool_context);
+        let result = engine.render("package/tool", &tool_context);
         if let Err(e) = &result {
             eprintln!("Error rendering template: {e}");
         }
