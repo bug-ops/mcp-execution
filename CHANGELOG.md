@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workspace**: a 7 day cooldown for Dependabot version updates; the cargo publish-age key is not set because it blocks `cargo update --precise`; issue #644 (#654)
 - **`mcp-execution-core`, `mcp-execution-cli`**: `_meta.json` records a digest per tool and `drift` names the changed tools (`changed_on_server`); issue #688 (#708)
 - **`mcp-execution-cli`**: `setup` accepts Bun or Deno when no suitable Node.js is installed and states that `run` needs Node.js; issue #685 (#708)
-- **`mcp-execution-cli`**: `drift` lists saved scripts that use a changed tool (`scripts_using_changed_tools`); issue #707 (#PR)
+- **`mcp-execution-cli`**: `drift` lists saved scripts that use a changed tool (`scripts_using_changed_tools`); issue #707 (#714)
 
 ### Breaking
 
@@ -82,8 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-skill`**: `TemplateError::RegistrationFailed` and `OutputPathError::InvalidServerId` are removed; issue #691 (#708)
 - **`mcp-execution-core`, `mcp-execution-cli`**: Windows reserved device names are not valid server ids, derived ids get `-server`, and an invalid `--name` exits 2; issue #696 (#708)
 - **`mcp-execution-cli`**: `setup` JSON output replaces `node_version` with `runtime {name, version}` and `caveat`; issue #685 (#708)
-- **`mcp-execution-skill`**: `RecipeName` rejects Windows device names; a saved `nul.ts` is no longer listed and `scripts check` reports it; issue #701 (#PR)
-- **`mcp-execution-codegen`**: a tool named like a Windows device gets a suffixed file and export name such as `nul_2`; issue #701 (#PR)
+- **`mcp-execution-skill`**: `RecipeName` rejects Windows device names; a saved `nul.ts` is no longer listed and `scripts check` reports it; issue #701 (#714)
+- **`mcp-execution-codegen`**: a tool named like a Windows device gets a suffixed file and export name such as `nul_2`; issue #701 (#714)
 
 ### Changed
 
@@ -144,13 +144,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: unit tests that raise signals, redirect `HOME` or install a scoped log subscriber run only under nextest (one process per test) and skip under plain `cargo test`, which no longer fails; issue #658 (#668)
 - **`mcp-execution-server`**: an inherited ignored SIGCHLD is reset at startup; issue #689 (#708)
 - **`mcp-execution-cli`**: `run` on a terminal no longer lets Ctrl-C or Ctrl-\ cancel the script when SIGINT or SIGQUIT was ignored at startup; issue #693 (#708)
-- **`mcp-execution-cli`**: `generate` rejects a bad `mcp.json` key or servers directory before starting the server, also for a server without tools; issue #703 (#PR)
-- **`mcp-execution-cli`**: a hanging `node` no longer blocks `setup` or `run` and is killed on cancel; issue #705 (#PR)
-- **`mcp-execution-cli`, `mcp-execution-server`**: the `rmcp` log cap no longer raises verbosity above `RUST_LOG`; issue #702 (#PR)
+- **`mcp-execution-cli`**: `generate` rejects a bad `mcp.json` key or servers directory before starting the server, also for a server without tools; issue #703 (#714)
+- **`mcp-execution-cli`**: a hanging `node` no longer blocks `setup` or `run` and is killed on cancel; issue #705 (#714)
+- **`mcp-execution-cli`, `mcp-execution-server`**: the `rmcp` log cap no longer raises verbosity above `RUST_LOG`; issue #702 (#714)
 
 ### Security
 
-- **CI**: checkouts no longer persist the job token and unused `actions: write` permissions are removed; issue #700 (#PR)
+- **CI**: checkouts no longer persist the job token and unused `actions: write` permissions are removed; issue #700 (#714)
 - Updated `url` to 2.5.9 to resolve RUSTSEC-2026-0592 (stack overflow in `Url::origin()` on nested `blob:` URLs) (#596).
 - **CI**: every workflow action is pinned to a full commit SHA with the version in a comment (#614)
 - **Workspace**: the crates.io publish job requires the `release` environment and release jobs do not persist checkout credentials; issue #697 (#708)
