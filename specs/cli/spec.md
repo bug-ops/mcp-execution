@@ -909,13 +909,14 @@ it.
   checked, a mismatch closes the channel without a reply. The reader loop acquires the `MAX_INFLIGHT_CALLS` (16)
   semaphore before spawning each call and holds the permit until the response is written; a `JoinSet` cancels
   in-flight calls at the end; one writer task over a queue of `RESPONSE_QUEUE` 64. `HelperHandle::finish` signals stop, waits for the loop (bounded by `FINISH_GRACE` 2 s) and
-  closes the pool; `run` waits for it unbounded in a normal run and bounds the wrap-up by `WRAP_UP_BOUND` 4 s only after a signal (section 16).
-- Protocol (`protocol.rs`): `read_line` is bounded (never buffers past the limit plus one read); the helper's reader uses
-  a `READ_BUFFER_BYTES` (64 KiB) buffer (#623). `encode_response(&Response) -> EncodedResponse` serializes once
-  (#620): `EncodedResponse::Sent(line)` is the response line with its newline, and
-  `EncodedResponse::Replaced { line, original_bytes }` is the `call_failed` "result exceeds N bytes" line that stands in for
-  a response over `MAX_HELPER_LINE_BYTES`, with the size of the original serialized response (newline excluded);
-  `into_line()` yields the bytes to write. A request that cannot be
+  closes the pool.
+- Cancel safety (built invariant): the request reader is never cancelled by a completing call. `serve` reaps finished
+  calls with `JoinSet::try_join_next` at the top of each loop turn, outside the `select!`, because `read_line` keeps a
+  partly read line in a local buffer and cancelling it would drop that prefix (the next request was then rejected as
+  malformed with id 0). The only branch racing `read_line` is the stop signal. Regression test:
+  `a_call_finishing_while_a_request_arrives_in_pieces_does_not_corrupt_it` (`tests/helper_stdio.rs`).
+- Protocol (`protocol.rs`): `read_line` is bounded (never buffers past the limit plus one read); `encode_response`
+  turns a line over `MAX_HELPER_LINE_BYTES` into `call_failed` "result exceeds N bytes". A request that cannot be
   parsed or exceeds the bound gets `call_failed` with its `id` echoed when parseable, else id `0`, and the channel
   closes; clients start ids at 1 and treat a close as rejecting every pending call.
 - Ownership (#620, #628): `CallHooks::execute` and `SessionPool::call` take the `Request` by value and move its arguments
@@ -1049,6 +1050,20 @@ Architect-approved rulings, relayed by the lead, 2026-11-24; all are built and w
 
 ## 18. Journal, Dry Run, Policy and Harness (as built)
 
+### Runner state directories (`runtime/dirs.rs`, `platform_state_base`)
+
+All runner-owned state (spill files, journals, `journal.key`, per-run scratch) lives under one root,
+`<base>/mcp-execution`, where `<base>` is per OS:
+
+| OS | Base |
+|----|------|
+| Linux | `dirs::state_dir()` |
+| macOS | `dirs::data_local_dir()` |
+| Windows | an absolute `%LOCALAPPDATA%` first; when it is unset or relative, `dirs::data_local_dir()` |
+
+A missing base is an error, never a silent temp-dir fallback. On Windows `%LOCALAPPDATA%` is preferred because the
+known-folder API behind `dirs` ignores the environment, which would make the state root impossible to redirect in tests.
+
 ### Journal (#572, `runtime/journal.rs`)
 
 - `Journal::create` prunes journals (7 days, 50 files; a live journal is spared for `LIVE_JOURNAL_GRACE` 600 s),
@@ -1098,6 +1113,13 @@ Architect-approved rulings, relayed by the lead, 2026-11-24; all are built and w
   it read-only (a hint, not trusted): list \"server/tool\" under reads to run it") for a tool whose recorded annotations
   say read-only; the suggestion never changes what executes.
 - A journal creation error fails the run with exit 1 before node starts (architect, D19).
+
+### Test environment notes
+
+- Integration tests run the CLI in a sandbox (`tests/common/mod.rs`) that redirects `HOME`, `USERPROFILE`, the `XDG_*`
+  variables and `LOCALAPPDATA`; the last one redirects the Windows state root (see Runner state directories).
+- Tests that need `~/.claude/mcp.json` are `#[ignore]`d on Windows: `dirs::home_dir()` ignores `HOME` and `USERPROFILE`
+  there, so the file cannot be redirected (#604).
 
 ### Context-cost harness (`tests/context_cost_harness.rs`)
 
