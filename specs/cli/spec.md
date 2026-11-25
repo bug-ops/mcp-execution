@@ -1081,6 +1081,12 @@ All runner-owned state (spill files, journals, `journal.key`, per-run scratch) l
 A missing base is an error, never a silent temp-dir fallback. On Windows `%LOCALAPPDATA%` is preferred because the
 known-folder API behind `dirs` ignores the environment, which would make the state root impossible to redirect in tests.
 
+The dry-run policy file lives under the config directory instead: `<config base>/mcp-execution/policy.json`
+(`RuntimeDirs::policy_path`, `platform_config_base`), where `<config base>` is `dirs::config_dir()` on Linux and macOS and,
+on Windows, an absolute `%APPDATA%` first; when it is unset or relative, `dirs::config_dir()`. It mirrors the state root
+handling for the same reason: the known-folder API ignores the environment, so the policy path could not be redirected in
+tests. A missing config base is an error, never a silent temp-dir fallback.
+
 ### Journal (#572, `runtime/journal.rs`)
 
 - `Journal::create` prunes journals (7 days, 50 files; a live journal is spared for `LIVE_JOURNAL_GRACE` 600 s),
@@ -1134,7 +1140,7 @@ known-folder API behind `dirs` ignores the environment, which would make the sta
 ### Test environment notes
 
 - Integration tests run the CLI in a sandbox (`tests/common/mod.rs`) that redirects `HOME`, `USERPROFILE`, the `XDG_*`
-  variables and `LOCALAPPDATA`; the last one redirects the Windows state root (see Runner state directories).
+  variables, `APPDATA` and `LOCALAPPDATA`; the last two redirect the Windows policy path and state root (see Runner state directories).
 - Tests that need `~/.claude/mcp.json` are `#[ignore]`d on Windows: `dirs::home_dir()` ignores `HOME` and `USERPROFILE`
   there, so the file cannot be redirected (#604).
 
