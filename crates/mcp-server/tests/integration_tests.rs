@@ -42,7 +42,7 @@ fn test_service_info_has_correct_capabilities() {
     // Verify instructions are provided
     assert!(info.instructions.is_some());
     let instructions = info.instructions.unwrap();
-    assert!(instructions.contains("progressive loading"));
+    assert!(instructions.contains("typed TypeScript SDK"));
     assert!(instructions.contains("introspect_server"));
     assert!(instructions.contains("save_categorized_tools"));
 }

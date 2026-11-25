@@ -1,7 +1,7 @@
-//! MCP server library for progressive loading generation.
+//! MCP server library for TypeScript SDK generation.
 //!
-//! This crate provides an MCP server that helps generate progressive loading
-//! TypeScript files for other MCP servers. It leverages Claude's natural
+//! This crate provides an MCP server that helps generate a typed TypeScript
+//! SDK for other MCP servers. It leverages Claude's natural
 //! language understanding for tool categorization - no separate LLM API needed.
 //!
 //! # Architecture
@@ -14,7 +14,7 @@
 //!
 //! # Workflow
 //!
-//! 1. User asks Claude to generate progressive loading for an MCP server
+//! 1. User asks Claude to generate a TypeScript SDK for an MCP server
 //! 2. Claude calls `introspect_server` to discover tools
 //! 3. Claude analyzes tool metadata and assigns categories, keywords, descriptions
 //! 4. Claude calls `save_categorized_tools` with categorization

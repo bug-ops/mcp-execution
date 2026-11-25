@@ -1,7 +1,7 @@
-//! Skill generation for MCP progressive loading.
+//! Skill generation for generated MCP TypeScript SDKs.
 //!
 //! This crate provides functionality to generate Claude Code skill files (SKILL.md)
-//! from generated progressive loading TypeScript files.
+//! from generated TypeScript files.
 //!
 //! # Architecture
 //!

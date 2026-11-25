@@ -413,8 +413,8 @@ impl FileSystem {
 
     /// Exports VFS contents to real filesystem.
     ///
-    /// This is a high-performance implementation optimized for the progressive
-    /// loading pattern. It pre-creates all directories and writes files sequentially.
+    /// This is a high-performance implementation optimized for generated SDK
+    /// packages. It pre-creates all directories and writes files sequentially.
     ///
     /// # Performance
     ///

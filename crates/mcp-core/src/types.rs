@@ -241,9 +241,24 @@ pub enum ServerIdSlugError {
     /// hyphen.
     #[error("server_id must contain only lowercase letters, digits, and hyphens")]
     InvalidCharacters,
+
+    /// The candidate is a Windows reserved device name, which cannot name a directory.
+    #[error("server_id must not be a Windows reserved device name")]
+    ReservedName,
 }
 
-/// Checks the slug rule `[a-z0-9-]{1,64}`; the single place the rule lives.
+/// Whether `id` is a Windows reserved device name (`con`, `prn`, `aux`, `nul`, `com0`-`com9`,
+/// `lpt0`-`lpt9`), which cannot name a directory there.
+fn is_reserved_device_name(id: &str) -> bool {
+    matches!(id, "con" | "prn" | "aux" | "nul")
+        || id
+            .strip_prefix("com")
+            .or_else(|| id.strip_prefix("lpt"))
+            .is_some_and(|n| matches!(n.as_bytes(), [b'0'..=b'9']))
+}
+
+/// Checks the slug rule: `[a-z0-9-]{1,64}`, not a reserved device name; the single place the rule
+/// lives.
 fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
     if id.is_empty() {
         return Err(ServerIdSlugError::Empty);
@@ -260,17 +275,23 @@ fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
     {
         return Err(ServerIdSlugError::InvalidCharacters);
     }
+    if is_reserved_device_name(id) {
+        return Err(ServerIdSlugError::ReservedName);
+    }
     Ok(())
 }
 
 /// A filesystem-safe server id *slug*: 1-64 lowercase ASCII letters, digits, or hyphens
-/// (`[a-z0-9-]{1,64}`).
+/// (`[a-z0-9-]{1,64}`) that is not a Windows reserved device name.
 ///
 /// The id that becomes a directory name or generated-code identifier, so it is the type of every
 /// public `server_id` whose producer validates this rule (the MCP tool parameters, skill
 /// generation). The rule is frozen with no leading, trailing or consecutive-hyphen restriction,
 /// so `-`, `--a` and `a-` are valid slugs; a host that applies the Agent Skills `name` hyphen
 /// rule may still refuse such a name, and `--a` as a command-line positional must follow `--`.
+///
+/// `con`, `prn`, `aux`, `nul`, `com0`-`com9` and `lpt0`-`lpt9` are rejected on every platform. The
+/// JSON Schema does not express this rule.
 ///
 /// A slug is always a valid [`ServerId`] (the converse does not hold: a raw `mcp.json` key such
 /// as `claude_ai_Gmail` is a `ServerId` but not a slug), which `From<ServerSlug> for ServerId`
@@ -290,18 +311,20 @@ fn validate_server_id_slug(id: &str) -> Result<(), ServerIdSlugError> {
 /// assert!(ServerSlug::new("").is_err());
 /// assert!(ServerSlug::new("GitHub").is_err());
 /// assert!(ServerSlug::new("my_server").is_err());
+/// assert!(ServerSlug::new("nul").is_err());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct ServerSlug(String);
 
 impl ServerSlug {
-    /// Creates a slug, validating the rule `[a-z0-9-]{1,64}`.
+    /// Creates a slug, validating the rule described on [`ServerSlug`].
     ///
     /// # Errors
     ///
-    /// Returns [`ServerIdSlugError`] if `id` is empty, exceeds [`MAX_SERVER_ID_LENGTH`] bytes, or
-    /// contains a character other than a lowercase ASCII letter, digit, or hyphen.
+    /// Returns [`ServerIdSlugError`] if `id` is empty, exceeds [`MAX_SERVER_ID_LENGTH`] bytes,
+    /// contains a character other than a lowercase ASCII letter, digit, or hyphen, or is a
+    /// Windows reserved device name.
     ///
     /// # Examples
     ///
@@ -949,6 +972,13 @@ mod tests {
             frontier = next;
         }
         for candidate in candidates.iter().filter(|c| !c.is_empty()) {
+            if is_reserved_device_name(candidate) {
+                assert_eq!(
+                    ServerSlug::new(candidate),
+                    Err(ServerIdSlugError::ReservedName)
+                );
+                continue;
+            }
             let slug = ServerSlug::new(candidate).unwrap();
             let id = ServerId::new(candidate).unwrap();
             assert_eq!(ServerId::from(slug), id, "{candidate:?}");

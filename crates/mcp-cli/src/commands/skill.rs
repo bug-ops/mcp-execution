@@ -1,7 +1,7 @@
 //! Skill command implementation.
 //!
-//! Generates Claude Code instruction skill files (SKILL.md) from progressive loading
-//! TypeScript tools. This command:
+//! Generates Claude Code instruction skill files (SKILL.md) from generated TypeScript
+//! tools. This command:
 //! 1. Scans generated TypeScript files in `~/.claude/servers/{server}/`
 //! 2. Extracts tool metadata and categories
 //! 3. Generates structured context for skill creation
@@ -34,7 +34,7 @@ struct SkillWriteResult {
 
 /// Runs the skill command.
 ///
-/// Scans generated progressive loading TypeScript files and prepares context
+/// Scans generated TypeScript files and prepares context
 /// for generating a Claude Code instruction skill (SKILL.md).
 ///
 /// # Process

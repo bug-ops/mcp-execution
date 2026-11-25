@@ -181,7 +181,8 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "build-${{ matrix.os }}-${{ matrix.rust }}"
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          # Beta legs save nothing: the repository cache quota is 10 GB.
+          save-if: ${{ matrix.rust != 'beta' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') }}
 
       - name: Build (all targets, all features)
         run: cargo build --all-targets --all-features --workspace
@@ -218,7 +219,8 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "test-${{ matrix.os }}-${{ matrix.rust }}"
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          # Beta legs save nothing: the repository cache quota is 10 GB.
+          save-if: ${{ matrix.rust != 'beta' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') }}
 
       - name: Install nextest
         uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
@@ -337,6 +339,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "msrv"
+          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
 
       - name: Check with MSRV
         run: cargo check --all-features --workspace
@@ -362,6 +365,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "bench"
+          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
 
       - name: Build benchmarks (no run)
         run: cargo bench --no-run --profile bench-fast --workspace
@@ -391,8 +395,9 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: "publish"
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          # Restore only, to stay within the cache quota.
+          shared-key: "build-ubuntu-latest-stable"
+          save-if: false
 
       - name: Check the changelog section of the workspace version
         run: |
@@ -461,8 +466,9 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: "node-latest"
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          # Restore only, to stay within the cache quota.
+          shared-key: "test-ubuntu-latest-stable"
+          save-if: false
 
       - name: Install nextest
         uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6

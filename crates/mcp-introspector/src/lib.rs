@@ -1413,8 +1413,8 @@ fn build_server_info(
 /// workspace's dependency tree raises or disables it (no `disable_recursion_limit`/
 /// `unbounded_depth`). A schema nested deep enough to threaten a recursive `clone`/serialize
 /// here would already have failed to deserialize into a `Tool` in the first place, surfacing as
-/// a recoverable parse error rather than reaching this function. See
-/// `mcp_execution_codegen::common::typescript::MAX_SCHEMA_RECURSION_DEPTH`'s docs for the
+/// a recoverable parse error rather than reaching this function. See the docs of
+/// `mcp-execution-codegen`'s internal `MAX_SCHEMA_RECURSION_DEPTH` for the
 /// measured reachable-depth ceiling this reasoning is based on.
 ///
 /// # Errors

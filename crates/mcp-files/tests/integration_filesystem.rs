@@ -169,7 +169,7 @@ fn test_export_github_server_structure() {
     }
 }
 
-/// Test progressive loading pattern: multiple servers
+/// Exporting packages of multiple servers
 #[test]
 fn test_export_multiple_servers() {
     let temp_dir = TempDir::new().unwrap();

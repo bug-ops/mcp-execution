@@ -44,9 +44,11 @@
 // Core modules (always available)
 pub mod common;
 pub mod package;
+#[doc(hidden)]
 pub mod template_engine;
 
 // Re-export main types
-pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
+pub use common::types::{GeneratedCode, GeneratedFile};
 pub use package::{PackageGenerator, TSCONFIG_JSON};
+#[doc(hidden)]
 pub use template_engine::TemplateEngine;

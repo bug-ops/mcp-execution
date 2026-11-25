@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: `run --format json` stream objects carry `spill_complete`, `false` when the spill file holds only the first bytes; issue #635 (#654)
 - **`mcp-execution-core`**: `HomeDir`, `HomeDirError`, `expand_home`, `ServersDir` and `SkillsDir` resolve the home, servers and skills directories in one place; issues #634, #637 (#654)
 - **Workspace**: a 7 day cooldown for Dependabot version updates; the cargo publish-age key is not set because it blocks `cargo update --precise`; issue #644 (#654)
+- **`mcp-execution-core`, `mcp-execution-cli`**: `_meta.json` records a digest per tool and `drift` names the changed tools (`changed_on_server`); issue #688 (#708)
+- **`mcp-execution-cli`**: `setup` accepts Bun or Deno when no suitable Node.js is installed and states that `run` needs Node.js; issue #685 (#708)
 
 ### Breaking
 
@@ -73,6 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Workspace**: the MSRV is Rust 1.98 and follows a rolling stable-minus-two policy; issue #641 (#654)
 - **`mcp-execution-core`**: `ServersDir` and `SkillsDir` move from `mcp-execution-cli` to `mcp-execution-core`, a bare `~` expands to the home directory, a relative or unknown home is an error instead of a `./.claude` fallback, and `generate_skill` expands `~` in `servers_dir`; issues #634, #637 (#654)
 - **Tests**: variant assertions use `assert_matches!`, so a failure prints the value; issue #642 (#654)
+- **`mcp-execution-codegen`**: `TemplateContext`, `ToolDefinition`, `ToolSummary`, `CategoryInfo`, `ToolContext`, `IndexContext`, `package::types` and `common::typescript` are no longer public; `TemplateEngine` and `BridgeContext` are hidden; issue #687 (#708)
+- **`mcp-execution-core`**: `forbidden_chars`, `forbidden_env_names`, `forbidden_env_prefix`, `env_name_charset_pattern` and `env_name_charset_desc` are removed; issue #687 (#708)
+- **`mcp-execution-server`**: `GeneratedServerInfo::id` is a `ServerSlug` and `list_generated_servers` skips directories that are not server slugs; issue #687 (#708)
+- **`mcp-execution-skill`**: `TemplateError::RegistrationFailed` and `OutputPathError::InvalidServerId` are removed; issue #691 (#708)
+- **`mcp-execution-core`, `mcp-execution-cli`**: Windows reserved device names are not valid server ids, derived ids get `-server`, and an invalid `--name` exits 2; issue #696 (#708)
+- **`mcp-execution-cli`**: `setup` JSON output replaces `node_version` with `runtime {name, version}` and `caveat`; issue #685 (#708)
 
 ### Changed
 
@@ -95,6 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tests**: signal tests wait for a readiness file instead of a fixed sleep, and a test shows `run` ends within the wrap-up bound against hanging servers; issues #636, #638 (#654)
 - **Tests**: `mcp-execution-cli` integration tests share one generated-package writer and one set of Unix process helpers; issue #651 (#661)
 - **Tests**: the home-redirecting unit tests of `mcp-execution-cli` set `HOME` and `USERPROFILE` and run on Windows too; issue #648 (#661)
+- **`mcp-execution-server`**: server help, tool descriptions, instructions and crate docs use the SDK wording; issue #694 (#708)
+- **Documentation**: `run --help` and README say to name a script with top-level `for await` `.mts` on Node.js 22.18; issue #690 (#708)
+- **Workspace**: CI saves fewer build caches to stay within the Actions cache quota; issue #692 (#708)
+- **Tests**: `--log-format json` output of both binaries is covered, and on macOS the terminal and helper acceptance binaries run exclusively with a longer nextest leak timeout; issues #695, #666 (#708)
 
 ### Fixed
 
@@ -127,11 +139,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mcp-execution-cli`**: the Windows helper pipe is limited to its owner; issue #617 (#668)
 - **`mcp-execution-cli`**: the terminal Ctrl-Z test also fails on Linux when the resume logic is missing; issue #660 (#668)
 - **`mcp-execution-cli`**: unit tests that raise signals, redirect `HOME` or install a scoped log subscriber run only under nextest (one process per test) and skip under plain `cargo test`, which no longer fails; issue #658 (#668)
+- **`mcp-execution-server`**: an inherited ignored SIGCHLD is reset at startup; issue #689 (#708)
+- **`mcp-execution-cli`**: `run` on a terminal no longer lets Ctrl-C or Ctrl-\ cancel the script when SIGINT or SIGQUIT was ignored at startup; issue #693 (#708)
 
 ### Security
 
 - Updated `url` to 2.5.9 to resolve RUSTSEC-2026-0592 (stack overflow in `Url::origin()` on nested `blob:` URLs) (#596).
 - **CI**: every workflow action is pinned to a full commit SHA with the version in a comment (#614)
+- **Workspace**: the crates.io publish job requires the `release` environment and release jobs do not persist checkout credentials; issue #697 (#708)
 
 ## [0.11.0] - 2026-11-19
 

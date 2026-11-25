@@ -11,7 +11,8 @@ use mcp_execution_core::metadata::{
 };
 use mcp_execution_core::{
     Error as CoreError, HomeDir, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues,
-    RedactedUrl, ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
+    RedactedUrl, ServerConfig, ServerConfigBuilder, ServerId, ServerIdSlugError, ServerSlug,
+    sanitize_path_for_error,
 };
 pub use mcp_execution_core::{ServersDir, SkillsDir};
 use mcp_execution_skill::MAX_SERVER_ID_LENGTH;
@@ -839,7 +840,8 @@ pub fn resolve_server_config(source: ServerSource) -> Result<(ServerId, ServerCo
 /// leading `/` or a `..` segment is dropped entirely rather than preserved,
 /// which is what makes this safe to use directly on untrusted filesystem-path-shaped
 /// input. Falls back to [`FALLBACK_SERVER_ID_SLUG`] if the result would
-/// otherwise be empty, and truncates to `MAX_SERVER_ID_LENGTH`.
+/// otherwise be empty, truncates to `MAX_SERVER_ID_LENGTH`, and appends `-server` to a Windows
+/// reserved device name so the result is always a valid `ServerSlug`.
 #[expect(
     clippy::expect_used,
     reason = "slugify only produces valid path-segment ids"
@@ -859,16 +861,19 @@ fn slugify(input: &str) -> ServerId {
     let slug = &slug[..slug.len().min(MAX_SERVER_ID_LENGTH)];
     let slug = slug.trim_end_matches('-');
 
+    let slug = if slug.is_empty() {
+        FALLBACK_SERVER_ID_SLUG.to_string()
+    } else if ServerSlug::new(slug) == Err(ServerIdSlugError::ReservedName) {
+        format!("{slug}-server")
+    } else {
+        slug.to_string()
+    };
+
     // The whitelist loop above only ever produces `[a-z0-9-]` characters (or the constant
     // fallback), so the result is always non-empty and free of `..`/path separators, and every
     // character is ASCII alphanumeric or `-` — all UTS #39 `Identifier_Status=Allowed` — so this
     // always satisfies `ServerId::new`'s full invariant (issue #433).
-    ServerId::new(if slug.is_empty() {
-        FALLBACK_SERVER_ID_SLUG
-    } else {
-        slug
-    })
-    .expect("slugify only ever produces a valid path-segment ServerId")
+    ServerId::new(&slug).expect("slugify only ever produces a valid path-segment ServerId")
 }
 
 /// Derives a filesystem- and `validate_server_id`-safe [`ServerId`] slug from
@@ -2257,6 +2262,19 @@ mod tests {
         let long_path = "a".repeat(200);
         let id = derive_server_id_from_url(&format!("https://example.com/{long_path}"));
         assert!(mcp_execution_core::ServerSlug::new(id.as_str()).is_ok());
+    }
+
+    #[test]
+    fn derived_ids_get_a_suffix_when_reserved_and_are_always_slugs() {
+        for (id, expected) in [
+            (derive_server_id_from_url("https://aux"), "aux-server"),
+            (derive_server_id_from_path_or_name("con"), "con-server"),
+            (derive_server_id_from_path_or_name("COM1"), "com1-server"),
+            (derive_server_id_from_path_or_name("com10"), "com10"),
+        ] {
+            assert_eq!(id.as_str(), expected);
+            assert!(ServerSlug::new(id.as_str()).is_ok());
+        }
     }
 
     #[test]

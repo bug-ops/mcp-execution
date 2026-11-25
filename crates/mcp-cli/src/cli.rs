@@ -508,7 +508,8 @@ pub enum Commands {
     /// Validate runtime environment for MCP tool execution.
     ///
     /// Checks that the system is ready to execute generated MCP tools:
-    /// - Verifies a Node.js that runs `.ts` files without a flag (22.18.0+) is installed
+    /// - Verifies a Node.js that runs `.ts` files without a flag (22.18.0+) is installed; without
+    ///   one, probes Bun and then Deno and reports that `run` still needs Node.js
     /// - Checks MCP configuration exists
     /// - Makes TypeScript files executable (Unix only)
     ///
@@ -519,7 +520,7 @@ pub enum Commands {
     /// mcp-execution-cli setup
     ///
     /// # Output:
-    /// # ✓ Node.js v20.10.0 detected
+    /// # ✓ Node.js v22.18.0 detected
     /// # ✓ MCP configuration found
     /// # ✓ Runtime setup complete
     /// ```
@@ -554,18 +555,23 @@ pub enum Commands {
     /// Output: the default text output wraps the script's output in runner lines and is not
     /// meant for pipelines; use `--format json` for one machine-readable document.
     ///
+    /// Node.js 22.18: on that version a `.ts` script with a top-level `for await` fails with a
+    /// syntax error; name it `.mts`.
+    ///
     /// Signals: SIGINT and SIGTERM, and on Unix also SIGHUP and SIGQUIT, stop the script and any
     /// running type check and exit 130, 143, 129 or 131 (Ctrl-C and Ctrl-Break report as SIGINT
     /// on Windows). On Unix a SIGINT, SIGHUP or SIGQUIT that was already ignored when the runner
     /// started (a background job of a non-interactive shell ignores SIGINT and SIGQUIT, `nohup`
-    /// ignores SIGHUP) is not acted on by the runner; SIGTERM is always handled. The script is
-    /// not covered by that, because node resets these inherited ignores, so on a terminal, where
-    /// the script is the foreground group, Ctrl-C, Ctrl-\ or a hang-up still end it and the run
-    /// is reported as cancelled (exit 130, 131 or 129). To keep a run alive after the terminal
-    /// closes, use `setsid` or tmux. On Unix the processes that stay in the script's process
-    /// group are stopped with it, also on the run timeout and after the script exited by itself,
-    /// so a background process the script left behind does not outlive the run; a process that
-    /// starts its own session or group is not stopped. On Windows the script runs in a job
+    /// ignores SIGHUP) is not acted on by the runner; SIGTERM is always handled. On a terminal,
+    /// where the script is the foreground group, Ctrl-C and Ctrl-\ are disabled while the script
+    /// runs when SIGINT or SIGQUIT, respectively, was ignored at startup; if the runner is killed
+    /// with SIGKILL meanwhile, run `stty sane` to get them back. A hang-up still ends the script,
+    /// because node resets an inherited SIGHUP ignore, and the run is reported as cancelled (exit
+    /// 129). To keep a run alive after the terminal closes, use `setsid` or tmux. On Unix the
+    /// processes that stay in the script's process group are stopped with it, also on the run
+    /// timeout and after the script exited by itself, so a background process the script left
+    /// behind does not outlive the run; a process that starts its own session or group is not
+    /// stopped. On Windows the script runs in a job
     /// object that ends all its processes with it, also after a normal exit; if the job cannot
     /// be set up only the script process itself is stopped, and a process it started before the
     /// job took effect can escape. SIGKILL cannot be handled: if the runner is killed that way,
@@ -575,15 +581,15 @@ pub enum Commands {
     /// about 4 seconds, and a further signal cuts it short; the run then exits with the
     /// signal's code without the call summary. A run that was not signalled always waits for
     /// the sessions to close. On a terminal the script's process group is the foreground group
-    /// while it runs, so a descendant can read `/dev/tty`, and Ctrl-C, Ctrl-\ or a hang-up
-    /// reach the script and are reported as the runner's own cancellation (exit 130, 131 or
-    /// 129); on a terminal Ctrl-C reaches only the script, so a script that handles SIGINT is
-    /// not forced to stop and keeps its own exit code or keeps running (use Ctrl-\ or `kill` to
-    /// stop it). The terminal returns to the runner afterwards. Ctrl-Z does not suspend a run:
-    /// the stopped script is resumed. A runner that is not the foreground group itself (a
-    /// background job) never takes the terminal. If the runner is killed with SIGKILL the
-    /// terminal stays with the orphaned script group, and the shell may report an input/output
-    /// error when it reads the terminal.
+    /// while it runs, so a descendant can read `/dev/tty`. A hang-up and, unless disabled as
+    /// described above, Ctrl-C and Ctrl-\ reach the script and are reported as the runner's own
+    /// cancellation (exit 129, 130 or 131); Ctrl-C reaches only the script, so a script that
+    /// handles SIGINT is not forced to stop and keeps its own exit code or keeps running (use
+    /// `kill`, or Ctrl-\ unless SIGQUIT was ignored at startup, to stop it). The terminal returns
+    /// to the runner afterwards. Ctrl-Z does not suspend a run: the stopped script is resumed. A
+    /// runner that is not the foreground group itself (a background job) never takes the
+    /// terminal. If the runner is killed with SIGKILL the terminal stays with the orphaned script
+    /// group, and the shell may report an input/output error when it reads the terminal.
     Run(RunArgs),
 
     /// Call one tool of one server and print its result within the output budget.

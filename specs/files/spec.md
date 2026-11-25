@@ -409,8 +409,8 @@ fixed file; each follows the rule above in the same pull request
 > [!info] As built; the semver promise binds from the 1.0.0 tag
 > Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
 > decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
-> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
-> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
+> API freeze (#673, #674 to #680) and the surface cut of #687 (`NFR-COM-031`: whatever is public at the tag is
+> frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|

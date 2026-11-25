@@ -1,4 +1,4 @@
-//! Acceptance test of the `ProgressiveGenerator` -> `PackageGenerator` rename (#680): the type
+//! Acceptance test of the `PackageGenerator` rename (#680): the type
 //! lives in `package`, is re-exported at the crate root, and generates the same ten-file
 //! package as before.
 

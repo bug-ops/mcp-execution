@@ -326,6 +326,42 @@ fn generate_with_the_maximum_tool_count_writes_a_compact_sidecar_under_the_scan_
         "{} B",
         sidecar.len()
     );
+    assert!(metadata(&code).tools.iter().all(|t| t.digest.is_some()));
+}
+
+#[test]
+fn generate_omits_every_digest_when_only_the_digests_would_exceed_the_cap() {
+    const DIGEST_BYTES: usize = r#","digest":"""#.len() + 64;
+    let all_digests = DIGEST_BYTES * MAX_TOOL_COUNT;
+    let cap = usize::try_from(MAX_METADATA_FILE_BYTES).unwrap();
+    let baseline = file(
+        &generate(&info(typical_tools(MAX_TOOL_COUNT))),
+        METADATA_FILE_NAME,
+    )
+    .len()
+        - all_digests;
+    // Pads descriptions so the file without digests ends about half the digests below the cap.
+    let padding = "x".repeat((cap - all_digests / 2 - baseline) / MAX_TOOL_COUNT);
+    let mut tools = typical_tools(MAX_TOOL_COUNT);
+    for tool in &mut tools {
+        tool.description.push_str(&padding);
+    }
+    let server = info(tools);
+
+    let (code, warnings) = capture_warnings(|| generate(&server));
+
+    let size = file(&code, METADATA_FILE_NAME).len();
+    assert!(size <= cap, "{size} B");
+    assert!(size + all_digests > cap, "fixture too small: {size} B");
+    assert!(metadata(&code).tools.iter().all(|t| t.digest.is_none()));
+    assert!(
+        warnings.iter().any(|w| w.contains("digests were omitted")),
+        "{warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("exceeds the size")),
+        "{warnings:?}"
+    );
 }
 
 #[test]

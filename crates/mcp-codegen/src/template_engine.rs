@@ -1,7 +1,7 @@
 //! Template engine for code generation using Handlebars.
 //!
 //! Provides a wrapper around Handlebars with pre-registered templates
-//! for TypeScript code generation with progressive loading.
+//! for TypeScript SDK generation.
 //!
 //! # Examples
 //!
@@ -21,7 +21,7 @@ use serde::Serialize;
 /// Template engine for code generation.
 ///
 /// Wraps Handlebars and provides pre-registered templates for
-/// generating TypeScript code from MCP tool schemas using progressive loading.
+/// generating TypeScript code from MCP tool schemas.
 ///
 /// # Thread Safety
 ///
@@ -44,7 +44,7 @@ pub struct TemplateEngine<'a> {
 impl<'a> TemplateEngine<'a> {
     /// Creates a new template engine with registered templates.
     ///
-    /// Registers all built-in progressive loading templates.
+    /// Registers all built-in package templates.
     ///
     /// # Errors
     ///
@@ -72,36 +72,35 @@ impl<'a> TemplateEngine<'a> {
         // unescaped quotes, newlines).
         handlebars.register_escape_fn(handlebars::no_escape);
 
-        // Register progressive loading templates
+        // Register package templates
         Self::register_package_templates(&mut handlebars)?;
 
         Ok(Self { handlebars })
     }
 
-    /// Registers progressive loading templates.
+    /// Registers the package templates.
     ///
-    /// Registers templates for progressive loading pattern where each tool
-    /// is a separate file.
+    /// Registers the templates of a package in which each tool is a separate file.
     fn register_package_templates(handlebars: &mut Handlebars<'a>) -> Result<()> {
-        // Tool template: generates a single tool function (progressive loading)
+        // Tool template: generates a single tool function
         handlebars
             .register_template_string(
                 "package/tool",
                 include_str!("../templates/package/tool.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register progressive tool template: {e}"),
+                message: format!("Failed to register tool template: {e}"),
                 source: None,
             })?;
 
-        // Index template: generates index.ts with re-exports (progressive loading)
+        // Index template: generates index.ts with re-exports
         handlebars
             .register_template_string(
                 "package/index",
                 include_str!("../templates/package/index.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register progressive index template: {e}"),
+                message: format!("Failed to register index template: {e}"),
                 source: None,
             })?;
 
@@ -112,7 +111,7 @@ impl<'a> TemplateEngine<'a> {
                 include_str!("../templates/package/runtime-bridge.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register progressive runtime-bridge template: {e}"),
+                message: format!("Failed to register runtime-bridge template: {e}"),
                 source: None,
             })?;
 
@@ -123,7 +122,7 @@ impl<'a> TemplateEngine<'a> {
                 include_str!("../templates/package/cli.ts.hbs"),
             )
             .map_err(|e| Error::SerializationError {
-                message: format!("Failed to register progressive cli template: {e}"),
+                message: format!("Failed to register cli template: {e}"),
                 source: None,
             })?;
 
@@ -215,7 +214,7 @@ mod tests {
     fn test_render_package_templates() {
         let engine = TemplateEngine::new().unwrap();
 
-        // Test progressive/tool template
+        // Test package/tool template
         let tool_context = json!({
             "typescript_name": "testTool",
             "description": "Test tool",

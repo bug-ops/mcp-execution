@@ -109,6 +109,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
@@ -122,11 +124,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: "release-${{ matrix.target }}"
 
       - name: Build release (CLI)
         run: cargo build --release --target ${{ matrix.target }} --package mcp-execution-cli
@@ -170,7 +167,7 @@ jobs:
           path: |
             mcp-execution-cli-${{ matrix.asset_suffix }}.tar.gz
             mcp-execution-cli-${{ matrix.asset_suffix }}.zip
-          retention-days: 7
+          retention-days: 10
 
       - name: Upload MCP Server artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -179,27 +176,26 @@ jobs:
           path: |
             mcp-execution-${{ matrix.asset_suffix }}.tar.gz
             mcp-execution-${{ matrix.asset_suffix }}.zip
-          retention-days: 7
+          retention-days: 10
 
   publish-crates:
     name: Publish to crates.io
     needs: build
     runs-on: ubuntu-latest
+    # Approve within 10 days (artifact retention), or the GitHub release fails after publishing.
+    environment: release
     permissions:
       id-token: write # Required for trusted publishing (OIDC)
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: stable
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: "release"
 
       # Trusted Publishing (OIDC) - no manual token needed after initial setup
       - name: Authenticate with crates.io
@@ -221,6 +217,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Download artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

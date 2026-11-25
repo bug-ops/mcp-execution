@@ -543,11 +543,10 @@ name before any filesystem work; the rest is delegated with
   by changing this function's own contract.
 
 Every `OutputPathError` variant that embeds caller-supplied text
-(`server_id` in `InvalidServerId`, or a rejected path in
+(a rejected path in
 `AbsolutePath`/`ParentTraversal`/`TildeComponent`/`InvalidPath`/`ServerIdIsSymlink`/`Escape`/`NotADirectory`/`NotAFile`/`CreateDir`)
 stores a display form pre-sanitized with
-`mcp_execution_core::untrusted::sanitize_untrusted_inline` (for
-`server_id`) or `sanitize_path_for_error` (for paths) before construction,
+`sanitize_path_for_error` before construction,
 escaping `&`/`<`/`>` while leaving legitimate non-ASCII text (emoji, other
 scripts) untouched. This sanitization alone is not sufficient: some
 invisible/joining characters (e.g. U+200D ZERO WIDTH JOINER) are
@@ -567,18 +566,16 @@ server" guidance, matching its sibling `StaleMetadata` (issue #468).
 `InvalidYaml`, `MissingField`, `NameTooLong { len, limit }` (issue #419 — `name` exceeded
 `MAX_SKILL_NAME_LENGTH`; see §7), `NameInvalidCharacters` (#582).
 
-`OutputPathError`: `InvalidServerId { server_id: String, source: ServerIdSlugError }` (issue #401; the
-`String` holds the rejected raw segment, sanitized, and is a listed exemption from `NFR-COM-035`). Since #677
-`resolve_skill_output_path` takes a `&ServerSlug` and does not validate the id itself; the variant is produced only
-by the `From<ConfinementError>` conversion. Other variants: `AbsolutePath`, `ParentTraversal`,
+`OutputPathError`: `resolve_skill_output_path` takes a `&ServerSlug` (#677), so there is no server-id variant
+(`InvalidServerId` removed, #691; a `ConfinementError::InvalidSegment` from any other source maps to `Io`).
+Variants: `AbsolutePath`, `ParentTraversal`,
 `TildeComponent` (issue #434/#441 — a literal `~` path component anywhere
 in `output_path`, distinct from `ParentTraversal`; see §8),
 `InvalidPath`, `ServerIdIsSymlink`, `Escape`, `NotADirectory`, `NotAFile`,
 `CreateDir`, `Io`.
 
-`TemplateError`: `RenderFailed` and `RegistrationFailed`, each holding
-`#[source] Box<dyn Error + Send + Sync>`, so no `handlebars` type is public (#678). `RegistrationFailed` is never
-constructed today (#691).
+`TemplateError`: `RenderFailed`, holding `#[source] Box<dyn Error + Send + Sync>`, so no `handlebars` type is public
+(#678). The never-constructed `RegistrationFailed` is removed (#691).
 
 ## 10. Cross-Crate Contracts
 
@@ -733,7 +730,7 @@ takes `Option<&SkillName>` (section 12). `validate_skill_name` no longer exists.
 
 - Resolved: a custom skill name that differs from its directory is rejected (`SkillName::in_directory`); with `--output` the parent directory name must equal the skill name; `render_generation_prompt` and `skill-generation.hbs` were removed; one shared partial `templates/workflow.hbs` serves the template and the prompt; the body is bounded by a listing of 12 categories times 3 tools (section 12).
 - Deferred (follow-up, user-approved): load-time catalog insertion with a static fallback (FR-043.8).
-- Resolved (#677): the slug rule is `[a-z0-9-]{1,64}`, frozen, with no restriction on leading, trailing or consecutive hyphens. `-`, `--a` and `a-` are valid ids; a SKILL.md `name` of that shape may be refused by a host that applies the Agent Skills hyphen rule; `--a` as a CLI positional must follow `--`. Windows reserved device names are also accepted today (open follow-up #696).
+- Resolved (#677): the slug rule is `[a-z0-9-]{1,64}`, frozen, with no restriction on leading, trailing or consecutive hyphens. `-`, `--a` and `a-` are valid ids; a SKILL.md `name` of that shape may be refused by a host that applies the Agent Skills hyphen rule; `--a` as a CLI positional must follow `--`. Windows reserved device names are not valid server ids (#696, [[../core/spec]]).
 - [NEEDS CLARIFICATION: whether the skill mentions the host's own code mode in one line or leaves that to the documentation (#560); see [[../decisions/ADR-581-code-mode-interoperability]].]
 
 Ask first: removing the exported prompt renderer; raising any body or catalog bound above its derived value;
@@ -801,8 +798,8 @@ versions, follow the YAML tooling rules); the numeric bounds; scripts that refer
 > [!info] As built; the semver promise binds from the 1.0.0 tag
 > Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
 > decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
-> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
-> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
+> API freeze (#673, #674 to #680) and the surface cut of #687 (`NFR-COM-031`: whatever is public at the tag is
+> frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|

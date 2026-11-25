@@ -10,7 +10,7 @@ tags:
 created: 2026-11-25
 status: accepted
 decided: 2026-11-25
-decided-by: user (stable crate set, OD-1, OD-2, OD-4, OD-5, per-tool digest deferral); OD-3 open
+decided-by: user (stable crate set, OD-1, OD-2, OD-4, OD-5, per-tool digest deferral and its withdrawal); OD-3 open
 related:
   - "[[../constitution]]"
   - "[[../README]]"
@@ -56,18 +56,40 @@ part of the CLI contract (`NFR-COM-065`).
 | OD-5 | D1 | Public surface of `cli` and `server` (#675) | (a), narrower than the first proposal: `cli` exposes only `Cli` and `run` (`runtime` is `#[doc(hidden)]`); `server` hides `clock`, `state` and the output-directory re-exports |
 | OD-4 | D2 | Foreign types (#678) | (c): `rmcp::ServerHandler` on the server only; core drops `log_filter`, the `tracing-filter` feature and `tracing-subscriber`; the cap policy is the `#[doc(hidden)]` `core::cli::RmcpLogCap` (workspace-internal, no copied helper); `handlebars` errors are boxed; `serde`, `serde_json`, `schemars`, `chrono`, and `clap`/`anyhow` on `cli`, are accepted |
 | OD-1 | D3 | Rename "progressive" (#680) | (a): module `package`, `PackageGenerator`, `templates/package/`, flag `--servers-dir`, `examples/generated-package-usage.md`; no shim |
-| none | D4 | Per-tool digests (#683) | Deferred past 1.0; if added, an optional `_meta.json` v3 field (`NFR-COM-053`); post-1.0 work in #688 |
+| none | D4 | Per-tool digests (#683) | Deferred past 1.0; if added, an optional `_meta.json` v3 field (`NFR-COM-053`); post-1.0 work in #688. **Amended 2026-11-25 (section 3.1):** landed before 1.0.0 |
 | OD-2 | OD-2 | Wire compatibility window | (a): exact match for 1.x, a bump only in a major, additive optional fields inside a version. Not decided: whether the saved-script header gets a version before 1.0.0 |
 | OD-3 | none | MSRV raise against semver | **Open.** The recommendation stays (a); meanwhile the rolling rule recorded under `Changed` holds |
 
 Also decided with the API freeze: the server-id slug rule `[a-z0-9-]{1,64}` is frozen with no hyphen-position rule
 (#677, [[../core/spec]]).
 
+### 3.1 Amendments (2026-11-25)
+
+**D4, per-tool digests (#688).** The deferral is withdrawn: the user included #688 in the pre-1.0 batch. The digests
+land as the optional `tools[].digest` field of `_meta.json` version 3, with no version bump and an unchanged aggregate
+preimage. When the file would exceed the 1 MiB cap with digests, all are omitted with a warning. `drift` names changed
+tools ([[../core/spec#7. Per-tool digests (#688)]]).
+
+**Remaining public surface (#687), per item.**
+
+| Item | Verdict |
+|---|---|
+| codegen `TemplateContext`, `ToolDefinition` | deleted |
+| codegen `ToolSummary`, `CategoryInfo`, `ToolContext`, `IndexContext`, modules `package::types` and `common::typescript` | internal |
+| codegen `BridgeContext`, `TemplateEngine`, module `template_engine` | `#[doc(hidden)]`, workspace-internal |
+| codegen `PackageGenerator`, `TSCONFIG_JSON`, generator bounds, `GeneratedCode`, `GeneratedFile`, `ToolCategorization`, `convert_schema`, `ConvertedType`, `RenderStyle` | public |
+| core `forbidden_*` and `env_name_charset_*` helpers | removed (no users) |
+| core path-confinement primitives | public |
+| server `GeneratedServerInfo::id` | `ServerSlug`; the listing skips other directories |
+
+In the same batch the never-constructed `TemplateError::RegistrationFailed` and the unreachable
+`OutputPathError::InvalidServerId` are removed (#691), and Windows reserved device names leave the slug rule (#696).
+
 ## 4. Consequences
 
 - The decisions above are implemented with the API freeze (#673, #674 to #680) and the release pipeline (#672).
-- Still open before the 1.0.0 tag include #686 (the `semver` job becomes blocking at the baseline), #687 (remaining
-  public surface), #691 and #696.
+- Still open before the 1.0.0 tag include #686 (the `semver` job becomes blocking at the baseline) and #706
+  (crates.io trusted publishers do not require the `release` environment).
 - The `cargo semver-checks` job of #679 exists; its step is non-blocking until the 1.0.0 baseline.
 
 ## 5. See Also

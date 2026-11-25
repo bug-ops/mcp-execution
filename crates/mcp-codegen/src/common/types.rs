@@ -21,7 +21,6 @@
 
 use mcp_execution_core::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Result of code generation containing all generated files.
 ///
@@ -214,104 +213,6 @@ impl GeneratedFile {
     }
 }
 
-/// Template context for code generation.
-///
-/// Contains all the data needed to render a Handlebars template.
-/// This is typically constructed from MCP server information.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::TemplateContext;
-/// use std::collections::HashMap;
-///
-/// let context = TemplateContext {
-///     server_name: "github".to_string(),
-///     server_version: "1.0.0".to_string(),
-///     tools: vec![],
-///     metadata: HashMap::new(),
-/// };
-///
-/// assert_eq!(context.server_name, "github");
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateContext {
-    /// Name of the MCP server
-    pub server_name: String,
-    /// Server version string
-    pub server_version: String,
-    /// List of tool definitions
-    pub tools: Vec<ToolDefinition>,
-    /// Additional metadata for template rendering
-    pub metadata: HashMap<String, serde_json::Value>,
-}
-
-/// Definition of a single MCP tool for code generation.
-///
-/// Contains all information needed to generate TypeScript or Rust
-/// code for calling an MCP tool.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::ToolDefinition;
-/// use serde_json::json;
-///
-/// let tool = ToolDefinition::new(
-///     "send_message".to_string(),
-///     "Sends a message".to_string(),
-///     json!({"type": "object"}),
-///     "sendMessage".to_string(),
-/// );
-///
-/// assert_eq!(tool.name, "send_message");
-/// assert_eq!(tool.typescript_name, "sendMessage");
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ToolDefinition {
-    /// Original tool name (`snake_case` from MCP)
-    pub name: String,
-    /// Human-readable description
-    pub description: String,
-    /// JSON Schema for input parameters
-    pub input_schema: serde_json::Value,
-    /// TypeScript-friendly name (camelCase)
-    pub typescript_name: String,
-}
-
-impl ToolDefinition {
-    /// Creates a tool definition from its four fields.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_codegen::ToolDefinition;
-    ///
-    /// let tool = ToolDefinition::new(
-    ///     "create_issue".to_string(),
-    ///     "Create an issue".to_string(),
-    ///     serde_json::json!({"type": "object"}),
-    ///     "createIssue".to_string(),
-    /// );
-    /// assert_eq!(tool.typescript_name, "createIssue");
-    /// ```
-    #[must_use]
-    pub const fn new(
-        name: String,
-        description: String,
-        input_schema: serde_json::Value,
-        typescript_name: String,
-    ) -> Self {
-        Self {
-            name,
-            description,
-            input_schema,
-            typescript_name,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,31 +261,5 @@ mod tests {
         // The original file must be left untouched, not silently overwritten.
         assert_eq!(code.file_count(), 1);
         assert_eq!(code.files[0].content, "first");
-    }
-
-    #[test]
-    fn test_tool_definition() {
-        let tool = ToolDefinition {
-            name: "test_tool".to_string(),
-            description: "Test".to_string(),
-            input_schema: serde_json::json!({"type": "object"}),
-            typescript_name: "testTool".to_string(),
-        };
-
-        assert_eq!(tool.name, "test_tool");
-        assert_eq!(tool.typescript_name, "testTool");
-    }
-
-    #[test]
-    fn test_template_context() {
-        let context = TemplateContext {
-            server_name: "test-server".to_string(),
-            server_version: "1.0.0".to_string(),
-            tools: vec![],
-            metadata: HashMap::new(),
-        };
-
-        assert_eq!(context.server_name, "test-server");
-        assert_eq!(context.tools.len(), 0);
     }
 }

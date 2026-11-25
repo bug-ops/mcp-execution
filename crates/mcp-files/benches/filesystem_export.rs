@@ -32,7 +32,7 @@ use tempfile::TempDir;
 
 /// Benchmark export performance across different file counts.
 ///
-/// This is the primary benchmark for progressive loading pattern.
+/// This is the primary benchmark for exporting a generated package.
 /// Target: 30 files in <50ms (GitHub server typical case).
 fn bench_export_file_count(c: &mut Criterion) {
     let mut group = c.benchmark_group("export_by_file_count");

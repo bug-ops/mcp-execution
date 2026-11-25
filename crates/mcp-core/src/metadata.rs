@@ -46,7 +46,7 @@
 //! ```
 
 use crate::annotations::ToolAnnotations;
-use crate::provenance::GenerationProvenance;
+use crate::provenance::{GenerationProvenance, ToolEntryDigest};
 use crate::{ServerId, ToolName};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -261,6 +261,7 @@ impl ToolMetadata {
             result_type: None,
             result_type_origin,
             manifest_size_bytes,
+            digest: None,
         }
     }
 }
@@ -390,6 +391,10 @@ pub struct ToolMetadata {
 
     /// Length in bytes of the compact JSON serialization of the tool's introspected manifest.
     pub manifest_size_bytes: u64,
+
+    /// Digest of this tool's introspected entry; `None` in files written without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<ToolEntryDigest>,
 }
 
 /// Where a tool's generated result type came from.
@@ -670,6 +675,7 @@ mod tests {
                 result_type: Some("string".to_string()),
                 result_type_origin: ResultTypeOrigin::Declared,
                 manifest_size_bytes: 123,
+                digest: None,
             }],
             provenance: test_provenance(),
         };
@@ -714,6 +720,7 @@ mod tests {
                 result_type: None,
                 result_type_origin: ResultTypeOrigin::Undeclared,
                 manifest_size_bytes: 0,
+                digest: None,
             }],
             provenance: test_provenance(),
         };

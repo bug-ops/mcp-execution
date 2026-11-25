@@ -209,8 +209,8 @@ human-facing surfaces, rather than maintaining two different escaping rules for 
 ```rust
 pub const MAX_SERVER_ID_LENGTH: usize = 64;
 #[non_exhaustive]
-pub enum ServerIdSlugError { Empty, TooLong { len: usize, limit: usize }, InvalidCharacters }
-pub struct ServerSlug(String); // private field; rule `[a-z0-9-]{1,64}`
+pub enum ServerIdSlugError { Empty, TooLong { len: usize, limit: usize }, InvalidCharacters, ReservedName }
+pub struct ServerSlug(String); // private field; rule `[a-z0-9-]{1,64}`, not a Windows reserved device name
 impl ServerSlug {
     pub fn new(id: &str) -> Result<Self, ServerIdSlugError>;
     pub fn as_str(&self) -> &str;
@@ -223,8 +223,14 @@ impl From<ServerSlug> for ServerId;
 The slug rule is decided and frozen (#677): 1 to 64 bytes of lowercase ASCII letters, digits and hyphens, with
 **no** restriction on leading, trailing or consecutive hyphens. Consequences: `-`, `--a` and `a-` are valid ids; a
 SKILL.md `name` of that shape may be refused by a host that applies the Agent Skills hyphen rule; `--a` given as a
-command-line positional must follow `--`. The rule does not exclude Windows reserved device names (`con`, `nul`),
-which is the open follow-up #696.
+command-line positional must follow `--`.
+
+**Windows reserved device names (#696).** The 24 names `con`, `prn`, `aux`, `nul`, `com0` to `com9` and `lpt0` to
+`lpt9` cannot name a directory on Windows and are rejected with `ServerIdSlugError::ReservedName` ("server_id must not
+be a Windows reserved device name") on every platform, by `new` and therefore by deserialization. Check order: `Empty`,
+`TooLong`, `InvalidCharacters`, `ReservedName`. Names that only resemble one (`con-1`, `nul2`, `com10`, `lpt`) are
+valid. The published JSON schema is unchanged and does not express the exclusion. File names of generated tools and
+saved scripts are not covered (open follow-up #701).
 
 `validate_server_id_slug` is private to this module and is the single place the rule lives. `ServerSlug` is the
 type of every public `server_id` whose producer validates the rule (`NFR-COM-035`); deserialization goes through
@@ -361,11 +367,6 @@ secrets and must never be logged.
 ```rust
 pub fn validate_server_config(config: &ServerConfig) -> Result<()>;
 pub fn validate_url_scheme(url: &str) -> Result<()>;
-pub const fn forbidden_chars() -> &'static [char];
-pub const fn forbidden_env_names() -> &'static [&'static str];
-pub const fn forbidden_env_prefix() -> &'static str; // "DYLD_"
-pub const fn env_name_charset_pattern() -> &'static str; // "^[A-Za-z_][A-Za-z0-9_]*$", JS RegExp-compatible
-pub const fn env_name_charset_desc() -> &'static str; // "[A-Za-z_][A-Za-z0-9_]*", message text only
 ```
 Constants (all `pub`): `MAX_ARG_COUNT` (256), `MAX_ARG_LEN` (4096),
 `MAX_ENV_COUNT` (256), `MAX_ENV_VALUE_LEN` (32 KiB), `MAX_HEADER_COUNT`
@@ -385,7 +386,7 @@ regardless of transport, before transport-specific checks):
      names are first required to match the POSIX/Windows identifier charset
      `^[A-Za-z_][A-Za-z0-9_]*$` (rejects empty names, names starting with a
      digit, and any non-ASCII character), then checked against
-     `forbidden_env_names()`/`forbidden_env_prefix()`, ASCII-case-insensitively
+     the forbidden names and the `DYLD_` prefix, ASCII-case-insensitively
      (so `Path`/`path`/`PATH` are all rejected) — Windows treats environment
      variable names as case-insensitive at the OS/`CreateProcess` level, so a
      case-varied spelling would otherwise bypass this list while still
@@ -487,6 +488,7 @@ pub struct ToolMetadata {
     result_type: Option<String>,                // v3
     result_type_origin: ResultTypeOrigin,       // v3
     manifest_size_bytes: u64,                   // v3
+    digest: Option<ToolEntryDigest>,            // v3, optional (#688)
 }
 pub enum ResultTypeOrigin { Declared, Degraded, Undeclared } // serde snake_case
 pub struct ParameterMetadata { name, typescript_type, required, description: Option<String> }
@@ -540,7 +542,7 @@ the one bump of the script-first package (FR-034.1, FR-034.2).
 | `result_type_origin` | `declared`, `degraded` (the server declared an output schema but the generic type is used) or `undeclared`. This is the stored output-schema flag, and it distinguishes "declared but not translated" | FR-046, FR-030 | in |
 | `manifest_size_bytes` | Length of the compact `serde_json::to_vec` of the introspected, sanitized `ToolInfo` (after the introspector's bounds, including annotations and output schema) | FR-046 | in |
 | `parameters[].name` | The **raw** schema key (never renamed or suffixed, #584); `parameters[].typescript_type` is `"unknown"` above 1024 bytes | FR-031 | in |
-| Per-tool digests | Name the changed tool in a drift report | FR-045 | out of the delivered #580 scope; tracked by the open follow-up #683 ([[#7. Planned Changes (script-first direction, adopted 2026-11-24)]]) |
+| `digest` | `Option<ToolEntryDigest>`: the digest of this tool's entry, so a drift report names a changed tool. Optional (`serde` default, omitted when `None`) ([[#7. Per-tool digests (#688)]]) | FR-045 | in (#688) |
 | Annotations inside the digest entries | An annotation-only change reads as drift | FR-045, FR-034 | in (see [[#`provenance` module (`src/provenance.rs`)]]) |
 | Catalog reference, converter diagnostics | | FR-032, FR-031 | out (diagnostics are `tracing::warn!` only) |
 
@@ -620,12 +622,21 @@ hints (read-only with destructive) are stored as advertised.
 pub struct GenerationProvenance { generated_at: DateTime<Utc>, config_fingerprint: ConfigFingerprint, tool_digest: ToolDigest }
 pub struct ConfigFingerprint(String); // 64 lowercase hex chars (SHA-256)
 pub struct ToolDigest(String);        // 64 lowercase hex chars (SHA-256)
+pub struct ToolEntryDigest(String);   // same form, one tool entry; derives Eq + Ord (#688)
 pub struct ToolDigestEntry<'a> { name: &'a str, description: &'a str, input_schema: &'a Value, output_schema: Option<&'a Value>, annotations: Option<&'a ToolAnnotations> } // #[non_exhaustive], pub fields, `new(name, description, input_schema)`
 pub struct DigestFormatError { value: String } // not exactly 64 lowercase hex chars
 impl GenerationProvenance { pub fn capture(config: &ServerConfig, tools: &[ToolDigestEntry<'_>]) -> Self; }
 impl ConfigFingerprint { pub fn compute(config: &ServerConfig) -> Self; }
 impl ToolDigest { pub fn compute(entries: &[ToolDigestEntry<'_>]) -> Self; }
+impl ToolEntryDigest { pub fn compute(entry: &ToolDigestEntry<'_>) -> Self; pub fn as_str(&self) -> &str; }
+impl TryFrom<String> for ToolEntryDigest; // Error = DigestFormatError
 ```
+
+`ToolEntryDigest::compute` is the per-entry hash the aggregate is built from (same domain tag `tool-entry:v2`, so
+aggregate values are unchanged): it changes with the name, description, input or output schema or any hint, and not
+with the annotation title text. Its `Deserialize` is validated like the two types below, so a malformed `digest` makes
+the whole sidecar unreadable (`MetadataReadError::Malformed`) for every consumer; this is deliberate, a corrupt value
+means regenerate.
 
 `ConfigFingerprint`/`ToolDigest`'s `Deserialize` is routed through `TryFrom<String>` (via
 `#[serde(try_from = "String")]`), mirroring `ServerId`/`ToolName`'s validated-newtype pattern: no
@@ -831,9 +842,9 @@ terminal-rendered error text. The `{segment:?}` (`Debug`) formatting on `Invalid
 `#[error(...)]` is a required second layer of defense on top of that sanitization, not
 incidental — it still escapes the residual characters `sanitize_untrusted_inline` deliberately
 leaves untouched (e.g. U+200D). Every caller that maps `ConfinementError::InvalidSegment` into
-its own `InvalidServerId` variant (`mcp-server::OutputDirError`, `mcp-skill::OutputPathError`)
-moves this field verbatim without re-sanitizing, so this is the sole sanitization point for both
-crates' `server_id` confinement errors.
+its own `InvalidServerId` variant (`mcp-server::OutputDirError`) moves this field verbatim without
+re-sanitizing, so this is the sole sanitization point for that crate's `server_id` confinement errors.
+`mcp-skill::OutputPathError` has no such variant since #691.
 
 Issue #395: `mcp-skill::resolve_skill_output_path` and
 `mcp-server::output_dir::resolve_output_dir` independently implemented the same
@@ -940,8 +951,9 @@ own pre-existing, byte-identical error enum — `mcp-server::OutputDirError` and
 `OutputDirError::NotADirectory` (the terminal `resolve_output_dir` walks is always a directory)
 and `OutputPathError::NotAFile` (the terminal `resolve_skill_output_path` walks is always a
 file) — one core variant, zero unreachable arms in either `From` impl. `ConfinementError::InvalidSegment`/`SegmentIsSymlink`/`Escape`/`NotADirectory`/`CreateDir`/`Io` map
-1:1 by name to each crate's own variant of the same name (`InvalidSegment` → `InvalidServerId`,
-`SegmentIsSymlink` → `ServerDirIsSymlink`/`ServerIdIsSymlink`). The absolute-path, `..`-component,
+1:1 by name to each crate's own variant of the same name (`SegmentIsSymlink` →
+`ServerDirIsSymlink`/`ServerIdIsSymlink`). `InvalidSegment` maps to `OutputDirError::InvalidServerId`; in
+`mcp-skill`, whose caller already holds a `ServerSlug`, it has no variant and is reported as `Io` (#691). The absolute-path, `..`-component,
 and file-name pre-checks (`relative_subpath`/`relative_target`) are **not** part of this module —
 they stay in each crate, since an absent path means "use the segment directory as-is" for
 `mcp-server` but "use the default `SKILL.md`" for `mcp-skill`, and only a crate-specific helper
@@ -1179,11 +1191,11 @@ a capture of the function. The `untrusted_text` section of `mcp-codegen`'s `shar
 | Consumer | What it depends on from `mcp-core` |
 |---|---|
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result`, `annotations::{AnnotationTitle, Hint, ToolAnnotations}` |
-| `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`, v3), `annotations::*`, `provenance::ToolDigestEntry` (with `annotations`), `untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN, MAX_TOTAL_VARIATION_SELECTORS}` (rendered into the bridge),  `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
+| `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`, v3), `annotations::*`, `provenance::ToolDigestEntry` (with `annotations`), `untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN, MAX_TOTAL_VARIATION_SELECTORS}` and `untrusted::BARE_IDENTIFIER_PATTERN` (rendered into the bridge), `helper_protocol::*` (rendered into the bridge via `BridgeContext`), `provenance::ToolEntryDigest` |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen`; `confinement::open_confined_write` directly (issue #504) |
 | `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `ServerSlug`, `ServerId`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*` (including `read_server_metadata_async`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
 | `mcp-server` | `ServerConfig`, `ServerId`, `ServerSlug`, `ServerIdSlugError`, `sanitize_path_for_error`, `contains_parent_dir`, `untrusted::*`, `metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR, RmcpLogCap}`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}` |
-| `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR, RmcpLogCap}`, `helper_protocol::*` (including `ResultSource`), `metadata::{read_server_metadata, read_server_metadata_async, MetadataReadError}`, `ServerConfig`/`ServerConfigBuilder`, `ServerSlug`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
+| `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR, RmcpLogCap}`, `helper_protocol::*` (including `ResultSource`), `metadata::{read_server_metadata, read_server_metadata_async, MetadataReadError}`, `ServerConfig`/`ServerConfigBuilder`, `ServerSlug`, `ServerIdSlugError`, `provenance::{ConfigFingerprint, ToolDigest, ToolDigestEntry, ToolEntryDigest}`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth
 
@@ -1257,72 +1269,46 @@ and byte-preserving of each variant's existing `Display` message.
   `INTERRUPTED` (130, the runner stopped by SIGINT) and `TERMINATED` (143, SIGTERM), `128 + signal number` as shells
   report them; #646 adds `HANGUP` (129, SIGHUP) and `QUIT` (131, SIGQUIT) the same way; `run` is the only command that returns them ([[../cli/spec#`run` (#571, `commands/run.rs`, `runtime/{exec,notice,import_hook}.rs`)]]).
 
-## 7. Planned Changes (script-first direction, adopted 2026-11-24)
+## 7. Per-tool digests (#688)
 
-> [!warning] Not implemented
-> The `_meta.json` v3 bump, the annotation types and the measurement fields (#568, #562's metadata
-> row) are implemented and described as built in [[#`metadata` module (`src/metadata.rs`)]],
-> [[#`annotations` module (`src/annotations.rs`, #568)]] and [[#`provenance` module (`src/provenance.rs`)]].
-> What remains here is the per-tool digest granularity. #580 is closed as completed without it (PR #631).
+> [!success] Implemented
+> The granularity left out of #580 (#683) landed before 1.0.0 as the optional `tools[].digest` field of
+> `_meta.json` version 3 (`NFR-COM-053`, `NFR-COM-056`; amendment of D4 in
+> [[../decisions/ADR-670-1-0-api-wire-release-contract]]). No schema version bump and no change of the aggregate
+> preimage. A version 3 reader that does not know the field ignores it.
 
-> [!important] Deferred past 1.0 (#683, decided 2026-11-25)
-> Per-tool digests are **not** part of 1.0. If they are added later, they land as an **optional** field of
-> `_meta.json` version 3 that every version 3 reader ignores when unknown (`NFR-COM-053`; wire-window decision
-> OD-2 (a)), not as a schema version bump and not as a change of the aggregate preimage. This is the deferral note
-> `NFR-COM-056` requires; the post-1.0 work is tracked by #688.
+**As built.**
 
-### Planned: provenance digest granularity (#683, left out of #580)
+- `generate` records `ToolEntryDigest::compute(&tool.digest_entry())` for every tool, so the value comes from the
+  same entry mapping as the aggregate and as the live side of `drift`.
+- **All or nothing under the size cap.** When the serialized file with digests would exceed
+  `MAX_METADATA_FILE_BYTES`, every digest is omitted, the file is serialized again and one `tracing::warn!` says
+  that drift cannot name changed tools for this server. The cap is unchanged; the over-cap warning still applies if
+  the file stays above it ([[../codegen/spec#9. Resource-Exhaustion Bounds (CWE-400)]]).
+- A sidecar without digests reads normally (`digest = None`); `ToolMetadata::new` sets `None`.
+- Duplicate raw names need no keying in the file: each entry carries its own digest, and `drift` compares the set of
+  digests per name ([[../cli/spec]]).
+- The aggregate `tool_digest` stays and remains the first comparison.
 
-**Why.** `GenerationProvenance` holds `generated_at`, a `config_fingerprint` and one aggregate
-`tool_digest`. The aggregate is built by hashing each tool entry on its own, sorting those hashes
-and hashing the sequence; the per-tool hashes are then discarded. The drift check (FR-045) compares a
-live listing with this record, so what it can say is fixed by what is recorded.
-
-**What the record can and cannot tell.**
-
-| Question | Answerable from today's record |
-|---|---|
-| Does the live tool list differ from the one generated from? | Yes, from the aggregate digest; reordering alone is not drift |
-| Which tools were added or removed? | Yes, by name, by comparing the live names with the sidecar's `tools` list |
-| Which tool, present on both sides, changed? | No: the aggregate does not say |
-| Did only a hint flip, for example to read-only? | **Yes since #568**: the four hints (not the title) are in the digest entries |
-| Do two tools sharing a raw name differ individually? | No, and names are not deduplicated at introspection (see [[../introspector/spec#7. Edge Cases & Notable Behaviors]]) |
-
-**Remaining candidate change.** Per-tool digests recorded beside the aggregate, so a drift report can
-name a changed tool. Duplicate raw names make a name-keyed map ambiguous; the keying is open. Per the
-deferral above, recording them is an optional version 3 field after 1.0.
-
-**Requirements.**
-
-| ID | Requirement | Priority |
+| ID | Requirement | Status |
 |---|---|---|
-| FR-045.1 | WHEN the drift check needs to name a changed tool THE SYSTEM SHALL have per-tool digests recorded in the sidecar; otherwise it SHALL report only that the list differs | must |
 | FR-034.7 | WHERE annotations are included in the digest entries THE SYSTEM SHALL feed each hint as stated-true, stated-false or not stated, with distinct framing, so an absent hint and `false` hash differently | implemented (#568) |
-| FR-045.2 | THE SYSTEM SHALL compute the live digest with the same entry mapping and function that `generate` uses, and that mapping SHALL exist once | must |
-| FR-045.3 | THE SYSTEM SHALL keep the existing secrecy guarantee: no credential value, argument value or header value enters any preimage | must |
-| FR-045.4 | THE SYSTEM SHALL word results as "the server changed", never "your files are out of date byte for byte" (see the provenance wording rule above) | must |
+| FR-045.1 | WHEN the drift check needs to name a changed tool THE SYSTEM SHALL have per-tool digests recorded in the sidecar; otherwise it SHALL report only that the list differs | implemented (#688) |
+| FR-045.2 | THE SYSTEM SHALL compute the live digest with the same entry mapping and function that `generate` uses, and that mapping SHALL exist once | implemented |
+| FR-045.3 | THE SYSTEM SHALL keep the existing secrecy guarantee: no credential value, argument value or header value enters any preimage | implemented |
+| FR-045.4 | THE SYSTEM SHALL word results as "the server changed", never "your files are out of date byte for byte" (see the provenance wording rule above) | implemented |
 
-**Constraints.** The digest preimage is a persisted contract: it is built from explicitly sorted,
-length-framed fields and never from `Debug` or serialised JSON (hashing section above). Any change
-to it changes every recorded digest, so it is ask-first and lands only with a schema bump (an added
-optional per-tool field does not change the preimage).
-
-**Open decisions.**
-
-- [NEEDS CLARIFICATION: Include per-tool digests, and key them by name, by position, or as a multiset, given duplicate raw names. Whether the aggregate stays beside them or is derived from them.]
-- [NEEDS CLARIFICATION: Where the shared entry mapping lives (it is private to codegen today, `PackageGenerator::create_metadata_file`); candidate: beside `ToolDigestEntry` in this crate.]
-- Ask first: any change to the preimage, the domain tags or the framing primitive; adding a dependency.
-
-**Depends on / blocks.** Deferred past 1.0 (see the note above); tracked by #688. It does not block the 1.0
-wire-format freeze ([[../README#1.0 Contract]]).
+**Constraints.** The digest preimage is a persisted contract: it is built from explicitly sorted, length-framed
+fields and never from `Debug` or serialised JSON (hashing section above). Any change to it changes every recorded
+digest, so it is Ask First and lands only with a schema bump.
 
 ## 8. 1.0 Public API Contract
 
 > [!info] As built; the semver promise binds from the 1.0.0 tag
 > Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
 > decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
-> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
-> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
+> API freeze (#673, #674 to #680) and the surface cut of #687 (`NFR-COM-031`: whatever is public at the tag is
+> frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -1333,7 +1319,7 @@ wire-format freeze ([[../README#1.0 Contract]]).
 | Item | Kind | Notes |
 |------|------|-------|
 | `Error`, `ResourceKind`, `Result` | error types | Crate-wide error hierarchy; `Error::ConnectionFailed.server` is a `ServerId` |
-| `ServerId`, `ToolName`, `ServerSlug`, `ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `MAX_SERVER_ID_LENGTH` | typed identifiers | The validated server id of `NFR-COM-035` is built here |
+| `ServerId`, `ToolName`, `ServerSlug`, `ServerIdError`, `ServerIdSlugError`, `ToolNameError`, `MAX_SERVER_ID_LENGTH` | typed identifiers | The validated server id of `NFR-COM-035` is built here; the slug rule excludes the Windows reserved device names (#696) |
 | `ServerConfig`, `ServerConfigBuilder`, `Transport` | configuration | Validation runs at construction |
 | `validate_server_config`, `validate_url_scheme`, the `MAX_ARG_*`, `MAX_ENV_*`, `MAX_HEADER_*`, `MAX_URL_LEN` bounds | validation | The bound values are documented limits (`NFR-COM-040`) |
 | `HomeDir`, `HomeDirError`, `ServersDir`, `SkillsDir`, `expand_home` | directories | One resolution of home, servers and skills directories |
@@ -1343,19 +1329,19 @@ wire-format freeze ([[../README#1.0 Contract]]).
 | module `cli` | CLI contract types | `OutputFormat`, `LogFormat`, `ExitCode` (values frozen by `NFR-COM-061`), `ServerConnectionString`, `LOG_FORMAT_ENV_VAR` |
 | module `helper_protocol` | wire constants and types | `HELPER_PROTOCOL_VERSION`, the line bounds, environment names, channel key and `ResultSource` (`NFR-COM-050`, `NFR-COM-034`) |
 | module `metadata` | wire format | `METADATA_SCHEMA_VERSION` (3), `ServerMetadata`, `ToolMetadata`, `ParameterMetadata`, `ResultTypeOrigin`, `MetadataReadError`, `read_server_metadata`, `read_server_metadata_async`, file-name constants, `MAX_TOOL_COUNT`, `MAX_METADATA_FILE_BYTES` |
-| module `provenance` | persisted record | `GenerationProvenance`, `ToolDigestEntry`, `ToolDigest`, `ConfigFingerprint`; per-tool digests are deferred past 1.0 (#683, #688) |
+| module `provenance` | persisted record | `GenerationProvenance`, `ToolDigestEntry`, `ToolDigest`, `ConfigFingerprint`, `ToolEntryDigest` (`compute`, `as_str`, `Ord`), `DigestFormatError` (#688) |
 | module `untrusted` | injection defense | `sanitize_untrusted_text`, `sanitize_untrusted_inline`, `wrap_untrusted_block`, `is_bare_identifier`, the bound constants |
 
 ### Workspace-internal (`NFR-COM-032`)
 
 `cli::RmcpLogCap` (`#[doc(hidden)]`), excluded from the semver promise.
 
-### Workspace-shared candidates (open, #687)
+### Removed before 1.0.0 (#687)
 
-Items that exist for sibling crates and may be listed as workspace-internal: `forbidden_chars`,
-`forbidden_env_names`, `forbidden_env_prefix`, `env_name_charset_pattern`, `env_name_charset_desc` (rendered into the
-generated package by `mcp-execution-codegen`), and the three path-confinement write primitives. They are public
-and documented today.
+`forbidden_chars`, `forbidden_env_names`, `forbidden_env_prefix`, `env_name_charset_pattern` and
+`env_name_charset_desc` are removed: nothing outside this crate used them since the generated bridge stopped
+mirroring the configuration validation (#575). The validation rules themselves are unchanged. The path-confinement
+primitives, including the write primitives, stay public.
 
 ### Foreign types (`NFR-COM-044`, OD-4 (c))
 
@@ -1376,13 +1362,13 @@ Closed sets (adding a variant is a major change, stated in the rustdoc): `Hint`,
 
 ### Owned wire formats
 
-`_meta.json` version 3 and helper protocol version 1 ([[#2. Public API Surface]] and
+`_meta.json` version 3 (including the optional `tools[].digest`, #688) and helper protocol version 1 ([[#2. Public API Surface]] and
 [[#6. Helper Protocol and Exit Codes (as built)]]); rules in `NFR-COM-050` to `NFR-COM-056`.
 
 ## 9. See Also
 
 - [[../introspector/spec]] — primary consumer of `ServerConfig`/`validate_server_config`
-- [[#7. Planned Changes (script-first direction, adopted 2026-11-24)|Planned changes]] — per-tool digest granularity (#683, left out of #580), not implemented; the v3 field registry is in §2 `metadata`
+- [[#7. Per-tool digests (#688)|Per-tool digests]] — the optional digest field; the v3 field registry is in §2 `metadata`
 - [[../cli/spec]] — consumer of `cli::{OutputFormat,ExitCode}` and the error-classification contract
 - [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]] / [[../skill/spec#8. `resolve_skill_output_path` — Path Confinement]] — the two `confinement::resolve_confined_path` consumers
 - [[../constitution]] — security principles this crate embodies workspace-wide

@@ -20,7 +20,7 @@ related:
 # Block: MCP Server Exposure (`mcp-execution-server`)
 
 > [!abstract]
-> Path: `crates/mcp-server`. Binary + library that exposes progressive-loading
+> Path: `crates/mcp-server`. Binary + library that exposes TypeScript SDK
 > generation and skill generation **as an MCP server itself** — i.e. Claude
 > Code can drive this project's own functionality over MCP, using the calling
 > Claude session's own natural-language understanding for tool
@@ -28,7 +28,7 @@ related:
 > `mcp-execution-core`, `mcp-execution-introspector`, `mcp-execution-codegen`,
 > `mcp-execution-files`, `mcp-execution-skill`.
 >
-> Not merely a "progressive loading" server: it also exposes skill generation
+> Besides SDK generation it exposes skill generation
 > (`generate_skill`, `save_skill`) and a listing tool — see [[#1. Responsibility]].
 
 ## 1. Responsibility
@@ -332,6 +332,10 @@ FR-032.10), and the subdirectory's mtime as `generated_at`. `_`-prefixed
 `.ts` files are counted: the generator prefixes a digit-leading tool name with
 `_` (`_1st_tool.ts`), and the runtime files live under `_runtime/`, a directory,
 so they never reach this filter (issue #598).
+
+Only directories whose name passes `ServerSlug::new` are listed (`My_Dir`, `.cache` or a reserved device name are
+skipped silently): generation only creates slug-named directories, and `GeneratedServerInfo::id` is a `ServerSlug`
+(#687). The JSON shape is unchanged.
 
 ### Default directories (#634)
 
@@ -705,6 +709,11 @@ threads share one process).
 
 ## 10. Error Conditions
 
+**Inherited SIGCHLD ignore (#689).** On Unix the server binary registers a SIGCHLD handler at the start of `main` and
+holds it for the life of the process, replacing an inherited `SIG_IGN`, so that terminating an introspected server
+works. A failed registration is logged at `warn` and the server continues. The regression test is meaningful on
+Linux, where the async runtime does not install its own SIGCHLD handler.
+
 `StateError`: `AtCapacity { limit }`, `MemoryBudgetExceeded { limit }`.
 
 `OutputDirError`: `InvalidServerId { server_id, source: ServerIdSlugError }` (issue #401 —
@@ -828,8 +837,8 @@ not part of this package: they are deferred to #589 under epic #559, depend on t
 > [!info] As built; the semver promise binds from the 1.0.0 tag
 > Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
 > decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
-> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
-> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
+> API freeze (#673, #674 to #680) and the surface cut of #687 (`NFR-COM-031`: whatever is public at the tag is
+> frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -842,8 +851,8 @@ at the root: `IntrospectServerParams`, `IntrospectServerResult`, `IntrospectedTo
 `SaveCategorizedToolsParams`, `SaveCategorizedToolsResult`, `CategorizedTool`, `ToolGenerationError`,
 `ListGeneratedServersParams`, `ListGeneratedServersResult`, `GeneratedServerInfo`), plus the re-exported
 `GenerateSkill*`, `SaveSkill*`, `SkillCategory`, `SkillMetadata`, `SkillTool`, `ToolExample`. `PendingGeneration` is
-also still public in `types` and re-exported (open, #687). Parameter and result `server_id` fields are `ServerSlug`;
-`GeneratedServerInfo::id` is a `String` directory name (open, #687). The binary contract (tool names, parameter and
+public in `types` and re-exported. Parameter and result `server_id` fields and `GeneratedServerInfo::id` are
+`ServerSlug` (#677, #687). The binary contract (tool names, parameter and
 result schemas) is `NFR-COM-066`, [[#13. Skill Name Rules (as built)]] and the tool sections; the output schemas of
 those `server_id` fields carry the slug bounds.
 

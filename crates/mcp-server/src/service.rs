@@ -1,4 +1,4 @@
-//! MCP server implementation for progressive loading generation.
+//! MCP server implementation for TypeScript SDK generation.
 //!
 //! The `GeneratorService` provides three main tools:
 //! 1. `introspect_server` - Connect to and introspect an MCP server
@@ -20,8 +20,8 @@ use mcp_execution_core::untrusted::{
     wrap_untrusted_block,
 };
 use mcp_execution_core::{
-    HomeDirError, ServerConfig, ServerId, ServersDir, SkillsDir, resolve_confined_existing,
-    sanitize_path_for_error, write_confined_file,
+    HomeDirError, ServerConfig, ServerId, ServerSlug, ServersDir, SkillsDir,
+    resolve_confined_existing, sanitize_path_for_error, write_confined_file,
 };
 use mcp_execution_files::FilesBuilder;
 use mcp_execution_introspector::{Introspector, ToolInfo};
@@ -64,7 +64,7 @@ pub(crate) const MAX_SKILL_CONTENT_SIZE: usize = 100 * 1024;
 /// file is the `.ts` extension itself (true ceiling: 255 - 3 = 252 bytes).
 /// The name also isn't used unchanged: it first passes through
 /// `to_camel_case` and then `sanitize_ts_identifier`
-/// (`mcp_execution_codegen::common::typescript`), which can only shrink the
+/// (codegen's internal `common::typescript`), which can only shrink the
 /// string (each multi-byte UTF-8 `char` collapses to at most one ASCII byte)
 /// plus at most one inserted leading `_`. Combined, this cap has roughly 124
 /// bytes of headroom against the true 252-byte ceiling - kept well below it
@@ -93,9 +93,9 @@ pub(crate) const MAX_KEYWORDS_LEN: usize = 500;
 /// [`MAX_SKILL_CONTENT_SIZE`]'s doc comment for why.
 pub(crate) const MAX_SHORT_DESCRIPTION_LEN: usize = 320;
 
-/// MCP server for progressive loading generation.
+/// MCP server that generates a typed TypeScript SDK from MCP servers.
 ///
-/// This service helps generate progressive loading TypeScript files for other
+/// This service helps generate a typed TypeScript SDK for other
 /// MCP servers. Claude provides the categorization intelligence through natural
 /// language understanding - no separate LLM API needed.
 ///
@@ -411,7 +411,7 @@ impl GeneratorService {
 
     /// Save categorized tools as TypeScript files.
     ///
-    /// Generates progressive loading TypeScript files using Claude's
+    /// Generates TypeScript SDK files using Claude's
     /// categorization. Requires `session_id` from a previous `introspect_server`
     /// call.
     ///
@@ -466,7 +466,7 @@ impl GeneratorService {
     /// same identity-checked [`Self::evict_export_lock`] the success path runs, so it can never evict a
     /// lock another call is holding.
     #[tool(
-        description = "Generate progressive loading TypeScript files using Claude's categorization. Requires session_id from a previous introspect_server call."
+        description = "Generate TypeScript SDK files using Claude's categorization. Requires session_id from a previous introspect_server call."
     )]
     #[tracing::instrument(skip_all, fields(server_id = tracing::field::Empty))]
     async fn save_categorized_tools(
@@ -690,7 +690,7 @@ impl GeneratorService {
         })
     }
 
-    /// List all servers with generated progressive loading files.
+    /// List all servers with generated TypeScript files.
     ///
     /// Scans the output directory (default: `~/.claude/servers`) for servers
     /// that have generated TypeScript files.
@@ -717,7 +717,7 @@ impl GeneratorService {
     /// over `base_dir`, plus a second `read_dir` per subdirectory), so a large directory tree
     /// can make it slow enough for cancellation to matter.
     #[tool(
-        description = "List all MCP servers that have generated progressive loading files in ~/.claude/servers/"
+        description = "List all MCP servers that have generated TypeScript files in ~/.claude/servers/"
     )]
     #[tracing::instrument(skip_all, fields(base_dir = tracing::field::Empty))]
     async fn list_generated_servers(
@@ -766,7 +766,14 @@ impl GeneratorService {
                 {
                     for entry in entries.flatten() {
                         if entry.path().is_dir() {
-                            let id = entry.file_name().to_string_lossy().to_string();
+                            // Generation only creates slug-named directories.
+                            let Some(id) = entry
+                                .file_name()
+                                .to_str()
+                                .and_then(|name| ServerSlug::new(name).ok())
+                            else {
+                                continue;
+                            };
 
                             // Count per-tool .ts files, excluding the non-tool entries
                             // `CATALOG_FILE_NAME` and `INDEX_FILE_NAME` (issue #477), compared
@@ -1035,12 +1042,6 @@ impl GeneratorService {
         )
         .await
         .map_err(|e| match e {
-            // `server_id` is a `ServerSlug`, so this arm is unreachable from this call site —
-            // kept distinct (rather than folded into the `output_path` arm below) so a segment
-            // rejection is still reported as `server_id`, not `output_path`.
-            OutputPathError::InvalidServerId { .. } => {
-                McpError::invalid_params(format!("Invalid server_id: {e}"), None)
-            }
             OutputPathError::AbsolutePath { .. }
             | OutputPathError::ParentTraversal { .. }
             | OutputPathError::TildeComponent { .. }
@@ -1125,7 +1126,7 @@ impl ServerHandler for GeneratorService {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
-            "Generate progressive loading TypeScript files for MCP servers. \
+            "Generate a typed TypeScript SDK for MCP servers. \
              Use introspect_server to discover tools, then save_categorized_tools \
              with your categorization."
                 .to_string(),
@@ -4305,7 +4306,7 @@ mod tests {
         let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
 
         assert_eq!(parsed.total_servers, 1);
-        assert_eq!(parsed.servers[0].id, "my-server");
+        assert_eq!(parsed.servers[0].id.as_str(), "my-server");
         assert_eq!(parsed.servers[0].tool_count, 1);
     }
 
@@ -4353,7 +4354,7 @@ mod tests {
         let text_content = content.content[0].as_text().unwrap();
         let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
 
-        assert_eq!(parsed.servers[0].id, "my-server");
+        assert_eq!(parsed.servers[0].id.as_str(), "my-server");
         assert_eq!(parsed.servers[0].tool_count, 2);
     }
 
@@ -4414,7 +4415,7 @@ mod tests {
         let text_content = content.content[0].as_text().unwrap();
         let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
 
-        assert_eq!(parsed.servers[0].id, "empty-server");
+        assert_eq!(parsed.servers[0].id.as_str(), "empty-server");
         assert_eq!(parsed.servers[0].tool_count, 0);
     }
 
@@ -4490,7 +4491,7 @@ mod tests {
         let parsed: ListGeneratedServersResult = serde_json::from_str(&text_content.text).unwrap();
 
         assert_eq!(parsed.total_servers, 1);
-        assert_eq!(parsed.servers[0].id, "my-server");
+        assert_eq!(parsed.servers[0].id.as_str(), "my-server");
     }
 
     /// A pre-cancelled token must short-circuit the directory scan rather than always running it

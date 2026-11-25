@@ -22,10 +22,6 @@ pub enum TemplateError {
     /// Template rendering failed.
     #[error("template rendering failed: {0}")]
     RenderFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
-
-    /// Template registration failed.
-    #[error("template registration failed: {0}")]
-    RegistrationFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Embedded Handlebars template that renders SKILL.md directly (no LLM required).

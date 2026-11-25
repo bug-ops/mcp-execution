@@ -338,8 +338,7 @@ OD-3, MSRV against semver for libraries. See [[NFR-mcp-execution-2026-07-27#12.7
 
 The API freeze items (#674 to #680) and the release pipeline (#672, `NFR-MNT-040` to `NFR-MNT-044`) are implemented;
 the pipeline is proven only by the rehearsal release (`NFR-MNT-049`). Still open before the tag include #686
-(blocking semver check), #687 (remaining public surface), #691 (unconstructed error variant) and #696 (Windows
-device names as server ids).
+(blocking semver check) and #706 (crates.io trusted publishers and the `release` environment).
 
 ## See Also
 

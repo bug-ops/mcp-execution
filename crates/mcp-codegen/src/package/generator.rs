@@ -1,7 +1,7 @@
-//! Progressive loading code generator.
+//! TypeScript SDK generator.
 //!
-//! Generates TypeScript files for progressive loading where each tool
-//! is in a separate file, enabling Claude Code to load only what it needs.
+//! Generates one TypeScript file per tool, so a model reads only the
+//! signatures it needs and scripts against the server.
 //!
 //! # Examples
 //!
@@ -47,7 +47,7 @@ use mcp_execution_core::metadata::{
     CATALOG_FILE_NAME, INDEX_FILE_NAME, MAX_METADATA_FILE_BYTES, METADATA_FILE_NAME,
     METADATA_SCHEMA_VERSION, ServerMetadata, ToolMetadata,
 };
-use mcp_execution_core::provenance::{GenerationProvenance, ToolDigestEntry};
+use mcp_execution_core::provenance::{GenerationProvenance, ToolDigestEntry, ToolEntryDigest};
 use mcp_execution_core::{Error, Result, ServerConfig};
 use mcp_execution_introspector::{
     MAX_SERVER_NAME_LEN, MAX_SERVER_VERSION_LEN, ServerInfo, ToolInfo,
@@ -259,10 +259,10 @@ pub const TSCONFIG_JSON: &str = r#"{
 }
 "#;
 
-/// Generator for progressive loading TypeScript files.
+/// Generator of a typed TypeScript SDK for one MCP server.
 ///
 /// Creates one file per tool plus an index file and runtime bridge,
-/// enabling progressive loading where only needed tools are loaded.
+/// so only the tool files that are needed have to be read.
 ///
 /// # Thread Safety
 ///
@@ -282,10 +282,10 @@ pub struct PackageGenerator<'a> {
 }
 
 impl PackageGenerator<'_> {
-    /// Creates a new progressive generator.
+    /// Creates a new generator.
     ///
-    /// Initializes the template engine and registers all progressive
-    /// loading templates.
+    /// Initializes the template engine and registers all package
+    /// templates.
     ///
     /// # Errors
     ///
@@ -331,7 +331,7 @@ impl PackageGenerator<'_> {
         self
     }
 
-    /// Generates progressive loading files for a server.
+    /// Generates the SDK files for a server.
     ///
     /// Creates one TypeScript file per tool, plus:
     /// - `index.ts`: Re-exports all tools
@@ -399,7 +399,7 @@ impl PackageGenerator<'_> {
         self.generate_with_categories(server_info, server_config, &HashMap::new())
     }
 
-    /// Generates progressive loading files with categorization metadata.
+    /// Generates the SDK files with categorization metadata.
     ///
     /// Like `generate`, but includes full categorization information from Claude's
     /// analysis. Categories, keywords, and short descriptions are displayed in
@@ -467,13 +467,10 @@ impl PackageGenerator<'_> {
         categorizations: &HashMap<String, ToolCategorization>,
     ) -> Result<GeneratedCode> {
         if categorizations.is_empty() {
-            tracing::info!(
-                "Generating progressive loading code for server: {}",
-                server_info.name
-            );
+            tracing::info!("Generating TypeScript SDK for server: {}", server_info.name);
         } else {
             tracing::info!(
-                "Generating progressive loading code with categorizations for server: {}",
+                "Generating TypeScript SDK with categorizations for server: {}",
                 server_info.name
             );
         }
@@ -515,13 +512,13 @@ impl PackageGenerator<'_> {
 
         if categorizations.is_empty() {
             tracing::info!(
-                "Successfully generated {} files for {} (progressive loading)",
+                "Successfully generated {} files for {}",
                 code.file_count(),
                 server_info.name
             );
         } else {
             tracing::info!(
-                "Successfully generated {} files for {} with categorizations (progressive loading)",
+                "Successfully generated {} files for {} with categorizations",
                 code.file_count(),
                 server_info.name
             );
@@ -981,6 +978,7 @@ impl PackageGenerator<'_> {
             value.category = category;
             value.description = description;
             value.annotations.clone_from(&tool.annotations);
+            value.digest = Some(ToolEntryDigest::compute(&tool.digest_entry()));
             value.result_type.clone_from(&types.stored_result_type);
             value
         })
@@ -992,6 +990,9 @@ impl PackageGenerator<'_> {
     /// Computes [`GenerationProvenance`] from `server_config` and `server_info.tools` — the
     /// same inputs this whole call is generating from — so the recorded digest can never drift
     /// from the files actually emitted.
+    ///
+    /// Per-tool digests are optional, so all of them are omitted when the file would exceed
+    /// [`MAX_METADATA_FILE_BYTES`] with them: they must not make a readable sidecar unreadable.
     ///
     /// # Errors
     ///
@@ -1009,7 +1010,7 @@ impl PackageGenerator<'_> {
             .collect();
         let provenance = GenerationProvenance::capture(server_config, &digest_entries);
 
-        let meta = ServerMetadata::new(
+        let mut meta = ServerMetadata::new(
             METADATA_SCHEMA_VERSION,
             server_info.id.clone(),
             server_info.name.clone(),
@@ -1018,12 +1019,30 @@ impl PackageGenerator<'_> {
             provenance,
         );
 
-        let content = serde_json::to_string(&meta).map_err(|e| Error::SerializationError {
-            message: format!("failed to serialize {METADATA_FILE_NAME}"),
-            source: Some(e),
-        })?;
+        let serialize = |meta: &ServerMetadata| {
+            serde_json::to_string(meta).map_err(|e| Error::SerializationError {
+                message: format!("failed to serialize {METADATA_FILE_NAME}"),
+                source: Some(e),
+            })
+        };
+        let over_cap = |content: &str| {
+            u64::try_from(content.len()).is_ok_and(|size| size > MAX_METADATA_FILE_BYTES)
+        };
 
-        if u64::try_from(content.len()).is_ok_and(|size| size > MAX_METADATA_FILE_BYTES) {
+        let mut content = serialize(&meta)?;
+        if over_cap(&content) {
+            for tool in &mut meta.tools {
+                tool.digest = None;
+            }
+            content = serialize(&meta)?;
+            tracing::warn!(
+                cap_bytes = MAX_METADATA_FILE_BYTES,
+                "per-tool digests were omitted to stay within the metadata size cap, so drift \
+                 cannot name changed tools for this server"
+            );
+        }
+
+        if over_cap(&content) {
             tracing::warn!(
                 size_bytes = content.len(),
                 cap_bytes = MAX_METADATA_FILE_BYTES,
@@ -1422,7 +1441,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_progressive_files() {
+    fn test_generate_package_files() {
         let generator = PackageGenerator::new().unwrap();
         let server_info = create_test_server_info();
 

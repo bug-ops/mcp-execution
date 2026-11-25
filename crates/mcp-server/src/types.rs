@@ -354,7 +354,7 @@ pub struct ListGeneratedServersResult {
     pub total_servers: usize,
 }
 
-/// Information about a server with generated progressive loading files.
+/// Information about a server with generated TypeScript files.
 ///
 /// # Examples
 ///
@@ -366,13 +366,13 @@ pub struct ListGeneratedServersResult {
 ///     "output_dir": "~/.claude/servers/github",
 /// }))
 /// .unwrap();
-/// assert_eq!(info.id, "github");
+/// assert_eq!(info.id.as_str(), "github");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct GeneratedServerInfo {
-    /// Server identifier
-    pub id: String,
+    /// Server identifier, which is also the server's directory name
+    pub id: ServerSlug,
 
     /// Number of tool files (excluding `index.ts` and files starting with `_`)
     pub tool_count: usize,
