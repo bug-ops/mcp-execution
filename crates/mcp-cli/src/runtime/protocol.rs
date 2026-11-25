@@ -285,6 +285,41 @@ pub async fn read_line<R: AsyncBufRead + Unpin>(
     }
 }
 
+/// A response encoded as one helper line.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::runtime::protocol::{EncodedResponse, Response, ResponseBody, encode_response};
+///
+/// let encoded = encode_response(&Response { id: 3, body: ResponseBody::Empty { empty: true } });
+/// assert!(matches!(encoded, EncodedResponse::Sent(_)));
+/// assert_eq!(encoded.into_line(), b"{\"id\":3,\"empty\":true}\n");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncodedResponse {
+    /// The response fits in one line; the line ends with a newline.
+    Sent(Vec<u8>),
+    /// The response exceeded [`MAX_HELPER_LINE_BYTES`] and `line` (a `call_failed` response for
+    /// the same id, newline included) stands in for it.
+    Replaced {
+        /// The replacement line that is sent.
+        line: Vec<u8>,
+        /// Size in bytes of the original serialized response, newline excluded.
+        original_bytes: usize,
+    },
+}
+
+impl EncodedResponse {
+    /// The bytes to write to the channel.
+    #[must_use]
+    pub fn into_line(self) -> Vec<u8> {
+        match self {
+            Self::Sent(line) | Self::Replaced { line, .. } => line,
+        }
+    }
+}
+
 /// Serializes a response as one line (with its newline). A line over
 /// [`MAX_HELPER_LINE_BYTES`] is replaced by a `call_failed` response for the same id.
 ///
@@ -293,28 +328,35 @@ pub async fn read_line<R: AsyncBufRead + Unpin>(
 /// ```
 /// use mcp_execution_cli::runtime::protocol::{Response, ResponseBody, encode_response};
 ///
-/// let line = encode_response(&Response { id: 3, body: ResponseBody::Empty { empty: true } });
+/// let line = encode_response(&Response { id: 3, body: ResponseBody::Empty { empty: true } })
+///     .into_line();
 /// assert_eq!(line, b"{\"id\":3,\"empty\":true}\n");
 /// ```
 #[must_use]
-pub fn encode_response(response: &Response) -> Vec<u8> {
+pub fn encode_response(response: &Response) -> EncodedResponse {
     let mut line = serde_json::to_vec(response).unwrap_or_default();
-    if line.is_empty() || line.len() > MAX_HELPER_LINE_BYTES {
-        let failed = Response {
-            id: response.id,
-            body: ResponseBody::Error {
-                error: ErrorBody {
-                    kind: ErrorKind::CallFailed,
-                    message: format!("result exceeds {MAX_HELPER_LINE_BYTES} bytes"),
-                    server_message: None,
-                    server_message_truncated: None,
-                },
-            },
-        };
-        line = serde_json::to_vec(&failed).unwrap_or_default();
+    if !line.is_empty() && line.len() <= MAX_HELPER_LINE_BYTES {
+        line.push(b'\n');
+        return EncodedResponse::Sent(line);
     }
+    let original_bytes = line.len();
+    let failed = Response {
+        id: response.id,
+        body: ResponseBody::Error {
+            error: ErrorBody {
+                kind: ErrorKind::CallFailed,
+                message: format!("result exceeds {MAX_HELPER_LINE_BYTES} bytes"),
+                server_message: None,
+                server_message_truncated: None,
+            },
+        },
+    };
+    let mut line = serde_json::to_vec(&failed).unwrap_or_default();
     line.push(b'\n');
-    line
+    EncodedResponse::Replaced {
+        line,
+        original_bytes,
+    }
 }
 
 #[cfg(test)]
@@ -371,6 +413,20 @@ mod tests {
     }
 
     #[test]
+    fn encode_response_sends_a_small_response_as_is() {
+        let response = Response {
+            id: 4,
+            body: ResponseBody::Value {
+                value: serde_json::json!({"a": 1}),
+            },
+        };
+        assert_eq!(
+            encode_response(&response),
+            EncodedResponse::Sent(b"{\"id\":4,\"value\":{\"a\":1}}\n".to_vec())
+        );
+    }
+
+    #[test]
     fn encode_response_replaces_an_oversized_line_with_call_failed() {
         let response = Response {
             id: 9,
@@ -378,10 +434,19 @@ mod tests {
                 value: serde_json::Value::String("x".repeat(MAX_HELPER_LINE_BYTES)),
             },
         };
-        let line = encode_response(&response);
+        let original = serde_json::to_vec(&response).unwrap().len();
+        let EncodedResponse::Replaced {
+            line,
+            original_bytes,
+        } = encode_response(&response)
+        else {
+            panic!("expected a replaced response");
+        };
+        assert_eq!(original_bytes, original);
         let text = String::from_utf8(line).unwrap();
         assert!(
             text.contains(r#""id":9"#) && text.contains("call_failed") && text.contains("exceeds")
         );
+        assert!(text.ends_with('\n'));
     }
 }

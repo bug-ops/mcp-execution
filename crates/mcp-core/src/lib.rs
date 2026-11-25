@@ -41,6 +41,8 @@ mod types;
 pub mod annotations;
 pub mod cli;
 pub mod helper_protocol;
+#[cfg(feature = "tracing-filter")]
+pub mod log_filter;
 pub mod metadata;
 pub mod provenance;
 pub mod untrusted;

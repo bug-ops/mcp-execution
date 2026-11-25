@@ -7,6 +7,7 @@
 //! 3. Generates structured context for skill creation
 //! 4. Returns a prompt for Claude to generate optimal SKILL.md content
 
+use super::common::{ServersDir, SkillsDir};
 use anyhow::{Context, Result, bail};
 use mcp_execution_core::Error as CoreError;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
@@ -29,12 +30,6 @@ struct SkillWriteResult {
     /// because `_meta.json` has no matching entry for them (issue #161).
     warnings: Vec<String>,
 }
-
-/// Default base directory for generated servers.
-const DEFAULT_SERVERS_DIR: &str = ".claude/servers";
-
-/// Default base directory for skills.
-const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
 
 /// Runs the skill command.
 ///
@@ -127,7 +122,7 @@ pub async fn run(
         .map_err(|e| CoreError::InvalidArgument(format!("Invalid server ID: {e}")))?;
     info!("Server ID validated: {}", server);
 
-    let tool_dir = resolve_tool_dir(&server, servers_dir.as_deref())?;
+    let tool_dir = resolve_tool_dir(&server, servers_dir)?;
 
     let scan_result = scan_server_tools(&tool_dir, &server).await?;
 
@@ -158,8 +153,8 @@ pub async fn run(
         // as a symlink ahead of time (issue #501). See `resolve_default_output_path`'s own doc
         // comment for why this leaves the terminal `SKILL.md` component's pre-existing-symlink
         // case untouched.
-        let skills_dir = resolve_skills_dir()?;
-        resolve_default_output_path(&skills_dir, &server).await?
+        let skills_dir = SkillsDir::resolve(None)?;
+        resolve_default_output_path(skills_dir.as_path(), &server).await?
     };
 
     // Check if output file exists and overwrite flag
@@ -220,14 +215,15 @@ pub async fn run(
 ///
 /// Returns an error if the home directory cannot be determined, the resolved path escapes
 /// its base via a symlink, or the server directory does not exist.
-fn resolve_tool_dir(server: &str, servers_dir: Option<&Path>) -> Result<PathBuf> {
+fn resolve_tool_dir(server: &str, servers_dir: Option<PathBuf>) -> Result<PathBuf> {
     // Step 2: Resolve servers directory
-    let servers_base = resolve_servers_dir(servers_dir)?;
+    let servers_base = ServersDir::resolve(servers_dir)?;
+    let servers_base = servers_base.as_path();
     debug!("Servers base directory: {}", servers_base.display());
 
     // Step 3: Build and validate server path
     let tool_dir = servers_base.join(server);
-    let tool_dir = validate_path_security(&tool_dir, &servers_base)?;
+    let tool_dir = validate_path_security(&tool_dir, servers_base)?;
     debug!("Server directory: {}", tool_dir.display());
 
     // Step 4: Check server directory exists
@@ -395,49 +391,6 @@ async fn resolve_default_output_path(skills_dir: &Path, server: &str) -> Result<
     Ok(segment_dir.join("SKILL.md"))
 }
 
-/// Resolve servers directory from provided path or default.
-///
-/// # Arguments
-///
-/// * `servers_dir` - Optional custom servers directory
-///
-/// # Returns
-///
-/// Resolved path to servers directory.
-///
-/// # Errors
-///
-/// Returns error if home directory cannot be determined.
-fn resolve_servers_dir(servers_dir: Option<&Path>) -> Result<PathBuf> {
-    if let Some(dir) = servers_dir {
-        // Use provided path, expand ~ if needed
-        if let Some(stripped) = dir.to_str().and_then(|s| s.strip_prefix("~/")) {
-            let home = dirs::home_dir().context("Could not determine home directory")?;
-            Ok(home.join(stripped))
-        } else {
-            Ok(dir.to_path_buf())
-        }
-    } else {
-        // Use default: ~/.claude/servers
-        let home = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home.join(DEFAULT_SERVERS_DIR))
-    }
-}
-
-/// Resolve skills directory (default: ~/.claude/skills).
-///
-/// # Returns
-///
-/// Resolved path to skills directory.
-///
-/// # Errors
-///
-/// Returns error if home directory cannot be determined.
-fn resolve_skills_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home.join(DEFAULT_SKILLS_DIR))
-}
-
 /// Validate path security to prevent path traversal attacks.
 ///
 /// Ensures the resolved path is within the expected base directory.
@@ -594,33 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_servers_dir_default() {
-        let result = resolve_servers_dir(None);
-        assert!(result.is_ok());
-        let path = result.unwrap();
-        assert!(path.to_string_lossy().contains(".claude/servers"));
-    }
-
-    #[test]
-    fn test_resolve_servers_dir_custom() {
-        let custom = PathBuf::from("/custom/servers");
-        let result = resolve_servers_dir(Some(&custom));
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), custom);
-    }
-
-    #[test]
-    fn test_resolve_servers_dir_tilde() {
-        let custom = PathBuf::from("~/custom/servers");
-        let result = resolve_servers_dir(Some(&custom));
-        assert!(result.is_ok());
-        let path = result.unwrap();
-        // Should expand ~ to home directory
-        assert!(!path.to_string_lossy().starts_with('~'));
-        assert!(path.to_string_lossy().contains("custom/servers"));
-    }
-
-    #[test]
     fn test_validate_path_security_valid() {
         let temp = TempDir::new().unwrap();
         let base = temp.path();
@@ -659,14 +585,6 @@ mod tests {
         // Non-existent paths without .. should be allowed
         let result = validate_path_security(&new_path, base);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_resolve_skills_dir() {
-        let result = resolve_skills_dir();
-        assert!(result.is_ok());
-        let path = result.unwrap();
-        assert!(path.to_string_lossy().contains(".claude/skills"));
     }
 
     #[test]

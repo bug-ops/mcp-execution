@@ -6,7 +6,9 @@
 //! 2. Generates TypeScript files for progressive loading (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
-use super::common::{ServerSource, derive_server_id_from_path_or_name, resolve_server_config};
+use super::common::{
+    ServerSource, ServersDir, derive_server_id_from_path_or_name, resolve_server_config,
+};
 use crate::formatters::escape_display;
 use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
@@ -198,7 +200,7 @@ pub async fn run(
         return render_dry_run(&server_info, &generated_code, &output_path, output_format);
     }
 
-    export_generated_code(generated_code, &base_dir, &output_path)?;
+    export_generated_code(generated_code, base_dir.as_path(), &output_path)?;
 
     render_success(&server_info, &output_path, output_format)
 }
@@ -388,28 +390,11 @@ pub(crate) fn generated_location(
     server_id: &ServerId,
     is_from_unvalidated_config_key: bool,
     output_dir: Option<PathBuf>,
-) -> Result<(PathBuf, PathBuf)> {
+) -> Result<(ServersDir, PathBuf)> {
     let dir_name = resolve_server_dir_name(server_id, is_from_unvalidated_config_key)?;
-    let base_dir = resolve_base_dir(output_dir)?;
-    let server_dir = base_dir.join(dir_name);
+    let base_dir = ServersDir::resolve(output_dir)?;
+    let server_dir = base_dir.as_path().join(dir_name);
     Ok((base_dir, server_dir))
-}
-
-/// Resolves the base directory generated servers are exported under, defaulting to
-/// `~/.claude/servers` when `output_dir` is not set.
-///
-/// # Errors
-///
-/// Returns an error if `output_dir` is `None` and the home directory cannot be determined.
-pub(crate) fn resolve_base_dir(output_dir: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(custom_dir) = output_dir {
-        Ok(custom_dir)
-    } else {
-        Ok(dirs::home_dir()
-            .context("failed to get home directory")?
-            .join(".claude")
-            .join("servers"))
-    }
 }
 
 /// Renders a dry-run preview of the files that would be generated, without writing anything.

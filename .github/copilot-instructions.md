@@ -1,6 +1,6 @@
 # GitHub Copilot Instructions for MCP Execution
 
-**Last Updated**: 2025-11-23
+**Last Updated**: 2026-11-25
 
 This document provides comprehensive guidelines for GitHub Copilot to generate high-quality code for the MCP Execution project, synthesizing expertise from architectural design, development practices, testing strategies, performance optimization, security, code review, and CI/CD.
 
@@ -39,7 +39,7 @@ This document provides comprehensive guidelines for GitHub Copilot to generate h
 mcp-execution/
 ├── crates/
 │   ├── mcp-core/          - Foundation: types, errors, ServerConfig validation
-│   ├── mcp-introspector/  - MCP server analysis (rmcp 3.5)
+│   ├── mcp-introspector/  - MCP server analysis (rmcp)
 │   ├── mcp-codegen/       - TypeScript code generation (typed SDK, catalog, runtime bridge)
 │   ├── mcp-files/         - Virtual filesystem and export
 │   ├── mcp-skill/         - SKILL.md generation
@@ -51,8 +51,8 @@ mcp-execution/
 ### Technology Stack
 
 - **Rust Edition**: 2024 (MSRV: 1.91)
-- **MCP SDK**: rmcp 3.5 (official Rust SDK)
-- **Async Runtime**: Tokio v1.48
+- **MCP SDK**: rmcp (official Rust SDK); version pinned in the workspace `Cargo.toml` and `Cargo.lock`
+- **Async Runtime**: Tokio; version pinned in the workspace `Cargo.toml`
 - **Testing**: cargo-nextest, criterion
 - **CI/CD**: GitHub Actions with cargo-deny
 
@@ -72,40 +72,11 @@ mcp-execution/
 - **Documentation**: Every public item needs doc comments with examples
 - **Safety**: `unsafe` only for FFI or novel abstractions; must include `SAFETY` comments
 
-**Example - Strong Types**:
-```rust
-// ✅ GOOD: Type-safe IDs
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ServerId(u64);
-
-impl ServerId {
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-
-    pub fn as_u64(&self) -> u64 {
-        self.0
-    }
-}
-
-// ❌ BAD: Primitive types
-pub fn connect_server(server_id: u64) -> Result<Connection> { ... }
-```
+**Example - Strong Types**: `ServerId` and `ToolName` in `crates/mcp-core/src/types.rs` wrap a `String`, validate in their constructors (`ServerId::new` returns a `Result`) and deserialize through the same constructor. See their doctests; do not hand-roll a parallel ID type.
 
 ### 2. Official MCP SDK Usage
 
-**CRITICAL**: Use **rmcp 3.5** for all MCP communication.
-
-```rust
-// ✅ GOOD: Use rmcp client
-use rmcp::client::TokioChildProcess;
-
-let transport = TokioChildProcess::new("github")?;
-let client = rmcp::client::Client::new(transport);
-
-// ❌ BAD: Custom MCP protocol implementation
-// NEVER implement custom JSON-RPC for MCP
-```
+**CRITICAL**: Use `rmcp` for all MCP communication; never implement custom JSON-RPC for MCP. Connections go through the bounded helpers in `crates/mcp-introspector/src/lib.rs`; the runnable examples are the doctests on `Introspector::discover_server` and `Introspector::discover`. Check the pinned `rmcp` version on docs.rs before calling any `rmcp` API.
 
 ### 3. Security First
 
@@ -291,64 +262,9 @@ mcp-server → {mcp-introspector, mcp-codegen, mcp-files, mcp-skill, mcp-core}
 mcp-introspector → {rmcp (official SDK), mcp-core}
 ```
 
-### Module Organization
+### Module Organization and Construction
 
-```rust
-// src/lib.rs - Public API
-pub mod error;     // Error types
-pub mod types;     // Core types
-pub mod client;    // Client implementation
-pub mod server;    // Server implementation
-
-// Re-export main types
-pub use error::{Error, Result};
-pub use types::{ServerId, ToolName};
-```
-
-### Builder Pattern for Complex Construction
-
-```rust
-// ✅ GOOD: Builder for structs with >3 fields
-pub struct ConnectionConfig {
-    max_memory: usize,
-    timeout: Duration,
-    env: Vec<(String, String)>,
-}
-
-pub struct ConnectionConfigBuilder {
-    max_memory: usize,
-    timeout: Duration,
-    env: Vec<(String, String)>,
-}
-
-impl ConnectionConfigBuilder {
-    pub fn new() -> Self {
-        Self {
-            max_memory: 64 * 1024 * 1024, // 64MB
-            timeout: Duration::from_secs(30),
-            env: Vec::new(),
-        }
-    }
-
-    pub fn max_memory(mut self, bytes: usize) -> Self {
-        self.max_memory = bytes;
-        self
-    }
-
-    pub fn timeout(mut self, duration: Duration) -> Self {
-        self.timeout = duration;
-        self
-    }
-
-    pub fn build(self) -> ConnectionConfig {
-        ConnectionConfig {
-            max_memory: self.max_memory,
-            timeout: self.timeout,
-            env: self.env,
-        }
-    }
-}
-```
+Each crate's public surface is declared in its `src/lib.rs`; read it for the current module layout. For types with many fields, use a builder that validates in `build()`, as `ServerConfig::builder()` does in `crates/mcp-core/src/server_config.rs`.
 
 ---
 
@@ -855,18 +771,12 @@ The project uses comprehensive GitHub Actions CI:
 - **Security**: cargo-deny for vulnerabilities, licenses, bans
 - **Cross-platform tests**: Linux, macOS, Windows with cargo-nextest
 - **Code coverage**: cargo-llvm-cov + codecov
-- **MSRV check**: Rust 1.89
+- **MSRV check**: Rust 1.91 (the `rust-version` in the workspace `Cargo.toml`)
 - **Benchmarks**: criterion (on main branch only)
 
 ### Dependency Management
 
-```toml
-# ✅ GOOD: Specific features only
-tokio = { version = "1.48", features = ["rt", "net", "time", "macros"] }
-
-# ❌ BAD: Include everything
-tokio = { version = "1.48", features = ["full"] }
-```
+Declare every dependency version once in the workspace `Cargo.toml` and reference it with `dep = { workspace = true }` in the crates. Enable only the features a crate needs; avoid `features = ["full"]`.
 
 ---
 
@@ -1013,7 +923,7 @@ cargo outdated                     # Check for updates
 When generating code for this project:
 
 1. **Follow Microsoft Rust Guidelines strictly**
-2. **Use rmcp 3.5 for all MCP communication**
+2. **Use rmcp for all MCP communication**
 3. **Use thiserror for libraries, anyhow only for CLI**
 4. **Write tests for all public functions (unit tests in same file)**
 5. **Document all public items with examples**

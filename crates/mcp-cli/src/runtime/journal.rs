@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
 use mcp_execution_core::{ServerId, ToolName};
+use serde::{Serialize, Serializer};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncWriteExt as _;
@@ -142,9 +143,7 @@ impl ArgsDigest {
     /// ```
     #[must_use]
     pub fn prefix(&self) -> String {
-        let mut padded = [0_u8; 8];
-        padded[2..].copy_from_slice(&self.0[..6]);
-        format!("{:012x}", u64::from_be_bytes(padded))
+        self.hex()[..12].to_string()
     }
 
     fn hex(&self) -> String {
@@ -170,23 +169,32 @@ impl ArgsDigest {
 /// ```
 #[must_use]
 pub fn canonical_args(arguments: &Value) -> Vec<u8> {
-    serde_json::to_vec(&sorted(arguments)).unwrap_or_default()
+    serde_json::to_vec(&Sorted(arguments)).unwrap_or_default()
 }
 
-fn sorted(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(b.0));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, inner)| (key.clone(), sorted(inner)))
-                    .collect::<Map<String, Value>>(),
-            )
+pub(crate) fn canonical_map(arguments: &Map<String, Value>) -> Vec<u8> {
+    serde_json::to_vec(&SortedMap(arguments)).unwrap_or_default()
+}
+
+struct Sorted<'a>(&'a Value);
+
+struct SortedMap<'a>(&'a Map<String, Value>);
+
+impl Serialize for Sorted<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Object(map) => SortedMap(map).serialize(serializer),
+            Value::Array(items) => serializer.collect_seq(items.iter().map(Sorted)),
+            other => other.serialize(serializer),
         }
-        Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
-        other => other.clone(),
+    }
+}
+
+impl Serialize for SortedMap<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut entries: Vec<(&String, &Value)> = self.0.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        serializer.collect_map(entries.into_iter().map(|(key, value)| (key, Sorted(value))))
     }
 }
 
@@ -226,16 +234,17 @@ impl State {
     fn emit(&mut self, line: &Value) {
         let mut text = line.to_string();
         text.push('\n');
+        let len = text.len() as u64;
         let fits = self.lines < MAX_JOURNAL_ENTRIES
-            && self.bytes + text.len() as u64 + MARKER_RESERVE <= MAX_JOURNAL_BYTES;
+            && self.bytes + len + MARKER_RESERVE <= MAX_JOURNAL_BYTES;
         let sent = fits
             && self
                 .sender
                 .as_ref()
-                .is_some_and(|sender| sender.send(text.clone()).is_ok());
+                .is_some_and(|sender| sender.send(text).is_ok());
         if sent {
             self.lines += 1;
-            self.bytes += text.len() as u64;
+            self.bytes += len;
         } else {
             self.dropped += 1;
         }
@@ -345,13 +354,13 @@ impl Journal {
     /// ```no_run
     /// # use mcp_execution_cli::runtime::journal::Journal;
     /// # fn example(journal: &Journal) {
-    /// let (digest, bytes) = journal.digest(&serde_json::json!({"k": 1}));
+    /// let (digest, bytes) = journal.digest(&serde_json::Map::new());
     /// println!("{} ({bytes} bytes)", digest.prefix());
     /// # }
     /// ```
     #[must_use]
-    pub fn digest(&self, arguments: &Value) -> (ArgsDigest, usize) {
-        let canonical = canonical_args(arguments);
+    pub fn digest(&self, arguments: &Map<String, Value>) -> (ArgsDigest, usize) {
+        let canonical = canonical_map(arguments);
         let mut hasher = Sha256::new();
         hasher.update(DIGEST_DOMAIN);
         hasher.update(self.key);
@@ -370,7 +379,7 @@ impl Journal {
     /// # use mcp_execution_cli::runtime::journal::Journal;
     /// # use mcp_execution_core::{ServerId, ToolName};
     /// # fn example(journal: &Journal) -> anyhow::Result<()> {
-    /// let (digest, size) = journal.digest(&serde_json::json!({}));
+    /// let (digest, size) = journal.digest(&serde_json::Map::new());
     /// let token = journal.start(&ServerId::new("demo")?, &ToolName::new("echo")?, digest, size);
     /// # drop(token);
     /// # Ok(())
@@ -596,6 +605,28 @@ mod tests {
         )
     }
 
+    fn object(value: Value) -> Map<String, Value> {
+        let Value::Object(map) = value else {
+            panic!("expected an object");
+        };
+        map
+    }
+
+    #[test]
+    fn canonical_args_golden_bytes() {
+        let bytes = canonical_args(&json!({"b": [{"y": 1, "x": null}, "s"], "a": 2.5}));
+        assert_eq!(bytes, br#"{"a":2.5,"b":[{"x":null,"y":1},"s"]}"#);
+        let map = object(json!({"b": 1, "a": {"d": true, "c": false}}));
+        assert_eq!(canonical_map(&map), br#"{"a":{"c":false,"d":true},"b":1}"#);
+    }
+
+    #[test]
+    fn args_digest_prefix_is_the_first_twelve_hex_characters() {
+        let mut bytes = [0_u8; 32];
+        bytes[..7].copy_from_slice(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd]);
+        assert_eq!(ArgsDigest::from_bytes(bytes).prefix(), "0123456789ab");
+    }
+
     #[test]
     fn canonical_args_sorts_every_level() {
         let one = canonical_args(&json!({"b": 2, "a": {"y": [1, {"q": 1, "p": 2}], "x": 2}}));
@@ -614,11 +645,11 @@ mod tests {
         let a = Journal::create(&dirs(&first), &run).await.unwrap();
         let again = Journal::create(&dirs(&first), &RunId::new()).await.unwrap();
         let other = Journal::create(&dirs(&second), &run).await.unwrap();
-        let args = json!({"k": 1});
+        let args = object(json!({"k": 1}));
 
         assert_eq!(a.digest(&args).0, again.digest(&args).0);
         assert_ne!(a.digest(&args).0, other.digest(&args).0);
-        assert_ne!(a.digest(&args).0, a.digest(&json!({"k": 2})).0);
+        assert_ne!(a.digest(&args).0, a.digest(&object(json!({"k": 2}))).0);
     }
 
     #[tokio::test]
@@ -626,7 +657,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let journal = Journal::create(&dirs(&temp), &RunId::new()).await.unwrap();
         let (server, tool) = ids();
-        let args = json!({"secret": "SECRET-VALUE"});
+        let args = object(json!({"secret": "SECRET-VALUE"}));
         let (digest, size) = journal.digest(&args);
 
         let done = journal.start(&server, &tool, digest, size);
@@ -652,7 +683,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let journal = Journal::create(&dirs(&temp), &RunId::new()).await.unwrap();
         let (server, tool) = ids();
-        let (digest, size) = journal.digest(&json!({}));
+        let (digest, size) = journal.digest(&Map::new());
 
         for _ in 0..MAX_JOURNAL_ENTRIES {
             let token = journal.start(&server, &tool, digest, size);

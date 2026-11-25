@@ -43,7 +43,10 @@ related:
    - `cli` — `OutputFormat`, `ExitCode`, `ServerConnectionString` (used by
      `mcp-cli`).
    - `metadata` — the `_meta.json` sidecar schema (version 3) shared by `mcp-codegen`
-     (producer) and `mcp-skill`/`mcp-server` (consumers).
+     (producer) and `mcp-skill`/`mcp-server`/`mcp-cli` (consumers), plus the one reader every
+     consumer goes through (`read_server_metadata`, #618).
+   - `log_filter` (feature `tracing-filter`, #608) — `cap_rmcp_log_level`, the one `rmcp` log cap
+     shared by `mcp-cli` and `mcp-server`.
    - `annotations` (#568) — `Hint`, `AnnotationTitle`, `ToolAnnotations`: the typed, sanitized
      shape of the untrusted tool annotations that `mcp-introspector` captures, `mcp-codegen`
      renders and stores, and `provenance` hashes.
@@ -435,7 +438,8 @@ pub const LOG_FORMAT_ENV_VAR: &str = "MCP_EXECUTION_LOG_FORMAT";
 // `resolve_log_format`/`log_format_env_is_invalid`) decide whether to warn without `resolve`
 // carrying a second, production-dead return value -- an earlier `(LogFormat, Option<String>)`
 // shape was reworked away for exactly that reason.
-pub struct ExitCode(i32); // SUCCESS=0, ERROR=1, INVALID_INPUT=2, SERVER_ERROR=3, TIMEOUT=4
+pub struct ExitCode(i32); // SUCCESS=0, ERROR=1, INVALID_INPUT=2, SERVER_ERROR=3, TIMEOUT=4, CHECK_FAILED=5, SCRIPT_FAILED=6,
+                          // INTERRUPTED=130 (SIGINT), TERMINATED=143 (SIGTERM); the last two are 128 + the signal number (#627)
 // ExitCode::from_i32(code: i32) -> Option<ExitCode>: None outside 0..=255 (std::process::exit's
 // actual valid range), instead of accepting any i32 unchecked.
 pub struct ServerConnectionString(String); // charset [A-Za-z0-9-_./:], <=256 chars, no control chars
@@ -480,6 +484,39 @@ pub enum ResultTypeOrigin { Declared, Degraded, Undeclared } // serde snake_case
 pub struct ParameterMetadata { name, typescript_type, required, description: Option<String> }
 ```
 
+#### Reader (`read_server_metadata`, #618)
+
+```rust
+pub fn read_server_metadata(dir: &Path) -> Result<ServerMetadata, MetadataReadError>;
+pub async fn read_server_metadata_async(dir: PathBuf) -> Result<ServerMetadata, MetadataReadError>;
+pub enum MetadataReadError {
+    NotFound, Link, NotRegularFile,
+    TooLarge { size: u64, limit: u64 },
+    Unreadable(io::Error), Malformed(serde_json::Error),
+    SchemaMismatch { found: u32, expected: u32 },
+}
+```
+
+The one place a `_meta.json` is read: `mcp-cli` (`drift`, `scripts check`, `stats`, `skill`, `generate`, dry-run
+policy suggestions) and `mcp-skill`'s scan all call it, so the rules below cannot drift apart.
+
+- **Contract.** `dir` is the server directory and may itself be a symlink; the sidecar `dir/_meta.json` must be a regular
+  file that is not a symlink, at most `MAX_METADATA_FILE_BYTES` (1 MiB), and carry `METADATA_SCHEMA_VERSION`. A symlinked
+  sidecar is refused even when its target lies inside `dir`.
+- **Open.** On Unix the file is opened with `O_NOFOLLOW | O_NONBLOCK` and the regular-file check is an `fstat` on the
+  opened handle, so there is no window between check and open and a FIFO never blocks. `ELOOP` maps to `Link`; any other
+  type maps to `NotRegularFile`. Windows has no equivalent flag: the type is checked with `symlink_metadata` before the
+  open.
+- **Size.** The size is checked from the handle, and the read is bounded by `take(MAX_METADATA_FILE_BYTES + 1)`, so a file
+  that grows after the check still yields `TooLarge`.
+- **Order.** Valid JSON is parsed to a `serde_json::Value`, `schema_version` is compared first (`SchemaMismatch`, so an
+  older sidecar reports a version error rather than a shape error), and only then is the typed `ServerMetadata`
+  deserialized (`Malformed` on failure).
+- **Errors.** Messages never contain the path (callers add a sanitized path or the server id). `NotFound` maps from
+  `io::ErrorKind::NotFound` only. `Malformed` wraps the `serde_json::Error` of the parse.
+- **Async.** `read_server_metadata_async` runs the read in one `spawn_blocking`, resumes a panic of the task, and maps a
+  cancelled task to `Unreadable`.
+
 #### Registry of v3 fields (single registry for the whole specification package)
 
 No other block defines a metadata field of its own; every other block refers here. Version 3 is
@@ -506,13 +543,13 @@ the one bump of the script-first package (FR-034.1, FR-034.2).
 | FR-034.6 | The stored title is sanitized and length-capped (`AnnotationTitle`) | implemented |
 | FR-046.1 | `manifest_size_bytes` and `result_type_origin` are the per-tool size and output-schema flag the measurement needs; no measurement-specific field exists | implemented |
 
-**Size cap.** `MAX_METADATA_FILE_BYTES` is the cap `mcp-skill` applies when reading the sidecar
-(`MAX_FILE_SIZE` is defined from it) and the size at which `mcp-codegen` warns when writing it. A
+**Size cap.** `MAX_METADATA_FILE_BYTES` is the cap `read_server_metadata` applies for every consumer
+(`mcp-skill`'s `MAX_FILE_SIZE` is defined from it) and the size at which `mcp-codegen` warns when writing it. A
 sidecar above it still generates; the skill scan then returns `ScanError::FileTooLarge`
 ([[../codegen/spec#9. Resource-Exhaustion Bounds (CWE-400)]]). The producer writes compact JSON.
 
-**What the version bump costs the user.** A sidecar consumer reads `schema_version` through a
-minimal probe before the typed parse and returns `ScanError::UnsupportedSchema` ("unsupported
+**What the version bump costs the user.** The shared reader compares `schema_version` before the typed parse
+(`MetadataReadError::SchemaMismatch`), which `mcp-skill` maps to `ScanError::UnsupportedSchema` ("unsupported
 metadata schema version: found {found}, expected {expected} (re-run 'generate' to regenerate this
 server)"). Every server directory generated before the v3 upgrade is therefore unreadable to the
 skill scan and to the server tools that read the sidecar until the user reruns
@@ -538,9 +575,8 @@ per-tool `.ts` file, matched case-insensitively in the server scan — see
 [[../server/spec#6. Output Directory Resolution (`output_dir.rs`)]].
 
 `provenance` (issue #468) is required, not `Option`: a `schema_version: 1` sidecar has no
-`provenance` key at all, and a consumer is expected to check `schema_version` — via a minimal
-probe struct, *before* attempting a typed `ServerMetadata` deserialization (see
-[[../skill/spec#ScanError]]) — so every `ServerMetadata` a consumer actually constructs already
+`provenance` key at all, and a consumer is expected to check `schema_version` *before* attempting a typed `ServerMetadata` deserialization (done inside
+`read_server_metadata`; see [[../skill/spec#ScanError]]) — so every `ServerMetadata` a consumer actually constructs already
 carries real provenance; an `Option` would encode a state the version check has already ruled
 out.
 
@@ -1076,6 +1112,26 @@ it is called out here explicitly rather than left implicit in the per-field fram
 it would require either a request-wide (not per-field) budget threaded through every
 `sanitize_untrusted_text` call site, or the semantic check already noted as out of scope.
 
+### `log_filter` module (`src/log_filter.rs`, feature `tracing-filter`, #608)
+
+```rust
+#[cfg_attr(docsrs, doc(cfg(feature = "tracing-filter")))]
+pub fn cap_rmcp_log_level(filter: EnvFilter, cap: LevelFilter) -> EnvFilter; // adds the directive `rmcp=<cap>`
+```
+
+The one copy of the `rmcp` log cap; before #608 `mcp-cli` (`runner.rs`) and `mcp-server` (`main.rs`) each kept their own.
+`mcp-cli` passes `LevelFilter::INFO`, or `WARN` for the quiet profile of `call`, `run` and `helper`; `mcp-server` passes
+`INFO`. The cap replaces an equally specific `RUST_LOG=rmcp=...` directive rather than merging with it. The module and its
+`tracing-subscriber` (`env-filter`) dependency exist only with the `tracing-filter` feature, which `mcp-cli` and
+`mcp-server` enable; the default feature set of `mcp-core` stays free of `tracing-subscriber`.
+
+### Untrusted-text vectors (#624)
+
+`sanitize_untrusted_text` is pinned to hand-written vectors in `crates/mcp-core/tests/fixtures/untrusted_text_vectors.json`,
+run by `crates/mcp-core/tests/untrusted_text_vectors.rs`. The expected outputs come from the documented rules, never from
+a capture of the function. The `untrusted_text` section of `mcp-codegen`'s `shared_vectors.json` no longer exists (no TypeScript consumer was left;
+[[../codegen/spec]]).
+
 ## 3. Cross-Crate Contracts
 
 | Consumer | What it depends on from `mcp-core` |
@@ -1083,9 +1139,9 @@ it would require either a request-wide (not per-field) budget threaded through e
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result`, `annotations::{AnnotationTitle, Hint, ToolAnnotations}` |
 | `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`, v3), `annotations::*`, `provenance::ToolDigestEntry` (with `annotations`), `untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN, MAX_TOTAL_VARIATION_SELECTORS}` (rendered into the bridge),  `forbidden_chars`/`forbidden_env_names`/`forbidden_env_prefix`/`env_name_charset_pattern`/`env_name_charset_desc` and `MAX_ARG_COUNT`/`MAX_ARG_LEN`/`MAX_ENV_COUNT`/`MAX_ENV_VALUE_LEN`/`MAX_URL_LEN`/`MAX_HEADER_COUNT`/`MAX_HEADER_VALUE_LEN` (renders all of them into the generated runtime bridge template via `BridgeContext`) |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen`; `confinement::open_confined_write` directly (issue #504) |
-| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
-| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
-| `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
+| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*` (including `read_server_metadata_async`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
+| `mcp-server` | `ServerConfig`, `ServerId`, `sanitize_path_for_error`, `contains_parent_dir`, `validate_server_id_slug`, `ServerIdSlugError`, `untrusted::*`, `metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `log_filter::cap_rmcp_log_level` (feature `tracing-filter`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR}` |
+| `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR}`, `metadata::{read_server_metadata, read_server_metadata_async, MetadataReadError}`, `log_filter::cap_rmcp_log_level` (feature `tracing-filter`), `ServerConfig`/`ServerConfigBuilder`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
 ## 4. Defense in Depth
 
@@ -1155,7 +1211,9 @@ and byte-preserving of each variant's existing `Display` message.
   and `RUN_MARKER_ENV` (`MCP_EXECUTION_RUN`), the marker set to `1` on the whole process tree under `run`.
   The generated bridge renders the version, the line bound and the names from here ([[../codegen/spec]]).
 - **`ExitCode`** gains `CHECK_FAILED` (5: drift found or `scripts check` problems) and `SCRIPT_FAILED` (6: a script
-  exited non-zero or was killed by a signal); success 0, error 1, invalid input 2, server error 3, timeout 4.
+  exited non-zero or was killed by a signal); success 0, error 1, invalid input 2, server error 3, timeout 4. #627 adds
+  `INTERRUPTED` (130, the runner stopped by SIGINT) and `TERMINATED` (143, SIGTERM), `128 + signal number` as shells
+  report them; `run` is the only command that returns them ([[../cli/spec#`run` (#571, `commands/run.rs`, `runtime/{exec,notice,import_hook}.rs`)]]).
 
 ## 7. Planned Changes (script-first direction, adopted 2026-11-24)
 

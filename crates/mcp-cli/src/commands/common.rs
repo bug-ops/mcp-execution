@@ -5,6 +5,10 @@
 
 use anyhow::{Context, Result};
 use mcp_execution_core::helper_protocol::RUN_MARKER_ENV;
+use mcp_execution_core::metadata::{
+    METADATA_FILE_NAME, MetadataReadError, ServerMetadata, read_server_metadata,
+    read_server_metadata_async,
+};
 use mcp_execution_core::{
     Error as CoreError, REDACTED_PLACEHOLDER, RedactedItems, RedactedMapValues, RedactedUrl,
     ServerConfig, ServerConfigBuilder, ServerId, sanitize_path_for_error,
@@ -1057,6 +1061,153 @@ pub(crate) fn refuse_inside_run() -> Result<()> {
     Ok(())
 }
 
+/// Default servers directory, relative to the home directory.
+const DEFAULT_SERVERS_DIR: &str = ".claude/servers";
+
+/// Default skills directory, relative to the home directory.
+const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
+
+/// Resolves a directory option against the home directory: a leading `~/` is expanded, any other
+/// path is taken literally, and `None` yields `default_relative` under the home directory.
+fn resolve_home_relative(
+    custom: Option<PathBuf>,
+    default_relative: &str,
+    home: Option<&Path>,
+) -> Result<PathBuf> {
+    let home_dir = || home.context("Could not determine home directory");
+    match custom {
+        Some(dir) => match dir.to_str().and_then(|text| text.strip_prefix("~/")) {
+            Some(rest) => Ok(home_dir()?.join(rest)),
+            None => Ok(dir),
+        },
+        None => Ok(home_dir()?.join(default_relative)),
+    }
+}
+
+/// Base directory that holds one generated TypeScript package per server.
+///
+/// Every command that reads or writes generated servers resolves its `--servers-dir` option
+/// through this type, so `~/` expansion and the default location stay identical everywhere.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::common::ServersDir;
+/// use mcp_execution_core::ServerId;
+///
+/// let dir = ServersDir::resolve(Some("/srv/servers".into())).unwrap();
+/// let server = ServerId::new("github").unwrap();
+/// assert_eq!(dir.server(&server), std::path::Path::new("/srv/servers/github"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServersDir(PathBuf);
+
+impl ServersDir {
+    /// Resolves `custom`, expanding a leading `~/`, or the default `~/.claude/servers`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the home directory is needed and cannot be determined.
+    pub fn resolve(custom: Option<PathBuf>) -> Result<Self> {
+        resolve_home_relative(custom, DEFAULT_SERVERS_DIR, dirs::home_dir().as_deref()).map(Self)
+    }
+
+    /// Directory of the generated package of `server`.
+    #[must_use]
+    pub fn server(&self, server: &ServerId) -> PathBuf {
+        self.0.join(server.as_str())
+    }
+
+    /// The base directory itself.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// Base directory that holds one skill directory per server.
+///
+/// Resolved like [`ServersDir`], with the default `~/.claude/skills`.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_cli::commands::common::SkillsDir;
+/// use mcp_execution_core::ServerId;
+///
+/// let dir = SkillsDir::resolve(Some("/srv/skills".into())).unwrap();
+/// let server = ServerId::new("github").unwrap();
+/// assert_eq!(dir.skill(&server), std::path::Path::new("/srv/skills/github"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillsDir(PathBuf);
+
+impl SkillsDir {
+    /// Resolves `custom`, expanding a leading `~/`, or the default `~/.claude/skills`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the home directory is needed and cannot be determined.
+    pub fn resolve(custom: Option<PathBuf>) -> Result<Self> {
+        resolve_home_relative(custom, DEFAULT_SKILLS_DIR, dirs::home_dir().as_deref()).map(Self)
+    }
+
+    /// Skill directory of `server`.
+    #[must_use]
+    pub fn skill(&self, server: &ServerId) -> PathBuf {
+        self.0.join(server.as_str())
+    }
+
+    /// The base directory itself.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// Reads the `_meta.json` of the generated package in `dir` through the single core reader.
+///
+/// A missing sidecar asks for `generate`; a schema mismatch is `InvalidArgument` (exit 2) and asks
+/// for regeneration; every other refusal keeps the reader's message.
+///
+/// # Errors
+///
+/// Returns an error for every [`MetadataReadError`] of the reader.
+pub fn read_generated_metadata(dir: &Path, server: &ServerId) -> Result<ServerMetadata> {
+    read_server_metadata(dir).map_err(|error| metadata_error(error, server))
+}
+
+/// Async form of [`read_generated_metadata`] that keeps the blocking read off the executor.
+///
+/// # Errors
+///
+/// Same as [`read_generated_metadata`].
+pub async fn read_generated_metadata_async(
+    dir: PathBuf,
+    server: &ServerId,
+) -> Result<ServerMetadata> {
+    read_server_metadata_async(dir)
+        .await
+        .map_err(|error| metadata_error(error, server))
+}
+
+fn metadata_error(error: MetadataReadError, server: &ServerId) -> anyhow::Error {
+    match error {
+        MetadataReadError::NotFound => anyhow::anyhow!(
+            "Metadata not found for '{server}'. Run 'mcp-execution-cli generate' for this server first."
+        ),
+        MetadataReadError::SchemaMismatch { found, expected } => {
+            CoreError::InvalidArgument(format!(
+                "{METADATA_FILE_NAME} of '{server}' has schema version {found}, expected {expected}; \
+                 regenerate it with 'mcp-execution-cli generate' for this server"
+            ))
+            .into()
+        }
+        other => anyhow::Error::new(other)
+            .context(format!("Cannot use {METADATA_FILE_NAME} of '{server}'")),
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(
     unix,
@@ -1068,6 +1219,72 @@ pub(crate) fn refuse_inside_run() -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn resolve_home_relative_expands_only_a_leading_tilde_slash() {
+        let home = Path::new("/home/u");
+        let resolve = |custom: &str| {
+            resolve_home_relative(Some(PathBuf::from(custom)), "d", Some(home)).unwrap()
+        };
+
+        assert_eq!(resolve("~/x/y"), Path::new("/home/u/x/y"));
+        assert_eq!(resolve("/abs"), Path::new("/abs"));
+        assert_eq!(resolve("rel"), Path::new("rel"));
+        assert_eq!(resolve("~other/x"), Path::new("~other/x"));
+        assert_eq!(resolve("~"), Path::new("~"));
+    }
+
+    #[test]
+    fn resolve_home_relative_defaults_under_home_and_needs_one() {
+        let home = Path::new("/home/u");
+
+        assert_eq!(
+            resolve_home_relative(None, ".claude/servers", Some(home)).unwrap(),
+            Path::new("/home/u/.claude/servers")
+        );
+        assert!(resolve_home_relative(None, "d", None).is_err());
+        assert!(resolve_home_relative(Some("~/x".into()), "d", None).is_err());
+        assert_eq!(
+            resolve_home_relative(Some("/abs".into()), "d", None).unwrap(),
+            Path::new("/abs")
+        );
+    }
+
+    #[test]
+    fn servers_and_skills_dirs_join_the_server_id() {
+        let server = ServerId::new("github").unwrap();
+
+        assert_eq!(
+            ServersDir::resolve(Some("/s".into()))
+                .unwrap()
+                .server(&server),
+            Path::new("/s/github")
+        );
+        assert_eq!(
+            SkillsDir::resolve(Some("/k".into()))
+                .unwrap()
+                .skill(&server),
+            Path::new("/k/github")
+        );
+    }
+
+    #[test]
+    fn metadata_error_marks_a_schema_mismatch_as_invalid_input() {
+        let server = ServerId::new("github").unwrap();
+
+        let error = metadata_error(
+            MetadataReadError::SchemaMismatch {
+                found: 1,
+                expected: 3,
+            },
+            &server,
+        );
+
+        assert!(matches!(
+            error.downcast_ref::<CoreError>(),
+            Some(CoreError::InvalidArgument(message)) if message.contains("regenerate")
+        ));
+    }
 
     /// Creates a temporary mcp.json file for testing.
     fn create_test_config(content: &str) -> tempfile::NamedTempFile {

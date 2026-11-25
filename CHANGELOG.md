@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`mcp-execution-cli`**: a symlinked `_meta.json` is refused everywhere, a schema-version mismatch in `drift` and `scripts check` exits 2, every directory option expands a leading `~/`, and a `run` stopped by SIGINT or SIGTERM exits 130 or 143; issues #618, #627 (#640)
+- **`mcp-execution-cli`**: `ScriptStatus` gains `Cancelled`, `SetupResult` gains `failed_entries`, and the shared `ServersDir`/`SkillsDir` replace `resolve_base_dir`; issues #610, #618, #627 (#640)
 - `_meta.json` schema version is 3 and the file is written as compact JSON; regenerate existing output (#603)
 - The `json_schema_to_typescript`, `json_type_to_typescript` and `extract_properties` converter API is replaced by `convert_schema` (#603)
 - Generated result types end in `| undefined`; stored result type text is capped at 1 KiB (#603)
@@ -58,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`mcp-execution-cli`**: one `_meta.json` reader in `mcp-execution-core`, `scripts check --servers-dir`, `stats` measures files in one blocking task; issues #618, #619, #621 (#640)
+- **`mcp-execution-cli`**: helper responses are encoded once, tool results and arguments are moved instead of copied, the helper reads with a 64 KiB buffer; issues #620, #623, #628 (#640)
+- **`mcp-execution-cli`**: `run --typecheck` caps `tsc` output at 8 MiB per stream and canonicalizes each file once; issue #622 (#640)
+- **`mcp-execution-core`**: one `cap_rmcp_log_level` behind the `tracing-filter` feature replaces the copies in `mcp-execution-cli` and `mcp-execution-server`; issue #608 (#640)
+- **`mcp-execution-server`**: the per-server introspector lock map is removed, so introspecting one server id is no longer serialized; issue #611 (#640)
+- **Documentation**: contributor instructions drop stale versions and unverified samples; issue #607 (#640)
 - **`mcp-execution-codegen`**: tool files are slim and delegate to `_runtime/cli.ts` through `runIfMain` (#603)
 - **`mcp-execution-codegen`**: each tool has a two-stage size degrade, and an oversized `_meta.json` logs a warning (#603)
 - **`mcp-execution-skill`**: non-identifier parameter keys show as JSON literals and are omitted from the example command (#603)
@@ -69,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mcp-execution-cli`**: `run` stops the script when the runner receives SIGINT or SIGTERM; a SIGKILL of the runner can still leave the script running; issue #627 (#640)
+- **`mcp-execution-cli`**: the `run` spill notice says only the first bytes were saved when the capture limit cut the output; issue #625 (#640)
+- **`mcp-execution-cli`**: a helper response replaced for exceeding the line cap is journaled as failed with its real size; issue #620 (#640)
+- **`mcp-execution-cli`**: `setup` reports entries it could not make executable in `failed_entries`; issue #610 (#640)
 - **`mcp-execution-codegen`**: generated single-call tools run from paths with spaces, non-ASCII names, symlinks and relative paths, and exit 0 on success (#603)
 - **`mcp-execution-files`**: the non-atomic write and the mtime marker write refuse symlinks (#614)
 - **`mcp-execution-server`**: the listing counts tool files whose name starts with an underscore (#614)

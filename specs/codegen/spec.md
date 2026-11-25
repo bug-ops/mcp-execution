@@ -436,8 +436,9 @@ Responsibilities:
     (control, bidi, zero-width, Tags-block handling, and both variation-selector rules) and
     truncates by **code points** to `MAX_SERVER_MESSAGE_LEN` (= `MAX_UNTRUSTED_FIELD_LEN`, 500),
     setting `serverMessageTruncated`. The three constants are rendered from `BridgeContext`; the
-    shared vectors in `tests/fixtures/shared_vectors.json` (`untrusted_text`) run the TypeScript
-    and the Rust implementation against the same cases.
+    sanitizer's vectors live in `crates/mcp-core/tests/fixtures/untrusted_text_vectors.json` and are run against the Rust
+    `sanitize_untrusted_text` by `crates/mcp-core/tests/untrusted_text_vectors.rs` (#624); `shared_vectors.json` keeps only
+    `observed_key_rule`.
   - Breaking: scripts that matched server wording in `error.message` must read `serverMessage`.
 - The opt-in observed-shape recorder is in [[#13.8 Observed result shapes (#587)]].
 
@@ -898,8 +899,8 @@ every server directory generated before the upgrade must be regenerated.
 - **Breaking changes** (changelog): the list above, `BridgeContext` fields, regeneration of every existing server.
 - The user docs (`crates/mcp-codegen/README.md`, `crates/mcp-cli/README.md`) describe the helper-protocol bridge and
   the regeneration requirement.
-- **Open (follow-up):** `fixtures/shared_vectors.json` section `untrusted_text` has no TypeScript consumer left; the Rust
-  sanitizer is not yet pinned to those vectors.
+- Resolved (#624): the dead `untrusted_text` section is removed from `fixtures/shared_vectors.json`; the Rust sanitizer is
+  pinned to hand-derived vectors in `mcp-core` ([[../core/spec#Untrusted-text vectors (#624)]]).
 
 ## 15. Bridge Retirement Requirements (#575)
 

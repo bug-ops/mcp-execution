@@ -189,7 +189,7 @@ mcp-execution-cli scripts list --server github    # signatures only, no bodies
 mcp-execution-cli scripts check --server github   # exit 5 on problems, changes nothing
 ```
 
-`--skills-dir <PATH>` selects another skills directory. A saved script starts with an `mcp-script` header (JSON in a leading block comment); `generate` and `skill` never touch the `scripts/` directory.
+`--skills-dir <PATH>` selects another skills directory, and `scripts check --servers-dir <PATH>` another servers directory; a leading `~/` is expanded in both. `scripts check` exits 2 when the server's `_meta.json` has another schema version, and a symlinked `_meta.json` is refused. A saved script starts with an `mcp-script` header (JSON in a leading block comment); `generate` and `skill` never touch the `scripts/` directory.
 
 ### `stats`
 

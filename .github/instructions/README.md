@@ -55,7 +55,7 @@ Editing `crates/mcp-cli/src/main.rs`:
 |-------|---------------|------------------|
 | **mcp-core** | `thiserror` only | Strong types, no business logic |
 | **mcp-cli** | `anyhow` only | User-friendly errors, CLI patterns |
-| **mcp-introspector** | `thiserror` | rmcp ServiceExt, server discovery |
+| **mcp-introspector** | `thiserror` | rmcp client, bounded server discovery |
 | **mcp-codegen** | `thiserror` | Handlebars templates, sanitized server text |
 
 ## Maintenance

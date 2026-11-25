@@ -8,6 +8,7 @@
 //! type definitions; anything else is a type error, and diagnostics that are only a consequence
 //! of missing Node types are left out of what is shown.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -18,7 +19,9 @@ use mcp_execution_core::write_confined_file;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
+use crate::runtime::exec::{DRAIN_GRACE, Drained, PipeCapture, drain};
 use crate::runtime::path_lookup::find_on_path;
+use crate::runtime::spill::MAX_SPILL_FILE_BYTES;
 
 /// Most server directories listed when building `typeRoots`.
 pub const MAX_TYPECHECK_SERVER_DIRS: usize = 256;
@@ -151,28 +154,54 @@ pub async fn typecheck(
         .await
         .context("cannot write the type-check configuration")?;
 
-    let child = Command::new(tsc)
+    let mut child = Command::new(tsc)
         .arg("-p")
         .arg(&tsconfig)
         .args(["--noEmit", "--pretty", "false"])
         .current_dir(run_dir)
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .output();
-    let Ok(output) = tokio::time::timeout(TYPECHECK_TIMEOUT, child).await else {
+        .spawn()
+        .context("cannot run tsc")?;
+    let stdout = child.stdout.take().context("tsc stdout was not captured")?;
+    let stderr = child.stderr.take().context("tsc stderr was not captured")?;
+    let out = PipeCapture::start(stdout);
+    let err = PipeCapture::start(stderr);
+
+    let Ok(status) = tokio::time::timeout(TYPECHECK_TIMEOUT, child.wait()).await else {
         return Ok(skipped("tsc did not finish within 60 seconds"));
     };
-    let output = output.context("cannot run tsc")?;
-    if output.status.success() {
-        return Ok(TypecheckOutcome::Passed);
+    let status = status.context("cannot wait for tsc")?;
+    let drained = drain(out, err, DRAIN_GRACE).await;
+    let origin = Origin::new(servers_dir, run_dir).await;
+    Ok(conclude(status.success(), &drained, &origin).await)
+}
+
+/// Turns a finished `tsc` run into an outcome. Exit 0 is a pass even when a stream was cut; a
+/// failure whose output was cut says so after the diagnostics.
+async fn conclude(success: bool, drained: &Drained, origin: &Origin) -> TypecheckOutcome {
+    if success {
+        return TypecheckOutcome::Passed;
     }
     let text = format!(
         "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&drained.stdout.bytes),
+        String::from_utf8_lossy(&drained.stderr.bytes)
     );
-    let origin = Origin::new(servers_dir, run_dir).await;
-    Ok(classify_diagnostics(&text, &origin).await)
+    match classify_diagnostics(&text, origin).await {
+        TypecheckOutcome::Failed { diagnostics }
+            if drained.stdout.is_cut() || drained.stderr.is_cut() =>
+        {
+            TypecheckOutcome::Failed {
+                diagnostics: format!(
+                    "{diagnostics}tsc output exceeded {MAX_SPILL_FILE_BYTES} bytes; remaining diagnostics were not read\n"
+                ),
+            }
+        }
+        other => other,
+    }
 }
 
 /// Whether any of `roots` holds the `node` type definitions.
@@ -370,16 +399,31 @@ fn kind_of(group: &[&str], generated: bool) -> Kind {
     }
 }
 
+/// The files named by the diagnostic groups, each once, in order of first appearance.
+fn distinct_files<'a>(groups: &[Vec<&'a str>]) -> Vec<&'a str> {
+    let mut seen = HashSet::new();
+    groups
+        .iter()
+        .filter_map(|group| diagnostic_file(group[0]))
+        .filter(|file| seen.insert(*file))
+        .collect()
+}
+
 async fn classify_diagnostics(text: &str, origin: &Origin) -> TypecheckOutcome {
     let groups = group_diagnostics(text);
-    let mut kinds = Vec::with_capacity(groups.len());
-    for group in &groups {
-        let generated = match diagnostic_file(group[0]) {
-            Some(file) => origin.is_generated(file).await,
-            None => false,
-        };
-        kinds.push(kind_of(group, generated));
+    let mut generated_files: HashMap<&str, bool> = HashMap::new();
+    for file in distinct_files(&groups) {
+        generated_files.insert(file, origin.is_generated(file).await);
     }
+    let kinds: Vec<Kind> = groups
+        .iter()
+        .map(|group| {
+            let generated = diagnostic_file(group[0])
+                .and_then(|file| generated_files.get(file).copied())
+                .unwrap_or(false);
+            kind_of(group, generated)
+        })
+        .collect();
     let node_types_missing = kinds.iter().any(|kind| matches!(kind, Kind::NodeTypes));
     let sdk_noise = kinds.iter().any(|kind| matches!(kind, Kind::Sdk));
     let environment_unresolved = node_types_missing || sdk_noise;
@@ -622,5 +666,55 @@ mod tests {
         };
         assert!(diagnostics.contains("TS2322") && diagnostics.contains("detail line"));
         assert!(!diagnostics.contains("TS2580") && !diagnostics.contains("TS2688"));
+    }
+
+    #[test]
+    fn distinct_files_lists_each_file_once_in_order() {
+        let text = "a.ts(1,1): error TS2322: x\na.ts(2,1): error TS2322: y\n\
+                    b.ts(1,1): error TS2322: z\nerror TS6053: no file\na.ts(3,1): error TS2322: w";
+        let groups = group_diagnostics(text);
+        assert_eq!(distinct_files(&groups), ["a.ts", "b.ts"]);
+    }
+
+    fn drained(stdout: &str, total: u64) -> Drained {
+        Drained {
+            stdout: crate::runtime::exec::Captured {
+                bytes: stdout.as_bytes().to_vec(),
+                total,
+            },
+            stderr: crate::runtime::exec::Captured::default(),
+            abandoned: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn exit_zero_passes_even_when_the_stream_was_cut() {
+        let cut = drained("s.ts(1,1): error TS2322: bad", u64::MAX);
+        assert_eq!(
+            conclude(true, &cut, &origin()).await,
+            TypecheckOutcome::Passed
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_with_a_cut_stream_says_the_diagnostics_were_cut() {
+        let line = "s.ts(1,1): error TS2322: bad";
+        let cut = drained(line, line.len() as u64 + 1);
+        let TypecheckOutcome::Failed { diagnostics } = conclude(false, &cut, &origin()).await
+        else {
+            panic!("expected a failure");
+        };
+        assert!(diagnostics.contains("TS2322"));
+        assert!(
+            diagnostics.ends_with(
+                "tsc output exceeded 8388608 bytes; remaining diagnostics were not read\n"
+            )
+        );
+        let whole = drained(line, line.len() as u64);
+        let TypecheckOutcome::Failed { diagnostics } = conclude(false, &whole, &origin()).await
+        else {
+            panic!("expected a failure");
+        };
+        assert!(!diagnostics.contains("exceeded"));
     }
 }

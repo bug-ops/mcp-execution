@@ -301,7 +301,7 @@ impl Session {
             })?;
 
         match reply {
-            Ok(CallToolResponse::Complete(result)) => Ok(classify(&result, result_source)),
+            Ok(CallToolResponse::Complete(result)) => Ok(classify(result, result_source)),
             Ok(_) => Err(self.connection_failed(std::io::Error::other(
                 "server replied with an input-required or task result, which is not supported",
             ))),
@@ -445,13 +445,14 @@ fn bound_server_text(raw: &str) -> ServerText {
     ServerText { text, truncated }
 }
 
-/// A `structuredContent` that is present and not a literal JSON `null`.
-fn structured(result: &CallToolResult) -> Option<&serde_json::Value> {
-    result.structured_content.as_ref().filter(|v| !v.is_null())
+/// Takes a `structuredContent` that is present and not a literal JSON `null`.
+fn take_structured(slot: &mut Option<serde_json::Value>) -> Option<serde_json::Value> {
+    slot.take().filter(|v| !v.is_null())
 }
 
-/// Classifies a completed `tools/call` reply (FR-030 semantics).
-fn classify(result: &CallToolResult, source: ResultSource) -> ToolCallOutcome {
+/// Classifies a completed `tools/call` reply (FR-030 semantics), moving the result value out
+/// of `result` instead of copying it.
+fn classify(mut result: CallToolResult, source: ResultSource) -> ToolCallOutcome {
     if result.is_error == Some(true) {
         let text = result
             .content
@@ -459,32 +460,29 @@ fn classify(result: &CallToolResult, source: ResultSource) -> ToolCallOutcome {
             .and_then(|block| block.as_text())
             .map(|t| t.text.clone())
             .filter(|t| !t.is_empty())
-            .or_else(|| structured(result).map(ToString::to_string));
+            .or_else(|| take_structured(&mut result.structured_content).map(|v| v.to_string()));
         return ToolCallOutcome::ToolError {
             server_text: text.as_deref().map(bound_server_text),
         };
     }
 
     if source == ResultSource::Structured
-        && let Some(value) = structured(result)
+        && let Some(value) = take_structured(&mut result.structured_content)
     {
-        return ToolCallOutcome::Value(value.clone());
+        return ToolCallOutcome::Value(value);
     }
 
+    let structured_or_empty = |slot: &mut Option<serde_json::Value>| {
+        take_structured(slot).map_or(ToolCallOutcome::Empty, ToolCallOutcome::Value)
+    };
     let Some(first) = result.content.first() else {
-        return structured(result).map_or(ToolCallOutcome::Empty, |v| {
-            ToolCallOutcome::Value(v.clone())
-        });
+        return structured_or_empty(&mut result.structured_content);
     };
 
     match first.as_text() {
         Some(text) if !text.text.is_empty() => ToolCallOutcome::Value(parse_text(&text.text)),
         _ => serde_json::to_value(first).map_or_else(
-            |_| {
-                structured(result).map_or(ToolCallOutcome::Empty, |v| {
-                    ToolCallOutcome::Value(v.clone())
-                })
-            },
+            |_| structured_or_empty(&mut result.structured_content),
             ToolCallOutcome::Value,
         ),
     }
@@ -527,7 +525,7 @@ mod tests {
         let mut result = CallToolResult::success(vec![ContentBlock::text("plain")]);
         result.structured_content = Some(serde_json::Value::Null);
 
-        let outcome = classify(&result, ResultSource::Structured);
+        let outcome = classify(result, ResultSource::Structured);
 
         assert_eq!(value(outcome), json!("plain"));
     }
@@ -538,7 +536,7 @@ mod tests {
         result.structured_content = Some(json!({"k": 1}));
 
         assert_eq!(
-            value(classify(&result, ResultSource::Content)),
+            value(classify(result, ResultSource::Content)),
             json!({"k": 1})
         );
     }
@@ -550,7 +548,7 @@ mod tests {
 
         let ToolCallOutcome::ToolError {
             server_text: Some(text),
-        } = classify(&result, ResultSource::Content)
+        } = classify(result, ResultSource::Content)
         else {
             panic!("expected a tool error with text");
         };
@@ -562,7 +560,7 @@ mod tests {
     fn classify_non_text_first_block_is_returned_as_its_json_form() {
         let result = CallToolResult::success(vec![ContentBlock::image("AAAA", "image/png")]);
 
-        let found = value(classify(&result, ResultSource::Content));
+        let found = value(classify(result, ResultSource::Content));
 
         assert_eq!(found["type"], "image");
     }

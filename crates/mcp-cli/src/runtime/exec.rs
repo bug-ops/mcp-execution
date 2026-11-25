@@ -6,6 +6,7 @@
 
 use std::ffi::OsString;
 use std::fmt;
+use std::future::Future;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
@@ -20,6 +21,7 @@ use tokio::task::JoinHandle;
 
 use super::OutOfRange;
 use super::helper::HelperEndpoint;
+use super::signal::RunnerSignal;
 use super::spill::MAX_SPILL_FILE_BYTES;
 
 /// Shortest accepted run timeout, in seconds.
@@ -133,10 +135,15 @@ impl FromStr for RunTimeout {
 ///
 /// ```
 /// use mcp_execution_cli::runtime::exec::ScriptStatus;
+/// use mcp_execution_cli::runtime::signal::RunnerSignal;
 ///
 /// assert_eq!(ScriptStatus::Exit(3).to_string(), "exit 3");
 /// assert_eq!(ScriptStatus::Signal(9).to_string(), "signal 9");
 /// assert_eq!(ScriptStatus::TimedOut.to_string(), "timed out");
+/// assert_eq!(
+///     ScriptStatus::Cancelled(RunnerSignal::Interrupt).to_string(),
+///     "cancelled by SIGINT"
+/// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptStatus {
@@ -146,6 +153,8 @@ pub enum ScriptStatus {
     Signal(i32),
     /// The runner killed the script because the run timeout elapsed.
     TimedOut,
+    /// The runner was interrupted or terminated and killed the script.
+    Cancelled(RunnerSignal),
 }
 
 impl ScriptStatus {
@@ -182,6 +191,7 @@ impl fmt::Display for ScriptStatus {
             Self::Exit(code) => write!(f, "exit {code}"),
             Self::Signal(signal) => write!(f, "signal {signal}"),
             Self::TimedOut => f.write_str("timed out"),
+            Self::Cancelled(signal) => write!(f, "cancelled by {signal}"),
         }
     }
 }
@@ -291,30 +301,76 @@ fn lock(capture: &Mutex<Captured>) -> MutexGuard<'_, Captured> {
     capture.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn spawn_reader<R>(mut reader: R) -> (SharedCapture, JoinHandle<()>)
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    let capture = SharedCapture::default();
-    let sink = Arc::clone(&capture);
-    let handle = tokio::spawn(async move {
-        let mut buf = [0_u8; 8192];
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(read) => lock(&sink).push(&buf[..read]),
+/// A task reading one output pipe into a bounded [`Captured`].
+#[derive(Debug)]
+pub(crate) struct PipeCapture {
+    capture: SharedCapture,
+    task: JoinHandle<()>,
+}
+
+impl PipeCapture {
+    /// Starts reading `reader` until EOF or a read error.
+    pub(crate) fn start<R>(mut reader: R) -> Self
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
+        let capture = SharedCapture::default();
+        let sink = Arc::clone(&capture);
+        let task = tokio::spawn(async move {
+            let mut buf = [0_u8; 8192];
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => lock(&sink).push(&buf[..read]),
+                }
             }
-        }
-    });
-    (capture, handle)
+        });
+        Self { capture, task }
+    }
+}
+
+/// What two pipe readers captured, and whether one was abandoned at the grace.
+#[derive(Debug)]
+pub(crate) struct Drained {
+    pub(crate) stdout: Captured,
+    pub(crate) stderr: Captured,
+    pub(crate) abandoned: bool,
+}
+
+/// Waits up to `grace` for both readers to reach EOF, aborts those that did not, and returns
+/// what they captured.
+pub(crate) async fn drain(mut out: PipeCapture, mut err: PipeCapture, grace: Duration) -> Drained {
+    let finished = tokio::time::timeout(grace, async {
+        let (out_done, err_done) = tokio::join!(&mut out.task, &mut err.task);
+        out_done.is_ok() && err_done.is_ok()
+    })
+    .await
+    .unwrap_or(false);
+    if !finished {
+        out.task.abort();
+        err.task.abort();
+    }
+    Drained {
+        stdout: std::mem::take(&mut *lock(&out.capture)),
+        stderr: std::mem::take(&mut *lock(&err.capture)),
+        abandoned: !finished,
+    }
+}
+
+async fn kill_script(child: &mut tokio::process::Child, why: &str) {
+    if let Err(error) = child.kill().await {
+        tracing::debug!("could not kill the {why} script: {error}");
+    }
 }
 
 /// Starts node on the script and waits for it within the run timeout.
 ///
 /// Without a `helper` the script gets a null stdin and no helper environment; with one, the
 /// endpoint's environment variables and, on the Unix carrier, its stdin (the channel). On timeout
-/// the script is killed. Afterwards
-/// the output readers get [`DRAIN_GRACE`] before they are abandoned.
+/// the script is killed. `cancel` is polled before the wait, so when it resolves the script is
+/// killed and the status is [`ScriptStatus::Cancelled`] even if the script ended at the same
+/// moment (for example from the same group-wide SIGINT). Afterwards the output readers get
+/// [`DRAIN_GRACE`] before they are abandoned.
 ///
 /// # Errors
 ///
@@ -335,7 +391,7 @@ where
 ///     node_args: vec![],
 ///     timeout: RunTimeout::default_timeout(),
 /// };
-/// let outcome = run_script_process(&spec, None).await?;
+/// let outcome = run_script_process(&spec, None, std::future::pending()).await?;
 /// assert_eq!(outcome.status, ScriptStatus::Exit(0));
 /// # Ok(())
 /// # }
@@ -343,6 +399,7 @@ where
 pub async fn run_script_process(
     spec: &ScriptProcess,
     helper: Option<&mut HelperEndpoint>,
+    cancel: impl Future<Output = RunnerSignal>,
 ) -> Result<ProcessOutcome> {
     let mut command = Command::new("node");
     command
@@ -376,37 +433,30 @@ pub async fn run_script_process(
         .stderr
         .take()
         .context("node stderr was not captured")?;
-    let (out_capture, mut out_task) = spawn_reader(stdout);
-    let (err_capture, mut err_task) = spawn_reader(stderr);
+    let out = PipeCapture::start(stdout);
+    let err = PipeCapture::start(stderr);
 
-    let status = match tokio::time::timeout(spec.timeout.get(), child.wait()).await {
-        Ok(waited) => ScriptStatus::from_exit(waited.context("cannot wait for node")?),
-        Err(_elapsed) => {
-            if let Err(error) = child.kill().await {
-                tracing::debug!("could not kill the timed-out script: {error}");
-            }
-            ScriptStatus::TimedOut
+    let status = tokio::select! {
+        biased;
+        signal = cancel => {
+            kill_script(&mut child, "cancelled").await;
+            ScriptStatus::Cancelled(signal)
         }
+        waited = tokio::time::timeout(spec.timeout.get(), child.wait()) => match waited {
+            Ok(waited) => ScriptStatus::from_exit(waited.context("cannot wait for node")?),
+            Err(_elapsed) => {
+                kill_script(&mut child, "timed-out").await;
+                ScriptStatus::TimedOut
+            }
+        },
     };
 
-    let drained = tokio::time::timeout(DRAIN_GRACE, async {
-        let (out_done, err_done) = tokio::join!(&mut out_task, &mut err_task);
-        out_done.is_ok() && err_done.is_ok()
-    })
-    .await
-    .unwrap_or(false);
-    if !drained {
-        out_task.abort();
-        err_task.abort();
-    }
-
-    let stdout = std::mem::take(&mut *lock(&out_capture));
-    let stderr = std::mem::take(&mut *lock(&err_capture));
+    let drained = drain(out, err, DRAIN_GRACE).await;
     Ok(ProcessOutcome {
         status,
-        stdout,
-        stderr,
-        drain_abandoned: !drained,
+        stdout: drained.stdout,
+        stderr: drained.stderr,
+        drain_abandoned: drained.abandoned,
     })
 }
 
@@ -436,5 +486,63 @@ mod tests {
         assert_eq!(captured.bytes.len(), MAX_SPILL_FILE_BYTES);
         assert_eq!(captured.total, MAX_SPILL_FILE_BYTES as u64 + 4);
         assert!(captured.is_cut());
+    }
+
+    fn node_available() -> bool {
+        std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
+    fn idle_spec(dir: &std::path::Path) -> ScriptProcess {
+        let script = dir.join("idle.mjs");
+        std::fs::write(&script, "setInterval(() => {}, 1000);\n").unwrap();
+        ScriptProcess {
+            script,
+            args: vec![],
+            import_argument: "data:text/javascript,".to_string(),
+            node_args: vec![],
+            timeout: RunTimeout::default_timeout(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_ready_cancel_kills_the_script_and_reports_the_signal() {
+        if !node_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let outcome = run_script_process(
+            &idle_spec(dir.path()),
+            None,
+            std::future::ready(RunnerSignal::Terminate),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome.status,
+            ScriptStatus::Cancelled(RunnerSignal::Terminate)
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn a_pending_cancel_lets_the_script_finish_normally() {
+        if !node_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("done.mjs");
+        std::fs::write(&script, "process.exit(3);\n").unwrap();
+        let spec = ScriptProcess {
+            script,
+            ..idle_spec(dir.path())
+        };
+        let outcome = run_script_process(&spec, None, std::future::pending())
+            .await
+            .unwrap();
+        assert_eq!(outcome.status, ScriptStatus::Exit(3));
     }
 }

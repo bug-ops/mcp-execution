@@ -13,11 +13,8 @@ use mcp_execution_core::untrusted::sanitize_untrusted_inline;
 use mcp_execution_skill::scripts::{self, CheckReport, ScriptListing, ToolRef, WriteIntent};
 use serde::Serialize;
 
-use super::drift::read_recorded;
+use super::common::{ServersDir, SkillsDir, read_generated_metadata_async};
 use crate::cli::parse_server_id;
-
-const DEFAULT_SKILLS_DIR: &str = ".claude/skills";
-const DEFAULT_SERVERS_DIR: &str = ".claude/servers";
 
 /// Options shared by the `scripts` subcommands.
 ///
@@ -45,6 +42,34 @@ pub struct ScriptsArgs {
     pub skills_dir: Option<PathBuf>,
 }
 
+/// Options of `scripts check`: the shared script options plus where the generated server lives.
+///
+/// # Examples
+///
+/// ```
+/// use clap::Parser;
+/// use mcp_execution_cli::cli::{Cli, Commands};
+/// use mcp_execution_cli::commands::scripts::ScriptsAction;
+///
+/// let cli = Cli::parse_from([
+///     "mcp-execution-cli", "scripts", "check", "--server", "github", "--servers-dir", "/srv",
+/// ]);
+/// let Commands::Scripts { action: ScriptsAction::Check(args) } = cli.command else {
+///     panic!("expected scripts check")
+/// };
+/// assert_eq!(args.servers_dir.as_deref(), Some(std::path::Path::new("/srv")));
+/// ```
+#[derive(Debug, Clone, Args)]
+pub struct CheckArgs {
+    /// Options shared with `scripts list`
+    #[command(flatten)]
+    pub scripts: ScriptsArgs,
+
+    /// Base directory of generated servers (default: ~/.claude/servers)
+    #[arg(long)]
+    pub servers_dir: Option<PathBuf>,
+}
+
 /// Saved-script actions.
 ///
 /// # Examples
@@ -62,7 +87,7 @@ pub enum ScriptsAction {
     /// List saved scripts by signature, without their bodies
     List(ScriptsArgs),
     /// Check saved scripts against the server's current tools (exit 5 on problems)
-    Check(ScriptsArgs),
+    Check(CheckArgs),
 }
 
 /// Runs a `scripts` subcommand.
@@ -94,13 +119,7 @@ pub async fn run(action: ScriptsAction, format: OutputFormat) -> Result<ExitCode
 }
 
 fn skill_dir(args: &ScriptsArgs) -> Result<PathBuf> {
-    let skills = match &args.skills_dir {
-        Some(dir) => dir.clone(),
-        None => dirs::home_dir()
-            .context("Could not determine home directory")?
-            .join(DEFAULT_SKILLS_DIR),
-    };
-    Ok(skills.join(args.server.as_str()))
+    Ok(SkillsDir::resolve(args.skills_dir.clone())?.skill(&args.server))
 }
 
 #[derive(Serialize)]
@@ -195,11 +214,11 @@ impl From<&CheckReport> for CheckOutput {
     }
 }
 
-async fn check(args: &ScriptsArgs, format: OutputFormat) -> Result<ExitCode> {
-    let servers_dir = dirs::home_dir()
-        .context("Could not determine home directory")?
-        .join(DEFAULT_SERVERS_DIR);
-    let metadata = read_recorded(&servers_dir.join(args.server.as_str()))?;
+async fn check(check_args: &CheckArgs, format: OutputFormat) -> Result<ExitCode> {
+    let args = &check_args.scripts;
+    let servers_dir = ServersDir::resolve(check_args.servers_dir.clone())?;
+    let metadata =
+        read_generated_metadata_async(servers_dir.server(&args.server), &args.server).await?;
     let report = scripts::check(&skill_dir(args)?, &metadata).await;
     let exit = if report.is_clean() {
         ExitCode::SUCCESS

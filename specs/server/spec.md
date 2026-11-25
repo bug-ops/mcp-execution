@@ -63,7 +63,6 @@ pub struct SystemClock; // production
 
 pub struct GeneratorService {
     state: Arc<StateManager>,
-    introspectors: Arc<Mutex<HashMap<ServerId, Arc<Mutex<Introspector>>>>>,
     exports: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
     clock: Arc<dyn Clock>,
     skills_base_dir: Option<PathBuf>,  // test-only override; production = ~/.claude/skills
@@ -456,28 +455,25 @@ astronomically unlikely edge case.
 
 ## 5. Per-Resource Locking
 
-Two independent lock tables, both following the identical pattern:
+One lock table, `exports: HashMap<PathBuf, Arc<Mutex<()>>>`: an export for one
+`output_dir` never blocks a different one; holding the per-target lock
+across `FileSystem::export_to_filesystem` serializes two concurrent
+`save_categorized_tools` calls targeting the **same** `output_dir`,
+narrowing (though not eliminating across 3+ overlapping calls) the
+data-loss race `mcp-files`'s own age-gated artifact sweep is the final
+backstop against.
 
-- `introspectors: HashMap<ServerId, Arc<Mutex<Introspector>>>` — a slow or
-  hung downstream server only blocks `introspect_server` calls for that
-  *same* server id, never unrelated ids. The outer map lock is released
-  before the per-id handle is awaited.
-- `exports: HashMap<PathBuf, Arc<Mutex<()>>>` — an export for one
-  `output_dir` never blocks a different one; holding the per-target lock
-  across `FileSystem::export_to_filesystem` serializes two concurrent
-  `save_categorized_tools` calls targeting the **same** `output_dir`,
-  narrowing (though not eliminating across 3+ overlapping calls) the
-  data-loss race `mcp-files`'s own age-gated artifact sweep is the final
-  backstop against.
-
-Both tables use **identity-checked eviction** (`Arc::ptr_eq`) after use —
-`server_id`/`output_dir` are caller-supplied, so without eviction the map
+The table uses **identity-checked eviction** (`Arc::ptr_eq`) after use —
+`output_dir` is caller-supplied, so without eviction the map
 grows unboundedly; an unconditional `remove` keyed by value alone is a
 TOCTOU bug (it could evict a fresh handle a *third*, concurrent caller
 already inserted after a *second* caller's own eviction).
 
-Every lock helper (`introspector_for`/`evict_introspector`/`export_lock_for`/
-`evict_export_lock`) and every tool handler
+Introspection takes no lock (#611): `Introspector` is a unit struct and `discover_server` takes `&self`, so
+`discover_with_cancellation` builds a local `Introspector::new()` per call. Concurrent `introspect_server` calls for the
+same server id are therefore not serialized; the cancellation `select!` is unchanged.
+
+Every lock helper (`export_lock_for`/`evict_export_lock`) and every tool handler
 (`introspect_server`/`save_categorized_tools`/`list_generated_servers`/`generate_skill`/`save_skill`)
 carries a `#[tracing::instrument(skip_all, fields(...))]` span (issue #211,
 `list_generated_servers` added by issue #404) — `server_id = ...` for
@@ -661,8 +657,9 @@ keeping, unlike the rejected-env-var case above.
 Issue #421: `rmcp` 3.1.2's own transport layer logs raw, unsanitized peer input at `debug` level
 (`rmcp::transport::async_rw`'s parse-failure line embeds the offending line verbatim) — this fires
 inside this binary's own decode path *before* §8's `SanitizedCodecError` mitigation ever sees it,
-so a broad `RUST_LOG=debug` streams untrusted peer text into the log unfiltered. `main`'s private
-`cap_rmcp_log_level(EnvFilter) -> EnvFilter` closes this specific path — *debug-level, raw-line*
+so a broad `RUST_LOG=debug` streams untrusted peer text into the log unfiltered. `main` calls the shared
+`mcp_execution_core::log_filter::cap_rmcp_log_level(EnvFilter, LevelFilter::INFO)` (#608; the one copy
+`mcp-cli` also uses, [[../core/spec]]), which closes this specific path — *debug-level, raw-line*
 logging — by `add_directive`-ing `rmcp=info` onto the *result* of
 `EnvFilter::try_from_default_env().unwrap_or_else(...)`, not folded into only the fallback string —
 a directive added solely to the fallback is dead code whenever `RUST_LOG` parses successfully,
