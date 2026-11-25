@@ -349,6 +349,29 @@ impl Sandbox {
         path
     }
 
+    /// `run <script> -- <script_args>` started through `perl` that first sets the signals in
+    /// `ignored` (names such as `INT CHLD`) to `SIG_IGN`, which `exec` passes on to the runner,
+    /// in a process group of its own. Perl rather than `trap ''` because dash accepts
+    /// `trap '' CHLD` without ignoring SIGCHLD.
+    #[cfg(unix)]
+    pub fn runner_ignoring(&self, ignored: &str, script: &Path, script_args: &[&Path]) -> Command {
+        use std::os::unix::process::CommandExt as _;
+
+        let mut cmd = self.command_for("perl");
+        cmd.args([
+            "-e",
+            "$SIG{$_} = 'IGNORE' for split ' ', shift; exec @ARGV or die \"exec: $!\"",
+            ignored,
+        ])
+        .arg(CLI_BIN)
+        .args(["run", &script.display().to_string()])
+        .args(["--servers-dir", &self.servers.display().to_string()])
+        .args(["--timeout", "60", "--"])
+        .args(script_args.iter().map(|path| path.display().to_string()))
+        .process_group(0);
+        cmd
+    }
+
     /// Forgets what the fixture logged so far (for example during `generate`).
     pub fn clear_fixture_log(&self) {
         let _ = std::fs::remove_file(&self.log);

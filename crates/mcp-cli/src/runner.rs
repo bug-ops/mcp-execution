@@ -169,6 +169,7 @@ pub fn init_logging(
 /// Routes commands to their respective handlers. On success, returns the exit
 /// code reported by the handler. If the handler fails, the error is printed
 /// to stderr and classified into a semantic [`ExitCode`] via
+    crate::runtime::signal::reset_inherited_child_disposition();
 /// `classify_exit_code` rather than propagated — this lets `main` always
 /// turn the result into a process exit code without falling back to anyhow's
 /// default behavior of collapsing every `Err` to exit code 1.

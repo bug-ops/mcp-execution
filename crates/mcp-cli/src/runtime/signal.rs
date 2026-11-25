@@ -11,8 +11,10 @@ use mcp_execution_core::cli::ExitCode;
 
 /// A signal that asked the runner to stop.
 ///
-/// A SIGHUP or SIGQUIT that was already ignored when the runner started (`nohup` ignores SIGHUP)
-/// stays ignored and never produces a [`RunnerSignal`]. The script is another matter: node resets
+/// On Unix a SIGINT, SIGHUP or SIGQUIT that was already ignored when the runner started (`nohup`
+/// ignores SIGHUP, a background job of a non-interactive shell ignores SIGINT and SIGQUIT) stays
+/// ignored and never produces a [`RunnerSignal`]; SIGTERM is always handled. The script is another
+/// matter: node resets
 /// an inherited SIGHUP disposition, so a foreground run on a terminal still ends when the terminal
 /// hangs up; use `setsid` or tmux for a run that must survive it.
 ///
@@ -119,10 +121,11 @@ mod platform {
 
     use super::{Inherited, RunnerSignal, inherited, never};
 
-    /// SIGHUP and SIGQUIT dispositions as of the first install in this process, taken before any
-    /// handler of ours exists.
+    /// SIGINT, SIGHUP and SIGQUIT dispositions as of the first install in this process, taken
+    /// before any handler of ours exists.
     #[derive(Debug, Clone, Copy)]
     pub(super) struct StartupDispositions {
+        pub(super) interrupt: Inherited,
         pub(super) hangup: Inherited,
         pub(super) quit: Inherited,
     }
@@ -130,9 +133,17 @@ mod platform {
     pub(super) fn startup_dispositions() -> StartupDispositions {
         static STARTUP: OnceLock<StartupDispositions> = OnceLock::new();
         *STARTUP.get_or_init(|| StartupDispositions {
+            interrupt: inherited::query(libc::SIGINT),
             hangup: inherited::query(libc::SIGHUP),
             quit: inherited::query(libc::SIGQUIT),
         })
+    }
+
+    /// Keeps a SIGCHLD handler registered for the life of the process (#663).
+    static CHILD: OnceLock<Option<Signal>> = OnceLock::new();
+
+    pub(super) fn reset_inherited_child_disposition() {
+        CHILD.get_or_init(|| register(SignalKind::child(), "SIGCHLD"));
     }
 
     fn register_unless_ignored(
@@ -174,7 +185,11 @@ mod platform {
         pub(super) fn install() -> Self {
             let startup = startup_dispositions();
             Self {
-                interrupt: register(SignalKind::interrupt(), "SIGINT"),
+                interrupt: register_unless_ignored(
+                    SignalKind::interrupt(),
+                    "SIGINT",
+                    startup.interrupt,
+                ),
                 terminate: register(SignalKind::terminate(), "SIGTERM"),
                 hangup: register_unless_ignored(SignalKind::hangup(), "SIGHUP", startup.hangup),
                 quit: register_unless_ignored(SignalKind::quit(), "SIGQUIT", startup.quit),
@@ -237,6 +252,16 @@ mod platform {
             }
         }
     }
+}
+
+/// Replaces an inherited `SIGCHLD = SIG_IGN` so exited children stay waitable.
+///
+/// With `SIG_IGN` the kernel reaps every child at exit, `waitid` then fails with `ECHILD` and the
+/// process group of a reaped script leader could be signalled. Registering a tokio handler
+/// installs a real disposition. Idempotent; must run inside the tokio runtime. No-op on Windows.
+pub(crate) fn reset_inherited_child_disposition() {
+    #[cfg(unix)]
+    platform::reset_inherited_child_disposition();
 }
 
 /// The runner's stop-signal subscription (SIGINT, SIGTERM, SIGHUP and SIGQUIT on Unix; Ctrl-C and
@@ -313,6 +338,7 @@ mod tests {
         let startup = startup_dispositions();
         assert!(termination.recv().now_or_never().is_none());
         for (name, expected, inherited) in [
+            ("INT", RunnerSignal::Interrupt, startup.interrupt),
             ("TERM", RunnerSignal::Terminate, Inherited::Other),
             ("HUP", RunnerSignal::Hangup, startup.hangup),
             ("QUIT", RunnerSignal::Quit, startup.quit),
