@@ -330,8 +330,8 @@ mcp-execution-cli generate --from-config <SERVER>
 Breaking changes to act on when coming from 0.x:
 
 - **Generated output**: `_meta.json` is at schema version 3, and the bridge is a thin client of the `mcp-execution-cli` helper. A tool file run directly with `node` needs a matching `mcp-execution-cli` (`MCP_EXECUTION_CLI` or `PATH`). `closeAllConnections`, the bridge's SIGINT/SIGTERM handlers and `MCPBRIDGE_REQUEST_TIMEOUT_MS` are removed.
-- **CLI**: `generate` and `introspect` accept exactly one of `--from-config`, a positional command, or `--http`/`--sse`. `call` takes the tool after `--`. Exit code 6 means a script run by `run` failed.
-- **Names**: server IDs and tool names consist only of Unicode `Identifier_Status=Allowed` characters, so a server exposing a tool named with a space or `@`/`+`/`(`/`&`/`<`/`>` fails introspection instead of being accepted.
+- **CLI**: `generate` and `introspect` accept exactly one of `--from-config`, a positional command, or `--http`/`--sse`. `call` takes the tool after `--`. Exit code 6 means a script run by `run` failed. The `--progressive-output` flag of `generate` and `drift` is now `--servers-dir`.
+- **Names**: server IDs and tool names consist only of Unicode `Identifier_Status=Allowed` characters, so a server exposing a tool named with a space or `@`/`+`/`(`/`&`/`<`/`>` fails introspection instead of being accepted. The `server_id` of the MCP tools must be 1-64 lowercase letters, digits or hyphens; any other value is a tool result with `isError: true`.
 
 The complete list is in the `### Breaking` section of each release in the [changelog](CHANGELOG.md).
 
