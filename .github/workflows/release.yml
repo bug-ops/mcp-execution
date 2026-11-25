@@ -9,8 +9,64 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    name: Verify Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tag against the workspace
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          mismatches="$(cargo metadata --no-deps --format-version 1 | jq -r --arg v "$version" '
+            (.packages | map(.name)) as $members
+            | .packages[]
+            | (select(.version != $v) | "\(.name) is version \(.version)"),
+              (.name as $n | .dependencies[]
+                | select(.kind != "dev")
+                | select(.name as $d | $members | index($d))
+                | select(.req != "^" + $v)
+                | "\($n) depends on \(.name) \(.req)")
+          ')"
+          if [[ -n "$mismatches" ]]; then
+            echo "::error::tag $TAG does not match the workspace versions"
+            echo "$mismatches"
+            exit 1
+          fi
+
+      - name: Check the changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          .github/scripts/changelog-section.sh "${TAG#v}" > /dev/null
+          if .github/scripts/changelog-section.sh Unreleased > /dev/null 2>&1; then
+            echo "::error::CHANGELOG.md [Unreleased] is not empty"
+            exit 1
+          fi
+
+  # The full CI run (every job must succeed) gates the release.
+  gate:
+    name: CI Gate
+    needs: [verify]
+    permissions:
+      contents: read
+      actions: write # For uploading artifacts
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
   build:
     name: Build Release (${{ matrix.target }})
+    needs: [verify, gate]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:
@@ -125,43 +181,9 @@ jobs:
             mcp-execution-${{ matrix.asset_suffix }}.zip
           retention-days: 7
 
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Download artifacts
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: artifacts
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          echo "## Changes in this Release" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md || echo "- Initial release" >> CHANGELOG.md
-
-      - name: Create Release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          files: artifacts/**/*
-          body_path: CHANGELOG.md
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   publish-crates:
     name: Publish to crates.io
-    needs: release
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       id-token: write # Required for trusted publishing (OIDC)
@@ -179,19 +201,6 @@ jobs:
         with:
           shared-key: "release"
 
-      - name: Verify packages build
-        run: |
-          cargo build --release -p mcp-execution-core
-          cargo build --release -p mcp-execution-introspector
-          cargo build --release -p mcp-execution-codegen
-          cargo build --release -p mcp-execution-files
-          cargo build --release -p mcp-execution-skill
-          cargo build --release -p mcp-execution-server
-          cargo build --release -p mcp-execution-cli
-
-      - name: Run tests
-        run: cargo test --workspace
-
       # Trusted Publishing (OIDC) - no manual token needed after initial setup
       - name: Authenticate with crates.io
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
@@ -203,3 +212,33 @@ jobs:
           registry-token: ${{ steps.crates-io-auth.outputs.token }}
           ignore-unpublished-changes: true
           publish-delay: 5000
+
+  release:
+    name: Create Release
+    needs: [build, publish-crates]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+
+      - name: Extract release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: .github/scripts/changelog-section.sh "${TAG#v}" > release-notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          files: artifacts/**/*
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

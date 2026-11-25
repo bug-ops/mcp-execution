@@ -8,6 +8,16 @@ on:
   schedule:
     # Weekly security audit on Sundays at midnight
     - cron: "0 0 * * 0"
+  # The release workflow calls this workflow as its gate with `full: true`.
+  workflow_call:
+    inputs:
+      full:
+        description: "Run every job and require each one to succeed"
+        type: boolean
+        default: false
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -27,7 +37,8 @@ jobs:
   # check chain can be skipped on docs-only changes. Workflow file changes
   # always force the full chain to run, since they could be the thing that's
   # broken. Scheduled runs (weekly security audit) always run everything too,
-  # since there's no meaningful diff to compare against.
+  # since there's no meaningful diff to compare against. A `full` call (the
+  # release gate) runs everything and skips the filter.
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
@@ -35,12 +46,13 @@ jobs:
     permissions:
       contents: read
     outputs:
-      run-checks: ${{ github.event_name == 'schedule' || steps.filter.outputs.code == 'true' || steps.filter.outputs.workflows == 'true' }}
+      run-checks: ${{ inputs.full || github.event_name == 'schedule' || steps.filter.outputs.code == 'true' || steps.filter.outputs.workflows == 'true' }}
+      run-publish: ${{ inputs.full || steps.filter.outputs.manifests == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check changed paths
-        if: github.event_name != 'schedule'
+        if: github.event_name != 'schedule' && !inputs.full
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
@@ -57,6 +69,12 @@ jobs:
               - '!SECURITY*'
             workflows:
               - '.github/workflows/**'
+            manifests:
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/release.yml'
+              - 'LICENSE*'
+              - 'crates/*/LICENSE-*'
 
   # Quick checks first - fail fast strategy
   check:
@@ -192,6 +210,7 @@ jobs:
         uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: ${{ matrix.rust }}
+          components: clippy
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -208,13 +227,20 @@ jobs:
       # `tsc`/`node` (e.g. the #201 runtime-bridge regression tests) to catch TypeScript-level
       # regressions that a Rust-only check can't see. Those tests hard-fail (rather than
       # silently skip) when the `CI` env var is set, so this toolchain must be present here.
+      # 22.18.0 is the supported Node.js floor, so every leg runs the suite on it.
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "22.18.0"
 
       - name: Install TypeScript
         run: npm install -g typescript
+
+      # Linux is linted by the `check` job; the other platforms compile cfg-gated code
+      # that clippy there never sees.
+      - name: Clippy (macOS and Windows)
+        if: matrix.os != 'ubuntu-latest' && matrix.rust == 'stable'
+        run: cargo +stable clippy --all-targets --all-features --workspace
 
       - name: Run tests (nextest)
         run: cargo nextest run --all-features --workspace --no-fail-fast
@@ -255,7 +281,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "22.18.0"
 
       - name: Install TypeScript
         run: npm install -g typescript
@@ -338,6 +364,129 @@ jobs:
       - name: Build benchmarks (no run)
         run: cargo bench --no-run --profile bench-fast --workspace
 
+  # Packaging gate: every crate must package and compile from its own tarball,
+  # and the workspace version needs a changelog section for the release notes.
+  # Runs for the release gate and for diffs that touch manifests, the lockfile,
+  # license files or the release workflow.
+  publish-dry-run:
+    name: Publish Dry Run
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    if: needs.changes.outputs.run-publish == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "publish"
+          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+
+      - name: Check the changelog section of the workspace version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          .github/scripts/changelog-section.sh "$version" > /dev/null
+
+      # An already published version only warns, and unpublished siblings are
+      # resolved from the local tarballs, so a re-run after a partial publish passes.
+      - name: Publish dry run (workspace)
+        run: cargo publish --workspace --dry-run --locked
+
+  # Semver compatibility against the last published version. The step is non-blocking
+  # (the job itself always reports success): before 1.0 a breaking change is allowed
+  # against 0.x, so this only surfaces tool or baseline failures until the 1.0.0
+  # baseline exists, when `continue-on-error` is removed.
+  semver:
+    name: Semver Check
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    if: needs.changes.outputs.run-checks == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run cargo-semver-checks
+        continue-on-error: true
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+
+  # Newest Node.js, Bun and Deno: the alternative-runtime tests must run here, so
+  # MCP_EXECUTION_REQUIRE_ALT_RUNTIMES (the name defined by `REQUIRE_ALT_RUNTIMES_ENV` in
+  # crates/mcp-cli/tests/common/mod.rs) turns a missing runtime into a failure.
+  node-latest:
+    name: Latest Runtimes (Node.js, Bun, Deno)
+    needs: [changes, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    if: needs.changes.outputs.run-checks == 'true' && needs.check.result == 'success'
+    env:
+      MCP_EXECUTION_REQUIRE_ALT_RUNTIMES: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "node-latest"
+          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: nextest
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+
+      # The codegen and CLI tests hard-fail under CI when `tsc` is missing.
+      - name: Install TypeScript
+        run: npm install -g typescript
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+
+      - name: Run CLI tests (nextest)
+        run: cargo nextest run -p mcp-execution-cli --all-features --no-fail-fast
+
+      # `bash` enables pipefail, so a filter that matches no test fails the step
+      # instead of being masked by `tee`.
+      - name: Check the alternative-runtime tests ran instead of skipping
+        shell: bash
+        run: |
+          cargo nextest run -p mcp-execution-cli --all-features \
+            -E 'binary(acceptance_runtime_compat)' --no-capture 2>&1 | tee compat.log
+          if grep -q 'alt-runtime skipped' compat.log; then
+            echo "::error::alternative-runtime tests skipped although MCP_EXECUTION_REQUIRE_ALT_RUNTIMES is set"
+            exit 1
+          fi
+
   # Release build check (master only — skip on PRs and other branches)
   release:
     name: Release Build
@@ -374,31 +523,30 @@ jobs:
   # All checks passed
   ci-success:
     name: CI Success
-    needs: [changes, check, security, build, test, coverage, msrv, benchmark]
+    needs: [changes, check, security, build, test, coverage, msrv, benchmark, publish-dry-run, semver, node-latest]
     runs-on: ubuntu-latest
     if: always()
     permissions:
       contents: read
     steps:
       - name: Check all jobs
-        # `skipped` is an acceptable outcome here: on docs-only diffs, the
-        # gated jobs (check/security/build/test/coverage/msrv/benchmark) skip
-        # themselves via the `changes` job's `run-checks` output rather than
-        # failing, and this status check must still report success/neutral
-        # rather than staying red or permanently pending.
+        # `skipped` is an acceptable outcome on push and pull requests: on docs-only
+        # diffs the gated jobs skip themselves via the `changes` job's outputs rather
+        # than failing, and this status check must still report success rather than
+        # staying red or pending. A `full` call (the release gate) never skips, so
+        # there every job must be `success`.
+        env:
+          FULL: ${{ inputs.full }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          for result in \
-            "${{ needs.changes.result }}" \
-            "${{ needs.check.result }}" \
-            "${{ needs.security.result }}" \
-            "${{ needs.build.result }}" \
-            "${{ needs.test.result }}" \
-            "${{ needs.coverage.result }}" \
-            "${{ needs.msrv.result }}" \
-            "${{ needs.benchmark.result }}"; do
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
-              echo "One or more required jobs failed or were cancelled"
-              exit 1
+          for result in $RESULTS; do
+            if [[ "$result" == "success" ]]; then
+              continue
             fi
+            if [[ "$result" == "skipped" && "$FULL" != "true" ]]; then
+              continue
+            fi
+            echo "A required job reported '$result' (full run: ${FULL:-false})"
+            exit 1
           done
-          echo "All required jobs passed successfully (or were skipped as docs-only)!"
+          echo "All required jobs passed"
