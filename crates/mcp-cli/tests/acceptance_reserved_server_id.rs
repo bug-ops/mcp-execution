@@ -65,3 +65,77 @@ fn generate_derives_a_suffixed_id_from_a_command_named_like_a_device() {
     assert!(sb.servers.join("con-server").join("index.ts").is_file());
     assert!(!sb.servers.join("con").exists());
 }
+
+/// An MCP server that records its own start in `argv[2]` and lists no tools.
+const EMPTY_SERVER: &str = r"const fs = require('node:fs');
+const readline = require('node:readline');
+fs.writeFileSync(process.argv[2], 'started');
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  const reply = (body) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, ...body }) + '\n');
+  if (message.method === 'initialize') {
+    reply({ result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'empty', version: '1' } } });
+  } else {
+    reply({ result: { tools: [] } });
+  }
+});
+";
+
+#[test]
+fn generate_rejects_an_invalid_config_key_before_the_server_is_started() {
+    for key in ["nul", "My_Server"] {
+        let sb = Sandbox::new();
+        sb.write_mcp_json(&json!({ key: sb.fixture_entry() }));
+
+        let out = sb.cli(&["generate", "--from-config", key]);
+
+        assert_eq!(out.code, Some(1), "{key}: {} {}", out.stdout, out.stderr);
+        assert!(
+            out.stderr.contains("is not a valid directory name"),
+            "{key}: {}",
+            out.stderr
+        );
+        assert_eq!(sb.fixture_log(), [] as [String; 0], "{key}: server started");
+    }
+}
+
+#[test]
+fn generate_rejects_an_invalid_config_key_of_a_server_without_tools() {
+    if !common::require_node("generate_rejects_an_invalid_config_key_of_a_server_without_tools") {
+        return;
+    }
+    let sb = Sandbox::new();
+    let script = sb.script("empty.cjs", EMPTY_SERVER);
+    let started = sb.root.join("started");
+    sb.write_mcp_json(&json!({ "My_Server": {
+        "command": "node",
+        "args": [script.display().to_string(), started.display().to_string()]
+    }}));
+
+    let out = sb.cli(&["generate", "--from-config", "My_Server"]);
+
+    assert_eq!(out.code, Some(1), "{} {}", out.stdout, out.stderr);
+    assert!(
+        out.stderr.contains("is not a valid directory name"),
+        "{}",
+        out.stderr
+    );
+    assert!(!started.exists(), "the server was started");
+}
+
+#[test]
+fn generate_rejects_an_unusable_servers_dir_before_the_server_is_started() {
+    let sb = Sandbox::new();
+
+    let out = sb.cli(&[
+        "generate",
+        "--from-config",
+        common::SERVER,
+        "--servers-dir",
+        "~someone/servers",
+    ]);
+
+    assert_ne!(out.code, Some(0), "{} {}", out.stdout, out.stderr);
+    assert_eq!(sb.fixture_log(), [] as [String; 0], "server started");
+}

@@ -284,12 +284,85 @@ pub fn contains_parent_dir(path: &Path) -> bool {
     path.components().any(|c| matches!(c, Component::ParentDir))
 }
 
+/// Whether `name` is a Windows reserved device name (`con`, `prn`, `aux`, `nul`, `com0`-`com9`,
+/// `lpt0`-`lpt9`) in any ASCII letter case, which cannot name a file or directory there.
+///
+/// Only the whole string is compared: `con.ts` or `con-1` are not matches, so a caller that adds
+/// an extension checks the stem. Workspace-internal and not part of the 1.0 API: server slugs,
+/// saved script names and generated tool file names share this one statement of the rule.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::is_reserved_device_name;
+///
+/// assert!(is_reserved_device_name("nul"));
+/// assert!(is_reserved_device_name("CoM1"));
+/// assert!(!is_reserved_device_name("com10"));
+/// assert!(!is_reserved_device_name("con.ts"));
+/// ```
+#[must_use]
+pub fn is_reserved_device_name(name: &str) -> bool {
+    let is_any = |words: &[&str], text: &[u8]| {
+        words
+            .iter()
+            .any(|word| text.eq_ignore_ascii_case(word.as_bytes()))
+    };
+    match name.as_bytes() {
+        stem @ [_, _, _] => is_any(&["con", "prn", "aux", "nul"], stem),
+        [stem @ .., b'0'..=b'9'] => is_any(&["com", "lpt"], stem),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn test_home() -> std::path::PathBuf {
         crate::HomeDir::from_env().unwrap().as_path().to_path_buf()
+    }
+
+    #[test]
+    fn is_reserved_device_name_matches_the_24_names_in_any_case() {
+        let numbered = ["com", "lpt"]
+            .into_iter()
+            .flat_map(|stem| (0..10).map(move |n| format!("{stem}{n}")));
+        let names: Vec<String> = ["con", "prn", "aux", "nul"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(numbered)
+            .collect();
+        assert_eq!(names.len(), 24);
+        for name in &names {
+            assert!(is_reserved_device_name(name), "{name}");
+            assert!(
+                is_reserved_device_name(&name.to_ascii_uppercase()),
+                "{name}"
+            );
+        }
+        assert!(is_reserved_device_name("CoM1"));
+    }
+
+    #[test]
+    fn is_reserved_device_name_rejects_lookalikes() {
+        for name in [
+            "",
+            "co",
+            "cons",
+            "con.ts",
+            "con-1",
+            "nul2",
+            "com",
+            "lpt",
+            "com10",
+            "lpta",
+            "conin$",
+            "\u{441}on",
+            "com\u{b9}",
+        ] {
+            assert!(!is_reserved_device_name(name), "{name:?}");
+        }
     }
 
     #[test]

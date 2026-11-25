@@ -57,7 +57,6 @@ jobs:
     needs: [verify]
     permissions:
       contents: read
-      actions: write # For uploading artifacts
     uses: ./.github/workflows/ci.yml
     with:
       full: true
@@ -71,7 +70,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      actions: write # For uploading artifacts
     strategy:
       fail-fast: false
       matrix:

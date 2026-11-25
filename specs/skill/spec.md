@@ -582,6 +582,7 @@ in `output_path`, distinct from `ParentTraversal`; see §8),
 - **Consumes** `mcp-core`: `metadata::{METADATA_FILE_NAME,
   METADATA_SCHEMA_VERSION, ServerMetadata}`, `sanitize_path_for_error`,
   `ServerSlug`, `ServerId`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`,
+  `is_reserved_device_name` (workspace-internal, saved scripts),
   `untrusted::*`, and (since #395) `confinement::{ConfinementError,
   ConfinementTarget, resolve_confined_path}` for `resolve_skill_output_path`'s
   walk — the `&ServerSlug` parameter gates `server_id` before that walk starts
@@ -648,9 +649,10 @@ in `output_path`, distinct from `ParentTraversal`; see §8),
   `description`, `tools` (`"server/tool"` strings), `writes` (`read_only` or `writes`); optional `parameters`
   (`[{name, description}]`); unknown keys refused; all tools on one server.
 - **Types and API** (`scripts.rs`, additive to the frozen W0 signatures): `RecipeName` is 1 to 64 of `[a-z0-9-]` with
-  no leading hyphen; `parse_header(&str) -> Result<ScriptHeader, ScriptError>` is the one header parser used by
-  `save`, `list`, `check` and by `run --save` (architect approved, on condition of one parser and a name re-check in
-  `save`); `ScriptHeader::server() -> Option<&ServerId>`; `ScriptError::TooManyScripts { limit }`.
+  no leading hyphen and is not a Windows device name (`ScriptError::InvalidName`, #701); `parse_header(&str) ->
+  Result<ScriptHeader, ScriptError>` is the one header parser used by `save`, `list`, `check` and by `run --save`
+  (architect approved, on condition of one parser and a name re-check in `save`); `ScriptHeader::server() ->
+  Option<&ServerId>`; `ScriptError::TooManyScripts { limit }`.
 - **Bounds:** `MAX_SCRIPT_BYTES` 64 KiB, `MAX_HEADER_BYTES` 8 KiB, `MAX_SCRIPTS_PER_SKILL` 50,
   `MAX_SCRIPT_PARAMETERS` 16, `MAX_SCRIPT_TOOLS` 64, `MAX_RECIPE_NAME_LENGTH` 64, `MAX_HEADER_TEXT_CHARS` 200
   (description, parameter name and description; control characters refused).
@@ -660,11 +662,12 @@ in `output_path`, distinct from `ParentTraversal`; see §8),
   overwrite) or `rename` (Replace). Returns the logical path `<skill_dir>/scripts/<name>.ts`.
 - **`list` and `check`:** read at most 50 `*.ts` regular files (sorted), the whole file only up to 64 KiB, only the
   header parsed; the header name must equal the file stem. `list` skips invalid files, `check` reports them; an
-  uninspectable `scripts/` is reported as one invalid entry `scripts`. `check` counts a tool of another server than the
-  recorded one as missing. Nothing is ever executed.
+  uninspectable `scripts/` is reported as one invalid entry `scripts`. A previously saved script with a device name
+  (for example `nul.ts`) is therefore skipped by `list` and reported by `check`; `run --save nul` is rejected. `check`
+  counts a tool of another server than the recorded one as missing. Nothing is ever executed.
 - **Server:** `save_skill` is unchanged: it writes `SKILL.md` only and never touches `scripts/` (FR-043.14).
 - **Open:** `scripts check` has no `--servers-dir`; the sidecar readers are duplicated in `stats` and `drift`
-  (follow-ups).
+  (follow-ups). The report of a device-named script does not say why it is rejected (#712).
 
 ## 14. Script-First Requirements
 

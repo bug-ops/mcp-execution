@@ -388,3 +388,71 @@ fn generate_sidecar_over_the_scan_cap_still_succeeds_and_warns_with_size_and_cap
         "expected one warning naming the size {size_text} and cap {cap_text}: {warnings:?}"
     );
 }
+
+fn is_device_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ["con", "prn", "aux", "nul"].contains(&lower.as_str())
+        || lower
+            .strip_prefix("com")
+            .or_else(|| lower.strip_prefix("lpt"))
+            .is_some_and(|digit| digit.len() == 1 && digit.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn typescript_names(code: &GeneratedCode) -> Vec<String> {
+    metadata(code)
+        .tools
+        .iter()
+        .map(|t| t.typescript_name.clone())
+        .collect()
+}
+
+#[test]
+fn generate_suffixes_a_tool_whose_file_name_would_be_a_windows_device_name() {
+    let mut raw: Vec<String> = ["con", "prn", "aux", "nul"].map(String::from).into();
+    for digit in 0..=9 {
+        raw.push(format!("com{digit}"));
+        raw.push(format!("lpt{digit}"));
+    }
+
+    let code = generate(&info(
+        raw.iter()
+            .map(|name| tool(name, json!({"type": "object"}), None))
+            .collect(),
+    ));
+
+    let expected: Vec<String> = raw.iter().map(|name| format!("{name}_2")).collect();
+    let mut actual = typescript_names(&code);
+    let mut sorted = expected.clone();
+    actual.sort();
+    sorted.sort();
+    assert_eq!(actual, sorted);
+    for name in &expected {
+        assert!(
+            file(&code, &format!("{name}.ts")).contains(name.as_str()),
+            "{name}.ts must export {name}"
+        );
+        assert!(file(&code, "index.ts").contains(name.as_str()), "{name}");
+    }
+    for generated in &code.files {
+        let stem = generated.path.rsplit('/').next().unwrap();
+        let stem = stem.split('.').next().unwrap();
+        assert!(!is_device_name(stem), "{}", generated.path);
+    }
+}
+
+#[test]
+fn generate_treats_device_names_case_insensitively_and_leaves_lookalikes_unchanged() {
+    let raw = ["CON", "Nul", "com10", "lpt", "console"];
+
+    let code = generate(&info(
+        raw.iter()
+            .map(|name| tool(name, json!({"type": "object"}), None))
+            .collect(),
+    ));
+
+    let names = typescript_names(&code);
+    assert!(names.iter().all(|n| !is_device_name(n)), "{names:?}");
+    for expected in ["CON_2", "com10", "lpt", "console"] {
+        assert!(names.iter().any(|n| n == expected), "{expected}: {names:?}");
+    }
+}

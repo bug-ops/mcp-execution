@@ -529,8 +529,9 @@ Traces to: BRD FR-049, SRS FR-049, issue #669 exit criteria; extends `NFR-MNT-01
 >
 > **Approval gate (#697).** `publish-crates` waits for approval in the `release` environment. Release artifacts are
 > retained for 10 days from upload (repository cap), so the approval must happen within 10 days; after that the crates
-> are published and the GitHub release job fails. The `build`, `publish-crates` and `release` checkouts do not persist
-> credentials (other checkouts: open follow-up #700). Making crates.io itself require the environment is open (#706).
+> are published and the GitHub release job fails. No checkout in `ci.yml` or `release.yml` persists credentials, and the
+> CI `coverage` job and the release `gate` and `build` jobs request only `contents: read` (#700). Making
+> crates.io itself require the environment is open (#706).
 >
 > **Cache policy (#692).** The repository cache quota is 10 GB. Beta legs save nothing, `publish-dry-run` and
 > `node-latest` restore only, the other cached CI jobs save on the default branch only, and the release workflow uses

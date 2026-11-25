@@ -706,7 +706,13 @@ async fn execute(
     } else {
         Vec::new()
     };
-    check_node_version().await?;
+    tokio::select! {
+        biased;
+        signal = termination.recv() => {
+            return Ok(cancelled_exit(signal, "the script was not started"));
+        }
+        checked = check_node_version() => checked?,
+    };
     if let Err(error) = dirs.prune_runs().await {
         tracing::debug!("could not prune old run directories: {error:#}");
     }

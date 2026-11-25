@@ -229,8 +229,12 @@ command-line positional must follow `--`.
 `lpt9` cannot name a directory on Windows and are rejected with `ServerIdSlugError::ReservedName` ("server_id must not
 be a Windows reserved device name") on every platform, by `new` and therefore by deserialization. Check order: `Empty`,
 `TooLong`, `InvalidCharacters`, `ReservedName`. Names that only resemble one (`con-1`, `nul2`, `com10`, `lpt`) are
-valid. The published JSON schema is unchanged and does not express the exclusion. File names of generated tools and
-saved scripts are not covered (open follow-up #701).
+valid. The published JSON schema is unchanged and does not express the exclusion.
+
+The rule is stated once, in `is_reserved_device_name(name: &str) -> bool` (`src/path.rs`, `#[doc(hidden)]`,
+workspace-internal, #701): true when the whole string equals one of the 24 names in any ASCII letter case; no
+extension stripping (`con.ts` and `con-1` are false). Server slugs, saved script names ([[../skill/spec]]) and
+generated tool file names ([[../codegen/spec]]) share it.
 
 `validate_server_id_slug` is private to this module and is the single place the rule lives. `ServerSlug` is the
 type of every public `server_id` whose producer validates the rule (`NFR-COM-035`); deserialization goes through
@@ -736,6 +740,8 @@ pub fn sanitize_path_for_error(path: &Path) -> String; // redacts home dir (from
 pub fn validate_path_segment(segment: &str) -> Option<Component<'_>>; // single plain component, no "..", no separator
 pub fn first_disallowed_identifier_char(s: &str) -> Option<char>; // first char failing UTS #39 Identifier_Status=Allowed
 pub fn contains_parent_dir(path: &Path) -> bool; // true if any component is `..`
+#[doc(hidden)]
+pub fn is_reserved_device_name(name: &str) -> bool; // workspace-internal, see `ServerSlug` (#701)
 ```
 On Windows/macOS, the home-directory component comparison inside `sanitize_path_for_error`
 (`components_match`/`replace_case_aware`) is both Unicode-case-insensitive (`str::to_lowercase`,
@@ -1169,15 +1175,23 @@ it would require either a request-wide (not per-field) budget threaded through e
 #[doc(hidden)]
 #[non_exhaustive]
 pub enum RmcpLogCap { Info, Warn }
-impl RmcpLogCap { pub const fn directive(self) -> &'static str; } // "rmcp=info" | "rmcp=warn"
+impl RmcpLogCap {
+    pub const fn directive(self) -> &'static str; // "rmcp=info" | "rmcp=warn"
+    pub fn cap_filter_directives(self, base_filter: &str) -> String;
+}
 ```
 
 The one statement of the `rmcp` log cap policy, free of `tracing` types, so `mcp-core` does not depend on
-`tracing-subscriber`. It is workspace-internal (`NFR-COM-032`): not part of the documented 1.0 API. Each binary
-parses the directive and adds it to its own `EnvFilter`: `mcp-cli` uses `Info`, or `Warn` for the quiet profile of
-`call`, `run` and `helper`; `mcp-server` uses `Info`. The cap replaces an equally specific `RUST_LOG=rmcp=...`
-directive rather than merging with it. The former `log_filter` module (`cap_rmcp_log_level`) and the
-`tracing-filter` feature were removed (#678).
+`tracing-subscriber`. It is workspace-internal (`NFR-COM-032`): not part of the documented 1.0 API. `mcp-cli` uses
+`Info`, or `Warn` for the quiet profile of `call`, `run` and `helper`; `mcp-server` uses `Info`. The former
+`log_filter` module (`cap_rmcp_log_level`) and the `tracing-filter` feature were removed (#678).
+
+The cap is a second filter combined with the base filter by logical AND, so it only lowers verbosity.
+`cap_filter_directives(base_filter)` returns `trace`, then `directive()`, then every comma-separated directive of
+`base_filter` that starts with `rmcp::` and has no span or field part, comma-joined. Those repeated directives keep
+their targets exempt from the cap; an `rmcp::` directive with a span or field part is not repeated, so the cap applies
+to it. Each binary parses the result into a `Targets` filter and replaces the `trace` default with the base filter's
+max level hint, so the cap does not raise the subscriber's max level for targets outside `rmcp`.
 
 ### Untrusted-text vectors (#624)
 
@@ -1191,9 +1205,9 @@ a capture of the function. The `untrusted_text` section of `mcp-codegen`'s `shar
 | Consumer | What it depends on from `mcp-core` |
 |---|---|
 | `mcp-introspector` | `ServerConfig`, `ServerId`, `ToolName`, `Transport`, `validate_server_config`, `Error`/`Result`, `annotations::{AnnotationTitle, Hint, ToolAnnotations}` |
-| `mcp-codegen` | `Error`/`Result`, `metadata::*` (writes `_meta.json`, v3), `annotations::*`, `provenance::ToolDigestEntry` (with `annotations`), `untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN, MAX_TOTAL_VARIATION_SELECTORS}` and `untrusted::BARE_IDENTIFIER_PATTERN` (rendered into the bridge), `helper_protocol::*` (rendered into the bridge via `BridgeContext`), `provenance::ToolEntryDigest` |
+| `mcp-codegen` | `Error`/`Result`, `is_reserved_device_name` (workspace-internal), `metadata::*` (writes `_meta.json`, v3), `annotations::*`, `provenance::ToolDigestEntry` (with `annotations`), `untrusted::{MAX_UNTRUSTED_FIELD_LEN, MAX_VARIATION_SELECTOR_RUN, MAX_TOTAL_VARIATION_SELECTORS}` and `untrusted::BARE_IDENTIFIER_PATTERN` (rendered into the bridge), `helper_protocol::*` (rendered into the bridge via `BridgeContext`), `provenance::ToolEntryDigest` |
 | `mcp-files` | `Error`/`Result` indirectly via `mcp-codegen`; `confinement::open_confined_write` directly (issue #504) |
-| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `ServerSlug`, `ServerId`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*` (including `read_server_metadata_async`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
+| `mcp-skill` | `sanitize_path_for_error`, `contains_parent_dir`, `is_reserved_device_name` (workspace-internal), `ServerSlug`, `ServerId`, `ServerIdSlugError`, `MAX_SERVER_ID_LENGTH`, `untrusted::*`, `metadata::*` (including `read_server_metadata_async`), `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path}` |
 | `mcp-server` | `ServerConfig`, `ServerId`, `ServerSlug`, `ServerIdSlugError`, `sanitize_path_for_error`, `contains_parent_dir`, `untrusted::*`, `metadata::{CATALOG_FILE_NAME, INDEX_FILE_NAME, METADATA_FILE_NAME, ServerMetadata}`, `cli::{LogFormat, LOG_FORMAT_ENV_VAR, RmcpLogCap}`, `confinement::{ConfinementError, ConfinementTarget, resolve_confined_path, write_confined_file}` |
 | `mcp-cli` | `cli::{OutputFormat, ExitCode, LogFormat, LOG_FORMAT_ENV_VAR, RmcpLogCap}`, `helper_protocol::*` (including `ResultSource`), `metadata::{read_server_metadata, read_server_metadata_async, MetadataReadError}`, `ServerConfig`/`ServerConfigBuilder`, `ServerSlug`, `ServerIdSlugError`, `provenance::{ConfigFingerprint, ToolDigest, ToolDigestEntry, ToolEntryDigest}`, `RedactedItems`/`RedactedUrl`, `Error` (for exit-code classification) |
 
@@ -1334,7 +1348,8 @@ digest, so it is Ask First and lands only with a schema bump.
 
 ### Workspace-internal (`NFR-COM-032`)
 
-`cli::RmcpLogCap` (`#[doc(hidden)]`), excluded from the semver promise.
+`cli::RmcpLogCap` (with `directive` and `cap_filter_directives`) and `is_reserved_device_name` (both
+`#[doc(hidden)]`), excluded from the semver promise.
 
 ### Removed before 1.0.0 (#687)
 

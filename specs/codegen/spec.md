@@ -175,7 +175,7 @@ into a consumer's own build).
 
 - `resolve_typescript_names(tools)` computes a collision-free
   `typescript_name` per tool via `disambiguate_output_filename`, which
-  combines two collision checks with different case sensitivity (numeric
+  combines these collision checks, with different case sensitivity (numeric
   suffix `_2`, `_3`, ... on collision, mirroring `disambiguate_identifier`'s
   scheme):
   - JS/TS reserved words (`delete`, `class`, `new`, ...) are checked
@@ -184,6 +184,11 @@ into a consumer's own build).
     form (`Delete`, `New`, `Import` are all legal identifiers). A tool
     literally named `delete` becomes `delete_2`; a tool named `Delete` is
     left as-is.
+  - Windows device names (`mcp_execution_core::is_reserved_device_name`, the 24 names of
+    [[../core/spec]]) are checked **case-insensitively**, because `<name>.ts` cannot be a file on
+    Windows: a tool named `nul` becomes `nul_2`, `CON` becomes `CON_2` (#701). File name, export name,
+    catalog `@see` and `_meta.json` `typescript_name` follow, since they share `typescript_name`. As
+    with other suffixes, a later tool resolving to the literal `con_2` moves on to `con_2_2`.
   - The fixed output filenames (`index`) and every previously-resolved tool
     name are checked **case-insensitively**, since `typescript_name` doubles
     as an output filename and filenames collide regardless of case on a
@@ -510,7 +515,8 @@ already exceed the cap for large servers.
 
 ## 11. Cross-Crate Contracts
 
-- **Consumes**: `mcp-core::metadata`/error types/forbidden-char constants;
+- **Consumes**: `mcp-core::metadata`/error types/forbidden-char constants, `is_reserved_device_name`
+  (workspace-internal);
   `mcp-introspector::{ServerInfo, ToolInfo}` and its `MAX_TOOL_COUNT`/
   `MAX_TOOL_NAME_LEN`/`MAX_TOOL_DESCRIPTION_LEN`/`MAX_SCHEMA_SIZE_BYTES`.
 - **Produced for** `mcp-files`: `GeneratedCode`/`GeneratedFile` are the

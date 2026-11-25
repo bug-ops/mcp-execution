@@ -3,10 +3,10 @@
 //! Generated tools and saved scripts are TypeScript files run directly by Node.js, so both
 //! commands need the same rule for "this Node.js can run a `.ts` file without a flag".
 
-use std::process::Stdio;
-
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tokio::process::Command;
+
+use super::probe::{CaptureError, PROBE_TIMEOUT, capped_stdout};
 
 /// Parsed Node.js version, as printed by `node --version`.
 ///
@@ -137,10 +137,14 @@ impl std::fmt::Display for NodeVersion {
 /// is installed (22.18.0 or later; 23.6.0 or later on the 23 line) and
 /// accessible, and returns its version string without the leading `v`.
 ///
+/// `node --version` gets 10 seconds. It runs as a process tree that is killed on timeout and
+/// when the returned future is dropped, so a hanging `node` shim leaves nothing behind.
+///
 /// # Errors
 ///
 /// Returns error if:
 /// - Node.js command not found in PATH
+/// - `node --version` does not answer within 10 seconds
 /// - Node.js version cannot be determined
 /// - Node.js cannot execute `.ts` files without a flag
 ///
@@ -156,32 +160,19 @@ impl std::fmt::Display for NodeVersion {
 /// # }
 /// ```
 pub async fn check_node_version() -> Result<String> {
-    // Check if node command exists
-    let output = Command::new("node")
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+    let mut command = Command::new("node");
+    command.arg("--version");
+    let output = tokio::time::timeout(PROBE_TIMEOUT, capped_stdout(command))
         .await
         .with_context(|| {
             format!(
-                "Node.js not found in PATH.\n\
-                 \n\
-                 Node.js {}+ is required to run generated TypeScript tools.\n\
-                 Install from: https://nodejs.org\n\
-                 \n\
-                 Or use a version manager:\n\
-                 - nvm: https://github.com/nvm-sh/nvm\n\
-                 - fnm: https://github.com/Schniz/fnm",
-                NodeVersion::FIRST_NATIVE_TS[0]
+                "Node.js did not answer `node --version` within {} s",
+                PROBE_TIMEOUT.as_secs()
             )
-        })?;
+        })?
+        .map_err(node_failure)?;
 
-    if !output.status.success() {
-        anyhow::bail!("Node.js is installed but not working correctly");
-    }
-
-    let version_str = String::from_utf8_lossy(&output.stdout);
+    let version_str = String::from_utf8_lossy(&output);
     let version_str = version_str.trim().trim_start_matches('v');
     let version = NodeVersion::parse(version_str).context("Failed to parse Node.js version")?;
 
@@ -202,9 +193,48 @@ pub async fn check_node_version() -> Result<String> {
     Ok(version.to_string())
 }
 
+fn node_failure(failure: CaptureError) -> anyhow::Error {
+    match failure {
+        CaptureError::Start(error) => anyhow!(error).context(format!(
+            "Node.js not found in PATH.\n\
+             \n\
+             Node.js {}+ is required to run generated TypeScript tools.\n\
+             Install from: https://nodejs.org\n\
+             \n\
+             Or use a version manager:\n\
+             - nvm: https://github.com/nvm-sh/nvm\n\
+             - fnm: https://github.com/Schniz/fnm",
+            NodeVersion::FIRST_NATIVE_TS[0]
+        )),
+        failure @ (CaptureError::Read(_) | CaptureError::Wait(_) | CaptureError::Exit(_)) => {
+            anyhow!(failure).context("Node.js is installed but not working correctly")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn node_failure_tells_a_missing_node_from_a_broken_one() {
+        #[cfg(unix)]
+        let status = std::os::unix::process::ExitStatusExt::from_raw(3 << 8);
+        #[cfg(windows)]
+        let status = std::os::windows::process::ExitStatusExt::from_raw(3);
+
+        let missing = node_failure(CaptureError::Start(std::io::ErrorKind::NotFound.into()));
+        assert!(
+            missing.to_string().starts_with("Node.js not found in PATH"),
+            "{missing:#}"
+        );
+        let broken = node_failure(CaptureError::Exit(status));
+        assert_eq!(
+            broken.to_string(),
+            "Node.js is installed but not working correctly"
+        );
+    }
 
     #[test]
     fn node_version_floor_matches_native_typescript_support() {

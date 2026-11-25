@@ -324,37 +324,37 @@ Issue #421: this crate is a *client* of third-party MCP servers
 unsanitized peer input at `debug` level. `RedactingWriter` only rewrites embedded URLs — it does
 not neutralize this, so without a cap, `--verbose` alone (`filter = EnvFilter::new("debug")`, no
 `RUST_LOG` involved at all) streams an untrusted server's raw stdout lines into stderr. `init_logging`
-closes this specific path — *debug-level, raw-line* logging — by adding the directive of
+closes this specific path — *debug-level, raw-line* logging — with the cap of
 `mcp_execution_core::cli::RmcpLogCap` (the one statement of the cap policy, also used by `mcp-server`, see
-[[../core/spec]]; #608, #678) in the private `runner::log_filter`, applied to *every* base filter — not just the
-`try_from_default_env()` fallback, since a directive folded only into that fallback string would never apply to the
-verbose branch (which never calls `try_from_default_env` at all) and is dead code whenever `RUST_LOG` parses
-successfully:
+[[../core/spec]]; #608, #678), built in the private `runner::log_filter(verbose, profile, env) ->
+Result<(EnvFilter, Targets), ParseError>` and applied to *every* base filter (`--verbose`, `RUST_LOG`, either profile
+default). The subscriber applies base, then cap, then the format layer.
 
-```rust
-Ok(base.add_directive(cap.directive().parse()?)) // cap: RmcpLogCap::Info, or Warn for the quiet profile
-```
+**AND filter (#702).** An event is emitted only if the base filter enables it **and** the cap does, so the cap only
+lowers verbosity. The cap is a `Targets` filter parsed from `cap_filter_directives(&base.to_string())`: `rmcp` at
+`info` (`warn` for the quiet profile default), plus the base filter's `rmcp::` target directives (without span or
+field parts) as exemptions. `cap_filter_directives` returns a `trace` default, which the binary replaces with the base
+filter's max level hint. With the `info` cap:
+
+| Base filter | `rmcp` events emitted |
+|---|---|
+| `RUST_LOG=error` | errors only |
+| `--verbose` or `RUST_LOG=debug` | up to `info` |
+| `RUST_LOG=rmcp=debug` | up to `info` |
+| `RUST_LOG=rmcp=error` | errors only |
+| `RUST_LOG=rmcp::transport=debug` | `rmcp::transport` up to `debug`, nothing else under `rmcp` |
+
+The last row is the escape hatch: a directive naming an `rmcp::` submodule is a deliberate request and is not capped.
+Directives with a span or field part are not exempt.
 
 The cap is level-based, not a content filter: `rmcp` also logs a `Debug`-formatted peer
-notification at `info` (`service.rs`'s `tracing::info!(?notification, ...)`), which `rmcp=info`
-does not and cannot suppress. That site is mitigated (`?` renders via `Debug`, which escapes
+notification at `info` (`service.rs`'s `tracing::info!(?notification, ...)`), which an `info` cap
+does not suppress. That site is mitigated (`?` renders via `Debug`, which escapes
 control characters, unlike the raw-`Display` `message`-field sites this cap targets), not
 eliminated — the full notification content still reaches stderr. Closing it would require
 content-level sanitization of `rmcp`'s own event, not a level directive, and is out of scope here.
 
-`log_filter` adds an `rmcp=<cap>` directive (`info` here; `warn` for the quiet profile) via `EnvFilter::add_directive`.
-`tracing_subscriber` orders directives by target specificity, so this directive (more specific
-than a bare global `debug`) wins over it. An operator who explicitly sets a *more specific*
-directive, e.g. `RUST_LOG=rmcp::transport=debug`, still wins over this one — intentional, since
-the goal is closing the accidental broad-`debug` case (including plain `--verbose`), not blocking
-a deliberate request for `rmcp` transport debug logs; this is the escape hatch for an operator who
-needs one. Specificity is a different axis from level, though: an *equally* specific
-`RUST_LOG=rmcp=debug` (same `rmcp` target this cap sets, different level) is not merged with this
-cap's `rmcp=info` — `tracing_subscriber`'s `Directive` ordering does not compare level, so
-`EnvFilter::add_directive` on a same-target directive *replaces* the existing entry, silently
-downgrading an operator's explicit `rmcp=debug` to `info`. Both the escape hatch and the
-replace-not-merge behavior are pinned by dedicated tests rather than assumed. Being a pure
-function (no `std::env` access), `log_filter` is unit-tested directly with a scoped
+Being a pure function (no `std::env` access), `log_filter` is unit-tested directly with a scoped
 subscriber rather than by mutating `RUST_LOG` in-process (parallel test threads share one
 process) — mirroring the `SharedBuf`-based scoped-subscriber pattern `runner.rs`'s
 `RedactingWriter` tests already establish.
@@ -399,18 +399,18 @@ command.
 
 `run(source: ServerSource, name: Option<String>, output_dir: Option<PathBuf>, observed_shapes: Option<PathBuf>, dry_run: bool, output_format) -> Result<ExitCode>`:
 
-1. `resolve_server_config` → `discover_server_info`: if `--name` is given,
-   it is validated with `ServerSlug::new` **before**
-   the connection attempt and only overrides `ServerInfo.id` once valid —
+1. `resolve_server_config`, then `name_override`: if `--name` is given,
+   it is validated with `ServerSlug::new` and only overrides `ServerInfo.id` once valid —
    an invalid `--name` (traversal shape, absolute path, or simply outside
    the `[a-z0-9-]` slug charset, e.g. `My Server!`, or a Windows reserved device name, #696) is a
    hard error with exit 2 (`INVALID_INPUT`, `CoreError::InvalidArgument`; the rejected name is sanitized and quoted;
    `drift` shares the check) instead of being silently slugified into a
    different id. **Breaking behavior change** from the pre-#311 CLI, which
    constructed `ServerId::new(custom_name)` directly with no validation.
-2. If the server has zero tools: logs a warning and returns
-   `ExitCode::SUCCESS` (not an error) without generating anything.
-3. `resolve_server_dir_name` turns `server_info.id` into the directory
+2. `generated_location(<--name or the server id>, ..)` runs **before any server process is started or connection
+   opened** (#703). It resolves the base directory with `ServersDir::resolve(output_dir)` (section 3, replaces
+   `resolve_base_dir`, #618; default `~/.claude/servers`, a leading `~` component is expanded, a bare `~` included),
+   and `resolve_server_dir_name` turns the id into the directory
    name, re-validating it with `ServerSlug::new` regardless of which arm
    produced the id: `derive_server_id_from_path_or_name` (stdio command),
    `derive_server_id_from_url` (http/sse — see [[#3. common.rs]]), or the
@@ -422,8 +422,10 @@ command.
    ready-to-use `--name` slug vs. framing the failure as an internal error
    for the other arms, since reaching it there would mean one of their own
    checks has a bug) (issue #311). The two derivations append `-server` to a reserved device name (`aux` gives
-   `aux-server`, #696), so a derived id always passes. A `--from-config` key that is not a slug is rejected only
-   after introspection (open follow-up #703).
+   `aux-server`, #696), so a derived id always passes. A bad key or an unusable home or `--servers-dir` therefore fails
+   without starting the server, also for a server that has no tools. A valid `--name` bypasses the key check.
+3. `discover_server_info` (connect, introspect, apply the validated override). If the server has zero tools: logs a
+   warning and returns `ExitCode::SUCCESS` (not an error) without generating anything.
 4. `PackageGenerator::generate` (uncategorized — no LLM step in this
    path, unlike `mcp-server`'s `save_categorized_tools`). When `--observed-shapes <FILE>` is given
    (#587), the file is read **before** the connection attempt by `read_observed_tail` and its text
@@ -434,12 +436,11 @@ command.
    such a line like any malformed one). A file of any size therefore never fails the command; only an
    unreadable or missing file does (`anyhow` error "failed to read observed shapes from <path>"). The
    flag changes nothing but the result-type hint of tools without an output schema.
-5. `ServersDir::resolve(output_dir)` (section 3, replaces `resolve_base_dir`, #618) — defaults to `~/.claude/servers`; a leading `~` component is expanded (a bare `~` included).
-6. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
+5. **`--dry-run`**: renders a `DryRunResult` (`FilePreview` per file: path +
    size, human-readable `format_size`) **without writing anything to
    disk** — the only place in this workspace that previews generated
    output without ever touching the filesystem.
-7. Otherwise: `FilesBuilder::from_generated_code(code, "/").build()`, then
+6. Otherwise: `FilesBuilder::from_generated_code(code, "/").build()`, then
    `FileSystem::export_to_filesystem_with_options(output_path,
    &ExportOptions::new().with_confine_to(base_dir))` — **not**
    `FilesBuilder::build_and_export`, which treats its target as a
@@ -449,7 +450,7 @@ command.
    staging/swap (a re-run with fewer tools deletes stale tool files in that
    server's own directory, but never touches sibling servers under the
    same `base_dir`). `with_confine_to(base_dir)` is a second,
-   defense-in-depth layer behind the id-sanitization in step 3: a future
+   defense-in-depth layer behind the id-sanitization in step 2: a future
    caller that skipped that sanitization fails loudly instead of writing
    outside `base_dir`. See [[../files/spec#5. Atomic Export
    (`export_to_filesystem_with_options`)]] and
@@ -627,7 +628,8 @@ script with a top-level `for await` fails with a syntax error under `run`; name 
    22.18.0 or later on the 22 line, 23.6.0 or later on the 23 line, and any later major. Node.js 18 and
    20, 22.6 to 22.17 (which need `--experimental-strip-types`) and 23.0 to 23.5 are rejected, and the error names
    the minimum (`NodeVersion`, #564). The same minimum appears in the README and the usage guide. A missing or
-   unsuitable Node.js is not fatal by itself: Bun and then Deno are probed (below).
+   unsuitable Node.js is not fatal by itself: Bun and then Deno are probed (below). `node --version` is bounded
+   (#705, see **Node.js version check**).
 2. On Unix only: makes every `.ts` file executable (`files_made_executable`
    count) anywhere under `~/.claude/servers/`, at any depth — the walk
    recurses into nested subdirectories (e.g. `{server-id}/_runtime/`) rather
@@ -638,6 +640,13 @@ script with a top-level `for await` fails with a syntax error under `run`; name 
    shared `ServersDir::resolve(None)` (section 3).
 3. Reports whether `~/.claude/mcp.json` exists, printing a starter example
    if not.
+
+**Node.js version check (#705, `runtime/node.rs`, shared by `setup` and `run`).** `check_node_version` runs
+`node --version` as a process tree through the same capture helper as the runtime probe (null stdin and stderr, stdout
+capped at 4096 bytes) with a 10 s limit. The tree is killed on timeout and when the check is dropped. Failures: a
+spawn failure gives the "Node.js not found in PATH" message; a read or wait failure or a non-zero exit gives
+"Node.js is installed but not working correctly"; a timeout gives "Node.js did not answer `node --version` within
+10 s". In `setup` each of these falls back to the Bun and Deno probe.
 
 **Runtime probe (#685, `runtime/probe.rs`).** Runs only without a suitable Node.js.
 
@@ -661,10 +670,9 @@ script with a top-level `for await` fails with a syntax error under `run`; name 
 
 **Signals.** `setup` races every check against SIGINT, SIGTERM and, on Unix, SIGHUP and SIGQUIT (Ctrl-C and
 Ctrl-Break on Windows), prints `setup cancelled by <SIGNAL>` on stderr and exits `128 + signal number`. A signal
-ignored at startup stays ignored; SIGTERM is always handled. A running probe and its whole process tree are stopped,
-on timeout as well. Residuals: SIGKILL of `setup` can leave a hanging probe, and a signal in the instant a shim forks
-can miss that child. The `node --version` check has no timeout and is not stopped with a cancelled `setup` (open
-follow-up #705).
+ignored at startup stays ignored; SIGTERM is always handled. A running probe or `node --version` check and its whole
+process tree are stopped, on timeout as well. Residuals: SIGKILL of `setup` can leave a hanging probe, and a signal in
+the instant a shim forks can miss that child.
 
 Non-Unix platforms always report `servers_dir_found: false`,
 `files_made_executable: 0`, `skipped_entries: 0`, `failed_entries: 0` (permission bits aren't a
@@ -853,7 +861,8 @@ itself.
 - Signals (#627, `runtime/signal.rs`, `commands/run.rs`, `runtime/exec.rs`): `Termination::install` registers SIGINT, SIGTERM,
   SIGHUP and SIGQUIT on Unix (`RunnerSignal::{Interrupt, Terminate, Hangup, Quit}`), and Ctrl-C and Ctrl-Break on Windows (both report as SIGINT); a failed registration logs a warning and
   that source stays silent. The handle is installed right after `refuse_inside_run` and is raced against every phase:
-  reading a stdin script and writing its snapshot, the type check, a pre-spawn check, and the script process. The first
+  reading a stdin script and writing its snapshot, the Node.js version check (bounded to 10 s, see **Node.js version
+  check**), the type check, a pre-spawn check, and the script process. The first
   signal wins, and cancellation is checked **before** the script's own exit status (`biased` select), so a script that traps
   SIGINT and exits 0 still gives 130 when the signal is delivered to the runner (a `kill -INT <runner>`, or a terminal Ctrl-C
   off a terminal-owned run; the script is in its own group on Unix and does not receive that SIGINT itself, the runner kills its
@@ -863,10 +872,11 @@ itself.
   be cancelled, and only an `Ok` result reaches `process::exit`, so an `Err` would leave the runtime waiting for stdin EOF.
   For the same reason a failed write of the cancel notice or of the report (a closed or broken stderr or stdout) is only
   logged. A cancel before the script starts writes `run cancelled by <SIGNAL>; the script was not read` (stdin script not yet
-  read) or `...; the script was not started` (type check or pre-spawn) to stderr, and the run directory (a stdin snapshot included) is
-  removed best-effort; the pre-spawn `now_or_never` check is best-effort, a signal that slips past it is caught by the cancel-first
-  select and kills the freshly spawned node (same exit code). A cancelled script reports the trailer status `cancelled by
-  SIGINT|SIGTERM|SIGHUP|SIGQUIT` and JSON `script_status` the same text; the call journal summary is printed (the status is not `exit 0`).
+  read) or `...; the script was not started` (Node.js version check, type check or pre-spawn) to stderr, and the run
+  directory (a stdin snapshot included) is removed best-effort; the pre-spawn `now_or_never` check is best-effort, a
+  signal that slips past it is caught by the cancel-first select and kills the freshly spawned node (same exit code).
+  A cancelled script reports the trailer status `cancelled by SIGINT|SIGTERM|SIGHUP|SIGQUIT` and JSON `script_status`
+  the same text; the call journal summary is printed (the status is not `exit 0`).
 - Wrap-up (`wrap_up` in `commands/run.rs`): after the script ends, `run` waits for `helper.finish()` (closing the helper and
   the MCP sessions) **without a bound** while no signal has arrived, so a normal run always reports its call summary, the
   `--dry-run` report and the journal marker. The bound `WRAP_UP_BOUND` (4 s) applies only once a signal has arrived: the
@@ -994,19 +1004,20 @@ itself.
   (`name_override()` and `generated_location()` in `commands/generate.rs`; `resolve_server_dir_name` takes
   `&ServerId`), so a package generated with `--name` or `--servers-dir` is found. The skills directory for
   FR-045.18 is `SkillsDir::resolve(None).skill(<id>)` (`~/.claude/skills/<id>`), id being the `--name` override or the server id.
-- FR-045.18 (wave 2): after a `ToolsDiffer` with removed tools, `scripts_using()` lists the saved scripts
-  (`scripts::list`) that name a removed tool of this server, through the same bounded and sanitised `NameList` (report
-  field `scripts_using_removed_tools`, text heading "saved scripts using a removed tool"). Best effort: a missing
-  skill directory or a `list` error gives no names. Only removed tools count; scripts that use a changed tool are
-  not listed. `read_recorded` is gone (#618): `drift` and `scripts check` both call
-  `read_generated_metadata_async`.
+- FR-045.18 (wave 2, #707): after a `ToolsDiffer` with removed or changed tools, `scripts_using()` makes one
+  `scripts::list` call and returns two lists of saved scripts of this server: those that name a removed tool (report
+  field `scripts_using_removed_tools`, text heading "saved scripts using a removed tool") and those that name a
+  changed tool (`scripts_using_changed_tools`, heading "saved scripts using a changed tool"). Both fields are always
+  present, each a bounded and sanitised `NameList` (`{names, more}`) in listing order; a script naming both kinds is
+  in both. Best effort: a missing skill directory or a `list` error gives no names. `read_recorded` is gone (#618):
+  `drift` and `scripts check` both call `read_generated_metadata_async`.
 
 ### Logging profile for `call`, `run` and `helper`
 
 `Commands::log_profile()` returns `LogProfile::{Standard, Quiet}`. `call`, `run` and the hidden `helper` use `Quiet`:
 the default level is `warn` and rmcp is capped at `warn`. `--verbose` or `RUST_LOG` restores the standard behaviour
 (rmcp capped at `info`). `runner.rs`: `init_logging(verbose, log_format, profile)`,
-`log_filter(verbose, profile, env)` (adds the `RmcpLogCap` directive); `run` passes
+`log_filter(verbose, profile, env)` (returns the base filter and the `RmcpLogCap` filter, section 4); `run` passes
 `cli.command.log_profile()`. Reason: a script or a model reads the process output, so tracing lines must not mix into
 it.
 
@@ -1583,7 +1594,7 @@ command-line side.
 
 **Why.** Nothing in the CLI saves, lists or checks a script. The `skill` command writes `SKILL.md` through a
 temporary file and `rename` (`commands/skill.rs:336-352`) into a segment directory it creates and never replaces
-(`:376-389`), whereas `generate` replaces the whole server directory (`commands/generate.rs:441`, §7 step 7);
+(`:376-389`), whereas `generate` replaces the whole server directory (`commands/generate.rs:441`, §7 step 6);
 saved scripts therefore belong beside `SKILL.md`, and the commands that touch them must respect that.
 
 **Requirements.**
@@ -1628,7 +1639,7 @@ recorded at generation. The locked `rmcp` 3.10.0 carries `ttl_ms` and `cache_sco
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-045.10 | WHEN the check runs THE SYSTEM SHALL resolve the server as `generate` does (`ServerSource`, §3) and obtain the live tool list through `Introspector::discover_server`, adding no second connection path, and SHALL derive the generated directory as `generate` derives it (§7 step 3) | must |
+| FR-045.10 | WHEN the check runs THE SYSTEM SHALL resolve the server as `generate` does (`ServerSource`, §3) and obtain the live tool list through `Introspector::discover_server`, adding no second connection path, and SHALL derive the generated directory as `generate` derives it (§7 step 2) | must |
 | FR-045.11 | WHEN the check compares THE SYSTEM SHALL compute the live digest with the one mapping and function `generate` uses, and WHEN the config fingerprint differs from the recorded one SHALL report that the endpoint differs rather than present a tool difference as the server changing | must |
 | FR-045.12 | WHEN the digests differ THE SYSTEM SHALL name the tools present only in the live list and only in `_meta.json`; WHEN the names are identical but the digests differ and no per-tool digests are recorded THE SYSTEM SHALL report that the tool list differs and that which tool changed cannot be determined from the recorded data | must |
 | FR-045.13 | WHERE per-tool digests are recorded THE SYSTEM SHALL also name tools present on both sides whose digest differs, and a change confined to tool annotations SHALL be reported as drift once the digest decision of the `_meta.json` v3 registry allows it | should |
@@ -1651,7 +1662,7 @@ recorded at generation. The locked `rmcp` 3.10.0 carries `ttl_ms` and `cache_sco
 **Resolved and open decisions.**
 
 - Resolved: the command is `drift <ServerFlags> [--name] [--servers-dir]`; it exits 5 (`CHECK_FAILED`) on drift or an endpoint that differs. `ttlMs` is reported, not honoured (section 16).
-- Resolved (#688, supersedes the #683 deferral): per-tool digests are recorded as the optional `tools[].digest`, and `drift` names changed tools ([[../core/spec#7. Per-tool digests (#688)]]). FR-045.13 is implemented; FR-045.18 covers removed tools only.
+- Resolved (#688, supersedes the #683 deferral): per-tool digests are recorded as the optional `tools[].digest`, and `drift` names changed tools ([[../core/spec#7. Per-tool digests (#688)]]). FR-045.13 is implemented; FR-045.18 covers removed and changed tools (#707).
 
 Ask first: changing `ServerInfo` public fields to carry `ttl_ms` and `cache_scope`;
 the exit code values.
