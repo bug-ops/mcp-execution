@@ -1,0 +1,16 @@
+# LEAK flags of the terminal and helper acceptance binaries (#666).
+#
+# On macOS a test spawned in parallel can inherit another test's stdout or stderr pipe, and it and
+# its descendants then keep that pipe open after the flagged test has exited. An lsof sample found
+# no other holder besides a test's own HTTP fixture, which is killed and waited before the test
+# ends. Linux showed 0 flags in 60 parallel runs.
+#
+# `threads-required` runs these tests with nothing spawned beside them; `leak-timeout` alone is not
+# enough. LEAK flags in 30 macOS runs of `acceptance_run_tty` and `acceptance_helper`: 4 with
+# `leak-timeout` only, 0 with both. Cost with those two: about 25 s on a full workspace run (27 s to
+# 52 s). `acceptance_run_tty_ignored_keys` is a terminal binary too. Other binaries are not covered.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(acceptance_run_tty) | binary(acceptance_run_tty_ignored_keys) | binary(acceptance_helper)'
+leak-timeout = "2s"
+threads-required = "num-test-threads"

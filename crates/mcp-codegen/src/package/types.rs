@@ -1,6 +1,6 @@
-//! Types for progressive loading code generation.
+//! Render contexts of the SDK generator.
 //!
-//! Defines data structures used during progressive code generation,
+//! Defines the data structures used during generation,
 //! where each tool is generated as a separate file.
 
 use crate::package::observed::{
@@ -17,36 +17,8 @@ use serde::{Deserialize, Serialize};
 /// Context for rendering a single tool template.
 ///
 /// Contains all data needed to generate one tool file in the
-/// progressive loading pattern.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::package::ToolContext;
-/// use mcp_execution_core::helper_protocol::ResultSource;
-///
-/// let context = ToolContext {
-///     server_id: "github".to_string(),
-///     name: "create_issue".to_string(),
-///     name_literal: "create_issue".to_string(),
-///     server_id_literal: "github".to_string(),
-///     typescript_name: "createIssue".to_string(),
-///     description: "Creates a new issue".to_string(),
-///     params_description: None,
-///     params_type: "{ title: string }".to_string(),
-///     result_type: "unknown | undefined".to_string(),
-///     result_source: ResultSource::Content,
-///     observed_hint: None,
-///     category: Some("issues".to_string()),
-///     keywords: Some("create,issue,new,bug".to_string()),
-///     short_description: "Create a new issue".to_string(),
-///     annotation_tags: vec![],
-/// };
-///
-/// assert_eq!(context.server_id, "github");
-/// ```
+/// generated package.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[doc(hidden)]
 pub struct ToolContext {
     /// MCP server identifier, sanitized for safe embedding in a `JSDoc` comment
     pub server_id: String,
@@ -86,24 +58,7 @@ pub struct ToolContext {
 /// Context for rendering the index.ts template.
 ///
 /// Contains server-level metadata and list of all tools.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::package::IndexContext;
-///
-/// let context = IndexContext {
-///     server_name: "GitHub".to_string(),
-///     server_version: "1.0.0".to_string(),
-///     tool_count: 30,
-///     tools: vec![],
-///     categories: None,
-/// };
-///
-/// assert_eq!(context.tool_count, 30);
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[doc(hidden)]
 pub struct IndexContext {
     /// Server name for documentation
     pub server_name: String,
@@ -122,22 +77,6 @@ pub struct IndexContext {
 ///
 /// Lighter-weight than full `ToolContext`, used only for
 /// re-exports and documentation in index.ts.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::package::ToolSummary;
-///
-/// let summary = ToolSummary {
-///     typescript_name: "createIssue".to_string(),
-///     description: "Creates a new issue".to_string(),
-///     category: Some("issues".to_string()),
-///     keywords: Some("create,issue,new".to_string()),
-///     short_description: Some("Create a new issue".to_string()),
-/// };
-///
-/// assert_eq!(summary.typescript_name, "createIssue");
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSummary {
     /// TypeScript-friendly name (camelCase)
@@ -183,26 +122,7 @@ pub struct ToolCategorization {
 /// Category information for grouped tool display in index.
 ///
 /// Groups tools by category for organized documentation.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::package::{CategoryInfo, ToolSummary};
-///
-/// let category = CategoryInfo::new("issues".to_string(), vec![
-///         ToolSummary {
-///             typescript_name: "createIssue".to_string(),
-///             description: "Creates a new issue".to_string(),
-///             category: Some("issues".to_string()),
-///             keywords: Some("create,issue".to_string()),
-///             short_description: Some("Create issue".to_string()),
-///         },
-///     ]);
-///
-/// assert_eq!(category.name, "issues");
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct CategoryInfo {
     /// Category name
     pub name: String,
@@ -232,23 +152,6 @@ impl ToolCategorization {
             keywords,
             short_description,
         }
-    }
-}
-
-impl CategoryInfo {
-    /// Creates a category from its name and tools.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mcp_execution_codegen::package::CategoryInfo;
-    ///
-    /// let category = CategoryInfo::new("issues".to_string(), vec![]);
-    /// assert!(category.tools.is_empty());
-    /// ```
-    #[must_use]
-    pub const fn new(name: String, tools: Vec<ToolSummary>) -> Self {
-        Self { name, tools }
     }
 }
 

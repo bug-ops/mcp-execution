@@ -1,9 +1,9 @@
 //! Generate command implementation.
 //!
-//! Generates progressive loading TypeScript files from MCP server tool definitions.
+//! Generates a typed TypeScript SDK from MCP server tool definitions.
 //! This command:
 //! 1. Introspects the server to discover tools and schemas
-//! 2. Generates TypeScript files for progressive loading (one file per tool)
+//! 2. Generates TypeScript files (one file per tool)
 //! 3. Saves files to `~/.claude/servers/{server-id}/` directory
 
 use super::common::{
@@ -14,7 +14,8 @@ use anyhow::{Context, Result};
 use mcp_execution_codegen::GeneratedCode;
 use mcp_execution_codegen::package::PackageGenerator;
 use mcp_execution_core::cli::{ExitCode, OutputFormat};
-use mcp_execution_core::{ServerConfig, ServerId, ServerSlug};
+use mcp_execution_core::untrusted::sanitize_untrusted_inline;
+use mcp_execution_core::{Error as CoreError, ServerConfig, ServerId, ServerSlug};
 use mcp_execution_files::{ExportOptions, FilesBuilder};
 use mcp_execution_introspector::{Introspector, ServerInfo};
 use serde::Serialize;
@@ -22,7 +23,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-/// Result of progressive loading code generation.
+/// Result of TypeScript SDK generation.
 #[derive(Debug, Serialize)]
 struct GenerationResult {
     /// Server ID
@@ -84,12 +85,12 @@ fn format_size(bytes: usize) -> String {
 
 /// Runs the generate command.
 ///
-/// Generates progressive loading TypeScript files from an MCP server.
+/// Generates a typed TypeScript SDK from an MCP server.
 ///
 /// This command performs the following steps:
 /// 1. Builds `ServerConfig` from CLI arguments or loads from ~/.claude/mcp.json
 /// 2. Introspects the MCP server to discover tools
-/// 3. Generates TypeScript files (one per tool) using progressive loading pattern
+/// 3. Generates TypeScript files (one per tool) into a typed SDK
 /// 4. Exports VFS to `~/.claude/servers/{server-id}/` directory
 ///
 /// # Arguments
@@ -228,7 +229,7 @@ fn read_observed_tail(path: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(complete_lines).into_owned())
 }
 
-/// Generates progressive-loading TypeScript code for `server_info`, with the result shapes in
+/// Generates the TypeScript SDK for `server_info`, with the result shapes in
 /// `observed_jsonl` when given.
 ///
 /// # Errors
@@ -247,10 +248,7 @@ fn generate_code(
         .generate(server_info, server_config)
         .context("failed to generate TypeScript code")?;
 
-    info!(
-        "Generated {} files for progressive loading",
-        generated_code.file_count()
-    );
+    info!("Generated {} files", generated_code.file_count());
 
     Ok(generated_code)
 }
@@ -320,12 +318,18 @@ fn resolve_server_dir_name(
 ///
 /// # Errors
 ///
-/// Returns an error if `name` is not a valid server id.
+/// Returns [`CoreError::InvalidArgument`] if `name` is not a valid server id.
 pub fn name_override(name: Option<&str>) -> Result<Option<ServerId>> {
     name.map(|custom_name| {
         ServerSlug::new(custom_name)
             .map(ServerId::from)
-            .with_context(|| format!("invalid --name '{custom_name}'"))
+            .map_err(|source| {
+                CoreError::InvalidArgument(format!(
+                    "invalid --name {:?}: {source}",
+                    sanitize_untrusted_inline(custom_name)
+                ))
+                .into()
+            })
     })
     .transpose()
 }

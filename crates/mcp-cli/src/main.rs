@@ -7,7 +7,7 @@
 //!
 //! The CLI is organized around subcommands:
 //! - `introspect` - Analyze MCP servers and display capabilities
-//! - `generate` - Generate progressive loading TypeScript files
+//! - `generate` - Generate a typed TypeScript SDK
 //! - `server` - Manage MCP server connections
 //! - `completions` - Generate shell completions
 //!
@@ -17,7 +17,7 @@
 //! # Introspect a server
 //! mcp-execution-cli introspect github-mcp-server
 //!
-//! # Generate progressive loading files
+//! # Generate the TypeScript SDK
 //! mcp-execution-cli generate github-mcp-server --env GITHUB_TOKEN=ghp_xxx
 //! ```
 

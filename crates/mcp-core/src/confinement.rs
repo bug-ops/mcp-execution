@@ -95,9 +95,8 @@ pub enum ConfinementError {
         /// sole constructor of this variant, and it always passes an already-sanitized string
         /// here. A caller building this variant directly (there are none in this workspace) must
         /// sanitize the value the same way, or a raw value reaches every downstream consumer that
-        /// embeds this field (see `mcp-execution-server`'s `OutputDirError::InvalidServerId` and
-        /// `mcp-execution-skill`'s `OutputPathError::InvalidServerId`, both of which move this
-        /// field verbatim into their own `server_id` without re-sanitizing).
+        /// embeds this field (see `mcp-execution-server`'s `OutputDirError::InvalidServerId`, which
+        /// moves this field verbatim into its own `server_id` without re-sanitizing).
         segment: String,
     },
 

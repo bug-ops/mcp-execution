@@ -14,8 +14,14 @@
 //! terminal. Afterwards the terminal returns to the runner when the script's group, or a group
 //! that no longer has any process, holds it.
 //!
+//! Node resets an inherited `SIGINT` or `SIGQUIT` ignore, so for each of the two that was ignored
+//! at startup the matching terminal key (Ctrl-C, Ctrl-\) is disabled for the whole terminal while
+//! the script runs and restored afterwards (#693), unless the script set a key of its own
+//! meanwhile.
+//!
 //! A `SIGKILL` of the runner cannot restore anything: the terminal stays with the script's group,
-//! which is orphaned, and the shell may report an input/output error when it reads the terminal.
+//! which is orphaned, the shell may report an input/output error when it reads the terminal, and
+//! disabled keys stay disabled until `stty sane`.
 
 use crate::runtime::exec::ScriptStatus;
 use crate::runtime::signal::RunnerSignal;
@@ -25,6 +31,8 @@ use crate::runtime::signal::RunnerSignal;
 /// While the script's group owns the terminal, Ctrl-C, Ctrl-\ and a terminal hang-up are
 /// delivered to it and not to the runner, so the runner reports them as its own cancellation
 /// (exit 130, 131 or 129) instead of a script failure. Other statuses are returned unchanged.
+/// Ctrl-C and Ctrl-\ do not occur when their signal was ignored at startup: the keys are
+/// disabled for the run.
 pub const fn terminal_cancellation(status: ScriptStatus) -> ScriptStatus {
     match status {
         ScriptStatus::Signal(1) => ScriptStatus::Cancelled(RunnerSignal::Hangup),
@@ -51,7 +59,11 @@ mod unix {
     use rustix::process::{
         Pid, Signal as RustixSignal, getpgrp, kill_process_group, test_kill_process_group,
     };
-    use rustix::termios::{tcgetpgrp, tcsetpgrp};
+    use rustix::termios::{
+        OptionalActions, SpecialCodeIndex, Termios, tcgetattr, tcgetpgrp, tcsetattr, tcsetpgrp,
+    };
+
+    use crate::runtime::signal::{TerminalDispositions, startup_terminal_dispositions};
 
     /// How often the script group is sent `SIGCONT`.
     const STOP_POLL: Duration = Duration::from_millis(100);
@@ -67,6 +79,8 @@ mod unix {
         tty: File,
         runner: Pid,
         script: Pid,
+        /// Restores itself when dropped, so on every path out of this guard's drop.
+        _disabled_keys: Option<DisabledKeys>,
     }
 
     impl ForegroundGroup {
@@ -76,6 +90,9 @@ mod unix {
         /// terminal, is not the terminal's foreground group itself, or the hand-over fails. The
         /// group is sent `SIGCONT` afterwards: the script may already have been stopped by
         /// SIGTTIN while it still was a background group.
+        ///
+        /// The keys of signals ignored at startup are disabled before the hand-over; a failed
+        /// hand-over restores them.
         pub fn hand_over(script_leader: u32) -> Option<Self> {
             let script = i32::try_from(script_leader).ok().and_then(Pid::from_raw)?;
             let tty = OpenOptions::new()
@@ -87,6 +104,7 @@ mod unix {
             if tcgetpgrp(&tty).ok()? != runner {
                 return None;
             }
+            let disabled_keys = DisabledKeys::disable(&tty, startup_terminal_dispositions());
             set_foreground(&tty, script)
                 .inspect_err(|error| tracing::debug!("could not hand over the terminal: {error}"))
                 .ok()?;
@@ -94,6 +112,7 @@ mod unix {
                 tty,
                 runner,
                 script,
+                _disabled_keys: disabled_keys,
             };
             group.resume();
             Some(group)
@@ -140,22 +159,190 @@ mod unix {
         }
     }
 
-    /// Sets the foreground group with SIGTTOU blocked on this thread.
-    ///
-    /// Changing the foreground group from a background group raises SIGTTOU unless the caller
-    /// ignores or blocks it, and the runner is a background group again once the script owns the
-    /// terminal.
+    /// A terminal key that was disabled, with the character it held before.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct SavedKey {
+        slot: SpecialCodeIndex,
+        value: libc::cc_t,
+    }
+
+    /// The keys to disable: those of an ignored signal whose slot is enabled now, so a key
+    /// someone else already disabled is never restored by this runner.
+    fn slots_to_disable(
+        current: impl Fn(SpecialCodeIndex) -> libc::cc_t,
+        dispositions: TerminalDispositions,
+    ) -> Vec<SavedKey> {
+        [
+            (SpecialCodeIndex::VINTR, dispositions.interrupt),
+            (SpecialCodeIndex::VQUIT, dispositions.quit),
+        ]
+        .into_iter()
+        .filter(|(_, disposition)| disposition.is_ignored())
+        .map(|(slot, _)| SavedKey {
+            slot,
+            value: current(slot),
+        })
+        .filter(|key| key.value != libc::_POSIX_VDISABLE)
+        .collect()
+    }
+
+    /// The saved keys to write back: only into slots that are still disabled, so a character the
+    /// script set meanwhile is kept.
+    fn slots_to_restore(
+        saved: &[SavedKey],
+        current: impl Fn(SpecialCodeIndex) -> libc::cc_t,
+    ) -> Vec<SavedKey> {
+        saved
+            .iter()
+            .copied()
+            .filter(|key| current(key.slot) == libc::_POSIX_VDISABLE)
+            .collect()
+    }
+
+    /// Terminal keys disabled until the guard is dropped.
+    #[derive(Debug)]
+    struct DisabledKeys {
+        tty: File,
+        saved: Vec<SavedKey>,
+    }
+
+    impl DisabledKeys {
+        /// Disables the keys of the ignored signals. `None` when there is nothing to disable or
+        /// the terminal cannot be changed.
+        fn disable(tty: &File, dispositions: TerminalDispositions) -> Option<Self> {
+            Self::try_disable(tty, dispositions)
+                .inspect_err(|error| tracing::debug!("could not disable terminal keys: {error}"))
+                .ok()
+                .flatten()
+        }
+
+        fn try_disable(
+            tty: &File,
+            dispositions: TerminalDispositions,
+        ) -> std::io::Result<Option<Self>> {
+            let mut termios = tcgetattr(tty)?;
+            let saved = slots_to_disable(|slot| termios.special_codes[slot], dispositions);
+            if saved.is_empty() {
+                return Ok(None);
+            }
+            // Cloned first: nothing may fail between the change and the guard owning it.
+            let tty = tty.try_clone()?;
+            for key in &saved {
+                termios.special_codes[key.slot] = libc::_POSIX_VDISABLE;
+            }
+            apply(&tty, &termios)?;
+            Ok(Some(Self { tty, saved }))
+        }
+
+        fn restore(&self) -> std::io::Result<()> {
+            let mut termios = tcgetattr(&self.tty)?;
+            let writes = slots_to_restore(&self.saved, |slot| termios.special_codes[slot]);
+            if writes.is_empty() {
+                return Ok(());
+            }
+            for key in writes {
+                termios.special_codes[key.slot] = key.value;
+            }
+            apply(&self.tty, &termios)
+        }
+    }
+
+    impl Drop for DisabledKeys {
+        fn drop(&mut self) {
+            if let Err(error) = self.restore() {
+                tracing::debug!("could not restore terminal keys: {error}");
+            }
+        }
+    }
+
+    /// Changes the settings at once (never `Flush`: typed-ahead input must survive).
+    fn apply(tty: &File, termios: &Termios) -> std::io::Result<()> {
+        with_sigttou_blocked(|| Ok(tcsetattr(tty, OptionalActions::Now, termios)?))
+    }
+
     fn set_foreground(tty: &File, group: Pid) -> std::io::Result<()> {
+        with_sigttou_blocked(|| Ok(tcsetpgrp(tty, group)?))
+    }
+
+    /// Runs a terminal change with SIGTTOU blocked on this thread.
+    ///
+    /// Changing the terminal from a background group raises SIGTTOU unless the caller ignores or
+    /// blocks it, and the runner is a background group once the script owns the terminal.
+    fn with_sigttou_blocked(change: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
         let mut blocked = SigSet::empty();
         blocked.add(Signal::SIGTTOU);
         let mut previous = SigSet::empty();
         pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&blocked), Some(&mut previous))
             .map_err(std::io::Error::from)?;
-        let result = tcsetpgrp(tty, group).map_err(std::io::Error::from);
+        let result = change();
         if let Err(error) = pthread_sigmask(SigmaskHow::SIG_SETMASK, Some(&previous), None) {
             tracing::debug!("could not restore the signal mask: {error}");
         }
         result
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::runtime::signal::Inherited;
+
+        const INTR: libc::cc_t = 3;
+        const QUIT: libc::cc_t = 28;
+        const SAVED_INTR: SavedKey = SavedKey {
+            slot: SpecialCodeIndex::VINTR,
+            value: INTR,
+        };
+        const SAVED_QUIT: SavedKey = SavedKey {
+            slot: SpecialCodeIndex::VQUIT,
+            value: QUIT,
+        };
+
+        fn codes(intr: libc::cc_t, quit: libc::cc_t) -> impl Fn(SpecialCodeIndex) -> libc::cc_t {
+            move |slot| {
+                if slot == SpecialCodeIndex::VINTR {
+                    intr
+                } else {
+                    quit
+                }
+            }
+        }
+
+        const fn dispositions(interrupt: Inherited, quit: Inherited) -> TerminalDispositions {
+            TerminalDispositions { interrupt, quit }
+        }
+
+        #[test]
+        fn only_the_keys_of_ignored_signals_are_disabled() {
+            let disable = |interrupt, quit| {
+                slots_to_disable(codes(INTR, QUIT), dispositions(interrupt, quit))
+            };
+
+            assert_eq!(disable(Inherited::Other, Inherited::Other), []);
+            assert_eq!(disable(Inherited::Ignored, Inherited::Other), [SAVED_INTR]);
+            assert_eq!(disable(Inherited::Other, Inherited::Ignored), [SAVED_QUIT]);
+            assert_eq!(
+                disable(Inherited::Ignored, Inherited::Ignored),
+                [SAVED_INTR, SAVED_QUIT]
+            );
+        }
+
+        #[test]
+        fn an_already_disabled_key_is_not_remembered() {
+            let saved = slots_to_disable(
+                codes(libc::_POSIX_VDISABLE, QUIT),
+                dispositions(Inherited::Ignored, Inherited::Ignored),
+            );
+
+            assert_eq!(saved, [SAVED_QUIT]);
+        }
+
+        #[test]
+        fn a_key_set_meanwhile_is_not_overwritten_by_the_restore() {
+            let writes =
+                slots_to_restore(&[SAVED_INTR, SAVED_QUIT], codes(7, libc::_POSIX_VDISABLE));
+
+            assert_eq!(writes, [SAVED_QUIT]);
+        }
     }
 }
 

@@ -145,7 +145,8 @@ fn hex_encode(bytes: [u8; 32]) -> String {
 /// Error returned when a candidate string is not a well-formed digest: exactly 64 lowercase
 /// ASCII hex characters (a hex-encoded SHA-256 digest).
 ///
-/// Returned by both [`ConfigFingerprint`] and [`ToolDigest`]'s `TryFrom<String>` impl, which
+/// Returned by the `TryFrom<String>` impl of [`ConfigFingerprint`], [`ToolDigest`] and
+/// [`ToolEntryDigest`], which
 /// their `#[serde(try_from = "String")]` `Deserialize` routes every deserialization through —
 /// mirroring [`crate::ServerId`]/[`crate::ToolName`]'s validated-newtype pattern (see their own
 /// doc comments): no separate, unvalidated deserialization path exists for either type, so a
@@ -584,25 +585,70 @@ impl ToolDigest {
     }
 }
 
-/// The digest of one discovered tool, recorded so a later comparison can name which tool
-/// changed on the server.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The digest of one discovered tool, recorded beside the aggregate [`ToolDigest`] so a later
+/// comparison can name which tool changed on the server.
+///
+/// Newtype over a 64-character lowercase-hex `String`, validated on [`Deserialize`] like
+/// [`ToolDigest`]. It covers the same fields as one entry of the aggregate: name, description,
+/// input and output schema and the annotation hints, but not the annotation title.
+///
+/// The ordering is by hex text and means nothing beyond being deterministic.
+///
+/// # Examples
+///
+/// ```
+/// use mcp_execution_core::provenance::{ToolDigestEntry, ToolEntryDigest};
+/// use serde_json::json;
+///
+/// let schema = json!({"type": "object"});
+/// let entry = ToolDigestEntry::new("create_issue", "Creates a new issue", &schema);
+/// assert_eq!(ToolEntryDigest::compute(&entry).as_str().len(), 64);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct ToolEntryDigest(String);
 
 impl TryFrom<String> for ToolEntryDigest {
     type Error = DigestFormatError;
 
-    fn try_from(_value: String) -> Result<Self, Self::Error> {
-        todo!("#688")
+    /// Delegates to `validate_digest_string` — the sole entry point [`Deserialize`] uses.
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        validate_digest_string(value).map(Self)
     }
 }
 
 impl ToolEntryDigest {
     /// Computes the digest of a single tool entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::provenance::{ToolDigestEntry, ToolEntryDigest};
+    /// use serde_json::json;
+    ///
+    /// let schema = json!({"type": "object"});
+    /// let before = ToolDigestEntry::new("a", "old", &schema);
+    /// let after = ToolDigestEntry::new("a", "new", &schema);
+    /// assert_ne!(ToolEntryDigest::compute(&before), ToolEntryDigest::compute(&after));
+    /// ```
     #[must_use]
-    pub fn compute(_entry: &ToolDigestEntry<'_>) -> Self {
-        todo!("#688")
+    pub fn compute(entry: &ToolDigestEntry<'_>) -> Self {
+        Self(hex_encode(hash_tool_entry(entry)))
+    }
+
+    /// Returns the digest as a 64-character lowercase-hex string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mcp_execution_core::provenance::ToolEntryDigest;
+    ///
+    /// let digest = ToolEntryDigest::try_from("0".repeat(64)).unwrap();
+    /// assert_eq!(digest.as_str(), "0".repeat(64));
+    /// ```
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

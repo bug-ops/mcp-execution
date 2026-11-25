@@ -1,7 +1,8 @@
 //! Setup command implementation.
 //!
 //! Validates the runtime environment for MCP tool execution:
-//! - Checks a Node.js that runs `.ts` files without a flag (22.18.0+) is installed
+//! - Checks a Node.js that runs `.ts` files without a flag (22.18.0+) is installed, or else
+//!   that Bun or Deno runs a `.ts` file
 //! - Verifies generated files are executable
 //! - Provides helpful error messages and suggestions
 
@@ -17,7 +18,9 @@ use std::path::Path;
 use crate::commands::common::ServersDir;
 use crate::commands::common::mcp_config_path;
 use crate::runtime::helper::{CliBinary, discover_cli_binary};
-use crate::runtime::node::check_node_version;
+use crate::runtime::node::{NodeVersion, check_node_version};
+use crate::runtime::probe::{DetectedRuntime, RuntimeName, detect_alternative_runtime};
+use crate::runtime::signal::Termination;
 use mcp_execution_core::helper_protocol::CLI_PATH_ENV;
 
 /// Structured result of the environment setup checks.
@@ -27,8 +30,10 @@ use mcp_execution_core::helper_protocol::CLI_PATH_ENV;
 /// [`crate::formatters::format_output`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SetupResult {
-    /// Detected Node.js version (e.g. `"20.10.0"`), without the leading `v`.
-    pub node_version: String,
+    /// The runtime that runs generated tool files.
+    pub runtime: DetectedRuntime,
+    /// What does not work with that runtime; `None` for Node.js.
+    pub caveat: Option<String>,
     /// Path where `~/.claude/mcp.json` is expected.
     pub mcp_config_path: String,
     /// Whether `~/.claude/mcp.json` exists.
@@ -60,12 +65,20 @@ pub struct SetupResult {
 ///
 /// # Checks Performed
 ///
-/// 1. **Node.js version**: Ensures Node.js 22.18.0 or higher (23.6.0 or higher on the 23 line) is
-///    installed, the first versions that run generated `.ts` files without a flag
+/// 1. **Runtime**: Looks for Node.js 22.18.0 or higher (23.6.0 or higher on the 23 line), the first
+///    versions that run generated `.ts` files without a flag. Without one, Bun and then Deno run a
+///    one-line `.ts` probe; the first success is reported with a caveat, because `run`,
+///    `--typecheck` and `--restrict` need Node.js
 /// 2. **File permissions**: Makes TypeScript files executable (Unix only)
 /// 3. **Configuration**: Checks if ~/.claude/mcp.json exists
 /// 4. **Helper binary**: Reports whether generated tools run outside `run` can find
 ///    `mcp-execution-cli` (`MCP_EXECUTION_CLI`, else `PATH`); a miss is a warning, not an error
+///
+/// # Signals
+///
+/// SIGINT and SIGTERM, and on Unix also SIGHUP and SIGQUIT, cancel the checks, stop a running
+/// runtime probe with all its processes and return `128 + signal number`. A signal ignored at
+/// startup stays ignored (SIGTERM is always handled). On Windows, Ctrl-C and Ctrl-Break cancel.
 ///
 /// # Examples
 ///
@@ -86,16 +99,30 @@ pub struct SetupResult {
 /// # Errors
 ///
 /// Returns an error if:
-/// - Node.js is not installed
-/// - Node.js version cannot run `.ts` files without a flag (below 22.18.0, or 23.0.0 to 23.5.x)
+/// - No suitable Node.js is installed (missing, below 22.18.0, or 23.0.0 to 23.5.x) and neither
+///   Bun nor Deno passes the probe
 /// - Home directory cannot be determined
 /// - Output formatting fails (serialization error)
 pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
+    // The probe leads its own process group, so only dropping it stops it. All checks are raced
+    // because a registered handler swallows signals for the rest of the process.
+    let mut termination = Termination::install();
+    tokio::select! {
+        biased;
+        signal = termination.recv() => {
+            eprintln!("setup cancelled by {signal}");
+            Ok(signal.exit_code())
+        }
+        result = check_and_report(output_format) => result,
+    }
+}
+
+async fn check_and_report(output_format: OutputFormat) -> Result<ExitCode> {
     if output_format == OutputFormat::Pretty {
         println!("Checking runtime environment...\n");
     }
 
-    let node_version = check_node_version().await?;
+    let runtime = detect_runtime().await?;
 
     let mcp_config_path = mcp_config_path()?;
     let mcp_config_found = mcp_config_path.exists();
@@ -103,7 +130,8 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
     let scan = check_files_executable().await?;
 
     let result = SetupResult {
-        node_version,
+        caveat: caveat_for(runtime.name),
+        runtime,
         mcp_config_path: mcp_config_path.display().to_string(),
         mcp_config_found,
         servers_dir_found: scan.is_some(),
@@ -121,9 +149,41 @@ pub async fn run(output_format: OutputFormat) -> Result<ExitCode> {
     crate::formatters::emit(&result, output_format, ExitCode::SUCCESS)
 }
 
+/// A suitable Node.js, else the first alternative runtime that passes the probe, else the
+/// Node.js error as the cause of "no usable runtime".
+async fn detect_runtime() -> Result<DetectedRuntime> {
+    let node_error = match check_node_version().await {
+        Ok(version) => {
+            return Ok(DetectedRuntime {
+                name: RuntimeName::Node,
+                version,
+            });
+        }
+        Err(error) => error,
+    };
+    // A separate link per statement: the error report collapses newlines within one link.
+    detect_alternative_runtime().await.ok_or_else(|| {
+        node_error.context("no usable runtime: Bun and Deno were not found or failed the probe")
+    })
+}
+
+fn caveat_for(runtime: RuntimeName) -> Option<String> {
+    match runtime {
+        RuntimeName::Node => None,
+        RuntimeName::Bun | RuntimeName::Deno => Some(format!(
+            "run, --typecheck and --restrict need Node.js {}",
+            NodeVersion::minimum_text()
+        )),
+    }
+}
+
 /// Prints the human-readable setup summary (the `Pretty` format rendering).
 fn print_pretty_summary(result: &SetupResult) {
-    println!("✓ Node.js v{} detected", result.node_version);
+    let DetectedRuntime { name, version } = &result.runtime;
+    println!("✓ {} v{version} detected", name.label());
+    if let Some(caveat) = &result.caveat {
+        println!("⚠ {caveat}");
+    }
 
     if result.mcp_config_found {
         println!("✓ MCP configuration found: {}", result.mcp_config_path);
@@ -202,11 +262,15 @@ fn print_pretty_summary(result: &SetupResult) {
         println!("\n✓ Runtime setup complete");
     }
     println!("  Claude Code can now execute MCP tools via:");
-    println!("  node ~/.claude/servers/<server>/<tool>.ts '{{\"param\":\"value\"}}'");
+    // JSON and text serialize the result as is, so only this summary prints an invocation.
+    println!(
+        "  {} ~/.claude/servers/<server>/<tool>.ts '{{\"param\":\"value\"}}'",
+        name.invocation()
+    );
     println!("\nNext steps:");
     println!("  1. Generate tools: mcp-execution-cli generate <server>");
     println!("  2. Configure servers in ~/.claude/mcp.json");
-    println!("  3. Execute tools autonomously via Node.js");
+    println!("  3. Execute tools autonomously via {}", name.label());
 }
 
 /// Tally of one walk over the servers directory.
@@ -853,10 +917,31 @@ mod tests {
         );
     }
 
+    fn node(version: &str) -> DetectedRuntime {
+        DetectedRuntime {
+            name: RuntimeName::Node,
+            version: version.to_string(),
+        }
+    }
+
+    #[test]
+    fn caveat_names_the_node_floor_only_for_alternative_runtimes() {
+        assert_eq!(caveat_for(RuntimeName::Node), None);
+        for name in [RuntimeName::Bun, RuntimeName::Deno] {
+            assert_eq!(
+                caveat_for(name).as_deref(),
+                Some(
+                    "run, --typecheck and --restrict need Node.js 22.18.0 (23.6.0 on the 23 line)"
+                )
+            );
+        }
+    }
+
     #[test]
     fn test_setup_result_serialization() {
         let result = SetupResult {
-            node_version: "20.10.0".to_string(),
+            runtime: node("22.18.0"),
+            caveat: None,
             mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
             mcp_config_found: true,
             servers_dir_found: true,
@@ -867,7 +952,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"node_version\":\"20.10.0\""));
+        assert!(json.contains("\"runtime\":{\"name\":\"node\",\"version\":\"22.18.0\"}"));
+        assert!(json.contains("\"caveat\":null"));
         assert!(json.contains("\"mcp_config_found\":true"));
         assert!(json.contains("\"files_made_executable\":3"));
     }
@@ -875,7 +961,8 @@ mod tests {
     #[test]
     fn test_setup_result_format_output_json() {
         let result = SetupResult {
-            node_version: "20.10.0".to_string(),
+            runtime: node("22.18.0"),
+            caveat: None,
             mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
             mcp_config_found: false,
             servers_dir_found: true,
@@ -888,7 +975,8 @@ mod tests {
         let formatted =
             crate::formatters::format_output(&result, mcp_execution_core::cli::OutputFormat::Json)
                 .unwrap();
-        assert!(formatted.contains("\"node_version\": \"20.10.0\""));
+        assert!(formatted.contains("\"name\": \"node\""));
+        assert!(formatted.contains("\"version\": \"22.18.0\""));
         assert!(formatted.contains("\"mcp_config_path\": \"/home/user/.claude/mcp.json\""));
         assert!(formatted.contains("\"mcp_config_found\": false"));
         assert!(formatted.contains("\"servers_dir_found\": true"));
@@ -898,7 +986,8 @@ mod tests {
     #[test]
     fn test_setup_result_format_output_text() {
         let result = SetupResult {
-            node_version: "20.10.0".to_string(),
+            runtime: node("22.18.0"),
+            caveat: None,
             mcp_config_path: "/home/user/.claude/mcp.json".to_string(),
             mcp_config_found: true,
             servers_dir_found: false,
@@ -914,7 +1003,7 @@ mod tests {
         // Text format is compact JSON (no newlines), unlike the pretty-printed
         // Json format checked above.
         assert!(!formatted.contains('\n'));
-        assert!(formatted.contains("\"node_version\":\"20.10.0\""));
+        assert!(formatted.contains("\"name\":\"node\""));
         assert!(formatted.contains("\"mcp_config_found\":true"));
         assert!(formatted.contains("\"servers_dir_found\":false"));
         assert!(formatted.contains("\"files_made_executable\":0"));

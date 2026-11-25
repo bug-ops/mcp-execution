@@ -1,12 +1,12 @@
 //! Common code shared by the generators.
 //!
-//! This module contains types and utilities shared by the generators: template
-//! context types, the JSON Schema to TypeScript converter and TypeScript helpers.
+//! This module contains the generator output types and the JSON Schema to TypeScript
+//! converter.
 //! Code here has no feature gates.
 
 pub mod ts_types;
 pub mod types;
-pub mod typescript;
+pub(crate) mod typescript;
 
 // Re-export common types
-pub use types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
+pub use types::{GeneratedCode, GeneratedFile};

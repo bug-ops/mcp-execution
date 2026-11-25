@@ -33,7 +33,7 @@ related:
 Provide the human/scriptable entry point to everything the other crates
 do, without going through the MCP-server layer at all: read
 `~/.claude/mcp.json` or accept transport flags directly, introspect a
-server, generate progressive-loading TypeScript, render SKILL.md, and
+server, generate a typed TypeScript SDK, render SKILL.md, and
 manage/validate server configuration and the local runtime environment.
 
 The crate is a library (`src/lib.rs`) with a thin binary entry point
@@ -52,10 +52,10 @@ of those modules in this spec describe internal code.
 | Subcommand | Purpose | Key flags |
 |---|---|---|
 | `introspect` | Connect + display server capabilities/tools | `--from-config`, `server` (positional), `--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header`, `--detailed`/`-d`, `--connect-timeout-secs`, `--discover-timeout-secs` |
-| `generate` | Introspect + emit progressive-loading TypeScript to `~/.claude/servers/{id}/` | identical transport flags as `introspect` (`--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header` — both commands flatten the same `ServerFlags`, so the `-a`/`-e` short aliases apply here too), plus `--name`, `--servers-dir`, `--observed-shapes <FILE>`, `--dry-run` |
+| `generate` | Introspect + emit a typed TypeScript SDK to `~/.claude/servers/{id}/` | identical transport flags as `introspect` (`--arg`/`-a`, `--env`/`-e`, `--cwd`, `--http`/`--sse`, `--header` — both commands flatten the same `ServerFlags`, so the `-a`/`-e` short aliases apply here too), plus `--name`, `--servers-dir`, `--observed-shapes <FILE>`, `--dry-run` |
 | `skill` | Render SKILL.md directly from a generated server's tools (no LLM) | `-s/--server`, `--servers-dir`, `-o/--output`, `--skill-name`, `--hint` (repeatable), `--overwrite` |
 | `server` | Manage `~/.claude/mcp.json` entries | subcommand: `list`, `info <server>`, `validate <command>` |
-| `setup` | Validate the local runtime (Node.js version, executable bits, config presence) | none |
+| `setup` | Validate the local runtime (Node.js, else Bun or Deno; executable bits, config presence) | none |
 | `completions` | Emit a shell completion script | `<shell>` (bash/zsh/fish/powershell/elvish) |
 
 Global flags on `Cli` (apply to every subcommand): `-v/--verbose` (DEBUG log
@@ -403,8 +403,9 @@ command.
    it is validated with `ServerSlug::new` **before**
    the connection attempt and only overrides `ServerInfo.id` once valid —
    an invalid `--name` (traversal shape, absolute path, or simply outside
-   the `[a-z0-9-]` slug charset, e.g. `My Server!`) is now a
-   hard `INVALID_INPUT` error instead of being silently slugified into a
+   the `[a-z0-9-]` slug charset, e.g. `My Server!`, or a Windows reserved device name, #696) is a
+   hard error with exit 2 (`INVALID_INPUT`, `CoreError::InvalidArgument`; the rejected name is sanitized and quoted;
+   `drift` shares the check) instead of being silently slugified into a
    different id. **Breaking behavior change** from the pre-#311 CLI, which
    constructed `ServerId::new(custom_name)` directly with no validation.
 2. If the server has zero tools: logs a warning and returns
@@ -420,7 +421,9 @@ command.
    the error message differs accordingly (names `mcp.json` and suggests a
    ready-to-use `--name` slug vs. framing the failure as an internal error
    for the other arms, since reaching it there would mean one of their own
-   checks has a bug) (issue #311).
+   checks has a bug) (issue #311). The two derivations append `-server` to a reserved device name (`aux` gives
+   `aux-server`, #696), so a derived id always passes. A `--from-config` key that is not a slug is rejected only
+   after introspection (open follow-up #703).
 4. `PackageGenerator::generate` (uncategorized — no LLM step in this
    path, unlike `mcp-server`'s `save_categorized_tools`). When `--observed-shapes <FILE>` is given
    (#587), the file is read **before** the connection attempt by `read_observed_tail` and its text
@@ -615,14 +618,16 @@ generated tool files, `run`, `--typecheck` and `--restrict`; CI pins 22.18.0 on 
 tests on the latest Node.js. Generated tool files also run directly under Bun (`bun <tool>.ts '<json>'`) and Deno
 (`deno run -A <tool>.ts '<json>'`), tested by `acceptance_runtime_compat`, which skips a missing runtime unless
 `MCP_EXECUTION_REQUIRE_ALT_RUNTIMES=1`; `run` does not use them. An older Node.js can run a tool file through a
-TypeScript loader (`npx tsx`). `setup` checks Node.js only (probing other runtimes is the follow-up #685). A `.ts`
-script with a top-level `for await` fails under `run` on Node.js 22.18 (#690).
+TypeScript loader (`npx tsx`). On Node.js 22.18 a `.ts`
+script with a top-level `for await` fails with a syntax error under `run`; name it `.mts` (#690; documented in
+`run --help` and the README, no code change).
 
 `setup` validates that the local runtime is ready to execute generated tools:
-1. Checks `node --version` is a version that runs `.ts` files without a flag (hard error if missing or
-   older): 22.18.0 or later on the 22 line, 23.6.0 or later on the 23 line, and any later major. Node.js 18 and
+1. Looks for a runtime (#685). `node --version` must be a version that runs `.ts` files without a flag:
+   22.18.0 or later on the 22 line, 23.6.0 or later on the 23 line, and any later major. Node.js 18 and
    20, 22.6 to 22.17 (which need `--experimental-strip-types`) and 23.0 to 23.5 are rejected, and the error names
-   the minimum (`NodeVersion`, #564). The same minimum appears in the README and the usage guide.
+   the minimum (`NodeVersion`, #564). The same minimum appears in the README and the usage guide. A missing or
+   unsuitable Node.js is not fatal by itself: Bun and then Deno are probed (below).
 2. On Unix only: makes every `.ts` file executable (`files_made_executable`
    count) anywhere under `~/.claude/servers/`, at any depth — the walk
    recurses into nested subdirectories (e.g. `{server-id}/_runtime/`) rather
@@ -633,6 +638,33 @@ script with a top-level `for await` fails under `run` on Node.js 22.18 (#690).
    shared `ServersDir::resolve(None)` (section 3).
 3. Reports whether `~/.claude/mcp.json` exists, printing a starter example
    if not.
+
+**Runtime probe (#685, `runtime/probe.rs`).** Runs only without a suitable Node.js.
+
+- Bun, then Deno, found through the absolute `PATH` entries only (`find_on_path`, `.exe` and `.cmd` on Windows); an
+  absent one is skipped silently. The first success wins.
+- The probe is a one-line typed script (so a runtime that cannot run TypeScript fails) that prints
+  `mcp-execution-probe <version>`. It is created 0600 in `<state root>/probe/` (0700) and removed by a drop guard on
+  every path. Commands: `bun <file>`, `deno run --no-config --quiet <file>`, with the probe directory as working
+  directory, so no `bunfig.toml` preload or `deno.json` of the caller's directory is read.
+- The probe runs as a process tree (`ProcessTree`) with a 10 s timeout, null stdin and stderr, stdout read capped at
+  4096 bytes; success is exit 0 with the marker line. The version is sanitized and capped at 64 characters. A runtime
+  that is present but fails, including a preparation error, is logged at `warn` and the next one is tried.
+- Success: exit 0. `SetupResult` carries `runtime: {name: "node"|"bun"|"deno", version}` and
+  `caveat: string|null` (replacing `node_version`, breaking). For Bun or Deno the caveat is
+  "run, --typecheck and --restrict need Node.js 22.18.0 (23.6.0 on the 23 line)"; for Node.js it is `null`.
+- Output: `--format json` and `--format text` (compact JSON) carry `runtime` and `caveat` only. Only the pretty
+  summary prints the invocation (`node`, `bun` or `deno run -A`, followed by the tool file and the JSON argument);
+  a consumer of the JSON derives it from `runtime.name`.
+- Exhausted: exit 1 with "no usable runtime: Bun and Deno were not found or failed the probe" and the Node.js error
+  as its cause.
+
+**Signals.** `setup` races every check against SIGINT, SIGTERM and, on Unix, SIGHUP and SIGQUIT (Ctrl-C and
+Ctrl-Break on Windows), prints `setup cancelled by <SIGNAL>` on stderr and exits `128 + signal number`. A signal
+ignored at startup stays ignored; SIGTERM is always handled. A running probe and its whole process tree are stopped,
+on timeout as well. Residuals: SIGKILL of `setup` can leave a hanging probe, and a signal in the instant a shim forks
+can miss that child. The `node --version` check has no timeout and is not stopped with a cancelled `setup` (open
+follow-up #705).
 
 Non-Unix platforms always report `servers_dir_found: false`,
 `files_made_executable: 0`, `skipped_entries: 0`, `failed_entries: 0` (permission bits aren't a
@@ -865,16 +897,15 @@ itself.
   any registration) and registers no cancel handler for a signal that was `SIG_IGN` at startup, so it stays ignored by the
   runner (a debug log only) and a foreground `nohup` on a terminal still ends the run on hang-up. SIGINT follows the same
   rule since #664; SIGTERM is always handled. Node resets an inherited
-  ignore of SIGHUP, so the script itself still ends on SIGHUP. Terminal limit: the script is not covered by the
-  runner's inherited ignores, because node resets them, so on a terminal, where the script is the foreground group,
-  Ctrl-C, Ctrl-\ or a hang-up still end it and the run is reported as cancelled (exit 130, 131 or 129) even when the
-  runner inherited that signal as ignored (`run --help` says so; changing it is the open follow-up #693).
+  ignore of SIGHUP, so the script itself still ends on SIGHUP and the run is reported as cancelled (exit 129). Node resets the
+  inherited SIGINT and SIGQUIT ignores too, so on a terminal, where the script is the foreground group, the matching
+  terminal keys are disabled instead (#693, see Terminal keys below).
   Residual: a non-interactive shell ignores SIGINT and SIGQUIT for a background `&` job, so the runner then ignores
   both too; a background run that must survive its terminal needs `setsid` or `tmux`.
 - Inherited SIGCHLD ignore (#663): at the start of every command (`runner::execute_command`,
   `signal::reset_inherited_child_disposition`) a SIGCHLD handler is registered for the life of the process on Unix,
   replacing an inherited `SIG_IGN`, so spawned processes (`node`, `tsc`, servers) stay waitable. No-op elsewhere. The
-  `mcp-execution` server binary does not do this (open follow-up #689).
+  `mcp-execution` server binary does the same (#689, [[../server/spec]]).
   On Windows (#649) the script and `tsc` are assigned to a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, no breakaway) in
   `ProcessTree` (`runtime/exec.rs`, private `job` module): the job is terminated on timeout, cancel and drop, and after a normal
   exit of the script or `tsc`, which kills leftovers on Windows (Unix does not signal after a normal `tsc` exit). When the job
@@ -903,6 +934,15 @@ itself.
   OpenBSD and similar targets, which the crate does not support. The `runtime::tty` module is `pub(crate)`. Dependencies (`mcp-cli`, `cfg(unix)`
   only): `nix` 0.32 (`default-features = false`, feature `signal`) for the safe `pthread_sigmask`, because the workspace denies
   `unsafe`; `rustix` gains the `termios` feature.
+- Terminal keys (#693, `runtime/tty.rs`, Unix): inside `hand_over`, after the foreground check and before the
+  foreground change, a guard (`DisabledKeys`) disables the `intr` slot when SIGINT, and the `quit` slot when SIGQUIT,
+  was ignored at startup (`signal::startup_terminal_dispositions`), only if the slot is currently enabled, and
+  remembers the old character. The guard is a field of `ForegroundGroup`, so it restores on every path: a failed
+  hand-over, normal end, timeout, cancel, unwind. Restore writes a remembered character back only into a slot that is
+  still disabled, so a character the script set meanwhile is kept, and of two runners on one terminal only the one
+  that disabled restores. Changes are applied at once (never flushing typed input) with SIGTTOU blocked; errors are
+  logged at debug. Nothing changes when neither signal was ignored or there is no controlling terminal. Residual:
+  after SIGKILL of the runner the keys stay disabled until `stty sane`.
 - Trailer: `[mcp-execution <token>] script_status exit N | signal N | timed out | cancelled by SIGINT|SIGTERM|SIGHUP|SIGQUIT`. Stdout notices (cut, drain
   abandoned, timeout) go to stdout and the stderr cut notice to stderr, all carrying the token. JSON mode prints no
   anchor and no stderr; the envelope holds `token`, `script_status`, `exit_code`, `stdout`/`stderr` (`text`, `bytes`,
@@ -937,13 +977,18 @@ itself.
 
 - Flow: `ServerFlags`, `resolve_server_config`, `~/.claude/servers/<server id>/_meta.json` read through
   `read_generated_metadata_async` (bounded, regular non-symlink file, schema v3; section 3), `Introspector::discover()`, fingerprint first, then `ToolDigest::compute` over
-  `ToolInfo::digest_entry`, then a name diff. Types: `DriftOutcome{NoDrift,EndpointDiffers,ToolsDiffer{added,removed}}`.
+  `ToolInfo::digest_entry`, then a name diff. Types: `DriftOutcome{NoDrift,EndpointDiffers,ToolsDiffer{added,removed,changed}}`; a per-tool digest comparison follows the name diff.
 - Exit: 0 no drift; 5 (`CHECK_FAILED`) drift or endpoint differs; could-not-complete errors use the runner
   classification (a missing directory gives 1; a `_meta.json` schema-version mismatch gives 2, distinct from drift, #618). Writes nothing; prints no descriptions.
 - Output: names through `sanitize_untrusted_inline`, at most `MAX_PRINTED_NAMES` 20 per list plus "and N more"
-  (`MAX_NAME_CHARS` 128); ttl and cache scope printed when present, with a credentials notice for `Private`; the same
-  names with a different digest print "which tool changed cannot be determined". Summaries say "server changed" or
+  (`MAX_NAME_CHARS` 128); ttl and cache scope printed when present, with a credentials notice for `Private`. JSON
+  carries `changed_on_server {names, more}`, text the heading "changed on the server since generation". The notice
+  "which tool changed cannot be determined" prints only when added, removed and changed are all empty. Summaries say "server changed" or
   "tool list differs", never "out of date".
+- Changed tools (#688): computed only when the aggregate digest differs. A name is changed when it is on both sides,
+  every recorded entry of that name has a `digest`, and the set of live digests of the name differs from the recorded
+  set (so unchanged duplicate names are not reported, and a live duplicate with another definition is). Sorted by
+  name. A sidecar without digests (older, or omitted at the size cap) names no changed tool. Exit codes are unchanged.
 - Location (fixed in wave 2, architect ruling; the user is to be informed): `DriftArgs` gained `--name` and
   `--servers-dir` with the names and meaning of `generate`. The location derivation is shared with `generate`
   (`name_override()` and `generated_location()` in `commands/generate.rs`; `resolve_server_dir_name` takes
@@ -952,8 +997,8 @@ itself.
 - FR-045.18 (wave 2): after a `ToolsDiffer` with removed tools, `scripts_using()` lists the saved scripts
   (`scripts::list`) that name a removed tool of this server, through the same bounded and sanitised `NameList` (report
   field `scripts_using_removed_tools`, text heading "saved scripts using a removed tool"). Best effort: a missing
-  skill directory or a `list` error gives no names. Only removed tools count: changed tools are not detectable, since
-  no per-tool digests are recorded. `read_recorded` is gone (#618): `drift` and `scripts check` both call
+  skill directory or a `list` error gives no names. Only removed tools count; scripts that use a changed tool are
+  not listed. `read_recorded` is gone (#618): `drift` and `scripts check` both call
   `read_generated_metadata_async`.
 
 ### Logging profile for `call`, `run` and `helper`
@@ -1203,6 +1248,10 @@ tests. A missing config base is an error, never a silent temp-dir fallback.
 - Unit tests that raise signals, redirect `HOME` or install a scoped log subscriber run only under `cargo nextest`, which gives
   each test its own process (#658; `commands::common::test_isolation`, `process_per_test`; the former `HOME_ENV_LOCK` is gone).
   Under plain `cargo test` they skip with a stderr line; under nextest without `NEXTEST_EXECUTION_MODE=process-per-test` they panic.
+- `.config/nextest.toml` (#666), macOS only: the binaries `acceptance_run_tty`, `acceptance_run_tty_ignored_keys`
+  and `acceptance_helper` run exclusively (`threads-required = "num-test-threads"`) with a 2 s `leak-timeout`,
+  because a test spawned in parallel can inherit another test's output pipe. Other binaries can still be flagged LEAK
+  (noise, the test passes; open follow-up #704).
 - Tests that need `~/.claude/mcp.json` are `#[ignore]`d on Windows: `dirs::home_dir()` ignores `HOME` and `USERPROFILE`
   there, so the file cannot be redirected (#604).
 
@@ -1497,6 +1546,7 @@ a second one.
 | FR-036.25 | On Unix, WHEN the run times out, is cancelled or the script exits normally THE SYSTEM SHALL stop the processes that remain in the script's process group (and, on timeout or cancel, the script); a descendant that created its own session or process group (`setsid`, detached spawn) is not stopped; after a normal exit of `tsc` nothing is signalled. On Windows THE SYSTEM SHALL assign the script and `tsc` to a kill-on-close job object without breakaway and terminate it on timeout, cancel, drop and after a normal exit, and, when the job cannot be set up, stop only the direct child; a process started before the assignment can escape | must |
 | FR-036.26 | On Unix, WHEN the runner is the foreground process group of its controlling terminal THE SYSTEM SHALL make the script's process group the terminal's foreground group right after the spawn and restore the runner's group on completion, timeout, cancel and drop, but only when the foreground group is then the script's own or a dead group (a group counts as dead only on `ESRCH`; `EPERM` counts as alive); otherwise (no terminal, a background runner, a failed hand-over) it SHALL leave the terminal untouched | must |
 | FR-036.27 | On Unix, WHEN the script's group is the terminal's foreground group THE SYSTEM SHALL send the group SIGCONT about every 100 ms, so a stop of the group does not suspend the run; a member stopped on purpose is resumed too | must |
+| FR-036.28 | On Unix, WHEN the runner makes the script's group the terminal's foreground group and had inherited SIGINT or SIGQUIT as ignored THE SYSTEM SHALL disable the matching terminal key while the script runs and restore it on every exit path the runner survives, keeping a character set meanwhile (#693) | must |
 | FR-039.20 | WHEN the call command is invoked THE SYSTEM SHALL select the server with the same selectors as `introspect` (`ServerFlags`, `ServerSource`, §2, §3), take the arguments as a single JSON object, and validate the server as a `ServerId` and the tool as a `ToolName` before connecting | must |
 | FR-039.21 | WHEN the JSON argument is malformed or is not a single object THE SYSTEM SHALL exit with invalid input and report the failure without repeating any part of the argument | must |
 | FR-039.22 | THE SYSTEM SHALL map call failures onto §5 (connection failure and resource limit 3, timeout 4, invalid input 2) and state the class of a tool-reported error | must |
@@ -1601,9 +1651,9 @@ recorded at generation. The locked `rmcp` 3.10.0 carries `ttl_ms` and `cache_sco
 **Resolved and open decisions.**
 
 - Resolved: the command is `drift <ServerFlags> [--name] [--servers-dir]`; it exits 5 (`CHECK_FAILED`) on drift or an endpoint that differs. `ttlMs` is reported, not honoured (section 16).
-- Resolved for 1.0 (#683): name-level reporting only; per-tool digests are deferred past 1.0 (#688, [[../core/spec#7. Planned Changes (script-first direction, adopted 2026-11-24)]]).
+- Resolved (#688, supersedes the #683 deferral): per-tool digests are recorded as the optional `tools[].digest`, and `drift` names changed tools ([[../core/spec#7. Per-tool digests (#688)]]). FR-045.13 is implemented; FR-045.18 covers removed tools only.
 
-Ask first: changing `ServerInfo` public fields to carry `ttl_ms` and `cache_scope`; recording per-tool digests;
+Ask first: changing `ServerInfo` public fields to carry `ttl_ms` and `cache_scope`;
 the exit code values.
 
 **Depends on / blocks.** Landed in the script-first pull request; no blocker remains.
@@ -1626,8 +1676,8 @@ Deferred or excluded:
 > [!info] As built; the semver promise binds from the 1.0.0 tag
 > Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
 > decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
-> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
-> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
+> API freeze (#673, #674 to #680) and the surface cut of #687 (`NFR-COM-031`: whatever is public at the tag is
+> frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|

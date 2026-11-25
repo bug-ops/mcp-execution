@@ -1,7 +1,7 @@
-//! Integration tests for progressive loading code generation.
+//! Integration tests for TypeScript SDK generation.
 //!
 //! Tests the full pipeline from `ServerInfo` to generated TypeScript files
-//! for progressive loading pattern. Tests that execute the generated runtime bridge live in
+//! for the generated package. Tests that execute the generated runtime bridge live in
 //! `runtime_bridge.rs`.
 #![expect(
     clippy::expect_used,

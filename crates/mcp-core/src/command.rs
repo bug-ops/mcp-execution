@@ -204,110 +204,10 @@ pub const MAX_HEADER_VALUE_LEN: usize = 8 * 1024;
 /// ```
 pub const MAX_URL_LEN: usize = 8 * 1024;
 
-/// Returns the shell metacharacters considered forbidden in a command or argument string.
-///
-/// Exposed so downstream consumers that must mirror this exact rule outside this function —
-/// currently, the generated TypeScript runtime bridge
-/// (`crates/mcp-codegen/templates/package/runtime-bridge.ts.hbs`) — can render their copy
-/// directly from this constant at code-generation time instead of hand-copying it, which
-/// would otherwise silently drift out of sync.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::forbidden_chars;
-///
-/// assert!(forbidden_chars().contains(&';'));
-/// ```
-#[must_use]
-pub const fn forbidden_chars() -> &'static [char] {
-    FORBIDDEN_CHARS
-}
-
-/// Returns the exact-match forbidden environment variable names.
-///
-/// Does not include the `DYLD_` prefix rule — see [`forbidden_env_prefix`] for that. Exposed
-/// for the same drift-elimination reason as [`forbidden_chars`]; see its documentation.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::forbidden_env_names;
-///
-/// assert!(forbidden_env_names().contains(&"LD_PRELOAD"));
-/// ```
-#[must_use]
-pub const fn forbidden_env_names() -> &'static [&'static str] {
-    FORBIDDEN_ENV_NAMES
-}
-
-/// Returns the environment-variable-name prefix rejected regardless of exact match
-/// (currently `DYLD_`, macOS's dynamic-linker variable family).
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::forbidden_env_prefix;
-///
-/// assert_eq!(forbidden_env_prefix(), "DYLD_");
-/// ```
-#[must_use]
-pub const fn forbidden_env_prefix() -> &'static str {
-    FORBIDDEN_ENV_PREFIX
-}
-
 /// Human-readable description of the POSIX/Windows environment-variable-name identifier
 /// charset enforced by [`validate_env_name`]: first character `[A-Za-z_]`, subsequent
-/// characters `[A-Za-z0-9_]*`. Embedded in both this module's own rejection message and
-/// [`env_name_charset_pattern`]'s rendered pattern, so a `test_env_name_charset_pattern_matches_desc`
-/// regression test can catch the two ever describing a different charset.
+/// characters `[A-Za-z0-9_]*`. Embedded in the rejection message.
 const ENV_NAME_CHARSET_DESC: &str = "[A-Za-z_][A-Za-z0-9_]*";
-
-/// Returns the environment-variable-name identifier charset as an anchored, JavaScript
-/// `RegExp`-compatible pattern source.
-///
-/// Matches `validate_env_name`'s charset rule: first character `[A-Za-z_]`, subsequent
-/// characters `[A-Za-z0-9_]*`. Exposed so downstream consumers that must mirror this exact
-/// rule outside this function —
-/// currently, the generated TypeScript runtime bridge
-/// (`crates/mcp-codegen/templates/package/runtime-bridge.ts.hbs`) — can render their copy
-/// directly from this constant at code-generation time instead of hand-copying it. Closes the
-/// #467 gap where the bridge's `validateEnvName` had no charset check at all and relied
-/// entirely on `String.prototype.toUpperCase()`'s incidental Unicode case folding to catch a
-/// forbidden-name confusable.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::env_name_charset_pattern;
-///
-/// assert_eq!(env_name_charset_pattern(), "^[A-Za-z_][A-Za-z0-9_]*$");
-/// ```
-#[must_use]
-pub const fn env_name_charset_pattern() -> &'static str {
-    "^[A-Za-z_][A-Za-z0-9_]*$"
-}
-
-/// Returns the human-readable description of the environment-variable-name identifier
-/// charset used in this module's own rejection message (`"[A-Za-z_][A-Za-z0-9_]*"`).
-///
-/// Exposed for the same drift-elimination reason as [`env_name_charset_pattern`] — this covers
-/// the *message text* around the rule rather than its enforcement, so a consumer that renders
-/// its own rejection message (currently the generated TypeScript runtime bridge's
-/// `validateEnvName`) can render it from this constant instead of hand-copying the literal a
-/// second time.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_core::env_name_charset_desc;
-///
-/// assert_eq!(env_name_charset_desc(), "[A-Za-z_][A-Za-z0-9_]*");
-/// ```
-#[must_use]
-pub const fn env_name_charset_desc() -> &'static str {
-    ENV_NAME_CHARSET_DESC
-}
 
 /// Validates a `ServerConfig` for safe execution, dispatching on transport type.
 ///
@@ -1430,53 +1330,8 @@ mod tests {
     }
 
     #[test]
-    fn test_env_name_charset_pattern_matches_desc() {
-        // Guards against `ENV_NAME_CHARSET_DESC` (used in the rejection message) and
-        // `env_name_charset_pattern()` (rendered into the generated TS bridge) ever
-        // describing a different charset.
-        assert_eq!(
-            env_name_charset_pattern(),
-            format!("^{ENV_NAME_CHARSET_DESC}$")
-        );
-    }
-
-    #[test]
-    fn test_env_name_charset_desc_matches_pattern() {
-        assert_eq!(
-            env_name_charset_desc(),
-            format!("^{ENV_NAME_CHARSET_DESC}$")
-                .trim_start_matches('^')
-                .trim_end_matches('$')
-        );
-        assert_eq!(env_name_charset_desc(), ENV_NAME_CHARSET_DESC);
-    }
-
-    #[test]
-    fn test_env_name_charset_pattern_has_no_ts_string_literal_metacharacters() {
-        // The generated TS bridge embeds this pattern inside a single-quoted string literal
-        // (`new RegExp('...')`), passed through `sanitize_ts_string_literal` for defense in
-        // depth (see `BridgeContext::default` in `mcp-codegen`). This test guards the
-        // assumption that currently makes that escaping a no-op: if a future edit introduces a
-        // `'` or `\` into this pattern, the escaping stops being a no-op and becomes the only
-        // thing standing between this constant and a broken (or silently different) regex in
-        // the rendered bridge — see #471/#467 critique S2.
-        let pattern = env_name_charset_pattern();
-        assert!(
-            !pattern.contains('\''),
-            "pattern must not contain a quote: {pattern}"
-        );
-        assert!(
-            !pattern.contains('\\'),
-            "pattern must not contain a backslash: {pattern}"
-        );
-    }
-
-    #[test]
     fn test_forbidden_env_constants_are_already_ascii_uppercase() {
-        // The generated TS runtime bridge (`runtime-bridge.ts.hbs`) renders these constants
-        // verbatim and upper-cases only the *input* name before comparing, relying on
-        // `FORBIDDEN_ENV_NAMES`/`FORBIDDEN_ENV_PREFIX` already being upper-case. This invariant
-        // protects that render-from-Rust drift guarantee.
+        // Keeps the lists in their canonical upper-case spelling; matching ignores ASCII case.
         for forbidden in FORBIDDEN_ENV_NAMES {
             assert_eq!(*forbidden, forbidden.to_ascii_uppercase());
         }

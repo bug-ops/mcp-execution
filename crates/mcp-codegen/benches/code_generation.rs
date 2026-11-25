@@ -240,7 +240,6 @@ fn bench_generator_initialization(c: &mut Criterion) {
 /// Benchmarks type conversion performance.
 fn bench_type_conversion(c: &mut Criterion) {
     use mcp_execution_codegen::common::ts_types::{RenderStyle, convert_schema};
-    use mcp_execution_codegen::common::typescript;
 
     let mut group = c.benchmark_group("type_conversion");
 
@@ -284,14 +283,6 @@ fn bench_type_conversion(c: &mut Criterion) {
     group.bench_function("compact_rendering", |b| {
         b.iter(|| {
             let result = convert_schema(black_box(&complex_schema)).render(RenderStyle::Compact);
-            black_box(result)
-        });
-    });
-
-    // String conversion
-    group.bench_function("snake_to_camel", |b| {
-        b.iter(|| {
-            let result = typescript::to_camel_case(black_box("send_message_to_chat_room"));
             black_box(result)
         });
     });

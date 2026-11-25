@@ -1,7 +1,7 @@
-//! MCP server entry point for progressive loading generation.
+//! MCP server entry point for TypeScript SDK generation.
 //!
-//! This binary provides an MCP server that helps generate progressive loading
-//! TypeScript files for other MCP servers. Claude provides categorization
+//! This binary provides an MCP server that helps generate a typed TypeScript
+//! SDK for other MCP servers. Claude provides categorization
 //! intelligence through natural language understanding.
 //!
 //! # Usage
@@ -62,7 +62,7 @@ use tracing_subscriber::{EnvFilter, Layer as _, layer::SubscriberExt, util::Subs
 #[command(
     name = "mcp-execution",
     version,
-    about = "MCP server for progressive loading TypeScript code generation"
+    about = "MCP server that generates a typed TypeScript SDK from MCP servers"
 )]
 struct ServerArgs {
     /// Diagnostic log format: `text` (default) or `json`.
@@ -570,6 +570,18 @@ where
     })
 }
 
+/// Replaces an inherited `SIGCHLD = SIG_IGN`, under which the kernel reaps children itself and
+/// terminating an introspected server fails.
+///
+/// The handler must stay registered for the life of the process, so the caller holds the result.
+#[cfg(unix)]
+fn keep_children_waitable() -> Option<tokio::signal::unix::Signal> {
+    use tokio::signal::unix::{SignalKind, signal};
+    signal(SignalKind::child())
+        .inspect_err(|error| tracing::warn!(%error, "failed to register the SIGCHLD handler"))
+        .ok()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = ServerArgs::parse();
@@ -604,6 +616,9 @@ async fn main() -> Result<()> {
         .init();
 
     warn_on_rejected_log_format(log_format_env_is_invalid(&args));
+
+    #[cfg(unix)]
+    let _sigchld = keep_children_waitable();
 
     tracing::info!("Starting mcp-execution v{}", env!("CARGO_PKG_VERSION"));
 

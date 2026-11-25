@@ -36,7 +36,7 @@ related:
 ## 1. Responsibility
 
 Convert `ServerInfo`/`ToolInfo` (JSON Schema-based tool definitions) into:
-1. TypeScript source implementing the "progressive loading" pattern —
+1. A typed TypeScript SDK, one file per tool —
    Claude Code discovers tools via `ls`/`cat` on individual files instead of
    loading one large manifest (~500-1,500 tokens/tool vs. ~30,000 tokens for
    the whole set, per the crate's own doc comments).
@@ -49,9 +49,13 @@ Convert `ServerInfo`/`ToolInfo` (JSON Schema-based tool definitions) into:
 
 ```rust
 // mcp_execution_codegen (crate root)
-pub use common::types::{GeneratedCode, GeneratedFile, TemplateContext, ToolDefinition};
+pub use common::types::{GeneratedCode, GeneratedFile};
 pub use package::{PackageGenerator, TSCONFIG_JSON};
-pub use template_engine::TemplateEngine;
+#[doc(hidden)]
+pub use template_engine::TemplateEngine; // workspace-internal
+
+// mcp_execution_codegen::package also re-exports ToolCategorization and, #[doc(hidden)], BridgeContext;
+// package::types and common::typescript are private modules.
 
 impl GeneratedCode {
     // Returns Error::DuplicateGeneratedFilePath if `file.path` is already present, instead
@@ -73,55 +77,14 @@ impl<'a> PackageGenerator<'a> {
 }
 pub struct ToolCategorization { pub category: String, pub keywords: Vec<String>, pub short_description: String }
 
-// Five of BridgeContext's fields (forbidden_chars, forbidden_env_names, forbidden_env_prefix,
-// env_name_charset_pattern, identifier_pattern) are private with read-only accessor methods of the same name —
-// each could fail open (e.g. an empty forbidden_chars, or an env_name_charset_pattern of ""
-// which `new RegExp('')` matches every string against) if a caller bypassed Default via a
-// struct literal, so `pub` fields aren't used for these. The remaining fields — the DoS
-// size/count ceilings (max_arg_count and siblings, see [[#9. Resource-Exhaustion Bounds
-// (CWE-400)]]), the server-message and recorder bounds, and env_name_charset_desc (message text
-// only, not enforcement) — are plain
-// `pub`: a wrong value there cannot fail open, only reject more (or less clearly) than
-// intended, so the accessor ceremony buys nothing. `BridgeContext::default()` is the only
-// construction path (no `derive(Default)`, no `Deserialize`) — see [[#Runtime bridge]] and
-// issues #315, #471, #467.
-pub struct BridgeContext {
-    /* forbidden_chars, forbidden_env_names, forbidden_env_prefix, env_name_charset_pattern: private */
-    pub max_arg_count: usize,
-    pub max_arg_len: usize,
-    pub max_env_count: usize,
-    pub max_env_value_len: usize,
-    pub max_url_len: usize,
-    pub max_header_count: usize,
-    pub max_header_value_len: usize,
-    pub env_name_charset_desc: String,
-    pub max_server_message_len: usize,          // MAX_UNTRUSTED_FIELD_LEN (code points)
-    pub max_variation_selector_run: usize,      // core untrusted::MAX_VARIATION_SELECTOR_RUN
-    pub max_total_variation_selectors: usize,   // core untrusted::MAX_TOTAL_VARIATION_SELECTORS
-    pub observed_shape_max_depth: usize,        // OBSERVED_SHAPE_MAX_DEPTH = 4
-    pub observed_shape_max_keys: usize,         // OBSERVED_SHAPE_MAX_KEYS = 16
-    pub observed_shape_max_key_len: usize,      // OBSERVED_SHAPE_MAX_KEY_LEN = 32
-    pub observed_shape_max_line_bytes: usize,   // OBSERVED_SHAPE_MAX_LINE_BYTES = 8192
-}
-impl BridgeContext {
-    pub fn forbidden_chars(&self) -> &[String];
-    pub fn forbidden_env_names(&self) -> &[String];
-    pub fn forbidden_env_prefix(&self) -> &str;
-    pub fn env_name_charset_pattern(&self) -> &str;
-    pub fn identifier_pattern(&self) -> &str; // core::untrusted::BARE_IDENTIFIER_PATTERN, escaped via sanitize_ts_string_literal
-}
-impl Default for BridgeContext { /* populates every field from mcp_execution_core: forbidden_chars()/forbidden_env_names()/forbidden_env_prefix()/env_name_charset_pattern()/env_name_charset_desc() and the MAX_* constants — hand-written, so it can never render a fail-open (empty) bridge. forbidden_chars, env_name_charset_pattern, and env_name_charset_desc are each passed through sanitize_ts_string_literal before storing, so a future Rust-side value containing `'`/`\` renders as a valid (and correct) TS string literal rather than breaking or silently changing what it matches. */ }
+// BridgeContext (#[doc(hidden)]): the helper-protocol values and observed-shape bounds rendered into the
+// bridge, plus a private identifier_pattern; `Default` is the only construction path (section 14).
 
+// mcp_execution_codegen::package::generator
 pub const MAX_GENERATED_FILES: usize; // = introspector::MAX_TOOL_COUNT + FIXED_FILE_COUNT (7)
 pub const MAX_GENERATED_BYTES: usize; // = MAX_TOOL_COUNT * PER_TOOL_BYTES_MAX + FIXED_FILES_BYTES_MAX, see [[#9. Resource-Exhaustion Bounds (CWE-400)]]
 
 // `ResultSource` is `mcp_execution_core::helper_protocol::ResultSource` (#676); this crate defines none.
-
-// mcp_execution_codegen::common::typescript
-pub const MAX_SCHEMA_RECURSION_DEPTH: usize = 128; // see [[#Recursion Depth Bound]]
-pub fn to_camel_case(s: &str) -> String;
-pub fn to_pascal_case(s: &str) -> String;
-pub fn sanitize_ts_identifier(s: &str) -> String; // collapses invalid-char runs to one '_'; prefixes '_' if leading digit/empty
 
 // mcp_execution_codegen::common::ts_types — the one schema-to-TypeScript converter (#565, #584)
 pub fn convert_schema(schema: &serde_json::Value) -> ConvertedType; // never panics/errors/fetches; deterministic
@@ -131,7 +94,7 @@ pub enum RenderStyle { Declaration, Compact } // multi-line with member JSDoc (t
 // pub(crate) only: diagnostics(), dropped_diagnostics(), root_degraded(), is_object_like(), members(),
 // SchemaDiagnostic, SchemaPath, DiagnosticKind, MemberSummary and the bound constants.
 
-// mcp_execution_codegen::template_engine
+// mcp_execution_codegen::template_engine (#[doc(hidden)], workspace-internal)
 pub struct TemplateEngine<'a> { /* handlebars: Handlebars<'a> */ }
 impl<'a> TemplateEngine<'a> {
     pub fn new() -> Result<Self>; // strict_mode(true), no_escape (see below)
@@ -191,7 +154,7 @@ For a server with N tools, exactly `N + 7` files (`FIXED_FILE_COUNT` = 7;
 | `_runtime/cli.ts` | Shared single-call module exporting `runIfMain` (see [[#13.6 Single-call mode (#567, #570, #583)]]); static text, identical for every server, no server-supplied data |
 | `package.json` | `{"type":"module","devDependencies":{"@types/node":"^22"}}` |
 | `tsconfig.json` | `target: ES2022`, `module`/`moduleResolution: NodeNext`, `strict: true`, `noEmit: true`, `allowImportingTsExtensions: true`, `skipLibCheck: true`, `types: ["node"]` |
-| `_meta.json` | `mcp_execution_core::metadata::ServerMetadata`, schema version 3, written as **compact** JSON (`serde_json::to_string`): per-tool metadata incl. **raw, unsanitized** parameter names and descriptions, annotations, stored result type, result-type origin and manifest size; and `provenance` (a `generated_at` timestamp plus a `ConfigFingerprint`/`ToolDigest` pair computed from the same `server_config`/`server_info.tools` this call is generating from — see [[../core/spec#provenance module (src/provenance.rs)]], [[../core/spec#`metadata` module (`src/metadata.rs`)]]) |
+| `_meta.json` | `mcp_execution_core::metadata::ServerMetadata`, schema version 3, written as **compact** JSON (`serde_json::to_string`): per-tool metadata incl. **raw, unsanitized** parameter names and descriptions, annotations, stored result type, result-type origin manifest size and `digest` (#688, [[../core/spec#7. Per-tool digests (#688)]]); and `provenance` (a `generated_at` timestamp plus a `ConfigFingerprint`/`ToolDigest` pair computed from the same `server_config`/`server_info.tools` this call is generating from — see [[../core/spec#provenance module (src/provenance.rs)]], [[../core/spec#`metadata` module (`src/metadata.rs`)]]) |
 
 Each tool's `{Name}Params` is emitted as a `type` alias, not an `interface` —
 only a `type` alias gets the implicit `Record<string, unknown>`-compatible
@@ -243,7 +206,7 @@ into a consumer's own build).
 
 ## 6. Recursion Depth Bound
 
-`common::typescript::MAX_SCHEMA_RECURSION_DEPTH` (`= 128`) bounds how far
+The internal `MAX_SCHEMA_RECURSION_DEPTH` (`= 128`) bounds how far
 the converter (`convert_schema`; every descent counts: a property, an item type, a composition
 member, an `additionalProperties` schema and a `$ref` hop) and the JSDoc description sanitizer
 (`sanitize_schema_jsdoc_descriptions`/`sanitize_schema_jsdoc_value` in
@@ -522,7 +485,11 @@ measurement above exact. Stored result and parameter type texts are capped at
 `STORED_TYPE_TEXT_MAX_BYTES` (1024): a longer `result_type` is stored as `None`, a longer
 `parameters[].typescript_type` as `"unknown"`, so per-tool growth over v2 is bounded. The cap the
 skill scan accepts is `mcp_execution_core::metadata::MAX_METADATA_FILE_BYTES` (1 MiB), shared by
-producer and consumer (`mcp-skill`'s `MAX_FILE_SIZE` is defined from it). **Behaviour above the
+producer and consumer (`mcp-skill`'s `MAX_FILE_SIZE` is defined from it).
+
+**Per-tool digests and the cap (#688).** `digest` is written for every tool or for none: when the serialized file
+with digests would exceed the cap, all are omitted, the file is serialized again (the same bytes as without the
+feature) and one `tracing::warn!` says that drift cannot name changed tools for this server. **Behaviour above the
 cap:** generation still succeeds, because the tool files are usable directly, and emits one
 `tracing::warn!` naming the size, the cap and the consequence; the skill scan (and the server tools
 reusing it) then returns `ScanError::FileTooLarge`. Generation is not rejected because v2 could
@@ -962,8 +929,8 @@ generated file.
 > [!info] As built; the semver promise binds from the 1.0.0 tag
 > Policy in [[../NFR-mcp-execution-2026-07-27#12. 1.0 Contract Requirements]] (`NFR-COM-030` to `NFR-COM-046`);
 > decisions in [[../decisions/ADR-670-1-0-api-wire-release-contract]]. The listing describes the code after the
-> API freeze (#673, #674 to #680). Public items not yet confirmed as 1.0 surface are tracked by #687, which blocks
-> the tag (`NFR-COM-031`: whatever is public at the tag is frozen).
+> API freeze (#673, #674 to #680) and the surface cut of #687 (`NFR-COM-031`: whatever is public at the tag is
+> frozen).
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
@@ -975,25 +942,27 @@ generated file.
 |------|------|-------|
 | `PackageGenerator`, `TSCONFIG_JSON`, module `package` | generator | Renamed from the "progressive" names before 1.0.0 (OD-1 (a), #680), with `templates/package/` and the CLI flag `--servers-dir`; generated export names are unchanged |
 | `GeneratedCode`, `GeneratedFile` | output | The file set and the fixed-file rule ([[#15. Bridge Retirement Requirements (#575)]]) |
-| `MAX_GENERATED_FILES`, `MAX_GENERATED_BYTES`, `MAX_CATALOG_BYTES` and the catalog and observed-shape bound constants | bounds | Derived from the introspector bounds |
-| `ObservedShapes`, `CatalogEntry`, `render_catalog`, `jsdoc_tags`, `catalog_hints` | generation helpers | Public today; whether they stay is open (#687) |
+| `MAX_GENERATED_FILES`, `MAX_GENERATED_BYTES` (module `package::generator`) | bounds | Derived from the introspector bounds |
 | `convert_schema`, `ConvertedType`, `RenderStyle` (module `common::ts_types`) | schema converter | One converter (#603) |
-| `ToolDefinition`, `TemplateContext`, `TemplateEngine`, `ToolSummary`, `ToolCategorization`, `CategoryInfo` | rendering inputs | `ToolCategorization` and `CategoryInfo` are used by `mcp-execution-server`; whether the others stay public is open (#687) |
-| `to_camel_case`, `to_pascal_case`, `sanitize_ts_identifier` (module `common::typescript`) | helpers | Public today; open (#687) |
+| `ToolCategorization` | categorization input | Used by `mcp-execution-server` |
+
+The catalog and observed-shape helpers and their bound constants are in private modules and were never public.
+Removed from the public surface by #687: `TemplateContext` and `ToolDefinition` (deleted, no users),
+`ToolSummary`, `CategoryInfo`, `ToolContext`, `IndexContext` and module `package::types` (internal), and module
+`common::typescript` (internal; `to_pascal_case` deleted).
 
 ### Workspace-internal (`NFR-COM-032`)
 
-`ToolContext`, `IndexContext` and `BridgeContext` are `#[doc(hidden)]`: render contexts holding sanitized display
-strings, excluded from the semver promise (their `server_id` strings are therefore outside `NFR-COM-035`).
+`BridgeContext`, module `template_engine` and `TemplateEngine` are `#[doc(hidden)]`, public only for the
+workspace's own benches and tests and excluded from the semver promise.
 
 ### Foreign types (`NFR-COM-044`)
 
-`serde_json::Value` in `ToolDefinition::input_schema` and `TemplateContext::metadata`; `serde` implementations.
+`serde_json::Value` in `convert_schema`; `serde` implementations.
 
 ### `#[non_exhaustive]` and closed sets (`NFR-COM-042`, `NFR-COM-043`)
 
-`#[non_exhaustive]`: `RenderStyle`, `GeneratedCode`, `GeneratedFile`, `ToolDefinition`, `ToolCategorization`,
-`CategoryInfo`. This crate defines no `ResultSource` (#676).
+`#[non_exhaustive]`: `RenderStyle`, `GeneratedCode`, `GeneratedFile`, `ToolCategorization`. This crate defines no `ResultSource` (#676).
 
 ### Owned wire formats
 

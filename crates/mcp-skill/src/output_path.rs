@@ -19,25 +19,6 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OutputPathError {
-    /// `server_id` failed [`mcp_execution_core::ServerSlug::new`]'s slug-format check
-    /// (e.g. it is empty, too long, or contains a character other than a lowercase ASCII
-    /// letter, digit, or hyphen). `source` carries the precise reason; the message is derived
-    /// from it rather than hardcoded, so it can't independently drift from the actual rule
-    /// enforced.
-    #[error("invalid server_id {server_id:?}: {source}")]
-    InvalidServerId {
-        /// Sanitized display form of the rejected server id (see
-        /// [`mcp_execution_core::untrusted::sanitize_untrusted_inline`]). The `{server_id:?}`
-        /// (`Debug`) formatting above is a required second layer of defense on top of that
-        /// sanitization, not incidental — see
-        /// [`mcp_execution_core::ServerIdError`]'s doc comment for why it must not be
-        /// "simplified" to `{server_id}` (`Display`).
-        server_id: String,
-        /// The specific slug-format violation.
-        #[source]
-        source: mcp_execution_core::ServerIdSlugError,
-    },
-
     /// The caller supplied an absolute `output_path`, which would override
     /// the base directory entirely.
     #[error("output_path must be relative to the skills directory, not absolute: {path}")]
@@ -128,30 +109,15 @@ pub enum OutputPathError {
 
 /// Maps the shared [`ConfinementError`] onto [`OutputPathError`]'s own, pre-existing variant set.
 ///
-/// This is a 1:1 rename, not a lossy union: [`ConfinementError::WrongTargetKind`] becomes
-/// [`OutputPathError::NotAFile`] here (the terminal component `resolve_skill_output_path` walks
-/// is always a file), which is the only variant this crate names differently than
-/// `mcp-execution-server`'s equivalent `From` impl.
+/// Variants map one to one, except as noted below. [`ConfinementError::WrongTargetKind`] becomes
+/// [`OutputPathError::NotAFile`] because the terminal component `resolve_skill_output_path` walks
+/// is always a file.
 ///
-/// [`ConfinementError::InvalidSegment`] doesn't carry a [`mcp_execution_core::ServerIdSlugError`]
-/// (the underlying walk only knows the looser [`mcp_execution_core::validate_path_segment`]
-/// rule), so this re-derives one by re-running [`ServerSlug::new`] on the rejected segment.
-/// `resolve_skill_output_path` takes a [`ServerSlug`], so a rejected segment cannot be the id in
-/// practice and `unwrap_or` never actually falls back — but doing it this way keeps this `From`
-/// impl itself panic-free instead of `expect`-ing an invariant that only holds because of a
-/// check made somewhere else.
+/// [`ConfinementError::InvalidSegment`] has no variant: `resolve_skill_output_path` takes a
+/// [`ServerSlug`], so it cannot reject the id, and any other source of it is reported as I/O.
 impl From<ConfinementError> for OutputPathError {
     fn from(err: ConfinementError) -> Self {
         match err {
-            ConfinementError::InvalidSegment { segment } => {
-                let source = ServerSlug::new(&segment)
-                    .err()
-                    .unwrap_or(mcp_execution_core::ServerIdSlugError::InvalidCharacters);
-                Self::InvalidServerId {
-                    server_id: segment,
-                    source,
-                }
-            }
             ConfinementError::SegmentIsSymlink { path } => Self::ServerIdIsSymlink { path },
             ConfinementError::Escape { path } => Self::Escape { path },
             ConfinementError::NotADirectory { path } => Self::NotADirectory { path },
@@ -348,20 +314,12 @@ mod tests {
         );
     }
 
-    /// `InvalidSegment` is the only way a rejected id can still reach `OutputPathError`; the
-    /// slug rule itself is enforced by `ServerSlug::new` (tested in `mcp-execution-core`).
     #[test]
-    fn rejected_segment_maps_to_invalid_server_id_with_the_slug_reason() {
+    fn rejected_segment_maps_to_io_carrying_the_confinement_error() {
         let err = OutputPathError::from(ConfinementError::InvalidSegment {
             segment: "My_Server".to_string(),
         });
-        assert_matches!(
-            err,
-            OutputPathError::InvalidServerId {
-                source: mcp_execution_core::ServerIdSlugError::InvalidCharacters,
-                ..
-            }
-        );
+        assert_matches!(err, OutputPathError::Io(source) if source.to_string().contains("My_Server"));
     }
 
     #[tokio::test]

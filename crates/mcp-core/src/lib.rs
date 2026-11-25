@@ -61,9 +61,7 @@ pub use server_config::{ServerConfig, ServerConfigBuilder, Transport};
 // Re-export command validation
 pub use command::{
     MAX_ARG_COUNT, MAX_ARG_LEN, MAX_ENV_COUNT, MAX_ENV_VALUE_LEN, MAX_HEADER_COUNT,
-    MAX_HEADER_VALUE_LEN, MAX_URL_LEN, env_name_charset_desc, env_name_charset_pattern,
-    forbidden_chars, forbidden_env_names, forbidden_env_prefix, validate_server_config,
-    validate_url_scheme,
+    MAX_HEADER_VALUE_LEN, MAX_URL_LEN, validate_server_config, validate_url_scheme,
 };
 
 // Re-export home-directory resolution

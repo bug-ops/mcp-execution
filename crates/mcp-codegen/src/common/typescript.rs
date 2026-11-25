@@ -2,14 +2,6 @@
 //!
 //! Provides name-casing and identifier helpers and the exact string-literal encoder used when
 //! generating TypeScript. Schema conversion lives in [`ts_types`](crate::common::ts_types).
-//!
-//! # Examples
-//!
-//! ```
-//! use mcp_execution_codegen::common::typescript;
-//!
-//! assert_eq!(typescript::to_camel_case("send_message"), "sendMessage");
-//! ```
 
 use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_text};
 
@@ -31,27 +23,9 @@ use mcp_execution_core::untrusted::{MAX_UNTRUSTED_FIELD_LEN, sanitize_untrusted_
 ///
 /// The bound does not cover the rest of the generation pipeline: cloning, serializing and
 /// dropping a `serde_json::Value` stay recursive without a limit.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::common::typescript::MAX_SCHEMA_RECURSION_DEPTH;
-///
-/// assert!(MAX_SCHEMA_RECURSION_DEPTH > 0);
-/// ```
 pub const MAX_SCHEMA_RECURSION_DEPTH: usize = 128;
 
 /// Converts a `snake_case` name to camelCase for TypeScript.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::common::typescript::to_camel_case;
-///
-/// assert_eq!(to_camel_case("send_message"), "sendMessage");
-/// assert_eq!(to_camel_case("get_user_data"), "getUserData");
-/// assert_eq!(to_camel_case("hello"), "hello");
-/// ```
 #[must_use]
 pub fn to_camel_case(snake_case: &str) -> String {
     let mut result = String::new();
@@ -71,26 +45,6 @@ pub fn to_camel_case(snake_case: &str) -> String {
     result
 }
 
-/// Converts a `snake_case` name to `PascalCase` for TypeScript types.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::common::typescript::to_pascal_case;
-///
-/// assert_eq!(to_pascal_case("send_message"), "SendMessage");
-/// assert_eq!(to_pascal_case("get_user_data"), "GetUserData");
-/// assert_eq!(to_pascal_case("hello"), "Hello");
-/// ```
-#[must_use]
-pub fn to_pascal_case(snake_case: &str) -> String {
-    let camel = to_camel_case(snake_case);
-    let mut chars = camel.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().collect::<String>() + chars.as_str()
-    })
-}
-
 /// Sanitizes a string for safe use as a TypeScript identifier (e.g. a function, export,
 /// or object property name).
 ///
@@ -107,17 +61,6 @@ pub fn to_pascal_case(snake_case: &str) -> String {
 /// run like `"a__b"` collapses to `"a_b"`: once a separator has been emitted, further
 /// separator-producing characters are redundant regardless of why each one would have
 /// produced a `_`.
-///
-/// # Examples
-///
-/// ```
-/// use mcp_execution_codegen::common::typescript::sanitize_ts_identifier;
-///
-/// assert_eq!(sanitize_ts_identifier("valid_name"), "valid_name");
-/// assert_eq!(sanitize_ts_identifier("123abc"), "_123abc");
-/// assert_eq!(sanitize_ts_identifier("a-b c"), "a_b_c");
-/// assert_eq!(sanitize_ts_identifier("café_menu_日本語"), "caf_menu_");
-/// ```
 #[must_use]
 pub fn sanitize_ts_identifier(s: &str) -> String {
     let mut result = String::new();
@@ -153,7 +96,7 @@ pub fn sanitize_ts_identifier(s: &str) -> String {
 /// deleting/collapsing that character afterward would reopen the comment. Truncation to
 /// `max_len` runs last, after escaping, so a `*/` straddling the truncation boundary is
 /// already widened to `*\/` and cannot be split back into a bare `*/` by the cut.
-pub(crate) fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
+pub fn sanitize_jsdoc(s: &str, max_len: usize) -> String {
     let neutralized = mcp_execution_core::untrusted::sanitize_untrusted_text(s, usize::MAX);
     let sanitized = neutralized.replace("*/", "*\\/");
     if sanitized.chars().count() > max_len {
@@ -175,7 +118,7 @@ fn unicode_escape(c: char) -> String {
 /// `None` above [`MAX_UNTRUSTED_FIELD_LEN`] characters, or when the text contains a character
 /// the shared sanitizer would neutralize (bidi controls, the Unicode Tags block, zero-width
 /// operators, variation-selector runs): such text cannot be kept both exact and safe.
-pub(crate) fn ts_string_literal_exact(s: &str) -> Option<String> {
+pub fn ts_string_literal_exact(s: &str) -> Option<String> {
     if s.chars().count() > MAX_UNTRUSTED_FIELD_LEN {
         return None;
     }
@@ -206,13 +149,6 @@ mod tests {
         assert_eq!(to_camel_case("get_user_data"), "getUserData");
         assert_eq!(to_camel_case("hello"), "hello");
         assert_eq!(to_camel_case("a_b_c"), "aBC");
-    }
-
-    #[test]
-    fn test_to_pascal_case() {
-        assert_eq!(to_pascal_case("send_message"), "SendMessage");
-        assert_eq!(to_pascal_case("get_user_data"), "GetUserData");
-        assert_eq!(to_pascal_case("hello"), "Hello");
     }
 
     #[test]

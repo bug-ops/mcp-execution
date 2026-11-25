@@ -7,6 +7,7 @@
 //! - [`dirs`], [`budget`], [`spill`]: per-OS state directories, output budgets and bounded spill
 //!   files.
 //! - [`node`]: Node.js detection shared with `setup`.
+//! - `probe`: the Bun and Deno detection `setup` falls back to without a suitable Node.js.
 //! - [`exec`], [`notice`], [`import_hook`], [`typecheck`], [`restrict`]: running the script
 //!   process.
 //! - [`signal`], `tty`: the runner's own stop signals and the terminal's foreground group.
@@ -26,6 +27,7 @@ pub mod notice;
 pub mod path_lookup;
 pub mod policy;
 pub mod pool;
+pub(crate) mod probe;
 pub mod protocol;
 pub mod restrict;
 pub mod signal;

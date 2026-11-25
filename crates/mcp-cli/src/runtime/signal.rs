@@ -14,9 +14,11 @@ use mcp_execution_core::cli::ExitCode;
 /// On Unix the runner does not subscribe to a SIGINT, SIGHUP or SIGQUIT that was already ignored
 /// when it started (`nohup` ignores SIGHUP, a background job of a non-interactive shell ignores
 /// SIGINT and SIGQUIT); SIGTERM is always handled. The script is another matter: node resets these
-/// inherited ignores, so on a terminal, where the script is the foreground group, Ctrl-C, Ctrl-\
-/// or a hang-up still end it and the run is reported as cancelled by that signal; use `setsid` or
-/// tmux for a run that must survive a closed terminal.
+/// inherited ignores. On a terminal, where the script is the foreground group, Ctrl-C and Ctrl-\
+/// are therefore disabled while the script runs when SIGINT or SIGQUIT, respectively, was ignored
+/// at startup; if the runner is killed with SIGKILL meanwhile, run `stty sane` to get them back.
+/// A hang-up still ends the script and the run is reported as cancelled; use `setsid` or tmux for
+/// a run that must survive a closed terminal.
 ///
 /// On Windows, Ctrl-C and Ctrl-Break both report as [`RunnerSignal::Interrupt`].
 ///
@@ -82,11 +84,36 @@ async fn never() -> RunnerSignal {
 /// The disposition a signal had when the process started.
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Inherited {
+pub(crate) enum Inherited {
     /// `SIG_IGN`, for example set by `nohup`.
     Ignored,
     /// Default or a handler.
     Other,
+}
+
+#[cfg(unix)]
+impl Inherited {
+    pub(crate) fn is_ignored(self) -> bool {
+        self == Self::Ignored
+    }
+}
+
+/// The startup dispositions of the signals that terminal keys generate.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TerminalDispositions {
+    pub(crate) interrupt: Inherited,
+    pub(crate) quit: Inherited,
+}
+
+/// The dispositions SIGINT and SIGQUIT had when the process started.
+#[cfg(unix)]
+pub(crate) fn startup_terminal_dispositions() -> TerminalDispositions {
+    let startup = platform::startup_dispositions();
+    TerminalDispositions {
+        interrupt: startup.interrupt,
+        quit: startup.quit,
+    }
 }
 
 #[cfg(unix)]
@@ -151,7 +178,7 @@ mod platform {
         name: &str,
         disposition: Inherited,
     ) -> Option<Signal> {
-        if disposition == Inherited::Ignored {
+        if disposition.is_ignored() {
             tracing::debug!("{name} was ignored at startup, leaving it ignored");
             return None;
         }

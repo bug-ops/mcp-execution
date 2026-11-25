@@ -45,7 +45,7 @@
 //!     .build()?;
 //! let info = introspector.discover_server(server_id, &config).await?;
 //!
-//! // Generate progressive loading files
+//! // Generate the SDK files
 //! let generator = PackageGenerator::new()?;
 //! let code = generator.generate(&info, &config)?;
 //!
@@ -58,9 +58,9 @@
 //! # }
 //! ```
 //!
-//! ## Progressive Loading Pattern
+//! ## Reading Files on Demand
 //!
-//! Once files are written to disk, Claude Code can discover and load tools progressively:
+//! Once files are written to disk, Claude Code can discover tools and read only the ones it needs:
 //!
 //! ```bash
 //! # Step 1: Discover available servers
@@ -81,10 +81,10 @@ mod catalog;
 pub mod generator;
 mod observed;
 mod tool_types;
-pub mod types;
+mod types;
 
 // Re-export main types
 pub use generator::{PackageGenerator, TSCONFIG_JSON};
-pub use types::{
-    BridgeContext, CategoryInfo, IndexContext, ToolCategorization, ToolContext, ToolSummary,
-};
+#[doc(hidden)]
+pub use types::BridgeContext;
+pub use types::ToolCategorization;

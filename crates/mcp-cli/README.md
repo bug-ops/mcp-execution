@@ -340,7 +340,9 @@ mcp-execution-cli setup
 # ✓ Runtime setup complete
 ```
 
-Checks that Node.js 22.18.0 or newer is installed (23.6.0 or newer on the 23 line; generated tools run as `.ts` files), `~/.claude/mcp.json` exists, that the helper binary (`$MCP_EXECUTION_CLI`, else `mcp-execution-cli` on `PATH`) is found, and makes generated TypeScript files executable (Unix only).
+Checks that a runtime for the generated `.ts` files is installed, `~/.claude/mcp.json` exists, that the helper binary (`$MCP_EXECUTION_CLI`, else `mcp-execution-cli` on `PATH`) is found, and makes generated TypeScript files executable (Unix only).
+
+The runtime is Node.js 22.18.0 or newer (23.6.0 or newer on the 23 line). Without one, `setup` runs a one-line `.ts` file with Bun, then Deno, and reports the first that works together with a caveat: `run`, `--typecheck` and `--restrict` still need Node.js. With `--format json` the result names it in `runtime` (`name`, `version`) and carries `caveat` (`null` for Node.js). When no runtime works, the command fails.
 
 ### `completions`
 
